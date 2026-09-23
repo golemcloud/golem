@@ -120,9 +120,13 @@ pub async fn MoonBitToolStreamingCaller::explicit_stdout_failure(
     Err(@tool.ToolError::Rpc(@tool.RpcError::ResourceExhausted(_))) =>
       "resource-exhausted"
     Err(@tool.ToolError::Rpc(error)) => "rpc:" + repr(error)
+    Err(@tool.ToolError::RemoteTool(error)) => "remote-tool:" + repr(error)
     Err(@tool.ToolError::Tool(_)) => "tool-error"
     Err(@tool.ToolError::UnknownToolError(name, _)) =>
       "unknown-tool-error:" + name
+    Err(@tool.ToolError::InvalidInput(message)) => "invalid-input:" + message
+    Err(@tool.ToolError::MalformedRemoteOutput(message)) =>
+      "malformed-output:" + message
     Ok(_) => "ok"
   }
   stdout_terminal + ":" + result_terminal

@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanResume,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -31,6 +31,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const DB_TYPE: &str = "sqlite";
+const SCAN_INCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key >= ? AND key < ? ORDER BY key LIMIT ?;";
+const SCAN_EXCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? AND key < ? ORDER BY key LIMIT ?;";
+const SCAN_INCLUSIVE_UNBOUNDED_QUERY: &str =
+    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key >= ? ORDER BY key LIMIT ?;";
+const SCAN_EXCLUSIVE_UNBOUNDED_QUERY: &str =
+    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? ORDER BY key LIMIT ?;";
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/indexed");
 
@@ -133,21 +139,6 @@ impl SqliteIndexedStorage {
             IndexedStorageError::Other(err.to_safe_string())
         }
     }
-
-    fn to_like_prefix(prefix: &str) -> String {
-        let mut result = String::with_capacity(prefix.len() + 1);
-        for ch in prefix.chars() {
-            match ch {
-                '%' | '_' | '\\' => {
-                    result.push('\\');
-                    result.push(ch);
-                }
-                _ => result.push(ch),
-            }
-        }
-        result.push('%');
-        result
-    }
 }
 
 #[async_trait]
@@ -193,51 +184,6 @@ impl IndexedStorage for SqliteIndexedStorage {
             .map_err(Self::classify_repo_error)
     }
 
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let query = match prefix {
-            Some(prefix) => {
-                let key = Self::to_like_prefix(prefix);
-                sqlx::query_as(
-                    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key LIKE ? ESCAPE '\\' ORDER BY key LIMIT ? OFFSET ?;",
-                )
-                .bind(Self::meta_namespace(namespace))
-                .bind(key)
-                .bind(sqlx::types::Json(count))
-                .bind(sqlx::types::Json(cursor))
-            }
-            None => sqlx::query_as(
-                "SELECT DISTINCT key FROM index_storage WHERE namespace = ? ORDER BY key LIMIT ? OFFSET ?;",
-            )
-            .bind(Self::meta_namespace(namespace))
-            .bind(sqlx::types::Json(count))
-            .bind(sqlx::types::Json(cursor)),
-        };
-
-        let keys = self
-            .pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String,), _>(query)
-            .await
-            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
-            .map_err(Self::classify_repo_error)?;
-
-        let new_cursor = if keys.len() < count as usize {
-            0
-        } else {
-            cursor + count
-        };
-
-        Ok((new_cursor, keys))
-    }
-
     async fn scan_stable(
         &self,
         svc_name: &'static str,
@@ -247,28 +193,28 @@ impl IndexedStorage for SqliteIndexedStorage {
         resume: Option<ScanResume>,
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
-        // Stored keys are never empty, so `key > ''` starts the first page at the first key.
-        let after = resume
-            .map(|resume| resume.into_marker("SQLite"))
-            .transpose()?
-            .unwrap_or_default();
-        let query = match prefix {
-            Some(prefix) => {
-                let like = Self::to_like_prefix(prefix);
-                sqlx::query_as(
-                    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? AND key LIKE ? ESCAPE '\\' ORDER BY key LIMIT ?;",
-                )
-                .bind(Self::meta_namespace(namespace))
-                .bind(after)
-                .bind(like)
-                .bind(sqlx::types::Json(count))
-            }
-            None => sqlx::query_as(
-                "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? ORDER BY key LIMIT ?;",
-            )
-            .bind(Self::meta_namespace(namespace))
-            .bind(after)
-            .bind(sqlx::types::Json(count)),
+        let bounds = super::stable_scan_key_bounds(prefix, resume, "SQLite")?;
+        let namespace = Self::meta_namespace(namespace);
+        let count_param = sqlx::types::Json(count);
+        let query = match (bounds.inclusive, bounds.upper) {
+            (true, Some(upper)) => sqlx::query_as(SCAN_INCLUSIVE_BOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(upper)
+                .bind(count_param),
+            (false, Some(upper)) => sqlx::query_as(SCAN_EXCLUSIVE_BOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(upper)
+                .bind(count_param),
+            (true, None) => sqlx::query_as(SCAN_INCLUSIVE_UNBOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(count_param),
+            (false, None) => sqlx::query_as(SCAN_EXCLUSIVE_UNBOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(count_param),
         };
 
         let keys = self
@@ -643,6 +589,8 @@ mod tests {
     use golem_common::model::AgentId;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
+    use sqlx::sqlite::SqliteConnectOptions;
+    use sqlx::{Connection, Executor};
     use test_r::test;
 
     fn oplog_namespace(agent_id: &str) -> IndexedStorageNamespace {
@@ -841,5 +789,86 @@ mod tests {
                 .unwrap(),
             vec![(2, b"existing".to_vec())]
         );
+    }
+
+    #[test]
+    async fn bounded_scan_uses_binary_covering_index_range() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(
+            tempdir
+                .path()
+                .join("indexed.db")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .await;
+        let explain = format!("EXPLAIN QUERY PLAN {SCAN_INCLUSIVE_BOUNDED_QUERY}");
+        let query = sqlx::query_as::<_, (i64, i64, i64, String)>(&explain)
+            .bind("durable-worker-oplog")
+            .bind("component:")
+            .bind("component;")
+            .bind(sqlx::types::Json(50_u64));
+        let plan = storage
+            .pool
+            .with_ro("test", "scan_query_plan")
+            .fetch_all_as(query)
+            .await
+            .unwrap();
+        let details = plan
+            .into_iter()
+            .map(|(_, _, _, detail)| detail)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(details.contains("COVERING INDEX"), "{details}");
+        assert!(details.contains("namespace=?"), "{details}");
+        assert!(
+            details.contains("key>?") && details.contains("key<?"),
+            "{details}"
+        );
+        assert!(!details.contains("TEMP B-TREE"), "{details}");
+
+        let collation = sqlx::query_as::<_, (String,)>(
+            "SELECT coll FROM pragma_index_xinfo('idx_key') WHERE name = 'key';",
+        );
+        assert_eq!(
+            storage
+                .pool
+                .with_ro("test", "scan_index_collation")
+                .fetch_one_as(collation)
+                .await
+                .unwrap()
+                .0,
+            "BINARY"
+        );
+    }
+
+    #[test]
+    async fn migration_rejects_non_utf8_database() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let database = tempdir.path().join("utf16.db");
+        let options = SqliteConnectOptions::new()
+            .filename(&database)
+            .create_if_missing(true);
+        let mut connection = sqlx::SqliteConnection::connect_with(&options)
+            .await
+            .unwrap();
+        connection
+            .execute("PRAGMA encoding = 'UTF-16';")
+            .await
+            .unwrap();
+        connection
+            .execute("CREATE TABLE encoding_marker (value TEXT);")
+            .await
+            .unwrap();
+        drop(connection);
+
+        let result = SqliteIndexedStorage::migrate(&DbSqliteConfig {
+            database: database.to_string_lossy().into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        })
+        .await;
+        assert!(result.is_err());
     }
 }

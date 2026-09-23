@@ -122,7 +122,12 @@ async fn observations(agent: &HttpTestContext, id: &str) -> anyhow::Result<Vec<u
         .send()
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
-    Ok(response.json().await?)
+    response
+        .json::<Vec<String>>()
+        .await?
+        .into_iter()
+        .map(|value| value.parse().map_err(Into::into))
+        .collect()
 }
 
 async fn wait_for_observations(
@@ -1916,7 +1921,7 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
         .send()
         .await?;
     assert_eq!(marked.status(), StatusCode::OK);
-    assert_eq!(marked.json::<Value>().await?, serde_json::json!(37));
+    assert_eq!(marked.json::<Value>().await?, serde_json::json!("37"));
     assert_eq!(observations(agent, &id).await?, vec![0, 0, 2, 1, 1, 37, 0]);
 
     let component_id = agent

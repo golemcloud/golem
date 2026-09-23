@@ -5,7 +5,9 @@ use crate::model::cli_output::{
 use crate::model::deploy::DeployPlanView;
 use crate::model::masking::MaskingConfig;
 use chrono::{TimeZone, Utc};
-use golem_common::model::card::{CardId, PolymorphicCard};
+use golem_common::model::card::{
+    CardId, PolymorphicCard, PublicInvocationWalletPin, WalletVersionToken,
+};
 use proptest::prelude::*;
 use quote::ToTokens;
 use serde_json::{Value, json};
@@ -2139,7 +2141,13 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
             timestamp: timestamp(),
             invocation: method_invocation(),
-            wallet_pin: None,
+            wallet_pin: PublicInvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 1,
+                },
+                scope_card_id: None,
+            },
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
             timestamp: timestamp(),

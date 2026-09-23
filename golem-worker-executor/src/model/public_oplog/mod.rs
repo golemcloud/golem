@@ -724,8 +724,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String> {
-        // Creation validates this naming invariant against the persisted kind. Rendering plugin
-        // descriptions needs no authority or status reconstruction; Create uses its own kind below.
         let owner_kind = if OwnerKind::is_reserved_instance_name(&owned_agent_id.agent_id.agent_id)
         {
             OwnerKind::EphemeralExternalTool
@@ -735,21 +733,24 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         match value {
             OplogEntry::Create {
                 timestamp,
-                agent_id,
-                owner_kind,
-                agent_mode,
-                component_revision,
-                env,
-                environment_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                local_agent_config,
-                original_phantom_id,
-                instance_id,
+                parameters,
             } => {
+                let golem_common::model::oplog::CreateParameters {
+                    agent_id,
+                    owner_kind,
+                    agent_mode,
+                    component_revision,
+                    env,
+                    environment_id,
+                    created_by,
+                    parent,
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins,
+                    local_agent_config,
+                    original_phantom_id,
+                    instance_id,
+                } = *parameters;
                 let metadata = components
                     .get_metadata(
                         owned_agent_id.agent_id.component_id,
@@ -940,12 +941,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     AgentInvocationStartedParams {
                         timestamp,
                         invocation: public_invocation,
-                        wallet_pin: wallet_pin.map(|pin| {
-                            golem_common::model::card::PublicInvocationWalletPin {
-                                wallet_token: pin.wallet_token,
-                                scope_card_id: pin.scope_card_id,
-                            }
-                        }),
+                        wallet_pin: golem_common::model::card::PublicInvocationWalletPin {
+                            wallet_token: wallet_pin.wallet_token,
+                            scope_card_id: wallet_pin.scope_card_id,
+                        },
                     },
                 ))
             }
@@ -1396,7 +1395,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp, policy, ..
             } => Ok(PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
                 timestamp,
-                policy: policy.into(),
+                policy: (*policy).into(),
             })),
             OplogEntry::RemoveRetryPolicy {
                 timestamp, name, ..
@@ -1513,7 +1512,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp, event, ..
             } => Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
                 timestamp,
-                event: event.into(),
+                event: (*event).into(),
             })),
             OplogEntry::CardInstalled {
                 timestamp,

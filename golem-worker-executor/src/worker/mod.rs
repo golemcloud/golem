@@ -7628,7 +7628,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             queued_event_indices.push(
                 self.add_to_oplog(OplogEntry::card_event_queued(
                     None,
-                    QueuedCardEvent::revoke(card_id),
+                    Box::new(QueuedCardEvent::revoke(card_id)),
                 ))
                 .await,
             );
@@ -7661,12 +7661,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 golem_common::model::ReceivedCardTransferState::Received {
                     source_card_id: recorded_source_card_id,
                     card: recorded_card,
-                } if recorded_source_card_id.is_none_or(|recorded_source_card_id| {
-                    recorded_source_card_id == source_card_id
-                }) && recorded_card == &card =>
-                {
-                    Ok(())
-                }
+                } if *recorded_source_card_id == source_card_id && recorded_card == &card => Ok(()),
                 golem_common::model::ReceivedCardTransferState::Received { .. }
                 | golem_common::model::ReceivedCardTransferState::Conflict => Err(
                     WorkerExecutorError::invalid_request(PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT),
@@ -7691,7 +7686,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .append_and_commit_attached(
                 OplogEntry::card_event_queued(
                     None,
-                    QueuedCardEvent::transfer_received(transfer_id, source_card_id, card),
+                    Box::new(QueuedCardEvent::transfer_received(
+                        transfer_id,
+                        source_card_id,
+                        card,
+                    )),
                 ),
                 self.clone(),
                 instance_guard,
@@ -9156,27 +9155,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .collect::<Result<_, _>>()
                         .map_err(|err: String| WorkerExecutorError::runtime(err))?;
 
-                let initial_oplog_entry = OplogEntry::create(
-                    initial_worker_metadata.agent_id.clone(),
-                    initial_worker_metadata.owner_kind,
-                    initial_worker_metadata.agent_mode,
-                    initial_worker_metadata.last_known_status.component_revision,
-                    initial_worker_metadata.env.clone(),
-                    initial_worker_metadata.environment_id,
-                    initial_worker_metadata.created_by,
-                    initial_worker_metadata.parent.clone(),
-                    initial_worker_metadata.last_known_status.component_size,
-                    initial_worker_metadata
-                        .last_known_status
-                        .total_linear_memory_size,
-                    initial_worker_metadata
-                        .last_known_status
-                        .active_plugins
-                        .clone(),
-                    local_agent_config,
-                    initial_worker_metadata.original_phantom_id,
-                    instance_id,
-                );
+                let initial_oplog_entry =
+                    OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+                        agent_id: initial_worker_metadata.agent_id.clone(),
+                        owner_kind: initial_worker_metadata.owner_kind,
+                        agent_mode: initial_worker_metadata.agent_mode,
+                        component_revision: initial_worker_metadata
+                            .last_known_status
+                            .component_revision,
+                        env: initial_worker_metadata.env.clone(),
+                        environment_id: initial_worker_metadata.environment_id,
+                        created_by: initial_worker_metadata.created_by,
+                        parent: initial_worker_metadata.parent.clone(),
+                        component_size: initial_worker_metadata.last_known_status.component_size,
+                        initial_total_linear_memory_size: initial_worker_metadata
+                            .last_known_status
+                            .total_linear_memory_size,
+                        initial_active_plugins: initial_worker_metadata
+                            .last_known_status
+                            .active_plugins
+                            .clone(),
+                        local_agent_config,
+                        original_phantom_id: initial_worker_metadata.original_phantom_id,
+                        instance_id,
+                    }));
 
                 let initial_status = Arc::new(arc_swap::ArcSwap::from_pointee(initial_status));
                 let execution_status = Arc::new(std::sync::RwLock::new(execution_status));

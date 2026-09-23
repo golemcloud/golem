@@ -727,7 +727,7 @@ async fn creation_receipt(
     let initial = service
         .read_source(target, mode, OplogIndex::INITIAL, 1)
         .await;
-    let Some(OplogEntry::Create { instance_id, .. }) = initial.get(&OplogIndex::INITIAL) else {
+    let Some(OplogEntry::Create { parameters, .. }) = initial.get(&OplogIndex::INITIAL) else {
         return Ok(None);
     };
     let mut covered = OplogIndex::INITIAL;
@@ -755,7 +755,7 @@ async fn creation_receipt(
                 match record {
                     StreamSessionRecord::ForkCut(record)
                         if cut.is_none()
-                            && record.creation_fingerprint.0 == *instance_id
+                            && record.creation_fingerprint.0 == parameters.instance_id
                             && record.revert.is_none() =>
                     {
                         cut = Some(record);

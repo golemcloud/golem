@@ -89,6 +89,17 @@ fn freshness_disposition_for_dispatch(
     }
 }
 
+fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
+    if count == 0 || count > i64::MAX as u64 {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "Agent enumeration count must be between 1 and {}",
+            i64::MAX
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 pub type InvocationRequestStream = Pin<Box<dyn Stream<Item = InvocationRequest> + Send + 'static>>;
 pub type InvocationResponseStream =
     Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
@@ -124,6 +135,12 @@ fn protocol_failure(details: impl Into<String>) -> OneShotInvocationSessionResul
     OneShotInvocationSessionResult::ProtocolFailure(details.into())
 }
 
+fn protocol_executor_error(details: impl Into<String>) -> WorkerExecutorError {
+    WorkerExecutorError::Unknown {
+        details: details.into(),
+    }
+}
+
 fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceError {
     match InvocationRejectionReason::try_from(rejected.reason) {
         Ok(InvocationRejectionReason::NotFound) => rejected
@@ -157,7 +174,7 @@ fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceErr
 
 fn decode_invocation_failure(failure: InvocationFailure) -> WorkerExecutorError {
     if failure.kind == InvocationFailureKind::Protocol as i32 {
-        WorkerExecutorError::invalid_request(failure.message)
+        protocol_executor_error(failure.message)
     } else if let Some(worker_error) = failure.worker_error {
         worker_error
             .try_into()
@@ -1171,7 +1188,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
-        if filter.as_ref().is_some_and(is_filter_with_running_status) {
+        validate_agent_enumeration_count(count)?;
+
+        if can_use_running_metadata_fast_path(&filter, &cursor) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)
                 .await?;
@@ -2095,7 +2114,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         Err(decode_invocation_failure(failure).into())
                     }
                     OneShotInvocationSessionResult::ProtocolFailure(details) => {
-                        Err(WorkerExecutorError::invalid_request(details).into())
+                        Err(protocol_executor_error(details).into())
                     }
                 },
                 WorkerServiceError::InternalCallError,
@@ -2604,6 +2623,37 @@ fn is_filter_with_running_status(filter: &AgentFilter) -> bool {
     }
 }
 
+fn can_use_running_metadata_fast_path(filter: &Option<AgentFilter>, cursor: &ScanCursor) -> bool {
+    cursor.is_finished() && filter.as_ref().is_some_and(is_filter_with_running_status)
+}
+
+#[cfg(test)]
+mod running_metadata_fast_path_tests {
+    use super::can_use_running_metadata_fast_path;
+    use golem_common::base_model::worker_filter::FilterComparator;
+    use golem_common::model::{AgentFilter, AgentStatus, ScanCursor};
+    use test_r::test;
+
+    fn running_filter() -> Option<AgentFilter> {
+        Some(AgentFilter::new_status(
+            FilterComparator::Equal,
+            AgentStatus::Running,
+        ))
+    }
+
+    #[test]
+    fn running_filter_uses_fast_path_only_without_a_cursor() {
+        assert!(can_use_running_metadata_fast_path(
+            &running_filter(),
+            &ScanCursor::default()
+        ));
+        assert!(!can_use_running_metadata_fast_path(
+            &running_filter(),
+            &ScanCursor::new("malformed".to_string())
+        ));
+    }
+}
+
 #[cfg(test)]
 mod freshness_tests {
     use super::freshness_disposition_for_dispatch;
@@ -2656,7 +2706,7 @@ mod freshness_tests {
 mod one_shot_session_tests {
     use super::{
         OneShotInvocationSessionResult, collect_one_shot_invocation_session,
-        decode_invocation_failure,
+        decode_invocation_failure, protocol_executor_error,
     };
     use futures::stream;
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
@@ -2830,6 +2880,21 @@ mod one_shot_session_tests {
     }
 
     #[test]
+    fn invocation_protocol_failures_are_internal_errors() {
+        let decoded = decode_invocation_failure(InvocationFailure {
+            kind: InvocationFailureKind::Protocol as i32,
+            code: "protocol".to_string(),
+            message: "invalid session sequence".to_string(),
+            worker_error: None,
+        });
+        assert!(matches!(decoded, WorkerExecutorError::Unknown { .. }));
+        assert!(matches!(
+            protocol_executor_error("session ended before publishing a result"),
+            WorkerExecutorError::Unknown { .. }
+        ));
+    }
+
+    #[test]
     async fn session_is_drained_and_rejects_frames_after_completion() {
         let responses = stream::iter([
             frame(accepted()),
@@ -2891,7 +2956,10 @@ mod one_shot_session_tests {
 
 #[cfg(test)]
 mod rejection_mapping_tests {
-    use super::{WorkerClient, WorkerExecutorWorkerClient, decode_invocation_rejection};
+    use super::{
+        WorkerClient, WorkerExecutorWorkerClient, decode_invocation_rejection,
+        validate_agent_enumeration_count,
+    };
     use futures::{Stream, stream};
     use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
     use golem_api_grpc::proto::golem::shardmanager::{
@@ -2941,6 +3009,14 @@ mod rejection_mapping_tests {
         };
         let error: AgentError = decode_invocation_rejection(rejection).into();
         error.error.expect("missing public error")
+    }
+
+    #[test]
+    fn agent_enumeration_count_bounds_are_validated() {
+        assert!(validate_agent_enumeration_count(1).is_ok());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64).is_ok());
+        assert!(validate_agent_enumeration_count(0).is_err());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64 + 1).is_err());
     }
 
     #[test]
