@@ -217,20 +217,24 @@ describe('native tool reflection', () => {
     });
   });
 
-  it('builds a canonical input schema and rejects invalid JSON before dispatch', async () => {
+  it('builds a canonical input schema and accepts omitted options before dispatch', async () => {
     const { tool, start } = fixture();
     const command = tool.client.command([]);
     expect(command.inputSchema?.toJsonSchema()).toBeDefined();
     expect(command.validateJson({ value: 'hello', maybe: null }).success).toBe(true);
-    expect(command.validateJson({ value: 'hello' }).success).toBe(false);
+    expect(command.validateJson({ value: 'hello' }).success).toBe(true);
     expect(start).not.toHaveBeenCalled();
-    for (const maybe of [null, 'supplied']) {
-      await expect(command.invokeJson({ value: 'hello', maybe })).resolves.toBe('ok');
+    for (const input of [
+      { value: 'hello' },
+      { value: 'hello', maybe: null },
+      { value: 'hello', maybe: 'supplied' },
+    ]) {
+      await expect(command.invokeJson(input)).resolves.toBe('ok');
       const sent = start.mock.calls.at(-1)![1];
       expect(schemaShapesMatch(command.inputSchema!.graph, sent.graph)).toBe(true);
       expect(command.inputSchema!.validateValue(sent.value).success).toBe(true);
     }
-    expect(start).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenCalledTimes(3);
   });
 
   it('rejects a missing declared remote result', async () => {
