@@ -36,7 +36,7 @@ import {
   encodeChild,
   isolateCapabilityRoot,
 } from '../schema-model';
-import { CodecShapeMismatchError, type SchemaCodec } from '../../schema/codec';
+import { CodecShapeMismatchError, type SchemaCodec, withDirectCodec } from '../../schema/codec';
 import { toolBuildError } from './errors';
 
 export type {
@@ -262,8 +262,9 @@ export class CanonicalInputModel {
         }),
       );
     };
-    this.codec = {
+    this.codec = withDirectCodec({
       graph,
+      fields: fields.map((entry) => ({ name: entry.name, codec: entry.codec })),
       toValue: isolateCapabilityRoot(toValue),
       fromValue: (input) => {
         if (input.tag !== 'record') {
@@ -278,7 +279,7 @@ export class CanonicalInputModel {
           fields.map((entry, index) => [entry.name, entry.codec.fromValue(input.fields[index])]),
         );
       },
-    };
+    });
   }
 
   encode(input: Record<string, unknown>): SchemaValue {
@@ -697,8 +698,10 @@ function isRepeatable(shape: ExtendedOptionShape): boolean {
  * preserves graph equality when forwarding inherited arguments.
  */
 export function optionalCanonicalFieldCodec(inner: SchemaCodec): SchemaCodec {
-  return {
+  return withDirectCodec({
     graph: inner.graph,
+    optionInner: inner,
+    optionKind: 'optional',
     toValue: isolateCapabilityRoot((input) =>
       v.option(input === undefined ? undefined : encodeChild(inner, input)),
     ),
@@ -706,7 +709,7 @@ export function optionalCanonicalFieldCodec(inner: SchemaCodec): SchemaCodec {
       if (input.tag !== 'option') throw new Error('expected an optional tool input value');
       return input.value === undefined ? undefined : inner.fromValue(input.value);
     },
-  };
+  });
 }
 
 export function optionValueCodec(shape: ExtendedOptionShape): SchemaCodec | undefined {
@@ -766,7 +769,7 @@ export function listCodec(itemCodec: SchemaCodec): SchemaCodec {
     }
     return v.list(input.map((item) => encodeChild(itemCodec, item)));
   };
-  return {
+  return withDirectCodec({
     graph: { defs: itemCodec.graph.defs, root: t.list(itemCodec.graph.root) },
     listItem: itemCodec,
     toValue: isolateCapabilityRoot(toValue),
@@ -774,7 +777,7 @@ export function listCodec(itemCodec: SchemaCodec): SchemaCodec {
       if (input.tag !== 'list') throw new Error('expected a list schema value');
       return input.elements.map((item) => itemCodec.fromValue(item));
     },
-  };
+  });
 }
 
 export function flagCodec(flag: FlagSpec): SchemaCodec {

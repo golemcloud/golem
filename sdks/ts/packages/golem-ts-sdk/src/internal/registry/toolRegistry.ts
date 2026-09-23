@@ -13,9 +13,12 @@
 // limitations under the License.
 
 import type { Tool, ToolError } from 'golem:tool/common@0.1.0';
-import { schemaValueIsCanonical } from '../../schema/codec';
+import type { TypedSchemaValue as WireTypedSchemaValue } from 'golem:core/types@2.0.0';
+import { directSchemaValueFromWit, schemaValueIsCanonical } from '../../schema/codec';
 import {
   deepEqual,
+  schemaGraphFromWit,
+  typedSchemaValueFromWit,
   type SchemaValue,
   type TypedSchemaValue,
   validateSchemaGraph,
@@ -51,6 +54,7 @@ export interface PreparedToolInvocation {
 export interface ResolvedToolInvocation {
   readonly command: ExtendedCommandNode;
   prepare(input: TypedSchemaValue): PreparedToolInvocation;
+  prepareWire(input: WireTypedSchemaValue): PreparedToolInvocation;
 }
 
 interface InternalResolvedToolInvocation extends ResolvedToolInvocation {
@@ -237,6 +241,30 @@ function resolveToolInvocationInternal(
     return {
       command,
       prepare: (input) => prepareValues(decodeCanonicalInput(tool, command, input)),
+      prepareWire: (input) => {
+        const inputModel = tool.canonicalInputModel(command);
+        if (!inputModel.codec.direct) {
+          return prepareValues(decodeCanonicalInput(tool, command, typedSchemaValueFromWit(input)));
+        }
+        try {
+          if (!deepEqual(schemaGraphFromWit(input.graph), inputModel.codec.graph)) {
+            throw new Error('tool input schema does not match the command canonical input schema');
+          }
+          const decoded = directSchemaValueFromWit(inputModel.codec, input.value) as Record<
+            string,
+            unknown
+          >;
+          const handlerInput = Object.fromEntries(
+            inputModel.fields.map((field) => [camelCase(field.name), decoded[field.name]]),
+          );
+          return {
+            invoke: async (context) =>
+              await binding.handler.call(binding.receiver, handlerInput, context),
+          };
+        } catch (error) {
+          throw invalidInput(error);
+        }
+      },
       prepareValues,
     };
   }
@@ -265,6 +293,10 @@ function resolveToolInvocationInternal(
   return {
     command,
     prepare: (input) => childResolved.prepareValues(decodeCanonicalInput(tool, command, input)),
+    prepareWire: (input) =>
+      childResolved.prepareValues(
+        decodeCanonicalInput(tool, command, typedSchemaValueFromWit(input)),
+      ),
     prepareValues: (inputValues) => childResolved.prepareValues(inputValues),
   };
 }

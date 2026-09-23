@@ -18,14 +18,8 @@ import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
-import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
-import {
-  schemaValueFromWit,
-  t,
-  typedSchemaValueFromWit,
-  typedSchemaValueToWit,
-  v,
-} from './internal/schema-model';
+import type { ExtendedCommandBody } from './internal/tool';
+import { schemaValueFromWit } from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -342,14 +336,12 @@ async function invokeTool(
   try {
     const resolved = ToolRegistry.resolveInvocation(toolName, commandPath);
 
-    let decodedInput;
+    let prepared;
     try {
-      decodedInput = typedSchemaValueFromWit(input);
+      prepared = resolved.prepareWire(input);
     } catch (error) {
       throw invalidToolInput(`malformed invocation input: ${errorMessage(error)}`);
     }
-
-    const prepared = resolved.prepare(decodedInput);
     const body = resolved.command.body;
     if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
 
