@@ -590,7 +590,18 @@ impl SchedulerServiceDefault {
             } => {
                 debug!("Running scheduled archive oplog for {account_id}/{owned_agent_id}");
 
-                if self.oplog_service.exists(&owned_agent_id, agent_mode).await {
+                let exists = match self
+                    .oplog_service
+                    .try_exists(&owned_agent_id, agent_mode)
+                    .await
+                {
+                    Ok(exists) => exists,
+                    Err(error) => {
+                        error!(agent_id = %owned_agent_id, error = %error, "Failed to check oplog before archival");
+                        return false;
+                    }
+                };
+                if exists {
                     let start = Instant::now();
                     let archive_result = self
                         .with_lease_renewal(
