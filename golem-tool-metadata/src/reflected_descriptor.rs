@@ -302,7 +302,7 @@ mod tests {
                             }),
                             errors: vec![native::ErrorCase {
                                 name: "failed".into(),
-                                doc: doc,
+                                doc,
                                 kind: native::ErrorKind::RuntimeError,
                                 exit_code: 7,
                                 payload: Some(SchemaType::ref_to(named)),

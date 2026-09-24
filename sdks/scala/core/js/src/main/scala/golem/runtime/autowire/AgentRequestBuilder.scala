@@ -57,6 +57,10 @@ private[autowire] object AgentRequestBuilder {
     }.toJSArray)
     JsAgentType(
       metadata.name,
+      metadata.kind match {
+        case AgentTypeKind.Regular    => "regular"
+        case AgentTypeKind.HttpRouter => "http-router"
+      },
       metadata.description.getOrElse(metadata.name),
       "scala",
       SchemaWireInterop.graphToJs(metadata.schema),

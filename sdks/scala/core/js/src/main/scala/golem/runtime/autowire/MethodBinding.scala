@@ -21,6 +21,16 @@ import golem.FutureInterop
 import golem.host.SchemaWireInterop
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
 import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec, WireAgentMetadata, WireImplementationMethod}
+import golem.runtime.http.HttpMethod
+import golem.schema.{
+  AgentStream,
+  AgentStreamOutputTransaction,
+  FromSchema,
+  FromSchemaError,
+  GuestSchemaValueStreamHandle,
+  SchemaValue
+}
+import golem.schema.SchemaValue.*
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue

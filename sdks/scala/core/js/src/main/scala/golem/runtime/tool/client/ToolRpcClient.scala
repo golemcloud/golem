@@ -38,7 +38,31 @@ object ToolRpcClient {
 
   /** A transport bound to one remote tool name. */
   def transport(toolName: String): ToolRpcTransport =
-    new JsToolRpcTransport(new ToolHostApi.RawToolRpc(toolName))
+    tryTransport(toolName) match {
+      case Right(transport) => transport
+      case Left(failure)    => throw new ToolRpcConstructionException(failure)
+    }
+
+  def tryTransport(toolName: String): Either[ToolRpcFailure, ToolRpcTransport] =
+    try Right(new JsToolRpcTransport(ToolHostApi.RawToolRpc.create(toolName)))
+    catch {
+      case js.JavaScriptException(error)      => Left(ToolHostApi.decodeRpcFailure(error))
+      case scala.util.control.NonFatal(error) =>
+        Left(ToolRpcFailure.ProtocolError(String.valueOf(error.getMessage)))
+    }
+
+  def trigger(
+    toolName: String,
+    commandPath: List[String],
+    input: TypedSchemaValue,
+    stdin: Option[ToolInputStream]
+  ): Either[ToolRpcFailure, Unit] =
+    try new JsToolRpcTransport(ToolHostApi.RawToolRpc.create(toolName)).trigger(commandPath, input, stdin)
+    catch {
+      case js.JavaScriptException(error)      => Left(ToolHostApi.decodeRpcFailure(error))
+      case scala.util.control.NonFatal(error) =>
+        Left(ToolRpcFailure.ProtocolError(String.valueOf(error.getMessage)))
+    }
 
   def wireTransport(toolName: String): WireToolRpcTransport =
     new JsWireToolRpcTransport(new ToolHostApi.RawToolRpc(toolName))

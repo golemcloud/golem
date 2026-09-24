@@ -248,36 +248,36 @@ object Guest {
     // A `Left` (declared tool error) is surfaced as a rejection carrying the
     // wire-encoded `tool-error`; a failed Future (user code error) propagates as
     // an unhandled rejection so it becomes a WASM trap.
-    val encoded = invoked.flatMap {
-      case Right(res) =>
-        res.result match {
-          case Some(value) => SchemaWireInterop.typedToJsAsync(value).map(value => JsInvocationResult(value))
-          case None        => Future.successful(JsInvocationResult(js.undefined))
-        }
-      case Left(error) =>
-        ToolWireInterop.toolErrorToJsAsync(error).flatMap(error => Future.failed(js.JavaScriptException(error)))
-    }
-    val cleanup = List(
-      () => inputOwnership.close(),
-      () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
-      () =>
-        scalaStdout match {
-          case Some(stream) => stream.close()
-          case None         =>
-            stdout.toOption.foreach(JsToolOutputStream.dispose)
-            Future.successful(())
-        }
-    )
-    val completed = encoded.transformWith { result =>
-      Future
-        .sequence(cleanup.map(action => AgentStreamOwnership.cleanup(action())))
-        .flatMap(_ => Future.fromTry(result))
-        .map {
-          case Right(res) =>
-            JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined)
-          case Left(error) =>
-            throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
-        }
+    val completed = invoked.transformWith { invocationResult =>
+      val encoded = Future.fromTry(invocationResult).flatMap {
+        case Right(res) =>
+          res.result match {
+            case Some(value) => SchemaWireInterop.typedToJsAsync(value).map(value => JsInvocationResult(value))
+            case None        => Future.successful(JsInvocationResult(js.undefined))
+          }
+        case Left(error) =>
+          ToolWireInterop.toolErrorToJsAsync(error).flatMap(error => Future.failed(js.JavaScriptException(error)))
+      }
+      val cleanup = List(
+        () => inputOwnership.close(),
+        () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
+        () =>
+          scalaStdout match {
+            case Some(stream) =>
+              invocationResult match {
+                case Success(_)     => stream.close()
+                case Failure(error) => stream.failInvocation(error)
+              }
+            case None =>
+              stdout.toOption.foreach(JsToolOutputStream.dispose)
+              Future.successful(())
+          }
+      )
+      encoded.transformWith { result =>
+        Future
+          .sequence(cleanup.map(action => AgentStreamOwnership.cleanup(action())))
+          .flatMap(_ => Future.fromTry(result))
+      }
     }
 
     FutureInterop.toPromise(completed)
