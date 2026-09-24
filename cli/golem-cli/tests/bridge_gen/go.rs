@@ -19,12 +19,15 @@
 //!
 //! - `gofmt -l` must print nothing, which is how a generated file is told apart
 //!   from an edited one;
-//! - `go vet` for wasip1 must pass, which is the target a guest client is built
-//!   for;
-//! - a native `go test` round-trips a value of every generated type through the
-//!   guest SDK's own codec. The SDK records a malformed registration — a variant
-//!   case that does not implement its interface, an enum over the wrong kind —
-//!   as a definition error at run time, where neither of the other checks looks.
+//! - `go vet` must pass, for wasip1 for a guest client and natively for an
+//!   external one — the targets each is built for;
+//! - a native `go test` round-trips a value of every generated type. For a guest
+//!   client that goes through the SDK's own codec, which records a malformed
+//!   registration — a variant case that does not implement its interface, an
+//!   enum over the wrong kind — as a definition error at run time, where neither
+//!   of the other checks looks. For an external client it goes through the
+//!   generated conversions and the REST wire form, and the client itself is
+//!   driven against a recording server.
 //!
 //! The toolchain is the one the CLI builds Go components with, resolved through
 //! `ensure_go_toolchain` rather than whatever `go` is on PATH, which can be older
@@ -109,6 +112,26 @@ impl GeneratedGo {
         generated
     }
 
+    fn external(env: &GoEnv, agent_type: AgentTypeSchema) -> Self {
+        let dir = TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        let mut generator =
+            GoBridgeGenerator::new_with_mode(agent_type, target, GoBridgeMode::ExternalRest)
+                .expect("a generator");
+        generator.generate().expect("generation");
+        let generated = Self { dir };
+        generated.point_at_the_workspace_sdk();
+        generated.run(env, &["mod", "tidy"]);
+        generated
+    }
+
+    fn package(&self) -> String {
+        self.read("client.go")
+            .lines()
+            .find_map(|l| l.strip_prefix("package ").map(str::to_string))
+            .expect("a package clause")
+    }
+
     fn path(&self) -> &Utf8Path {
         Utf8Path::from_path(self.dir.path()).unwrap()
     }
@@ -128,7 +151,14 @@ impl GeneratedGo {
             for (module, dir) in [
                 ("github.com/golemcloud/golem/sdks/go/golem", "sdks/go/golem"),
                 ("github.com/golemcloud/golem/sdks/go/core", "sdks/go/core"),
+                (
+                    "github.com/golemcloud/golem/sdks/go/bridge",
+                    "sdks/go/bridge",
+                ),
             ] {
+                if !content.contains(module) {
+                    continue;
+                }
                 content.push_str(&format!(
                     "\nreplace {module} => {}\n",
                     root.join(dir).display()
@@ -181,6 +211,10 @@ impl GeneratedGo {
             &["vet", "./..."],
             &[("GOOS", "wasip1"), ("GOARCH", "wasm")],
         );
+    }
+
+    fn assert_vets_natively(&self, env: &GoEnv) {
+        self.run(env, &["vet", "./..."]);
     }
 
     /// Drops a test into the generated package and runs it natively.
@@ -434,4 +468,259 @@ fn go_guest_reserves_the_agent_level_names(env: &GoEnv) {
     );
     let generated = GeneratedGo::guest(env, colliding);
     generated.assert_vets_for_wasip1(env);
+}
+
+#[test_dep(tagged_as = "go_external_counter")]
+fn go_external_counter(env: &GoEnv) -> GeneratedGo {
+    GeneratedGo::external(env, counter_agent())
+}
+
+#[test_dep(tagged_as = "go_external_kitchen_sink")]
+fn go_external_kitchen_sink(env: &GoEnv) -> GeneratedGo {
+    GeneratedGo::external(env, kitchen_sink_agent())
+}
+
+#[test]
+fn go_external_counter_is_gofmt_clean_and_vets(
+    env: &GoEnv,
+    #[tagged_as("go_external_counter")] generated: &GeneratedGo,
+) {
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_natively(env);
+}
+
+/// An external client depends on the bridge runtime and core only: pulling in
+/// the guest SDK would drag its WebAssembly bindings into an ordinary program.
+#[test]
+fn go_external_client_does_not_depend_on_the_guest_sdk(
+    #[tagged_as("go_external_counter")] generated: &GeneratedGo,
+) {
+    let go_mod = generated.read("go.mod");
+    assert!(
+        go_mod.contains("module golem.local/bridge/counter-agent-client"),
+        "{go_mod}"
+    );
+    assert!(
+        go_mod.contains("github.com/golemcloud/golem/sdks/go/bridge"),
+        "{go_mod}"
+    );
+    assert!(
+        !go_mod.contains("github.com/golemcloud/golem/sdks/go/golem "),
+        "{go_mod}"
+    );
+    for file in ["types.go", "codec.go", "client.go"] {
+        let source = generated.read(file);
+        assert!(!source.contains("sdks/go/golem\""), "{file}:\n{source}");
+    }
+}
+
+#[test]
+fn go_external_kitchen_sink_is_gofmt_clean_and_vets(
+    env: &GoEnv,
+    #[tagged_as("go_external_kitchen_sink")] generated: &GeneratedGo,
+) {
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_natively(env);
+}
+
+/// Every generated conversion, checked against what actually travels: encode,
+/// marshal to the REST wire form, unmarshal, decode.
+#[test]
+fn go_external_kitchen_sink_types_round_trip_through_the_wire(
+    env: &GoEnv,
+    #[tagged_as("go_external_kitchen_sink")] generated: &GeneratedGo,
+) {
+    let package = generated.package();
+    generated.run_native_test(
+        env,
+        &format!(
+            r##"package {package}
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
+)
+
+func roundTrip[T any](t *testing.T, name string, in T, enc func(T) schema.SchemaValue, dec func(schema.SchemaValue) (T, error)) {{
+	t.Helper()
+	data, err := schema.MarshalWireValue(enc(in))
+	if err != nil {{
+		t.Fatalf("%s: marshal: %v", name, err)
+	}}
+	sv, err := schema.UnmarshalWireValue(data)
+	if err != nil {{
+		t.Fatalf("%s: unmarshal: %v", name, err)
+	}}
+	out, err := dec(sv)
+	if err != nil {{
+		t.Fatalf("%s: decode: %v", name, err)
+	}}
+	if !reflect.DeepEqual(in, out) {{
+		t.Fatalf("%s: %#v round-tripped to %#v", name, in, out)
+	}}
+}}
+
+func TestGeneratedConversionsRoundTrip(t *testing.T) {{
+	at := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	roundTrip(t, "record", ShopOrder{{
+		OrderId: "o1", PlacedAt: at, Tags: map[string]uint32{{"a": 1, "b": 2}},
+		Lines: []int64{{1, -2}}, Digest: [4]uint8{{1, 2, 3, 4}},
+	}}, encodeShopOrder, decodeShopOrder)
+	roundTrip(t, "enum", ShopStatusInTransit, encodeShopStatus, decodeShopStatus)
+	roundTrip(t, "flags", ShopPerms{{WriteAll: true}}, encodeShopPerms, decodeShopPerms)
+	for name, event := range map[string]ShopEvent{{
+		"datetime":   ShopEventAt{{Value: at}},
+		"text":       ShopEventNote{{Value: "hi"}},
+		"option":     ShopEventMaybe{{Value: values.Some("x")}},
+		"none":       ShopEventMaybe{{Value: values.None[string]()}},
+		"enum":       ShopEventStatus{{Value: ShopStatusPending}},
+		"no payload": ShopEventCleared{{}},
+	}} {{
+		roundTrip(t, "variant, "+name, event, encodeShopEvent, decodeShopEvent)
+	}}
+	roundTrip(t, "union", ShopHandle(ShopHandleTeam{{Value: "#core"}}), encodeShopHandle, decodeShopHandle)
+}}
+
+// A value of the wrong shape names the type it was decoded as.
+func TestADecodingFailureNamesTheType(t *testing.T) {{
+	_, err := decodeShopOrder(schema.RecordValue{{Fields: []schema.SchemaValue{{schema.StringValue{{Value: "o1"}}}}}})
+	if err == nil || !strings.Contains(err.Error(), "ShopOrder") {{
+		t.Fatalf("got %v", err)
+	}}
+	_, err = decodeShopEvent(schema.VariantValue{{Case: 9}})
+	if err == nil || !strings.Contains(err.Error(), "ShopEvent has no case 9") {{
+		t.Fatalf("got %v", err)
+	}}
+}}
+"##
+        ),
+    );
+}
+
+/// The client itself, against a server that records what it is sent and
+/// answers as the real one would.
+#[test]
+fn go_external_counter_client_speaks_the_rest_protocol(
+    env: &GoEnv,
+    #[tagged_as("go_external_counter")] generated: &GeneratedGo,
+) {
+    let package = generated.package();
+    generated.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/golemcloud/golem/sdks/go/bridge"
+)
+
+func TestTheClientInvokesTriggersAndSchedules(t *testing.T) {{
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {{
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		bodies = append(bodies, body)
+		w.Header().Set("Content-Type", "application/json")
+		result := ""
+		if body["methodName"] == "increment" && body["mode"] == "await" {{
+			result = `,"result":{{"graph":{{"root":{{"kind":"f64","value":{{}}}}}},"value":{{"kind":"f64","value":2.5}}}}`
+		}}
+		_, _ = io.WriteString(w, `{{"agentId":{{"componentId":"c","agentId":"a"}},"idempotencyKey":"k"`+result+`}}`)
+	}}))
+	defer server.Close()
+
+	client, err := GetCounterAgent(CounterAgentId{{Name: "c1"}}, bridge.WithConfiguration(bridge.Configuration{{
+		Server: bridge.Custom(server.URL, "token"), AppName: "app", EnvName: "env",
+	}}))
+	if err != nil {{
+		t.Fatal(err)
+	}}
+	ctx := context.Background()
+
+	got, err := client.Increment(ctx)
+	if err != nil || got != 2.5 {{
+		t.Fatalf("Increment = %v, %v", got, err)
+	}}
+	if err := client.Add(ctx, 3); err != nil {{
+		t.Fatal(err)
+	}}
+	if _, err := client.TriggerAdd(ctx, 4); err != nil {{
+		t.Fatal(err)
+	}}
+	if _, err := client.ScheduleAdd(ctx, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), 5); err != nil {{
+		t.Fatal(err)
+	}}
+
+	if len(bodies) != 4 {{
+		t.Fatalf("%d requests", len(bodies))
+	}}
+	params := func(v any) string {{
+		out, _ := json.Marshal(v)
+		return string(out)
+	}}
+	if want := `{{"kind":"record","value":{{"fields":[{{"kind":"string","value":"c1"}}]}}}}`; params(bodies[0]["parameters"]) != want {{
+		t.Fatalf("constructor arguments sent as %s", params(bodies[0]["parameters"]))
+	}}
+	if want := `{{"kind":"record","value":{{"fields":[{{"kind":"u32","value":3}}]}}}}`; params(bodies[1]["methodParameters"]) != want {{
+		t.Fatalf("method arguments sent as %s", params(bodies[1]["methodParameters"]))
+	}}
+	for i, want := range []string{{"await", "await", "schedule", "schedule"}} {{
+		if bodies[i]["mode"] != want {{
+			t.Fatalf("request %d in mode %v, want %s", i, bodies[i]["mode"], want)
+		}}
+	}}
+	if bodies[3]["scheduleAt"] != "2030-01-01T00:00:00Z" {{
+		t.Fatalf("scheduled at %v", bodies[3]["scheduleAt"])
+	}}
+}}
+"#
+        ),
+    );
+}
+
+/// An agent method whose name makes another's trigger name keeps its own, and
+/// the trigger is renamed around it.
+#[test]
+fn go_external_method_names_do_not_collide(env: &GoEnv) {
+    let colliding = agent(
+        "Poller",
+        "rust",
+        vec![],
+        vec![
+            method("poll", vec![], None),
+            method("trigger-poll", vec![], None),
+            method("agent", vec![], None),
+        ],
+        vec![],
+        AgentMode::Durable,
+    );
+    let generated = GeneratedGo::external(env, colliding);
+    generated.assert_vets_natively(env);
+    let client = generated.read("client.go");
+    assert!(
+        client.contains(") TriggerPoll(ctx context.Context) error {"),
+        "{client}"
+    );
+    assert!(
+        client.contains(") TriggerPoll2(ctx context.Context) (bridge.Receipt, error) {"),
+        "{client}"
+    );
+    assert!(
+        client.contains(") Agent2(ctx context.Context) error {"),
+        "{client}"
+    );
 }

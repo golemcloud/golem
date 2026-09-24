@@ -1837,6 +1837,10 @@
         "moonbit": {
           "description": "MoonBit SDK configuration",
           "$ref": "#/definitions/bridgeSdkLanguageTargets"
+        },
+        "go": {
+          "description": "Go SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
         }
       }
     },

@@ -1901,6 +1901,156 @@ async fn test_scala_bridge_e2e() {
     );
 }
 
+/// End-to-end test for the Go external bridge: deploys the Rust counter agent,
+/// generates a Go client for it, then builds and runs a small Go program that
+/// invokes the live agent through the generated client.
+#[test]
+#[timeout("10 minutes")]
+async fn test_go_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let bridge_root = ctx.cwd_path_join("go-bridge");
+    let outputs = ctx
+        .cli([
+            cmd::GENERATE_BRIDGE,
+            flag::LANGUAGE,
+            "go",
+            flag::AGENT_TYPE_NAME,
+            "CounterAgent",
+            flag::OUTPUT_DIR,
+            bridge_root.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let client_dir = bridge_root.join("counter-agent-client");
+    assert!(
+        client_dir.join("go.mod").exists(),
+        "generated Go bridge module is missing at {}",
+        client_dir.display()
+    );
+
+    // An ordinary Go program, requiring the generated client the way a user's
+    // would. A replace in a dependency's go.mod is ignored, so the program
+    // points the bridge runtime and core at this checkout itself.
+    let program_dir = ctx.cwd_path_join("go-e2e");
+    std::fs::create_dir_all(&program_dir).unwrap();
+    let sdks = workspace_path().join("sdks/go");
+    std::fs::write(
+        program_dir.join("go.mod"),
+        formatdoc! {r#"
+            module example.com/go-e2e
+
+            go {go}
+
+            require (
+            	golem.local/bridge/counter-agent-client v0.0.0
+            	github.com/golemcloud/golem/sdks/go/bridge v0.0.0
+            	github.com/golemcloud/golem/sdks/go/core v0.0.0
+            )
+
+            replace golem.local/bridge/counter-agent-client => {client}
+
+            replace github.com/golemcloud/golem/sdks/go/bridge => {bridge}
+
+            replace github.com/golemcloud/golem/sdks/go/core => {core}
+            "#,
+            go = versions::build_tool::GO_MIN,
+            client = client_dir.display(),
+            bridge = sdks.join("bridge").display(),
+            core = sdks.join("core").display(),
+        },
+    )
+    .unwrap();
+    let server_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+    std::fs::write(
+        program_dir.join("main.go"),
+        formatdoc! {r#"
+            package main
+
+            import (
+            	"context"
+            	"fmt"
+            	"log"
+
+            	"github.com/golemcloud/golem/sdks/go/bridge"
+            	client "golem.local/bridge/counter-agent-client"
+            )
+
+            func main() {{
+            	err := bridge.Configure(bridge.Configuration{{
+            		Server:  bridge.Custom("{server_url}", "{token}"),
+            		AppName: "{app_name}",
+            		EnvName: "local",
+            	}})
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	counter, err := client.GetCounterAgent(client.CounterAgentId{{Name: "go-e2e-counter"}})
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	ctx := context.Background()
+            	first, err := counter.Increment(ctx)
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	second, err := counter.Increment(ctx)
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d\n", first, second)
+            }}
+            "#
+        },
+    )
+    .unwrap();
+
+    let toolchain = golem_cli::app::build::go_toolchain::ensure_go_toolchain(
+        &golem_cli::model::app::ApplicationConfig {
+            offline: false,
+            dev_mode: false,
+            should_colorize: false,
+            enable_wasmtime_fs_cache: false,
+        },
+    )
+    .await
+    .expect("the Golem Go toolchain");
+    let output = std::process::Command::new(&toolchain.go)
+        .args(["run", "."])
+        .current_dir(&program_dir)
+        .env("GOTOOLCHAIN", "local")
+        .env("GOFLAGS", "-mod=mod")
+        .output()
+        .expect("go runs");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "go run failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        program_dir.display()
+    );
+    assert!(
+        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2"),
+        "Go bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+}
+
 /// End-to-end test for the MoonBit bridge generator: deploys the Rust counter
 /// agent, generates a MoonBit bridge SDK for it, then compiles and runs a small
 /// MoonBit program that invokes the live agent through the generated, async

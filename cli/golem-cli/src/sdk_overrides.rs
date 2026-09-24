@@ -60,6 +60,10 @@ pub const GO_SDK_MODULE: &str = "github.com/golemcloud/golem/sdks/go/golem";
 /// version of its own.
 pub const GO_CORE_MODULE: &str = "github.com/golemcloud/golem/sdks/go/core";
 
+/// The runtime a generated external (REST) client calls through. Like core it
+/// sits beside the guest SDK and is released with it.
+pub const GO_BRIDGE_MODULE: &str = "github.com/golemcloud/golem/sdks/go/bridge";
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SdkOverridesTestProfile {
     LocalWorkspace,
@@ -212,6 +216,21 @@ impl SdkOverrides {
         }
     }
 
+    /// The `replace` directives an external client needs to resolve the
+    /// bridge runtime and core from a checkout, or an empty string.
+    pub fn go_bridge_replace(&self) -> String {
+        match &self.go_sdk_path {
+            Some(path) => {
+                let bridge = Self::go_sibling_path(path, "bridge");
+                let core = Self::go_core_path(path);
+                format!(
+                    "\nreplace {GO_BRIDGE_MODULE} => {bridge}\n\nreplace {GO_CORE_MODULE} => {core}"
+                )
+            }
+            None => String::new(),
+        }
+    }
+
     /// The local path for the core module, when a Go SDK path override is
     /// active.
     pub fn go_core_path_override(&self) -> Option<String> {
@@ -222,9 +241,13 @@ impl SdkOverrides {
     /// path is derived rather than configured separately — one override keeps
     /// pointing a build at a checkout a single step.
     fn go_core_path(go_sdk_path: &str) -> String {
+        Self::go_sibling_path(go_sdk_path, "core")
+    }
+
+    fn go_sibling_path(go_sdk_path: &str, module: &str) -> String {
         match go_sdk_path.rsplit_once('/') {
-            Some((parent, _)) => format!("{parent}/core"),
-            None => "core".to_string(),
+            Some((parent, _)) => format!("{parent}/{module}"),
+            None => module.to_string(),
         }
     }
 

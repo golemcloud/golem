@@ -186,9 +186,7 @@ fn write_enum(name: &str, cases: &[String], metadata: &MetadataEnvelope, writer:
     writer.line("}");
     writer.blank();
 
-    writer.line(format!(
-        "// String returns the case name the schema declares, or a placeholder for a"
-    ));
+    writer.line("// String returns the case name the schema declares, or a placeholder for a");
     writer.line("// value outside the declared cases.");
     writer.line(format!("func (v {name}) String() string {{"));
     writer.indent();

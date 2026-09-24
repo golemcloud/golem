@@ -1787,6 +1787,8 @@ pub struct BridgeSdks {
     pub scala: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moonbit: Option<BridgeSdkLanguageTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub go: Option<BridgeSdkLanguageTargets>,
 }
 
 impl BridgeSdks {
@@ -1797,8 +1799,7 @@ impl BridgeSdks {
             GuestLanguage::Effect => self.effect.as_ref(),
             GuestLanguage::Scala => self.scala.as_ref(),
             GuestLanguage::MoonBit => self.moonbit.as_ref(),
-            // No bridge SDK targets for Go; see BridgeSdkTargetKind::supports.
-            GuestLanguage::Go => None,
+            GuestLanguage::Go => self.go.as_ref(),
         }
     }
 

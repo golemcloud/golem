@@ -1141,11 +1141,13 @@ async fn gen_bridge_sdk_target(
                                 GoBridgeMode::GuestWasmRpc,
                             )?)
                         }
-                        // Not generated yet; see BridgeSdkTargetKind::supports.
-                        (GuestLanguage::Go, BridgeMode::External) => bail!(
-                            "external bridge generation is not supported for {} yet",
-                            GuestLanguage::Go.to_string().log_color_highlight()
-                        ),
+                        (GuestLanguage::Go, BridgeMode::External) => {
+                            Box::new(GoBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                GoBridgeMode::ExternalRest,
+                            )?)
+                        }
                     };
 
                         fs::remove(&output_dir)?;
@@ -1397,16 +1399,13 @@ mod tests {
     #[test]
     fn bridge_sdk_support_matrix_matches_current_capabilities() {
         use GuestLanguage::*;
-        // Every language with a full generator. Go generates guest agent
-        // clients only, so it is listed per capability instead.
+        // Every language with a full generator. Go generates agent clients
+        // only, so it is listed per capability instead.
         let full = [TypeScript, Effect, Rust, Scala, MoonBit];
+        let agents = [TypeScript, Effect, Rust, Scala, MoonBit, Go];
         let capabilities: [(BridgeSdkTargetKind, BridgeMode, &[GuestLanguage]); 4] = [
-            (BridgeSdkTargetKind::Agent, BridgeMode::External, &full),
-            (
-                BridgeSdkTargetKind::Agent,
-                BridgeMode::Guest,
-                &[TypeScript, Effect, Rust, Scala, MoonBit, Go],
-            ),
+            (BridgeSdkTargetKind::Agent, BridgeMode::External, &agents),
+            (BridgeSdkTargetKind::Agent, BridgeMode::Guest, &agents),
             // No language generates external tool clients.
             (BridgeSdkTargetKind::Tool, BridgeMode::External, &[]),
             (BridgeSdkTargetKind::Tool, BridgeMode::Guest, &full),

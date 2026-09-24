@@ -476,7 +476,12 @@ bridge:
         - MyAgent                    # Agent type name
         - my-app:billing             # Component name (all agents in that component)
       outputDir: ./bridge-sdk/rust
+  go:
+    external:
+      agents: "*"                    # One Go module per agent type
 ```
+
+The languages are `ts`, `effect`, `rust`, `scala`, `moonbit` and `go`.
 
 ## Plugin Installations
 

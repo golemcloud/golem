@@ -29,12 +29,15 @@
 //!   emits no codec at all. The sum types are registered with the SDK
 //!   (`DefineVariant`, `DefineEnum`, `DefineFlags`, `DefineUnion`), which is also
 //!   what a hand-written Go agent would write.
-//! - **External** mode calls through the `bridge` runtime over REST.
+//! - **External** mode calls through the `bridge` runtime over REST. With no
+//!   SDK beneath it, the generator writes the value conversions itself; see
+//!   [`external`].
 //!
 //! RPC values are positional, so a generated field or parameter name never has
 //! to match the schema's: only order and type travel.
 
 pub mod decl;
+pub mod external;
 #[allow(clippy::module_inception)]
 pub mod go;
 pub mod go_writer;
@@ -162,9 +165,14 @@ impl BridgeGenerator for GoBridgeGenerator {
                 self.write_file("client.go", self.guest_client_file()?)?;
                 Ok(())
             }
-            GoBridgeMode::ExternalRest => bail!(
-                "the Go external bridge is not generated yet; only guest bridges are supported"
-            ),
+            GoBridgeMode::ExternalRest => {
+                self.write_file("go.mod", self.external_go_mod()?)?;
+                self.write_file("types.go", self.types_file()?)?;
+                let (client, codec) = self.external_files()?;
+                self.write_file("codec.go", codec)?;
+                self.write_file("client.go", client)?;
+                Ok(())
+            }
         }
     }
 }
@@ -176,9 +184,9 @@ impl GoBridgeGenerator {
         mode: GoBridgeMode,
     ) -> anyhow::Result<Self> {
         validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
-        if mode == GoBridgeMode::GuestWasmRpc && agent_uses_streams(&agent_type) {
+        if agent_uses_streams(&agent_type) {
             bail!(
-                "the Go guest bridge does not generate stream-bearing methods yet ({})",
+                "the Go bridge does not generate stream-bearing methods yet ({})",
                 agent_type.type_name.as_str()
             );
         }
@@ -600,7 +608,10 @@ fn agent_uses_streams(agent_type: &AgentTypeSchema) -> bool {
 
 /// The per-case type names a variant or union declaration emits, which the
 /// registration has to name identically.
-fn case_idents<'a>(type_name: &str, cases: impl Iterator<Item = &'a str>) -> Vec<String> {
+pub(crate) fn case_idents<'a>(
+    type_name: &str,
+    cases: impl Iterator<Item = &'a str>,
+) -> Vec<String> {
     unique_idents(
         cases
             .map(|case| format!("{type_name}{}", to_exported_ident(case)))
