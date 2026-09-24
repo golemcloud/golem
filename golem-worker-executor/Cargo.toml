@@ -57,7 +57,6 @@ cap-time-ext = { workspace = true }                              # keep in sync 
 chrono = { workspace = true }
 dashmap = { workspace = true }
 desert_rust = { workspace = true }
-drop-stream = { workspace = true }
 evicting_cache_map = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }

@@ -66,15 +66,20 @@ impl Drop for BodyGuard {
 
 #[test]
 #[timeout("5s")]
-async fn body_count_waiter_wakes_when_upgrade_adds_a_body() {
+async fn live_body_waiters_observe_acquisition_and_release() {
     let bodies = LiveBodies::default();
-    let waiting = bodies.wait_for(1);
-    tokio::pin!(waiting);
-    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    let acquired = bodies.wait_for(1);
+    tokio::pin!(acquired);
+    assert!(futures::poll!(acquired.as_mut()).is_pending());
+
     let guard = bodies.guard();
-    waiting.await;
+    assert!(futures::poll!(acquired.as_mut()).is_ready());
+
+    let released = bodies.wait_for(0);
+    tokio::pin!(released);
+    assert!(futures::poll!(released.as_mut()).is_pending());
     drop(guard);
-    bodies.wait_for(0).await;
+    assert!(futures::poll!(released.as_mut()).is_ready());
 }
 
 fn idle_body(guard: BodyGuard) -> Body {

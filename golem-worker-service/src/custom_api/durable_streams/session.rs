@@ -40,7 +40,7 @@ use golem_service_base::custom_api::{
     CallAgentBehaviour, DurableStreamRepresentation, DurableStreamSlot, MethodParameter,
 };
 use golem_service_base::model::auth::AuthCtx;
-use http::{HeaderName, Method, StatusCode};
+use http::{HeaderName, HeaderValue, Method, StatusCode};
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
@@ -58,7 +58,7 @@ impl DurableStreamsHandler {
         creation_intent: StreamSessionCreationIntent,
         expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<CreateStreamSessionSuccess, RequestHandlerError> {
-        let body = request.parse_request_body(&route.route.body).await?;
+        let body = request.parse_request_body(&behaviour.body).await?;
         let args = self
             .call_agent
             .resolve_method_arguments(route, request, behaviour, body)?;
@@ -164,7 +164,9 @@ impl DurableStreamsHandler {
             format!(
                 "{}/invocations/{session}",
                 request.underlying.uri().path().trim_end_matches('/')
-            ),
+            )
+            .parse()
+            .map_err(anyhow::Error::from)?,
         );
         Ok(result)
     }
@@ -418,15 +420,18 @@ impl DurableStreamsHandler {
         )
         .map_err(anyhow::Error::from)?;
         let mut result = body_response(StatusCode::OK, body, "application/json");
-        result
-            .headers
-            .insert(http::header::CACHE_CONTROL, "no-store".into());
-        result
-            .headers
-            .insert(http::header::CONTENT_TYPE, "application/json".into());
-        result
-            .headers
-            .insert(HeaderName::from_static("stream-closed"), closed.to_string());
+        result.headers.insert(
+            http::header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        );
+        result.headers.insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        result.headers.insert(
+            HeaderName::from_static("stream-closed"),
+            HeaderValue::from_static(if closed { "true" } else { "false" }),
+        );
         if request.underlying.method() == Method::HEAD {
             add_expiry_headers(&mut result, &read.expiry_policy);
             result.body = ResponseBody::NoBody;

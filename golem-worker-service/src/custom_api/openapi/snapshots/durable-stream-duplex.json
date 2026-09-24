@@ -196,6 +196,7 @@
             }
           }
         },
+        "security": [],
         "summary": "create-session"
       },
       "x-golem-route-mode": "durable-streams"
@@ -270,6 +271,7 @@
             }
           }
         },
+        "security": [],
         "summary": "get-fork"
       },
       "head": {
@@ -348,6 +350,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-fork"
       },
       "x-golem-route-mode": "durable-streams"
@@ -404,6 +407,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-$result"
       },
       "get": {
@@ -693,6 +697,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-$result"
       },
       "head": {
@@ -798,6 +803,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-$result"
       },
       "put": {
@@ -1072,6 +1078,7 @@
             }
           }
         },
+        "security": [],
         "summary": "fork-$result"
       },
       "x-golem-route-mode": "durable-streams",
@@ -1135,6 +1142,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-input"
       },
       "get": {
@@ -1424,6 +1432,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-input"
       },
       "head": {
@@ -1529,6 +1538,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-input"
       },
       "post": {
@@ -1826,6 +1836,7 @@
             }
           }
         },
+        "security": [],
         "summary": "append-input"
       },
       "put": {
@@ -2100,6 +2111,7 @@
             }
           }
         },
+        "security": [],
         "summary": "fork-input"
       },
       "x-golem-route-mode": "durable-streams",
@@ -2149,6 +2161,7 @@
             }
           }
         },
+        "security": [],
         "summary": "cancel-session"
       },
       "get": {
@@ -2209,6 +2222,7 @@
             }
           }
         },
+        "security": [],
         "summary": "get-session"
       },
       "head": {
@@ -2276,6 +2290,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-session"
       },
       "put": {
@@ -2347,6 +2362,7 @@
             }
           }
         },
+        "security": [],
         "summary": "ensure-session"
       },
       "x-golem-route-mode": "durable-streams"
@@ -2392,6 +2408,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-$result"
       },
       "get": {
@@ -2670,6 +2687,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-$result"
       },
       "head": {
@@ -2764,6 +2782,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-$result"
       },
       "put": {
@@ -2940,6 +2959,7 @@
             }
           }
         },
+        "security": [],
         "summary": "ensure-$result"
       },
       "x-golem-route-mode": "durable-streams",
@@ -2992,6 +3012,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-input"
       },
       "get": {
@@ -3270,6 +3291,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-input"
       },
       "head": {
@@ -3364,6 +3386,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-input"
       },
       "post": {
@@ -3650,6 +3673,7 @@
             }
           }
         },
+        "security": [],
         "summary": "append-input"
       },
       "put": {
@@ -3826,6 +3850,7 @@
             }
           }
         },
+        "security": [],
         "summary": "ensure-input"
       },
       "x-golem-route-mode": "durable-streams",
@@ -3841,9 +3866,6 @@
   "servers": [
     {
       "url": "https://example.com"
-    },
-    {
-      "url": "http://example.com"
     }
   ]
 }

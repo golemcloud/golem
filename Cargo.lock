@@ -1001,20 +1001,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-jrpc"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "971e8b8715d28ffcbe7146f45b9463b537878740f1046b0981e597a865d572a8"
-dependencies = [
- "axum",
- "cfg-if",
- "mime",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "backoff"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2838,16 +2824,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
-name = "drop-stream"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf3ad5e2193e855cdd101d6d4ad09f0b3fa9aa5bd5169f483b4accd6eef96cfe"
-dependencies = [
- "futures-core",
- "pin-project",
-]
-
-[[package]]
 name = "dtor"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4000,49 +3976,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "golem-debugging-service"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "axum-jrpc",
- "chrono",
- "futures",
- "golem-api-grpc",
- "golem-common",
- "golem-schema",
- "golem-service-base",
- "golem-test-framework",
- "golem-worker-executor",
- "golem-worker-executor-test-utils",
- "humansize",
- "log",
- "poem",
- "poem-openapi",
- "prometheus",
- "rustls 0.23.43",
- "serde",
- "serde_json",
- "tempfile",
- "test-r",
- "thiserror 2.0.20",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tokio-util",
- "tonic 0.14.6",
- "tonic-tracing-opentelemetry",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "wasmtime",
- "wasmtime-wasi",
- "wasmtime-wasi-http",
-]
-
-[[package]]
 name = "golem-mcp-import"
 version = "0.0.0"
 dependencies = [
@@ -4190,11 +4123,13 @@ dependencies = [
 name = "golem-rust-macro"
 version = "0.0.0"
 dependencies = [
+ "golem-schema",
  "heck",
  "humantime",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
+ "serde_json",
  "syn 2.0.119",
  "test-r",
 ]
@@ -4294,6 +4229,7 @@ dependencies = [
  "include_dir",
  "indexmap 2.14.0",
  "lazy_static",
+ "libsqlite3-sys",
  "metrics-prometheus",
  "openidconnect",
  "pin-project",
@@ -4467,7 +4403,6 @@ dependencies = [
  "criterion",
  "dashmap",
  "desert_rust",
- "drop-stream",
  "evicting_cache_map",
  "figment",
  "fred",
@@ -4618,6 +4553,7 @@ dependencies = [
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
+ "h2 0.4.19",
  "headers",
  "hmac 0.12.1",
  "http 1.5.0",
@@ -4627,6 +4563,7 @@ dependencies = [
  "hyper-util",
  "include_dir",
  "indexmap 2.14.0",
+ "jsonschema",
  "mime",
  "mime_guess",
  "openidconnect",
@@ -5510,6 +5447,7 @@ dependencies = [
  "chrono",
  "clap",
  "convert_case 0.11.0",
+ "flate2",
  "futures",
  "futures-concurrency",
  "goldenfile",
@@ -5519,7 +5457,9 @@ dependencies = [
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
+ "h2 0.4.19",
  "headers",
+ "http 1.5.0",
  "indoc",
  "opentelemetry 0.30.0",
  "opentelemetry_sdk 0.30.0",

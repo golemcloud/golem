@@ -399,6 +399,8 @@ Each deployment must define exactly one of:
 - `subdomain`: a single DNS label resolved through the target environment server (`my-app.localhost:9006` locally by default, `my-app.apps.golem.cloud` on built-in cloud).
 - `domain`: a full custom domain such as `api.example.com` for custom DNS or custom server environments.
 
+The optional `scheme` field is the public `http` or `https` scheme advertised in OpenAPI. Omission defaults to `http` for built-in local and implicit local environments and `https` for built-in cloud. Explicit values override these defaults. Custom server environments require an explicit value; the management URL scheme is not inferred. This does not configure the listener.
+
 ```yaml
 httpApi:
   deployments:
@@ -685,6 +687,7 @@ httpApi:
   deployments:
     staging:
       - domain: api-staging.example.com
+        scheme: https
         agents:
           MyAgent: {}
 ```

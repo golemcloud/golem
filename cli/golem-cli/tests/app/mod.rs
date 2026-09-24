@@ -25,14 +25,18 @@ mod external_durable_streams;
 mod mcp_import;
 mod mcp_oauth;
 mod moonbit_guest_streams;
+mod moonbit_http_router;
 mod moonbit_tool_middleware;
 mod plugins;
 mod remote_releases;
+mod rust_http_router;
 mod rust_streams;
 mod scala_guest_streams;
+mod scala_http_router;
 mod scala_tool_middleware;
 mod tool_middleware;
 mod typescript_guest_streams;
+mod typescript_http_router;
 
 inherit_test_dep!(Tracing);
 
@@ -53,13 +57,16 @@ tag_suite!(external_durable_streams, agents_streaming);
 tag_suite!(mcp_import, agents_guest_bridge);
 tag_suite!(mcp_oauth, agents_guest_bridge);
 tag_suite!(moonbit_guest_streams, agents_guest_bridge);
+tag_suite!(moonbit_http_router, deploy);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(plugins, deploy);
 tag_suite!(rust_streams, agents_guest_bridge);
 tag_suite!(scala_guest_streams, agents_guest_bridge);
+tag_suite!(scala_http_router, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
 tag_suite!(tool_middleware, deploy);
 tag_suite!(typescript_guest_streams, agents_guest_bridge);
+tag_suite!(typescript_http_router, deploy);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;

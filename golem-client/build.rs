@@ -530,6 +530,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // http_api_deployment
             (
+                "HttpApiDeploymentScheme",
+                "golem_common::model::http_api_deployment::HttpApiDeploymentScheme",
+            ),
+            (
                 "HttpApiDeployment",
                 "golem_common::model::http_api_deployment::HttpApiDeployment",
             ),

@@ -144,9 +144,29 @@ object JsHttpMethod {
   def options: JsHttpMethod = JsShape.tagOnly[JsHttpMethod]("options")
   def trace: JsHttpMethod   = JsShape.tagOnly[JsHttpMethod]("trace")
   def patch: JsHttpMethod   = JsShape.tagOnly[JsHttpMethod]("patch")
+  def any: JsHttpMethod     = JsShape.tagOnly[JsHttpMethod]("any")
 
   def custom(method: String): JsHttpMethod =
     JsShape.tagged[JsHttpMethod]("custom", method.asInstanceOf[js.Any])
+}
+
+@js.native
+sealed trait JsFileMapping extends js.Object {
+  def tag: String = js.native
+}
+
+object JsFileMapping {
+  def exact(publicPath: js.Array[String], filePath: String): JsFileMapping =
+    JsShape.tagged[JsFileMapping](
+      "exact",
+      js.Dynamic.literal("publicPath" -> publicPath, "filePath" -> filePath)
+    )
+
+  def subtree(publicPrefix: js.Array[String], filesystemRoot: String): JsFileMapping =
+    JsShape.tagged[JsFileMapping](
+      "subtree",
+      js.Dynamic.literal("publicPrefix" -> publicPrefix, "filesystemRoot" -> filesystemRoot)
+    )
 }
 
 @js.native
@@ -242,11 +262,14 @@ object JsCorsOptions {
 
 @js.native
 sealed trait JsHttpMountDetails extends js.Object {
-  def pathPrefix: js.Array[JsPathSegment]    = js.native
-  def authDetails: js.UndefOr[JsAuthDetails] = js.native
-  def phantomAgent: Boolean                  = js.native
-  def corsOptions: JsCorsOptions             = js.native
-  def webhookSuffix: js.Array[JsPathSegment] = js.native
+  def pathPrefix: js.Array[JsPathSegment]         = js.native
+  def authDetails: js.UndefOr[JsAuthDetails]      = js.native
+  def phantomAgent: Boolean                       = js.native
+  def corsOptions: JsCorsOptions                  = js.native
+  def webhookSuffix: js.Array[JsPathSegment]      = js.native
+  def staticBindings: js.Array[JsFileMapping]     = js.native
+  def filesystemBindings: js.Array[JsFileMapping] = js.native
+  def openapiProviderMethod: js.UndefOr[String]   = js.native
 }
 
 object JsHttpMountDetails {
@@ -255,15 +278,21 @@ object JsHttpMountDetails {
     phantomAgent: Boolean,
     corsOptions: JsCorsOptions,
     webhookSuffix: js.Array[JsPathSegment],
+    staticBindings: js.Array[JsFileMapping],
+    filesystemBindings: js.Array[JsFileMapping],
+    openapiProviderMethod: js.UndefOr[String],
     authDetails: js.UndefOr[JsAuthDetails] = js.undefined
   ): JsHttpMountDetails = {
     val obj = js.Dynamic.literal(
-      "pathPrefix"    -> pathPrefix,
-      "phantomAgent"  -> phantomAgent,
-      "corsOptions"   -> corsOptions,
-      "webhookSuffix" -> webhookSuffix
+      "pathPrefix"         -> pathPrefix,
+      "phantomAgent"       -> phantomAgent,
+      "corsOptions"        -> corsOptions,
+      "webhookSuffix"      -> webhookSuffix,
+      "staticBindings"     -> staticBindings,
+      "filesystemBindings" -> filesystemBindings
     )
     authDetails.foreach(a => obj.updateDynamic("authDetails")(a))
+    openapiProviderMethod.foreach(p => obj.updateDynamic("openapiProviderMethod")(p))
     obj.asInstanceOf[JsHttpMountDetails]
   }
 }

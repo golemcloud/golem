@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::openapi::HttpApiOpenApiSpec;
+use crate::custom_api::openapi::OpenApiDocument;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{BinarySource, TextSource};
@@ -20,16 +20,15 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
-    OpenApiSpecFormat, SecuritySchemeDetails, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour,
+    AgentFilesystemBehaviour, CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour,
+    HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat, RouteMatch,
+    SecuritySchemeDetails, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
-use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
-use http::Method;
-use http::{HeaderName, StatusCode};
+use golem_service_base::custom_api::{PathSegment, RouteBehaviour, RouteId};
+use http::{HeaderMap, StatusCode};
 use openidconnect::Scope;
 use openidconnect::core::CoreIdTokenClaims;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -68,9 +67,8 @@ pub struct RichCompiledRoute {
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
     pub route_id: RouteId,
-    pub method: Method,
+    pub route_match: RouteMatch,
     pub path: Vec<PathSegment>,
-    pub body: RequestBodySchema,
     pub behavior: RichRouteBehaviour,
     pub security: RichRouteSecurity,
     pub cors: CorsOptions,
@@ -84,6 +82,8 @@ pub enum RichRouteBehaviour {
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
     OidcCallback(OidcCallbackBehaviour),
+    HttpRouter(HttpRouterBehaviour),
+    AgentFilesystem(AgentFilesystemBehaviour),
 }
 
 impl From<RouteBehaviour> for RichRouteBehaviour {
@@ -93,6 +93,8 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
             RouteBehaviour::CorsPreflight(inner) => Self::CorsPreflight(inner),
             RouteBehaviour::WebhookCallback(inner) => Self::WebhookCallback(inner),
             RouteBehaviour::OpenApiSpec(inner) => Self::OpenApiSpec(inner),
+            RouteBehaviour::HttpRouter(inner) => Self::HttpRouter(inner),
+            RouteBehaviour::AgentFilesystem(inner) => Self::AgentFilesystem(inner),
         }
     }
 }
@@ -107,6 +109,7 @@ pub enum RichRouteSecurity {
     None,
     SessionFromHeader(SessionFromHeaderRouteSecurity),
     SecurityScheme(RichSecuritySchemeRouteSecurity),
+    Unavailable,
 }
 
 #[derive(Debug, Clone)]
@@ -117,7 +120,7 @@ pub struct RichSecuritySchemeRouteSecurity {
 #[derive(Debug)]
 pub struct RouteExecutionResult {
     pub status: StatusCode,
-    pub headers: HashMap<HeaderName, String>,
+    pub headers: HeaderMap,
     pub body: ResponseBody,
 }
 
@@ -138,9 +141,10 @@ pub enum ResponseBody {
         body: TextSource,
     },
     OpenApiSchema {
-        spec: Arc<HttpApiOpenApiSpec>,
+        spec: Arc<OpenApiDocument>,
         format: OpenApiSpecFormat,
     },
+    Stream(poem::Body),
 }
 
 impl fmt::Debug for ResponseBody {
@@ -156,9 +160,10 @@ impl fmt::Debug for ResponseBody {
             ResponseBody::UnstructuredTextBody { .. } => f.write_str("UnstructuredTextBody"),
             ResponseBody::OpenApiSchema { spec, format } => f
                 .debug_struct("OpenApiSchema")
-                .field("spec", &spec.0)
+                .field("spec", spec)
                 .field("format", format)
                 .finish(),
+            ResponseBody::Stream(_) => f.write_str("Stream"),
         }
     }
 }

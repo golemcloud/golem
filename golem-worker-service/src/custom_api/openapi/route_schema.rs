@@ -136,12 +136,20 @@ pub fn build_document_schema(
     let mut graphs: Vec<SchemaGraph> = Vec::new();
 
     for route in routes {
-        let request_body = lower_request_body(&route.body, &mut graphs)?;
         let call_agent = match &route.behavior {
             super::super::RichRouteBehaviour::CallAgent(inner) => {
                 Some(lower_call_agent(&route.path, inner, &mut graphs)?)
             }
             _ => None,
+        };
+        let request_body = match &route.behavior {
+            super::super::RichRouteBehaviour::CallAgent(inner) => {
+                lower_request_body(&inner.body, &mut graphs)?
+            }
+            super::super::RichRouteBehaviour::WebhookCallback(_) => {
+                RequestBodyModel::UnrestrictedBinary
+            }
+            _ => RequestBodyModel::Unused,
         };
         per_route.push(RouteSchema {
             request_body,

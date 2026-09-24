@@ -23281,6 +23281,11 @@ components:
           type: array
           items:
             type: string
+    AgentTypeKind:
+      type: string
+      enum:
+      - regular
+      - http-router
     AgentTypeProvisionConfig:
       title: AgentTypeProvisionConfig
       description: |-
@@ -23383,6 +23388,8 @@ components:
       properties:
         type_name:
           type: string
+        kind:
+          $ref: '#/components/schemas/AgentTypeKind'
         description:
           type: string
         source_language:
@@ -23414,6 +23421,7 @@ components:
             $ref: '#/components/schemas/AgentConfigDeclarationSchema'
       required:
       - type_name
+      - kind
       - description
       - constructor
       - methods
@@ -25113,6 +25121,19 @@ components:
       - environment
       - application
       - account
+    ExactFileMapping:
+      title: ExactFileMapping
+      type: object
+      properties:
+        publicPath:
+          type: array
+          items:
+            type: string
+        filePath:
+          type: string
+      required:
+      - publicPath
+      - filePath
     FieldSource:
       type: object
       oneOf:
@@ -25135,6 +25156,40 @@ components:
         required:
         - tag
         - value
+    FileMapping:
+      discriminator:
+        propertyName: type
+        mapping:
+          Exact: '#/components/schemas/FileMapping_ExactFileMapping'
+          Subtree: '#/components/schemas/FileMapping_SubtreeFileMapping'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/FileMapping_ExactFileMapping'
+      - $ref: '#/components/schemas/FileMapping_SubtreeFileMapping'
+    FileMapping_ExactFileMapping:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Exact
+            type: string
+            enum:
+            - Exact
+        required:
+        - type
+      - $ref: '#/components/schemas/ExactFileMapping'
+    FileMapping_SubtreeFileMapping:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Subtree
+            type: string
+            enum:
+            - Subtree
+        required:
+        - type
+      - $ref: '#/components/schemas/SubtreeFileMapping'
     HeaderVariable:
       title: HeaderVariable
       type: object
@@ -25161,6 +25216,8 @@ components:
           format: uuid
         domain:
           type: string
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         hash:
           type: string
           format: hash
@@ -25180,6 +25237,7 @@ components:
       - revision
       - environmentId
       - domain
+      - scheme
       - hash
       - agents
       - webhooksPrefix
@@ -25238,6 +25296,13 @@ components:
       properties:
         domain:
           type: string
+        scheme:
+          description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+          default: https
+          allOf:
+          - $ref: '#/components/schemas/HttpApiDeploymentScheme'
+          - description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+            default: https
         webhooksPrefix:
           type: string
         openapiEndpointPrefix:
@@ -25251,6 +25316,11 @@ components:
       - webhooksPrefix
       - openapiEndpointPrefix
       - agents
+    HttpApiDeploymentScheme:
+      type: string
+      enum:
+      - http
+      - https
     HttpApiDeploymentUpdate:
       title: HttpApiDeploymentUpdate
       type: object
@@ -25258,6 +25328,8 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         webhookPrefix:
           type: string
         openapiEndpointPrefix:
@@ -25352,6 +25424,7 @@ components:
           Trace: '#/components/schemas/HttpMethod_Empty'
           Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
+          Any: '#/components/schemas/HttpMethod_Empty'
       type: object
       oneOf:
       - $ref: '#/components/schemas/HttpMethod_Empty'
@@ -25364,6 +25437,7 @@ components:
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
     HttpMethod_CustomHttpMethod:
       allOf:
       - type: object
@@ -25381,10 +25455,10 @@ components:
       - type: object
         properties:
           type:
-            example: Patch
+            example: Any
             type: string
             enum:
-            - Patch
+            - Any
         required:
         - type
       - $ref: '#/components/schemas/Empty'
@@ -25406,11 +25480,24 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PathSegment'
+        staticBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        filesystemBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        openapiProviderMethod:
+          description: The name of a parameterless router method that returns the OpenAPI document as a string.
+          type: string
       required:
       - pathPrefix
       - phantomAgent
       - corsOptions
       - webhookSuffix
+      - staticBindings
+      - filesystemBindings
     InitialAgentFile:
       title: InitialAgentFile
       type: object
@@ -27447,6 +27534,19 @@ components:
       - planDefault
       - ceiling
       - userConfigurable
+    SubtreeFileMapping:
+      title: SubtreeFileMapping
+      type: object
+      properties:
+        publicPrefix:
+          type: array
+          items:
+            type: string
+        filesystemRoot:
+          type: string
+      required:
+      - publicPrefix
+      - filesystemRoot
     SystemToolAvailability:
       type: string
       enum:
@@ -28316,7 +28416,6 @@ tags:
 - name: Application
 - name: Card
 - name: Component
-- name: Debugging
 - name: Deployment
 - name: Environment
 - name: EnvironmentPluginGrants

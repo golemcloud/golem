@@ -58,9 +58,7 @@ use crate::durable_host::{
     recover_stderr_logs,
 };
 use crate::metrics::workers::AdmissionPhase;
-use crate::model::{
-    AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, SnapshotSource, TrapType,
-};
+use crate::model::{AgentConfig, ExecutionStatus, LookupResult, SnapshotSource, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::active_agents::{
     MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
@@ -96,8 +94,9 @@ use crate::services::{
     HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
     HasKeyValueService, HasNativeToolCatalog, HasOplog, HasOplogService, HasPromiseService,
     HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
-    HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWebSocketConnectionPool,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    UsesAllDeps,
 };
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation_loop::{
@@ -141,6 +140,7 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
     ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
+use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
@@ -163,6 +163,7 @@ use golem_common::related_span;
 use golem_common::schema::TypedSchemaValue;
 use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
@@ -903,13 +904,19 @@ impl DurableTopologyRecoveryCache {
 }
 
 /// Owns the periodic task so worker deletion can join it before removing oplog storage.
-#[derive(Default)]
 struct DurableStreamAttachmentReconciler {
     shutdown: CancellationToken,
     handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl DurableStreamAttachmentReconciler {
+    fn new(executor_shutdown: CancellationToken) -> Self {
+        Self {
+            shutdown: executor_shutdown.child_token(),
+            handle: Mutex::new(None),
+        }
+    }
+
     fn start(&self, handle: JoinHandle<()>) {
         let mut stored = self
             .handle
@@ -924,6 +931,10 @@ impl DurableStreamAttachmentReconciler {
 
     async fn stop(&self) {
         self.shutdown.cancel();
+        self.wait().await;
+    }
+
+    async fn wait(&self) {
         let mut stored = self.handle.lock().await;
         if let Some(handle) = stored.as_mut() {
             let _ = handle.await;
@@ -1258,12 +1269,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(interrupt) = interrupt {
             self.set_interrupting(interrupt).await;
         }
+        let unload_reason = interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt);
         self.stop_internal(
             false,
             None,
-            UnloadRequest::ordinary(
-                interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt),
-            ),
+            UnloadRequest::ordinary(unload_reason),
             FinalWorkerState::Unloaded {
                 startup_failure: None,
             },
@@ -2077,7 +2087,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owner_retirement: tokio::sync::OnceCell::new(),
             owner_cleanup: Mutex::new(OwnerCleanupState::PreRemoval),
             owner_retirement_requested: CancellationToken::new(),
-            durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler::default(),
+            durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler::new(
+                deps.shutdown_token(),
+            ),
             durable_topology_recovery: Arc::new(
                 Mutex::new(DurableTopologyRecoveryCache::default()),
             ),
@@ -2097,7 +2109,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && last_oplog_idx <= OplogIndex::from_u64(2)
             && !reconstructed_ephemeral
         {
-            let idempotency_key = IdempotencyKey::new(format!("init-{}", self.agent_id()));
+            let idempotency_key = self.initialization_idempotency_key();
             let (_, entry) = self
                 .pending_invocation_entry(
                     &worker.oplog,
@@ -2121,8 +2133,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await;
         }
-        if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS
-            && worker.last_known_status.load().has_durable_stream_history
+        if worker.last_known_status.load().has_durable_stream_history
             && !self
                 .durable_stream_producer_for(&worker)
                 .await?
@@ -4298,6 +4309,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .clone()
     }
 
+    /// Reserved constructor key, also used to recognize initialization before inspecting files.
+    fn initialization_idempotency_key(&self) -> IdempotencyKey {
+        IdempotencyKey::new(format!("init-{}", self.agent_id()))
+    }
+
     /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
     /// full invocation, downloading its payload from external storage if needed. The status record
     /// only keeps a lightweight reference, so callers that need to execute the invocation hydrate
@@ -4644,7 +4660,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn is_running_worker_idle(&self, running: &RunningWorker) -> bool {
         let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
         let has_pending_invocations = !self.pending_invocations().await.is_empty();
-        let has_queued_internal_work = !running.queue.read().await.is_empty();
+        let has_queued_internal_work = {
+            let mut queue = running.queue.write().await;
+            queue.retain(|invocation| !invocation.is_abandoned());
+            !queue.is_empty()
+        };
         let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
         let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
         let has_filesystem_effects = self.has_active_filesystem_effects(running);
@@ -4757,7 +4777,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
-                let has_queued_internal_work = !running.queue.read().await.is_empty();
+                let has_queued_internal_work = {
+                    let mut queue = running.queue.write().await;
+                    queue.retain(|invocation| !invocation.is_abandoned());
+                    !queue.is_empty()
+                };
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
@@ -4825,7 +4849,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let should_stop = match &*instance_guard {
             WorkerInstance::Running(running) => {
                 let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
-                let has_queued_internal_work = !running.queue.read().await.is_empty();
+                let has_queued_internal_work = {
+                    let mut queue = running.queue.write().await;
+                    queue.retain(|invocation| !invocation.is_abandoned());
+                    !queue.is_empty()
+                };
                 let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
                 let has_interrupt = running.interrupt_signal.lock().await.has_interrupt();
                 let has_filesystem_effects = self.has_active_filesystem_effects(running);
@@ -5306,9 +5334,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn get_file_system_node(
-        &self,
+        self: &Arc<Self>,
         path: CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
+        let (sender, receiver) = oneshot::channel();
+        self.enqueue_filesystem_request(QueuedWorkerInvocation::GetFileSystemNode { path, sender })
+            .await?;
+        receiver
+            .await
+            .map_err(|_| WorkerExecutorError::runtime("Filesystem inspection stopped"))?
+    }
+
+    async fn enqueue_filesystem_request(
+        self: &Arc<Self>,
+        invocation: QueuedWorkerInvocation,
+    ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
         if instance_guard.ensure_not_deleting().is_err() {
@@ -5316,29 +5356,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Cannot access filesystem of a deleting worker",
             ));
         };
+        if self.owner_retirement_requested.is_cancelled() {
+            return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
+        }
 
         if let Some(err) = instance_guard.startup_failure() {
             return Err(err.clone());
         }
 
-        let (sender, receiver) = oneshot::channel();
+        let status = self.state_actor.try_attached_status().await?;
+        Self::ensure_not_failed(&self.deps, &self.owned_agent_id, self.agent_mode(), &status)
+            .await?;
 
-        self.queue
-            .write()
-            .await
-            .push_back(QueuedWorkerInvocation::GetFileSystemNode { path, sender });
-
-        // Two cases here:
-        // - Worker is running, we can send the invocation command, and the worker will look at the queue immediately
-        // - Worker is starting, it will process the request when it is started
+        let mut queue = self.queue.write().await;
+        queue.retain(|invocation| !invocation.is_abandoned());
+        queue.push_back(invocation);
+        drop(queue);
 
         if let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
         };
 
+        let needs_start = matches!(*instance_guard, WorkerInstance::Unloaded { .. });
         drop(instance_guard);
-
-        receiver.await.unwrap()
+        if needs_start {
+            Self::start_if_needed(self.clone()).await?;
+        }
+        Ok(())
     }
 
     pub async fn get_wallet_cards(&self) -> Result<Vec<StoredCard>, WorkerExecutorError> {
@@ -5356,10 +5400,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let (sender, receiver) = oneshot::channel();
 
-        self.queue
-            .write()
-            .await
-            .push_back(QueuedWorkerInvocation::GetWalletCards { sender });
+        let mut queue = self.queue.write().await;
+        queue.retain(|invocation| !invocation.is_abandoned());
+        queue.push_back(QueuedWorkerInvocation::GetWalletCards { sender });
+        drop(queue);
 
         if let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -5385,35 +5429,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn read_file(
-        &self,
+        self: &Arc<Self>,
         path: CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let instance_guard = self.lock_non_stopping_worker().await;
+        selection: FileByteSelection,
+    ) -> Result<FileReadResponse, FileReadError> {
+        validate_file_read_path(path.as_abs_str())?;
+        selection.validate()?;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.enqueue_filesystem_request(QueuedWorkerInvocation::ReadFile {
+            path,
+            selection,
+            sender,
+        })
+        .await
+        .map_err(|_| FileReadError::Lifecycle)?;
 
-        if instance_guard.ensure_not_deleting().is_err() {
-            return Err(WorkerExecutorError::invalid_request(
-                "Cannot access filesystem of a deleting worker",
-            ));
-        };
-
-        if let Some(err) = instance_guard.startup_failure() {
-            return Err(err.clone());
-        }
-
-        let (sender, receiver) = oneshot::channel();
-
-        self.queue
-            .write()
-            .await
-            .push_back(QueuedWorkerInvocation::ReadFile { path, sender });
-
-        if let WorkerInstance::Running(running) = &*instance_guard {
-            running.sender.send(WorkerCommand::WorkAvailable).unwrap();
-        };
-
-        drop(instance_guard);
-
-        receiver.await.unwrap()
+        receiver.await.map_err(|_| FileReadError::Lifecycle)?
     }
 
     pub async fn await_ready_to_process_commands(&self) -> Result<(), WorkerExecutorError> {
@@ -5430,20 +5461,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         // An unloaded worker has no invocation loop that could drain a queued readiness marker,
-        // and this method must not start one: the worker already reached a stopped state (for
-        // example a debugging worker that suspended itself after replaying to its target), which
-        // is exactly the "not processing anything until the next explicit start" condition
-        // callers wait for.
+        // and this method must not start one: the worker already reached a stopped state, which is
+        // exactly the "not processing anything until the next explicit start" condition callers
+        // wait for.
         if matches!(&*instance_guard, WorkerInstance::Unloaded { .. }) {
             return Ok(());
         }
 
         let (sender, receiver) = oneshot::channel();
 
-        self.queue
-            .write()
-            .await
-            .push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
+        let mut queue = self.queue.write().await;
+        queue.retain(|invocation| !invocation.is_abandoned());
+        queue.push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
+        drop(queue);
 
         if let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -6569,14 +6599,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let producer = self.durable_stream_producer().await?;
         let session_reference = StreamRegistrationInvocation::Local(prepared.session_key.clone());
-        if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
-            let _ = self
-                .recover_durable_stream_topologies(
-                    false,
-                    Some(&producer.qualify_session(&session_reference)),
-                )
-                .await?;
-        }
+        let _ = self
+            .recover_durable_stream_topologies(
+                false,
+                Some(&producer.qualify_session(&session_reference)),
+            )
+            .await?;
         let mappings = producer
             .materialize_bindings(&prepared.stream_mappings)
             .await
@@ -6938,8 +6966,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn run_durable_stream_maintenance(&self, producer: &DurableStreamStore) -> bool {
         let mut needs_periodic_maintenance = false;
-        if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS && !producer.deletion_started().await
-        {
+        if !producer.deletion_started().await {
             match self.recover_durable_stream_topologies(true, None).await {
                 Ok(pending) => {
                     needs_periodic_maintenance |= pending;
@@ -7586,6 +7613,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
         });
         this.durable_stream_attachment_reconciler.start(handle);
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub async fn wait_for_durable_stream_attachment_reconciler(&self) {
+        self.durable_stream_attachment_reconciler.wait().await;
     }
 
     /// Appends an oplog entry without forcing a durable commit. Callers that
@@ -8789,16 +8821,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Resolves all queued `AwaitReadyToProcessCommands` markers when the worker reaches the
     /// `Unloaded` state without the invocation loop having drained them — for example when the
-    /// worker suspends itself mid-invocation, as debugging workers do as soon as their replay
-    /// goes live. Waiters observe the startup failure if there is one, otherwise a successful
-    /// stop. All other queued items are kept for the next start.
+    /// worker suspends itself mid-invocation. Waiters observe the startup failure if there is
+    /// one, otherwise a successful stop. Inspection waiters survive only a recoverable unload;
+    /// startup and cleanup failure or a terminal stop must not leave requests waiting for a
+    /// loop that will not return.
     async fn resolve_pending_queue_on_unload(
         &self,
         startup_failure: Option<&WorkerExecutorError>,
-        _pending_live_invocations: PendingLiveInvocationDisposition,
+        pending_live_invocations: PendingLiveInvocationDisposition,
     ) {
         self.resolve_pending_readiness_awaiters_on_stop(startup_failure)
             .await;
+        let mut queue = self.queue.write().await;
+        queue.retain(|invocation| !invocation.is_abandoned());
+        if pending_live_invocations == PendingLiveInvocationDisposition::Fail && !queue.is_empty() {
+            let status = self.get_attached_last_known_status().await;
+            let error = Self::ensure_not_failed(
+                &self.deps,
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &status,
+            )
+            .await
+            .err()
+            .unwrap_or_else(|| {
+                WorkerExecutorError::runtime("Worker stopped with queued resident work")
+            });
+            for invocation in queue.drain(..) {
+                invocation.fail(&error);
+            }
+        }
     }
 
     async fn resolve_pending_readiness_awaiters_on_stop(
@@ -8806,6 +8858,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         startup_failure: Option<&WorkerExecutorError>,
     ) {
         let mut queue = self.queue.write().await;
+        queue.retain(|invocation| !invocation.is_abandoned());
+        if let Some(error) = startup_failure {
+            for invocation in queue.drain(..) {
+                invocation.fail(error);
+            }
+        }
         let items = queue.drain(..).collect::<Vec<_>>();
         for item in items {
             match item {
@@ -8826,21 +8884,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // Publishing the provided initialization error to all queued internal operations
         for item in queued_items {
-            match item {
-                QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
-                    let _ = sender.send(Err(error.clone()));
-                }
-                QueuedWorkerInvocation::GetWalletCards { sender } => {
-                    let _ = sender.send(Err(error.clone()));
-                }
-                QueuedWorkerInvocation::ReadFile { sender, .. } => {
-                    let _ = sender.send(Err(error.clone()));
-                }
-                QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
-                    let _ = sender.send(Err(error.clone()));
-                }
-                QueuedWorkerInvocation::SaveSnapshot => {}
-            }
+            item.fail(&error);
         }
 
         let status = self.last_known_status.load_full();
@@ -11074,6 +11118,46 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn cancelled_resident_requests_are_pruned_without_dropping_snapshots() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let read = QueuedWorkerInvocation::ReadFile {
+            path: CanonicalFilePath::from_abs_str("/file").unwrap(),
+            selection: FileByteSelection::Full,
+            sender,
+        };
+        assert!(!read.is_abandoned());
+        drop(receiver);
+        let mut queue = VecDeque::from([read, QueuedWorkerInvocation::SaveSnapshot]);
+        queue.retain(|invocation| !invocation.is_abandoned());
+        assert_eq!(queue.len(), 1);
+        assert!(matches!(queue[0], QueuedWorkerInvocation::SaveSnapshot));
+    }
+
+    #[test]
+    async fn resident_filesystem_requests_receive_lifecycle_failures() {
+        let error = WorkerExecutorError::runtime("initialization failed");
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        QueuedWorkerInvocation::ReadFile {
+            path: CanonicalFilePath::from_abs_str("/file").unwrap(),
+            selection: FileByteSelection::Full,
+            sender,
+        }
+        .fail(&error);
+        assert!(matches!(
+            receiver.await.unwrap(),
+            Err(FileReadError::Lifecycle)
+        ));
+
+        let (sender, receiver) = oneshot::channel();
+        QueuedWorkerInvocation::GetFileSystemNode {
+            path: CanonicalFilePath::from_abs_str("/file").unwrap(),
+            sender,
+        }
+        .fail(&error);
+        assert!(matches!(receiver.await.unwrap(), Err(actual) if actual == error));
+    }
+
+    #[test]
     fn external_tool_deployment_revision_fence_is_optional_and_exact() {
         let listed = DeploymentRevision::try_from(7_u64).unwrap();
         let changed = DeploymentRevision::try_from(8_u64).unwrap();
@@ -11394,7 +11478,9 @@ mod tests {
 
     #[test]
     async fn stopping_durable_stream_reconciler_waits_for_in_flight_pass() {
-        let reconciler = Arc::new(DurableStreamAttachmentReconciler::default());
+        let reconciler = Arc::new(DurableStreamAttachmentReconciler::new(
+            CancellationToken::new(),
+        ));
         let shutdown = reconciler.shutdown.clone();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
@@ -11432,7 +11518,9 @@ mod tests {
 
     #[test]
     async fn cancelled_reconciler_stop_retains_the_in_flight_pass_barrier() {
-        let reconciler = Arc::new(DurableStreamAttachmentReconciler::default());
+        let reconciler = Arc::new(DurableStreamAttachmentReconciler::new(
+            CancellationToken::new(),
+        ));
         let shutdown = reconciler.shutdown.clone();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
@@ -12302,10 +12390,12 @@ pub enum QueuedWorkerInvocation {
     GetWalletCards {
         sender: oneshot::Sender<Result<Vec<StoredCard>, WorkerExecutorError>>,
     },
-    // The worker will suspend execution until the stream is dropped, so consume in a timely manner.
+    // Holds resident execution ownership until production has copied all selected bytes into the
+    // bounded response, or until cancellation/failure.
     ReadFile {
         path: CanonicalFilePath,
-        sender: oneshot::Sender<Result<ReadFileResult, WorkerExecutorError>>,
+        selection: FileByteSelection,
+        sender: tokio::sync::oneshot::Sender<Result<FileReadResponse, FileReadError>>,
     },
     // Waits for the invocation loop to pick up this message, ensuring that the worker is ready to process followup commands.
     // The sender will be called with Ok if the worker is in a running state.
@@ -12314,6 +12404,37 @@ pub enum QueuedWorkerInvocation {
         sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     SaveSnapshot,
+}
+
+impl QueuedWorkerInvocation {
+    /// Only transient commands are abandoned on disconnect; durable invocations live in the oplog.
+    fn is_abandoned(&self) -> bool {
+        match self {
+            Self::ReadFile { sender, .. } => sender.is_closed(),
+            Self::GetFileSystemNode { sender, .. } => sender.is_canceled(),
+            Self::GetWalletCards { sender } => sender.is_canceled(),
+            Self::AwaitReadyToProcessCommands { sender } => sender.is_canceled(),
+            Self::SaveSnapshot => false,
+        }
+    }
+
+    fn fail(self, error: &WorkerExecutorError) {
+        match self {
+            Self::ReadFile { sender, .. } => {
+                let _ = sender.send(Err(FileReadError::Lifecycle));
+            }
+            Self::GetFileSystemNode { sender, .. } => {
+                let _ = sender.send(Err(error.clone()));
+            }
+            Self::GetWalletCards { sender } => {
+                let _ = sender.send(Err(error.clone()));
+            }
+            Self::AwaitReadyToProcessCommands { sender } => {
+                let _ = sender.send(Err(error.clone()));
+            }
+            Self::SaveSnapshot => {}
+        }
+    }
 }
 
 fn durable_stream_attempt_error_outcome(error: &WorkerExecutorError) -> &'static str {

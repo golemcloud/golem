@@ -37,6 +37,7 @@ pub fn get_http_endpoint_details(
     };
 
     let http_method = match method {
+        "any" => HttpMethod::Any,
         "get" => HttpMethod::Get,
         "post" => HttpMethod::Post,
         "put" => HttpMethod::Put,

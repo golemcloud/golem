@@ -10,6 +10,7 @@ declare module 'golem:agent/common@2.0.0' {
   export type ComponentId = golemCore200Types.ComponentId;
   export type Duration = wasiClocks030Types.Duration;
   export type AgentMode = "durable" | "ephemeral";
+  export type AgentTypeKind = "regular" | "http-router";
   export type AutoInjectedKind = "principal";
   export type FieldSource =
   {
@@ -60,6 +61,23 @@ declare module 'golem:agent/common@2.0.0' {
   export type ReadOnlyConfig = {
     cachePolicy: CachePolicy;
     usesPrincipal: boolean;
+  };
+  export type ExactFileMapping = {
+    publicPath: string[];
+    filePath: string;
+  };
+  export type SubtreeFileMapping = {
+    publicPrefix: string[];
+    filesystemRoot: string;
+  };
+  export type FileMapping =
+  {
+    tag: 'exact'
+    val: ExactFileMapping
+  } |
+  {
+    tag: 'subtree'
+    val: SubtreeFileMapping
   };
   export type CorsOptions = {
     allowedPatterns: string[];
@@ -120,6 +138,9 @@ declare module 'golem:agent/common@2.0.0' {
   {
     tag: 'custom'
     val: string
+  } |
+  {
+    tag: 'any'
   };
   export type SystemVariable = "agent-type" | "agent-version";
   export type PathVariable = {
@@ -160,6 +181,10 @@ declare module 'golem:agent/common@2.0.0' {
     phantomAgent: boolean;
     corsOptions: CorsOptions;
     webhookSuffix: PathSegment[];
+    staticBindings: FileMapping[];
+    filesystemBindings: FileMapping[];
+    /** The name of a parameterless router method that returns the OpenAPI document as a string. */
+    openapiProviderMethod?: string;
   };
   export type HttpEndpointDetails = {
     httpMethod: HttpMethod;
@@ -267,6 +292,7 @@ declare module 'golem:agent/common@2.0.0' {
    */
   export type AgentType = {
     typeName: string;
+    kind: AgentTypeKind;
     description: string;
     sourceLanguage: string;
     schema: SchemaGraph;

@@ -459,6 +459,9 @@ mod test {
     #[test]
     fn constructor_binds_all_parameters_from_mount_path() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![
                 PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
@@ -494,6 +497,9 @@ mod test {
     #[test]
     fn constructor_fails_if_parameter_not_in_path() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![PathSegment::Literal(LiteralSegment {
                 value: "agents".into(),
             })],
@@ -517,6 +523,9 @@ mod test {
     #[test]
     fn constructor_rejects_non_string_remaining_path_variable() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![PathSegment::RemainingPathVariable(PathVariable {
                 variable_name: "rest".into(),
             })],
@@ -540,6 +549,9 @@ mod test {
     #[test]
     fn method_parameters_only_bind_to_endpoint_suffix() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![PathSegment::PathVariable(PathVariable {
                 variable_name: "agent_id".into(),
             })],
@@ -693,6 +705,9 @@ mod test {
     #[test]
     fn constructor_binds_snake_case_parameter_from_path() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![
                 PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
@@ -728,6 +743,9 @@ mod test {
     #[test]
     fn constructor_binds_camel_case_parameter_from_path() {
         let mount = HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![
                 PathSegment::Literal(LiteralSegment {
                     value: "agents".into(),
@@ -912,6 +930,9 @@ mod test {
 
     fn empty_mount() -> HttpMountDetails {
         HttpMountDetails {
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
             path_prefix: vec![],
             auth_details: None,
             phantom_agent: false,

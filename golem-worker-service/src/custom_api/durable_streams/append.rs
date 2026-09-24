@@ -24,7 +24,7 @@ use golem_common::schema::{FieldSource, SchemaGraph, SchemaType};
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::custom_api::CallAgentBehaviour;
 use golem_service_base::model::auth::AuthCtx;
-use http::{HeaderName, StatusCode};
+use http::{HeaderName, HeaderValue, StatusCode};
 use prost::Message;
 use tokio::io::AsyncReadExt;
 
@@ -344,7 +344,7 @@ fn append_response(
             result.status = StatusCode::FORBIDDEN;
             result.headers.insert(
                 HeaderName::from_static("producer-epoch"),
-                value.current_epoch.to_string(),
+                HeaderValue::from(value.current_epoch),
             );
             return Ok(result);
         }
@@ -353,11 +353,11 @@ fn append_response(
             result.status = StatusCode::CONFLICT;
             result.headers.insert(
                 HeaderName::from_static("producer-expected-seq"),
-                value.expected.to_string(),
+                HeaderValue::from(value.expected),
             );
             result.headers.insert(
                 HeaderName::from_static("producer-received-seq"),
-                value.received.to_string(),
+                HeaderValue::from(value.received),
             );
             return Ok(result);
         }
@@ -372,22 +372,28 @@ fn append_response(
     };
     result.headers.insert(
         HeaderName::from_static("stream-next-offset"),
-        offset_text(&offset)?,
+        offset_text(&offset)?.parse().map_err(anyhow::Error::from)?,
     );
     result.headers.insert(
         HeaderName::from_static("stream-closed"),
-        stream_closed
-            .ok_or_else(|| anyhow::anyhow!("append outcome has no stream metadata"))?
-            .to_string(),
+        HeaderValue::from_static(
+            if stream_closed
+                .ok_or_else(|| anyhow::anyhow!("append outcome has no stream metadata"))?
+            {
+                "true"
+            } else {
+                "false"
+            },
+        ),
     );
     if let (Some(producer), Some(sequence)) = (producer, sequence) {
         result.headers.insert(
             HeaderName::from_static("producer-epoch"),
-            producer.epoch.to_string(),
+            HeaderValue::from(producer.epoch),
         );
         result.headers.insert(
             HeaderName::from_static("producer-seq"),
-            sequence.to_string(),
+            HeaderValue::from(sequence),
         );
     }
     Ok(result)
@@ -395,7 +401,10 @@ fn append_response(
 
 fn read_only_response(allow: &str) -> RouteExecutionResult {
     let mut result = response(StatusCode::METHOD_NOT_ALLOWED);
-    result.headers.insert(http::header::ALLOW, allow.into());
+    result.headers.insert(
+        http::header::ALLOW,
+        allow.parse().expect("static Allow header is valid"),
+    );
     result
 }
 
@@ -523,19 +532,19 @@ mod tests {
         assert_eq!(result.status, StatusCode::NO_CONTENT);
         assert_eq!(
             result.headers[&HeaderName::from_static("stream-next-offset")],
-            original.to_string()
+            original.to_string().parse::<HeaderValue>().unwrap()
         );
         assert_eq!(
             result.headers[&HeaderName::from_static("producer-seq")],
-            "9"
+            HeaderValue::from_static("9")
         );
         assert_eq!(
             result.headers[&HeaderName::from_static("producer-epoch")],
-            "4"
+            HeaderValue::from_static("4")
         );
         assert_eq!(
             result.headers[&HeaderName::from_static("stream-closed")],
-            "false"
+            HeaderValue::from_static("false")
         );
     }
 

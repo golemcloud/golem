@@ -918,8 +918,10 @@ impl GrpcQuotaService {
             // If re-acquire fails we leave the entry as Lost and retry next loop.
             for (key, slot_mutex) in &entries_to_renew {
                 let (environment_id, resource_name) = key;
-                let is_lost = matches!(slot_mutex.inner.lock().await.lease, TrackedLease::Lost);
-                if !is_lost {
+                // Keep acquisition serialized with notify_demand: acquiring twice
+                // replaces the remote lease and can forfeit its unused allocation.
+                let mut slot = slot_mutex.inner.lock().await;
+                if !matches!(slot.lease, TrackedLease::Lost) {
                     continue;
                 }
 
@@ -931,18 +933,13 @@ impl GrpcQuotaService {
                     .await
                 {
                     Ok(new_lease) => {
-                        let mut slot = slot_mutex.inner.lock().await;
-                        // Only update if still Lost — another concurrent path won't exist
-                        // given the single renewal task, but guard defensively.
-                        if matches!(slot.lease, TrackedLease::Lost) {
-                            tracing::info!(
-                                environment_id = %environment_id,
-                                resource_name = %resource_name,
-                                "Re-acquired lost lease"
-                            );
-                            slot.lease = Self::from_quota_lease(&new_lease);
-                            self.process_waiters(&mut slot, key);
-                        }
+                        tracing::info!(
+                            environment_id = %environment_id,
+                            resource_name = %resource_name,
+                            "Re-acquired lost lease"
+                        );
+                        slot.lease = Self::from_quota_lease(&new_lease);
+                        self.process_waiters(&mut slot, key);
                     }
                     Err(err) => {
                         tracing::warn!(
@@ -1296,6 +1293,8 @@ mod tests {
 
     struct MockShardManager {
         acquire_response: StdMutex<Option<Result<QuotaLease, QuotaError>>>,
+        acquire_calls: std::sync::atomic::AtomicUsize,
+        acquire_gate: Option<Arc<tokio::sync::Semaphore>>,
         renew_fn: StdMutex<Option<RenewFn>>,
         released: StdMutex<Vec<(ResourceDefinitionId, u64, u64)>>,
     }
@@ -1304,6 +1303,8 @@ mod tests {
         fn new() -> Self {
             Self {
                 acquire_response: StdMutex::new(None),
+                acquire_calls: std::sync::atomic::AtomicUsize::new(0),
+                acquire_gate: None,
                 renew_fn: StdMutex::new(None),
                 released: StdMutex::new(Vec::new()),
             }
@@ -1367,6 +1368,11 @@ mod tests {
             _resource_name: ResourceName,
             _port: u16,
         ) -> Result<QuotaLease, QuotaError> {
+            self.acquire_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(gate) = &self.acquire_gate {
+                gate.acquire().await.unwrap().forget();
+            }
             self.acquire_response
                 .lock()
                 .unwrap()
@@ -1443,6 +1449,50 @@ mod tests {
 
         recorder.assert_closed_span("quota_renewal");
         recorder.assert_all_closed();
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn reservation_joins_in_flight_background_acquire() {
+        let rid = test_resource_definition_id();
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let mut mock = MockShardManager::new().with_acquire(Ok(bounded_lease(rid, 1, 4)));
+        mock.acquire_gate = Some(gate.clone());
+        let mock = Arc::new(mock);
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            9093,
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+        let mut interest = svc
+            .acquire(test_env_id(), test_resource_name(), 4, 0, None)
+            .await;
+
+        let mut renewal = Box::pin(svc.renew_all());
+        assert!(futures::poll!(&mut renewal).is_pending());
+        let mut reservation = Box::pin(svc.try_reserve(&mut interest, 2));
+        assert!(futures::poll!(&mut reservation).is_pending());
+        assert_eq!(
+            mock.acquire_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a reservation must not replace an in-flight quota lease"
+        );
+
+        gate.add_permits(1);
+        let ((), first) = tokio::join!(renewal, reservation);
+        assert_matches!(
+            first,
+            ReserveResult::Ok(Reservation::Bounded { reserved: 2, .. })
+        );
+        assert_matches!(
+            svc.try_reserve(&mut interest, 2).await,
+            ReserveResult::Ok(Reservation::Bounded { reserved: 2, .. })
+        );
+        assert_eq!(
+            mock.acquire_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
     }
 
     #[test]

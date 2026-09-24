@@ -307,6 +307,7 @@ mod tests {
         methods: Vec<AgentMethodSchema>,
     ) -> ComponentMetadata {
         let at = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type,
             description: String::new(),
             source_language: String::new(),

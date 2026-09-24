@@ -465,6 +465,12 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   </Field>
 
   <Field meta={{
+    path: "httpApi.deployments.<environment-name>[*].scheme",
+  }}>
+    ***Public HTTP API scheme***: `http` or `https`. When omitted, defaults to `http` for the built-in local server (including the implicit local target), and `https` for the built-in cloud server. Custom server environments require an explicit value. An explicit value always overrides the default; the management API URL does not determine the public scheme. This controls the origin advertised in generated OpenAPI documents, not TLS configuration.
+  </Field>
+
+  <Field meta={{
     path: "httpApi.deployments.<environment-name>[*].webhookUrl",
     since: Release.R_1_5_0
   }}>

@@ -8,6 +8,7 @@ use super::{
     RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
+use crate::base_model::agent::{ExactFileMapping, FileMapping, SubtreeFileMapping};
 use crate::model::Empty;
 
 impl From<golem_api_grpc::proto::golem::component::AgentMode> for AgentMode {
@@ -213,6 +214,17 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
+            static_bindings: value
+                .static_bindings
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            filesystem_bindings: value
+                .filesystem_bindings
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            openapi_provider_method: value.openapi_provider_method,
         })
     }
 }
@@ -225,6 +237,51 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
             phantom_agent: value.phantom_agent,
             cors_options: Some(value.cors_options.into()),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
+            static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
+            filesystem_bindings: value
+                .filesystem_bindings
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            openapi_provider_method: value.openapi_provider_method,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::FileMapping> for FileMapping {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::FileMapping,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::file_mapping::Value;
+        match value.value.ok_or("Missing FileMapping.value")? {
+            Value::Exact(mapping) => Ok(Self::Exact(ExactFileMapping {
+                public_path: mapping.public_path,
+                file_path: mapping.file_path,
+            })),
+            Value::Subtree(mapping) => Ok(Self::Subtree(SubtreeFileMapping {
+                public_prefix: mapping.public_prefix,
+                filesystem_root: mapping.filesystem_root,
+            })),
+        }
+    }
+}
+
+impl From<FileMapping> for golem_api_grpc::proto::golem::component::FileMapping {
+    fn from(value: FileMapping) -> Self {
+        use golem_api_grpc::proto::golem::component::{self as proto, file_mapping::Value};
+        Self {
+            value: Some(match value {
+                FileMapping::Exact(mapping) => Value::Exact(proto::ExactFileMapping {
+                    public_path: mapping.public_path,
+                    file_path: mapping.file_path,
+                }),
+                FileMapping::Subtree(mapping) => Value::Subtree(proto::SubtreeFileMapping {
+                    public_prefix: mapping.public_prefix,
+                    filesystem_root: mapping.filesystem_root,
+                }),
+            }),
         }
     }
 }
@@ -438,6 +495,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMethod> for HttpMethod
                 }
             }
             Value::Custom(c) => Ok(HttpMethod::Custom(CustomHttpMethod { value: c })),
+            Value::Any(_) => Ok(HttpMethod::Any(Empty {})),
         }
     }
 }
@@ -459,6 +517,7 @@ impl From<HttpMethod> for golem_api_grpc::proto::golem::component::HttpMethod {
                 HttpMethod::Trace(_) => Value::Standard(StandardHttpMethod::Trace.into()),
                 HttpMethod::Patch(_) => Value::Standard(StandardHttpMethod::Patch.into()),
                 HttpMethod::Custom(c) => Value::Custom(c.value),
+                HttpMethod::Any(_) => Value::Any(golem_api_grpc::proto::golem::common::Empty {}),
             }),
         }
     }

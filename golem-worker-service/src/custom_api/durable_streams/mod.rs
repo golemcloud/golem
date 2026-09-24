@@ -31,9 +31,8 @@ use golem_common::model::{AgentId, IdempotencyKey};
 use golem_service_base::custom_api::{CallAgentBehaviour, DurableStreamRoutePolicy};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
-use http::{Method, StatusCode};
+use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use load::{DurableStreamLoadLimiter, LoadRejection};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -166,13 +165,21 @@ impl DurableStreamsHandler {
                 stable_phantom(session)
             }
         });
-        let root_agent_id = self
-            .call_agent
-            .build_agent_id(route, behaviour, root_phantom)?;
+        let root_agent_id = CallAgentHandler::build_agent_id(
+            route,
+            behaviour.component_id,
+            &behaviour.agent_type,
+            &behaviour.constructor_input,
+            &behaviour.constructor_parameters,
+            root_phantom,
+        )?;
         let agent_id = match suffix.fork.as_deref() {
-            Some(fork) => self.call_agent.build_agent_id(
+            Some(fork) => CallAgentHandler::build_agent_id(
                 route,
-                behaviour,
+                behaviour.component_id,
+                &behaviour.agent_type,
+                &behaviour.constructor_input,
+                &behaviour.constructor_parameters,
                 Some(fork::fork_phantom_id(&root_agent_id, fork)),
             )?,
             None => root_agent_id.clone(),
@@ -358,7 +365,9 @@ pub(super) fn error_response(
     };
     let mut result = response(status);
     if status == StatusCode::SERVICE_UNAVAILABLE {
-        result.headers.insert(http::header::RETRY_AFTER, "1".into());
+        result
+            .headers
+            .insert(http::header::RETRY_AFTER, HeaderValue::from_static("1"));
     }
     Ok(result)
 }
@@ -401,7 +410,10 @@ fn allowed_methods(suffix: &Suffix, policy: &DurableStreamRoutePolicy) -> Vec<&'
 
 fn method_not_allowed(allow: &[&str]) -> RouteExecutionResult {
     let mut result = response(StatusCode::METHOD_NOT_ALLOWED);
-    result.headers.insert(http::header::ALLOW, allow.join(", "));
+    result.headers.insert(
+        http::header::ALLOW,
+        allow.join(", ").parse().expect("HTTP methods are valid"),
+    );
     result
 }
 
@@ -479,7 +491,10 @@ fn stable_phantom(session: &str) -> Uuid {
 }
 
 fn response(status: StatusCode) -> RouteExecutionResult {
-    let headers = HashMap::from([(http::header::CACHE_CONTROL, "no-store".into())]);
+    let headers = HeaderMap::from_iter([(
+        http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    )]);
     RouteExecutionResult {
         status,
         headers,
@@ -498,7 +513,9 @@ fn body_response(status: StatusCode, body: Vec<u8>, ct: &'static str) -> RouteEx
 
 fn rejection_response(rejection: LoadRejection) -> RouteExecutionResult {
     let mut result = response(rejection.status_code());
-    result.headers.insert(http::header::RETRY_AFTER, "1".into());
+    result
+        .headers
+        .insert(http::header::RETRY_AFTER, HeaderValue::from_static("1"));
     result
 }
 
@@ -525,7 +542,7 @@ mod tests {
                 response
                     .headers
                     .get(&http::header::RETRY_AFTER)
-                    .map(String::as_str),
+                    .and_then(|value| value.to_str().ok()),
                 Some("1")
             );
         }
