@@ -417,6 +417,19 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching` and
   `claim_start_matching_request`); a `CompletionDelivered` marker at the head may belong to a
   retained `Start`, so retained-first ordering is required, not an optimisation.
+- Retaining is not consuming. Retained `Start`s and their attached terminals are committed
+  through `commit_retained_entry`, which does not advance `last_replayed_non_hint_index`; the
+  position is published by `publish_claimed_position` only when the owner claims the `Start`.
+  A durable call that derives its position from that index (`begin_function` without a scope:
+  the replay-time begin index and retry point) therefore observes the same value the live run
+  saw as the oplog tip before its own `Start` was appended, not a position advanced by entries
+  no caller has consumed.
+- A recovery Jump abandons the attempt it deletes, including any `Start`s retained from it.
+  Every recovery-time Jump (incomplete batched-write and remote-transaction retries on the
+  direct and accessor paths, atomic-region rollbacks on the primary and entity Stores) goes
+  through `commit_replay_jumps` (`durable_host/mod.rs`), which appends the Jump entries,
+  registers the deleted regions with the cursor (`register_replay_jump`) and prunes the retained
+  `Start`s inside them, so the re-executed attempt cannot claim the abandoned attempt's history.
 - Positional reads through the shared cursor are attributed per Store (`get_oplog_entry(scope)`,
   `OplogEntry::entity_attribution()`): the primary agent consumes only entries with no entity
   parent, an entity body only entries recorded under its own invocation `Start`. A read that
@@ -437,7 +450,9 @@ entitled to nothing it did not record. Kind and owner are validated before consu
 
 Tests: `replay_state/tests.rs` (`positional_reader_waits_for_a_retained_entity_start_to_be_claimed`,
 `interleaved_positional_markers_are_consumed_only_by_the_recording_store`,
-`request_matching_claim_adopts_retained_start_behind_its_own_delivery_marker`),
+`request_matching_claim_adopts_retained_start_behind_its_own_delivery_marker`,
+`retained_start_publishes_the_non_hint_position_only_when_claimed`,
+`replay_jump_prunes_retained_starts_of_the_abandoned_attempt`),
 `tests/tool_streaming.rs` (`positional_atomic_marker_does_not_consume_unclaimed_body_*`,
 `direct_call_waits_without_blocking_body_admission_*`,
 `incomplete_custom_durability_waits_for_overlapping_completed_reconstruction`).
