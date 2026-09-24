@@ -1,5 +1,13 @@
 [workspace]
-members = ["empty", "tool", "agent", "tool-client", "non-reflective", "reflection"]
+members = [
+    "agent",
+    "canonical-floor",
+    "empty",
+    "non-reflective",
+    "reflection",
+    "tool",
+    "tool-client",
+]
 resolver = "2"
 
 [workspace.package]
@@ -8,6 +16,7 @@ edition = "2024"
 
 [workspace.dependencies]
 golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "ca628b5d78c346f8b51973931d45c0ce08c784dd", version = "=0.59.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
 
 [profile.release]
 opt-level = "s"

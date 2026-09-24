@@ -61,6 +61,9 @@ crate::golem_agentic::export_golem_agentic!(Component with_types_in metadata);
 crate::save_snapshot::export_save_snapshot!(Component with_types_in metadata);
 crate::load_snapshot::export_load_snapshot!(Component with_types_in metadata);
 
+#[inline(never)]
+pub(crate) fn link() {}
+
 // Signatures and layouts follow the pinned wit-bindgen's generated export
 // macros. Sync results use a returned pointer and a separate post-return;
 // async exports return the task status and complete through task-return imports.

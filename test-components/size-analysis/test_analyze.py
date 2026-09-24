@@ -10,6 +10,7 @@ from analyze import (
     CORE,
     attribution,
     custom_name,
+    environment_override,
     inspect,
     preserve_component_types,
     read_u32,
@@ -30,6 +31,15 @@ def custom(name, payload):
 
 
 class BinaryTests(unittest.TestCase):
+    def test_profile_overrides_are_explicit_and_scoped(self):
+        self.assertEqual(
+            environment_override("CARGO_PROFILE_RELEASE_STRIP=symbols"),
+            ("CARGO_PROFILE_RELEASE_STRIP", "symbols"),
+        )
+        for value in ("STRIP=symbols", "CARGO_PROFILE_RELEASE_STRIP", "=symbols"):
+            with self.assertRaises(Exception):
+                environment_override(value)
+
     def test_leb_boundaries_and_invalid_lengths(self):
         for value in (0, 127, 128, 16383, 16384, 0xFFFFFFFF):
             encoded = u32(value)

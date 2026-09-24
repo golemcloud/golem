@@ -18,6 +18,27 @@ test_r::enable!();
 pub use uuid::Uuid;
 pub use wasip3;
 
+#[doc(hidden)]
+#[cfg(feature = "export_golem_agentic")]
+pub fn __link_golem_component_exports() {
+    #[cfg(target_arch = "wasm32")]
+    agentic::exports::raw::link();
+}
+
+/// Export the unified Golem guest world without registering an agent, tool, or middleware.
+#[macro_export]
+#[cfg(feature = "export_golem_agentic")]
+macro_rules! export_golem_component {
+    () => {
+        $crate::ctor::__support::ctor_parse!(
+            #[ctor]
+            fn __golem_link_component_exports() {
+                $crate::__link_golem_component_exports();
+            }
+        );
+    };
+}
+
 pub use golem_schema;
 pub use golem_schema::schema;
 pub use golem_schema::schema::wit::direct::{FromWire, IntoWire, WireSchema};

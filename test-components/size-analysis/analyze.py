@@ -154,6 +154,15 @@ def run(command, output=None, env=None):
     return result.stdout
 
 
+def environment_override(value):
+    key, separator, setting = value.partition("=")
+    if not separator or not key or not setting:
+        raise argparse.ArgumentTypeError("expected KEY=VALUE")
+    if not key.startswith("CARGO_PROFILE_"):
+        raise argparse.ArgumentTypeError("only CARGO_PROFILE_* overrides are recorded")
+    return key, setting
+
+
 def attribution(core, directory):
     if not shutil.which("twiggy"):
         (directory / "attribution-unavailable.txt").write_text(
@@ -335,9 +344,19 @@ def main():
     parser.add_argument(
         "--optimize", action="store_true", help="experimental per-core Binaryen -Oz"
     )
+    parser.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        type=environment_override,
+        metavar="CARGO_PROFILE_*=VALUE",
+        help="recorded Cargo profile override (repeatable)",
+    )
     args = parser.parse_args()
     if args.matrix and (not args.manifest or args.profile != "release"):
         parser.error("--matrix requires --manifest and --profile release")
+    if args.matrix and args.override:
+        parser.error("--matrix and --override cannot be combined")
     if args.optimize and not shutil.which("wasm-opt"):
         parser.error("--optimize requires wasm-opt on PATH")
     args.out.mkdir(parents=True, exist_ok=False)
@@ -349,7 +368,7 @@ def main():
             else "unavailable"
         )
     (args.out / "versions.json").write_text(json.dumps(versions, indent=2) + "\n")
-    variants = {"current": {}}
+    variants = {"current": dict(args.override)}
     if args.matrix:
         baseline = {
             "CARGO_PROFILE_RELEASE_OPT_LEVEL": "s",

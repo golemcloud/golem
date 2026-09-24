@@ -38,18 +38,25 @@ jobs:
         run: python3 -m unittest discover -s test-components/size-analysis -v
       - name: Build reflection retention fixtures
         run: |
-          for package in retention-empty retention-non-reflective retention-reflection; do
+          for package in retention-canonical-floor retention-empty retention-non-reflective retention-reflection; do
             python3 test-components/size-analysis/analyze.py \
               --manifest test-components/size-analysis/fixtures/Cargo.toml \
               --package "$package" \
               --out "tmp/$package"
           done
+          wasm-tools component wit --json tmp/retention-canonical-floor/current/component.wasm \
+            > tmp/retention-canonical-floor/world.json
+          wasm-tools component wit --json tmp/retention-empty/current/component.wasm \
+            > tmp/retention-empty/world.json
+          python3 test-components/size-analysis/compare-export-contract.py \
+            tmp/retention-canonical-floor/world.json tmp/retention-empty/world.json
       - name: Check reflection retention contracts
         run: |
           python3 test-components/size-analysis/retention.py \
             --negative empty=tmp/retention-empty/current/component.wasm \
             --negative tool=tmp/retention-non-reflective/current/component.wasm \
             --positive reflection=tmp/retention-reflection/current/component.wasm \
+            --enforce-option-b \
             --out tmp/reflection-retention.json
       - name: Build and report independent release choices
         run: |

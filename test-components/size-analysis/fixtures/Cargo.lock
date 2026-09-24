@@ -618,6 +618,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "retention-canonical-floor"
+version = "0.0.1"
+dependencies = [
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "retention-empty"
 version = "0.0.1"
 dependencies = [

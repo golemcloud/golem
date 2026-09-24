@@ -63,7 +63,17 @@ for (const name of ['empty', 'tool-only', 'agent-only', 'middleware-only', 'mixe
       ],
     });
     const prefix = path.join(out, `${name}-${mode}`);
-    await bundle.write({ file: `${prefix}.mjs`, format: 'es', inlineDynamicImports: true });
+    const generated = await bundle.write({
+      file: `${prefix}.mjs`,
+      format: 'es',
+      inlineDynamicImports: true,
+    });
+    const chunk = generated.output.find((item) => item.type === 'chunk');
+    const modules = Object.fromEntries(
+      Object.entries(chunk.modules)
+        .filter(([, info]) => info.renderedLength > 0)
+        .map(([id, info]) => [path.relative(root, id), info.renderedLength]),
+    );
     await bundle.close();
     run('wasm-rquickjs', [
       'inject-js',
@@ -115,6 +125,7 @@ for (const name of ['empty', 'tool-only', 'agent-only', 'middleware-only', 'mixe
       preinitialized: bytes('.preinitialized.wasm'),
       preinitializedStripped: bytes('.preinitialized.stripped.wasm'),
       preinitializeMedianMs: Math.round(times.sort((a, b) => a - b)[1]),
+      modules,
     };
     rows.push(row);
     console.log(JSON.stringify(row));

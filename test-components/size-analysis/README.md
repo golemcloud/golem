@@ -28,17 +28,13 @@ and explicit reflection components. Build them through `analyze.py`, then run:
 python3 test-components/size-analysis/retention.py \
   --negative empty=tmp/retention-empty/current/component.wasm \
   --negative tool=tmp/retention-non-reflective/current/component.wasm \
-  --positive reflection=tmp/retention-reflection/current/component.wasm
+  --positive reflection=tmp/retention-reflection/current/component.wasm \
+  --enforce-option-b
 ```
 
-The current gate rejects reflection host imports in both negative fixtures and
-requires `get-agent-type` plus the positive fixture's named reflection method.
-The report separately lists the schema render, validation, well-formedness,
-regex, URL/IDNA, JSON-value, and reflection-module symbols that remain shared
-through generic descriptor/invocation code. Those symbol absences are recorded
-but deliberately do not fail until specialized model-free invocation removes
-their shared root. Once that lands, add `--enforce-option-b` to the existing
-command; the analyzer and fixture contract do not need to change.
+The gate rejects reflection host imports and model/reflection helper retention
+in both negative fixtures, and requires `get-agent-type` plus the positive
+fixture's named reflection method.
 
 The output directory must not exist. Builds use `--locked`; generate/update the
 application's lockfile intentionally before analysis if necessary. Cargo artifact
