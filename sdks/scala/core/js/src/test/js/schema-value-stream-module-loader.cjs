@@ -102,6 +102,13 @@ Module._load = function (request) {
       parseAgentId: missingHostImport("parseAgentId"),
     };
   }
+  if (request === "golem:tool/host@0.1.0") {
+    return {
+      createStdin: missingHostImport("createStdin"),
+      createStdout: missingHostImport("createStdout"),
+      ToolRpc: missingHostImport("ToolRpc"),
+    };
+  }
   if (request === "golem:agent/durable-streams@2.0.0") {
     return {
       DurableStreamReader: durableStreamResource("readers", "read", ["checkpoint", "contentType", "transport"]),

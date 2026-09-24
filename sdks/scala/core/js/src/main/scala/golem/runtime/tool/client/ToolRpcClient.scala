@@ -44,7 +44,11 @@ object ToolRpcClient {
     new JsWireToolRpcTransport(new ToolHostApi.RawToolRpc(toolName))
 }
 
-private[golem] final class JsWireToolRpcTransport(rpc: ToolHostApi.RawToolRpc) extends WireToolRpcTransport {
+private[golem] final class JsWireToolRpcTransport(
+  rpc: ToolHostApi.RawToolRpc,
+  encode: WitTypedSchemaValue => Future[JsTypedSchemaValue] = SchemaWireInterop.typedToJsAsync,
+  createStdout: () => (ToolHostApi.RawToolStdout, ToolHostApi.RawByteStream) = () => ToolHostApi.createStdout()
+) extends WireToolRpcTransport {
   private implicit val ec: scala.concurrent.ExecutionContext = ToolInvokerRuntime.executionContext
 
   def start(
@@ -56,23 +60,25 @@ private[golem] final class JsWireToolRpcTransport(rpc: ToolHostApi.RawToolRpc) e
     var observer  = Option.empty[ToolHostApi.RawToolFutureInvokeResult]
     var cancelled = false
     try {
-      val stdoutEndpoints = if (stdout) Some(ToolHostApi.createStdout()) else None
+      val stdoutEndpoints = if (stdout) Some(createStdout()) else None
+      val stdoutStream    = stdoutEndpoints.map(e => new JsToolInputStream(e._2))
       val pumpTransport   = new JsToolRpcTransport(rpc)
-      val result          = SchemaWireInterop
-        .typedToJsAsync(input)
-        .flatMap { jsInput =>
-          val stdinEndpoints = stdin.map(_ => ToolHostApi.createStdin())
-          stdinEndpoints.foreach { case (writer, _, closed) => pumpTransport.pump(stdin.get, writer, closed) }
-          val started = rpc.asyncInvokeAndAwait(
-            commandPath.toJSArray,
-            jsInput,
-            stdinEndpoints.map(_._2).orUndefined,
-            stdoutEndpoints.map(_._1).orUndefined
-          )
-          observer = Some(started)
-          if (cancelled) started.cancel()
-          FutureInterop.fromPromise(started.get())
-        }
+      val encoded         = encode(input).recoverWith { case error =>
+        Future.sequence(stdoutStream.toList.map(_.close())).flatMap(_ => Future.failed(error))
+      }
+      val result = encoded.flatMap { jsInput =>
+        val stdinEndpoints = stdin.map(_ => ToolHostApi.createStdin())
+        stdinEndpoints.foreach { case (writer, _, closed) => pumpTransport.pump(stdin.get, writer, closed) }
+        val started = rpc.asyncInvokeAndAwait(
+          commandPath.toJSArray,
+          jsInput,
+          stdinEndpoints.map(_._2).orUndefined,
+          stdoutEndpoints.map(_._1).orUndefined
+        )
+        observer = Some(started)
+        if (cancelled) started.cancel()
+        FutureInterop.fromPromise(started.get())
+      }
         .map(value => Right(WireToolInvokeResult(value.result.toOption.map(SchemaWireInterop.typedFromJs))))
         .recover { case js.JavaScriptException(error) => Left(ToolHostApi.decodeWireRpcFailure(error)) }
         .recover { case error: Throwable =>
@@ -80,7 +86,7 @@ private[golem] final class JsWireToolRpcTransport(rpc: ToolHostApi.RawToolRpc) e
         }
       Right(
         WireToolRpcStarted(
-          stdoutEndpoints.map(e => new JsToolInputStream(e._2)),
+          stdoutStream,
           result,
           () => { cancelled = true; observer.foreach(_.cancel()) }
         )
