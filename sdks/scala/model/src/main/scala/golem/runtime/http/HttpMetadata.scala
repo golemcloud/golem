@@ -84,5 +84,31 @@ final case class HttpEndpointDetails(
   headerVars: List[HeaderVariable],
   queryVars: List[QueryVariable],
   authOverride: Option[Boolean],
-  corsOverride: Option[List[String]]
+  corsOverride: Option[List[String]],
+  durableStreams: Option[DurableStreamRouteOptions] = None
+)
+
+sealed trait DurableStreamSlotSource extends Product with Serializable
+object DurableStreamSlotSource {
+  final case class Input(slot: String)  extends DurableStreamSlotSource
+  final case class Output(slot: String) extends DurableStreamSlotSource
+}
+
+final case class DurableStreamSlotOptions(
+  source: DurableStreamSlotSource,
+  name: Option[String],
+  contentType: Option[String]
+)
+
+final case class DurableStreamRouteLoadOptions(
+  maxConcurrentReadersPerStream: Option[Int],
+  maxAppendRequestsPerSecondPerStream: Option[Int]
+)
+
+final case class DurableStreamRouteOptions(
+  slots: List[DurableStreamSlotOptions],
+  allowExternalWrites: Option[Boolean],
+  allowStreamDelete: Option[Boolean],
+  allowInvocationDelete: Option[Boolean],
+  load: Option[DurableStreamRouteLoadOptions]
 )

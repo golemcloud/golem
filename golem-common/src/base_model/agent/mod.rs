@@ -611,6 +611,86 @@ pub struct HttpEndpointDetails {
     pub query_vars: Vec<QueryVariable>,
     pub auth_details: Option<AgentHttpAuthDetails>,
     pub cors_options: CorsOptions,
+    pub durable_streams: Option<DurableStreamRouteOptions>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DurableStreamRouteOptions {
+    pub slots: Vec<DurableStreamSlotOptions>,
+    pub allow_external_writes: Option<bool>,
+    pub allow_stream_delete: Option<bool>,
+    pub allow_invocation_delete: Option<bool>,
+    pub load: Option<DurableStreamRouteLoadOptions>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DurableStreamSlotOptions {
+    pub source: DurableStreamSlotSource,
+    pub name: Option<String>,
+    pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(
+    feature = "full",
+    oai(discriminator_name = "type", one_of = true, rename_all = "camelCase")
+)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum DurableStreamSlotSource {
+    Input(DurableStreamInputSlotSource),
+    Output(DurableStreamOutputSlotSource),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct DurableStreamInputSlotSource {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct DurableStreamOutputSlotSource {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DurableStreamRouteLoadOptions {
+    pub max_concurrent_readers_per_stream: Option<u32>,
+    pub max_append_requests_per_second_per_stream: Option<u32>,
 }
 
 #[derive(
@@ -1120,5 +1200,90 @@ mod tests {
             back.read_only.is_none(),
             "missing read_only field must default to None"
         );
+    }
+
+    fn durable_stream_endpoints() -> Vec<HttpEndpointDetails> {
+        let base = HttpEndpointDetails {
+            http_method: HttpMethod::Post(Empty {}),
+            path_suffix: Vec::new(),
+            header_vars: Vec::new(),
+            query_vars: Vec::new(),
+            auth_details: None,
+            cors_options: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+            durable_streams: None,
+        };
+
+        vec![
+            base.clone(),
+            HttpEndpointDetails {
+                durable_streams: Some(DurableStreamRouteOptions {
+                    slots: Vec::new(),
+                    allow_external_writes: Some(false),
+                    allow_stream_delete: None,
+                    allow_invocation_delete: Some(true),
+                    load: Some(DurableStreamRouteLoadOptions {
+                        max_concurrent_readers_per_stream: None,
+                        max_append_requests_per_second_per_stream: None,
+                    }),
+                }),
+                ..base.clone()
+            },
+            HttpEndpointDetails {
+                durable_streams: Some(DurableStreamRouteOptions {
+                    slots: vec![
+                        DurableStreamSlotOptions {
+                            source: DurableStreamSlotSource::Input(DurableStreamInputSlotSource {
+                                name: "events".to_string(),
+                            }),
+                            name: Some("messages".to_string()),
+                            content_type: None,
+                        },
+                        DurableStreamSlotOptions {
+                            source: DurableStreamSlotSource::Output(
+                                DurableStreamOutputSlotSource {
+                                    name: "$result".to_string(),
+                                },
+                            ),
+                            name: None,
+                            content_type: Some("application/octet-stream".to_string()),
+                        },
+                    ],
+                    allow_external_writes: None,
+                    allow_stream_delete: Some(false),
+                    allow_invocation_delete: None,
+                    load: Some(DurableStreamRouteLoadOptions {
+                        max_concurrent_readers_per_stream: Some(8),
+                        max_append_requests_per_second_per_stream: Some(25),
+                    }),
+                }),
+                ..base
+            },
+        ]
+    }
+
+    #[test]
+    fn durable_stream_endpoint_roundtrips_through_all_codecs() {
+        use poem_openapi::types::{ParseFromJSON, ToJSON};
+
+        for endpoint in durable_stream_endpoints() {
+            let serde_json = serde_json::to_value(&endpoint).expect("serde serialization");
+            let from_poem =
+                <HttpEndpointDetails as ParseFromJSON>::parse_from_json(Some(serde_json.clone()))
+                    .expect("Poem parsing of Serde JSON");
+            assert_eq!(from_poem, endpoint);
+
+            let poem_json = ToJSON::to_json(&endpoint).expect("Poem serialization");
+            let from_serde: HttpEndpointDetails =
+                serde_json::from_value(poem_json).expect("Serde parsing of Poem JSON");
+            assert_eq!(from_serde, endpoint);
+
+            let bytes =
+                desert_rust::serialize_to_byte_vec(&endpoint).expect("desert serialization");
+            let from_desert: HttpEndpointDetails =
+                desert_rust::deserialize(&bytes).expect("desert deserialization");
+            assert_eq!(from_desert, endpoint);
+        }
     }
 }

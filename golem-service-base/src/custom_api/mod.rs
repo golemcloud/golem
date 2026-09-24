@@ -553,6 +553,7 @@ pub struct CallAgentBehaviour {
     pub route_mode: AgentRouteMode,
     /// Number of captured variables in the declared base path, excluding DS session and slot.
     pub base_path_variables: u32,
+    pub durable_streams: Option<DurableStreamRoutePolicy>,
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,
@@ -587,6 +588,60 @@ pub enum AgentRouteMode {
     DurableStreams,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct DurableStreamRoutePolicy {
+    pub slots: Vec<DurableStreamSlot>,
+    pub allow_external_writes: bool,
+    pub allow_stream_delete: bool,
+    pub allow_invocation_delete: bool,
+    pub load: Option<DurableStreamRouteLoadPolicy>,
+}
+
+impl DurableStreamRoutePolicy {
+    pub fn slot_by_public_name(&self, name: &str) -> Option<&DurableStreamSlot> {
+        self.slots.iter().find(|slot| slot.public_name == name)
+    }
+
+    pub fn slot_by_canonical_name(&self, name: &str) -> Option<&DurableStreamSlot> {
+        self.slots.iter().find(|slot| slot.canonical_name == name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct DurableStreamSlot {
+    pub canonical_name: String,
+    pub public_name: String,
+    pub direction: DurableStreamSlotDirection,
+    pub content_type: String,
+    pub representation: DurableStreamRepresentation,
+}
+
+impl DurableStreamSlot {
+    pub fn writable(&self) -> bool {
+        self.direction == DurableStreamSlotDirection::Input
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+pub enum DurableStreamSlotDirection {
+    Input,
+    Output,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BinaryCodec)]
+pub enum DurableStreamRepresentation {
+    Json,
+    Bytes,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct DurableStreamRouteLoadPolicy {
+    pub max_concurrent_readers_per_stream: Option<u32>,
+    pub max_append_requests_per_second_per_stream: Option<u32>,
+}
 /// Request headers for durable-stream session creation, conditional reads,
 /// closing appends and producer-tracked appends.
 pub const DURABLE_STREAM_REQUEST_HEADERS: &[&str] = &[
@@ -595,6 +650,8 @@ pub const DURABLE_STREAM_REQUEST_HEADERS: &[&str] = &[
     "stream-ttl",
     "stream-expires-at",
     "stream-forked-from",
+    "stream-fork-offset",
+    "stream-fork-sub-offset",
     "stream-closed",
     "producer-id",
     "producer-epoch",
@@ -796,5 +853,52 @@ mod tests {
         assert!(exact.matches("https://example.com"));
         assert!(!exact.matches("https://other.com"));
         assert!(!exact.matches("http://example.com")); // scheme matters
+    }
+
+    #[test]
+    fn durable_stream_policy_resolves_public_and_canonical_slot_names() {
+        let policy = DurableStreamRoutePolicy {
+            slots: vec![
+                DurableStreamSlot {
+                    canonical_name: "input".into(),
+                    public_name: "requests".into(),
+                    direction: DurableStreamSlotDirection::Input,
+                    content_type: "application/json".into(),
+                    representation: DurableStreamRepresentation::Json,
+                },
+                DurableStreamSlot {
+                    canonical_name: "$result".into(),
+                    public_name: "responses".into(),
+                    direction: DurableStreamSlotDirection::Output,
+                    content_type: "application/vnd.golem.binary".into(),
+                    representation: DurableStreamRepresentation::Bytes,
+                },
+            ],
+            allow_external_writes: true,
+            allow_stream_delete: true,
+            allow_invocation_delete: true,
+            load: None,
+        };
+
+        assert_eq!(
+            policy
+                .slot_by_public_name("requests")
+                .map(|slot| slot.canonical_name.as_str()),
+            Some("input")
+        );
+        assert_eq!(
+            policy
+                .slot_by_public_name("responses")
+                .map(|slot| slot.canonical_name.as_str()),
+            Some("$result")
+        );
+        assert_eq!(
+            policy
+                .slot_by_canonical_name("$result")
+                .map(|slot| slot.public_name.as_str()),
+            Some("responses")
+        );
+        assert!(policy.slot_by_public_name("input").is_none());
+        assert!(policy.slot_by_canonical_name("responses").is_none());
     }
 }

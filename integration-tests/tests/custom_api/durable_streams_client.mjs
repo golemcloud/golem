@@ -507,7 +507,7 @@ async function readerCapAndRelease() {
   }
   try {
     for (let i = 0; i < 16; i++) await subscribe();
-    await request(url, 503, {}, { "retry-after": "1" });
+    await request(url, 429, {}, { "retry-after": "1" });
     controllers[0].abort();
     await readers[0].cancel().catch(() => {});
     const deadline = Date.now() + 5_000;
@@ -519,7 +519,7 @@ async function readerCapAndRelease() {
         readers.push(response.body.getReader());
         break;
       }
-      assert.equal(response.status, 503);
+      assert.equal(response.status, 429);
       await response.arrayBuffer();
       assert.ok(
         Date.now() < deadline,
@@ -527,7 +527,7 @@ async function readerCapAndRelease() {
       );
       await sleep(20);
     }
-    await request(url, 503, {}, { "retry-after": "1" });
+    await request(url, 429, {}, { "retry-after": "1" });
   } finally {
     for (const controller of controllers) controller.abort();
     await Promise.all(readers.map((reader) => reader.cancel().catch(() => {})));

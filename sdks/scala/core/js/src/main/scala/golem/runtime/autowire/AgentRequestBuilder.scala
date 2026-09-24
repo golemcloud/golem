@@ -154,7 +154,32 @@ private[autowire] object AgentRequestBuilder {
       headerVars = headerArr,
       queryVars = queryArr,
       corsOptions = corsOptions,
-      authDetails = authDetails
+      authDetails = authDetails,
+      durableStreams =
+        ep.durableStreams.fold[js.UndefOr[JsDurableStreamRouteOptions]](js.undefined)(encodeDurableStreams)
+    )
+  }
+
+  private def encodeDurableStreams(options: DurableStreamRouteOptions): JsDurableStreamRouteOptions = {
+    val slots = js.Array(options.slots.map { slot =>
+      val source = slot.source match {
+        case DurableStreamSlotSource.Input(name)  => JsDurableStreamSlotSource.input(name)
+        case DurableStreamSlotSource.Output(name) => JsDurableStreamSlotSource.output(name)
+      }
+      JsDurableStreamSlotOptions(source, slot.name.orUndefined, slot.contentType.orUndefined)
+    }: _*)
+    val load = options.load.fold[js.UndefOr[JsDurableStreamRouteLoadOptions]](js.undefined)(v =>
+      JsDurableStreamRouteLoadOptions(
+        v.maxConcurrentReadersPerStream.orUndefined,
+        v.maxAppendRequestsPerSecondPerStream.orUndefined
+      )
+    )
+    JsDurableStreamRouteOptions(
+      slots,
+      options.allowExternalWrites.orUndefined,
+      options.allowStreamDelete.orUndefined,
+      options.allowInvocationDelete.orUndefined,
+      load
     )
   }
 
