@@ -117,14 +117,19 @@ fn begin_owned_failure_drain(
     return
   }
   ev.owned_failure.set(waitable_set, true)
-  if ev.tasks.get(waitable_set) is Some(root) && !physical_equal(root, failed) {
+  if ev.tasks.get(waitable_set) is Some(root) &&
+    !physical_equal(root, failed) {
     match root.state {
       Running | Suspend(_) => root.cancel()
       Done | Fail(_) => ()
     }
   }
   if ev.owned_coroutines.get(waitable_set) is Some(owned) {
-    owned.each(fn(coro) { if !physical_equal(coro, failed) { coro.cancel() } })
+    owned.each(fn(coro) {
+      if !physical_equal(coro, failed) {
+        coro.cancel()
+      }
+    })
   }
 }
 
@@ -136,7 +141,7 @@ fn notify_subscriber(
 ) -> Unit {
   if ev.wakeups.get(waitable_set) is Some(wakeup) &&
     wakeup.reader == waitable_id {
-    guard! event is StreamRead(i, { progress: 1, copy_result: Completed, }) &&
+    guard! event is StreamRead(i, { progress: 1, copy_result: Completed }) &&
       i == waitable_id
     wakeup.reading = false
     wakeup.signaled = false
@@ -394,7 +399,7 @@ fn arm_task_wakeup(waitable_set : WaitableSet) -> Unit {
   guard! result == -1
   let subscribers = subscribers_for(waitable_set)
   guard! subscribers.get(wakeup.reader) is None
-  subscribers.set(wakeup.reader, { event: None, coro: Set([]), })
+  subscribers.set(wakeup.reader, { event: None, coro: Set([]) })
   waitable_join(wakeup.reader, waitable_set.0)
   wakeup.reading = true
   wakeup.signaled = false
@@ -487,7 +492,7 @@ async fn waitable_event(waitable_id : Int, immediate : Events?) -> Events {
       let subscriber = if subscribers.get(waitable_id) is Some(subscriber) {
         subscriber
       } else {
-        let subscriber = { event: None, coro: Set([]), }
+        let subscriber = { event: None, coro: Set([]) }
         subscribers.set(waitable_id, subscriber)
         subscriber
       }
@@ -559,7 +564,7 @@ pub async fn suspend_for_subtask(
   // again after each callback until a terminal state arrives.
   let waitable_set = current_waitableset()
   let set = @set.Set([])
-  let subscriber = { event: None, coro: set, }
+  let subscriber = { event: None, coro: set }
   let coro = current_coroutine()
   set.add(coro)
   defer {
@@ -713,7 +718,7 @@ pub async fn suspend_for_stream_read(idx : Int, val : Int) -> (Int, Bool) {
     let result = StreamResult::from(val)
     waitable_event(idx, Some(StreamRead(idx, result)))
   }
-  guard! event is StreamRead(i, { progress, copy_result, }) && i == idx
+  guard! event is StreamRead(i, { progress, copy_result }) && i == idx
   match copy_result {
     Completed => return (progress, false)
     Dropped => return (progress, true)
@@ -736,7 +741,7 @@ pub async fn suspend_for_stream_write(idx : Int, val : Int) -> (Int, Bool) {
     let result = StreamResult::from(val)
     waitable_event(idx, Some(StreamWrite(idx, result)))
   }
-  guard! event is StreamWrite(i, { progress, copy_result, }) && i == idx
+  guard! event is StreamWrite(i, { progress, copy_result }) && i == idx
   match copy_result {
     Completed => return (progress, false)
     Dropped => return (progress, true)

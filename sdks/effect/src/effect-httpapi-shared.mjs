@@ -1,0 +1,12 @@
+// Documentation UI assets belong in applications that use them, not every guest runtime.
+export * as HttpApi from "effect/unstable/httpapi/HttpApi"
+export * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder"
+export * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient"
+export * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint"
+export * as HttpApiError from "effect/unstable/httpapi/HttpApiError"
+export * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup"
+export * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware"
+export * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema"
+export * as HttpApiSecurity from "effect/unstable/httpapi/HttpApiSecurity"
+export * as HttpApiTest from "effect/unstable/httpapi/HttpApiTest"
+export * as OpenApi from "effect/unstable/httpapi/OpenApi"

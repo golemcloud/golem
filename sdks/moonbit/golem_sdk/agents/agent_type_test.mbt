@@ -221,6 +221,7 @@ test "router metadata is preserved exactly" {
             query_vars: [],
             auth_details: None,
             cors_options: { allowed_patterns: [], },
+            durable_streams: None,
           },
           {
             http_method: Custom("ANY"),
@@ -229,6 +230,7 @@ test "router metadata is preserved exactly" {
             query_vars: [],
             auth_details: None,
             cors_options: { allowed_patterns: [], },
+            durable_streams: None,
           },
         ],
         prompt_hint: None,

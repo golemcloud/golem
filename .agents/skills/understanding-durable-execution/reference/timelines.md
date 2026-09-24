@@ -129,7 +129,8 @@ Tests: `tests/api.rs::lost_card_transfer_response_converges_after_source_and_tar
 `tests/rpc.rs::counter_resource_test_2_with_restart` covers the weaker "completed call is not
 re-executed across restart" property (1 then 2).
 
-The serialized fire-and-forget `invoke` path records `Start → StartSpan → End → FinishSpan`.
+The serialized `invoke` and non-streaming `invoke_and_await` paths record
+`Start → StartSpan → End → FinishSpan` for admitted calls.
 Replay must reconstruct `StartSpan` before awaiting the RPC terminal; the positional span entry
 otherwise blocks the terminal resolver. Each committed prefix is recoverable:
 
@@ -140,8 +141,17 @@ otherwise blocks the terminal resolver. Each committed prefix is recoverable:
   the checked `switch_to_live` transition before appending the missing `FinishSpan`.
 - With `FinishSpan` recorded, consume it normally during replay.
 
-Tests: `tests/rpc.rs::completed_fire_and_forget_rpc_replays_span_before_result` and the
-fire-and-forget crash-prefix test, using committed `Start`, `StartSpan`, and `End` gates.
+Synchronous local denials instead record `Start → End(Denied)` without an invocation span.
+The non-streaming synchronous path probes terminal readiness without waiting on positional
+entries. It resolves a ready no-span denial or an exhausted Start-only prefix through normal
+call replay; otherwise it reconstructs its span before resolving the result. The readiness probe
+does not consume `StartSpan`, relax matching, or authorize a live effect. A remote denial after
+dispatch still has a span and follows ordinary admitted-call replay.
+
+Tests: `tests/rpc.rs::completed_fire_and_forget_rpc_replays_span_before_result`,
+`raw_sync_rpc_completed_history_replays`, `raw_sync_rpc_resumes_after_suspension`,
+`raw_sync_rpc_local_denial_replays_without_span_or_dispatch`, and the synchronous and
+fire-and-forget crash-prefix tests, using committed `Start`, `StartSpan`, and `End` gates.
 
 ## 7. Atomic region rollback keeps the RPC key
 

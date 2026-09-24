@@ -464,6 +464,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },
+        durable_streams: None,
     }];
     agent.methods = vec![method];
     let context = http_context(vec![agent]);

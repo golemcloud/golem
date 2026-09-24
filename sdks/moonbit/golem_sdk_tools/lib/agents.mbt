@@ -52,6 +52,30 @@ pub(all) struct HttpEndpointInfo {
   headers : Array[(String, String)]
   auth : Bool?
   cors : Array[String]
+  durable_streams : DurableStreamRouteInfo?
+} derive(Debug, Eq)
+
+///|
+pub(all) enum DurableStreamSlotSourceInfo {
+  Input(String)
+  Output(String)
+} derive(Debug, Eq)
+
+///|
+pub(all) struct DurableStreamSlotInfo {
+  source : DurableStreamSlotSourceInfo
+  name : String?
+  content_type : String?
+} derive(Debug, Eq)
+
+///|
+pub(all) struct DurableStreamRouteInfo {
+  slots : Array[DurableStreamSlotInfo]
+  allow_external_writes : Bool?
+  allow_stream_delete : Bool?
+  allow_invocation_delete : Bool?
+  max_concurrent_readers_per_stream : UInt?
+  max_append_requests_per_second_per_stream : UInt?
 } derive(Debug, Eq)
 
 ///|
@@ -840,6 +864,247 @@ let http_methods : Array[String] = [
 ]
 
 ///|
+fn parse_derive_properties(
+  raw : String,
+  annotation : String,
+) -> Map[String, String] raise AgentParseError {
+  let prefix = "#derive." + annotation + "("
+  guard raw.has_prefix(prefix) && raw.has_suffix(")") else {
+    raise AgentParseError("Malformed #derive.\{annotation} attribute")
+  }
+  let body = raw.unsafe_substring(start=prefix.length(), end=raw.length() - 1)
+  let result : Map[String, String] = Map([])
+  let parts : Array[String] = []
+  let mut buf = ""
+  let mut quoted = false
+  let mut escaped = false
+  for ch in body {
+    if quoted && escaped {
+      escaped = false
+    } else if quoted && ch == '\\' {
+      escaped = true
+    } else if ch == '"' {
+      quoted = !quoted
+    }
+    if ch == ',' && !quoted {
+      parts.push(buf.trim().to_owned())
+      buf = ""
+    } else {
+      buf = buf + ch.to_string()
+    }
+  }
+  if quoted {
+    raise AgentParseError(
+      "Malformed #derive.\{annotation} attribute: unterminated string",
+    )
+  }
+  if buf != "" {
+    parts.push(buf.trim().to_owned())
+  }
+  for part in parts {
+    guard part.find("=") is Some(eq) else {
+      raise AgentParseError("Malformed #derive.\{annotation} property")
+    }
+    let key = part.unsafe_substring(start=0, end=eq).trim().to_owned()
+    let value = part
+      .unsafe_substring(start=eq + 1, end=part.length())
+      .trim()
+      .to_owned()
+    if key == "" || value == "" || result.contains(key) {
+      raise AgentParseError(
+        "Malformed or duplicate #derive.\{annotation} property '\{key}'",
+      )
+    }
+    result[key] = value
+  }
+  result
+}
+
+///|
+fn quoted_value(
+  value : String,
+  annotation : String,
+  key : String,
+) -> String raise AgentParseError {
+  guard value.length() >= 2 && value.has_prefix("\"") && value.has_suffix("\"") else {
+    raise AgentParseError(
+      "#derive.\{annotation} property '\{key}' must be a string",
+    )
+  }
+  let raw = value.unsafe_substring(start=1, end=value.length() - 1)
+  let result = StringBuilder()
+  let mut escaped = false
+  for ch in raw {
+    if escaped {
+      match ch {
+        '"' => result.write_char('"')
+        '\\' => result.write_char('\\')
+        'n' => result.write_char('\n')
+        'r' => result.write_char('\r')
+        't' => result.write_char('\t')
+        _ =>
+          raise AgentParseError(
+            "#derive.\{annotation} property '\{key}' contains an unsupported string escape",
+          )
+      }
+      escaped = false
+    } else if ch == '\\' {
+      escaped = true
+    } else {
+      result.write_char(ch)
+    }
+  }
+  if escaped {
+    raise AgentParseError(
+      "#derive.\{annotation} property '\{key}' contains an unterminated string escape",
+    )
+  }
+  result.to_string()
+}
+
+///|
+fn bool_value(
+  value : String,
+  annotation : String,
+  key : String,
+) -> Bool raise AgentParseError {
+  if value == "true" {
+    true
+  } else if value == "false" {
+    false
+  } else {
+    raise AgentParseError(
+      "#derive.\{annotation} property '\{key}' must be true or false",
+    )
+  }
+}
+
+///|
+fn uint_value(
+  value : String,
+  annotation : String,
+  key : String,
+) -> UInt raise AgentParseError {
+  if value.is_empty() {
+    raise AgentParseError(
+      "#derive.\{annotation} property '\{key}' must be an unsigned integer",
+    )
+  }
+  let mut result = 0UL
+  for ch in value {
+    if ch < '0' || ch > '9' {
+      raise AgentParseError(
+        "#derive.\{annotation} property '\{key}' must be an unsigned integer",
+      )
+    }
+    let digit = (ch.to_int() - '0'.to_int()).to_uint64()
+    if result > (4294967295UL - digit) / 10UL {
+      raise AgentParseError(
+        "#derive.\{annotation} property '\{key}' exceeds the maximum unsigned integer",
+      )
+    }
+    result = result * 10UL + digit
+  }
+  result.to_uint()
+}
+
+///|
+fn extract_durable_streams(
+  attrs : @list.List[@attribute.Attribute],
+) -> DurableStreamRouteInfo? raise AgentParseError {
+  let slots : Array[DurableStreamSlotInfo] = []
+  let mut route_seen = false
+  let mut allow_external_writes : Bool? = None
+  let mut allow_stream_delete : Bool? = None
+  let mut allow_invocation_delete : Bool? = None
+  let mut max_readers : UInt? = None
+  let mut max_appends : UInt? = None
+  attrs.each(attr => {
+    if attr.raw.has_prefix("#derive.durable_stream_slot") {
+      let props = parse_derive_properties(attr.raw, "durable_stream_slot")
+      for key, _ in props {
+        if key != "input" &&
+          key != "output" &&
+          key != "name" &&
+          key != "content_type" {
+          raise AgentParseError(
+            "Unknown #derive.durable_stream_slot property '\{key}'",
+          )
+        }
+      }
+      let input = props.get("input")
+      let output = props.get("output")
+      let source = match (input, output) {
+        (Some(v), None) =>
+          Input(quoted_value(v, "durable_stream_slot", "input"))
+        (None, Some(v)) =>
+          Output(quoted_value(v, "durable_stream_slot", "output"))
+        _ =>
+          raise AgentParseError(
+            "#derive.durable_stream_slot requires exactly one of input or output",
+          )
+      }
+      for slot in slots {
+        if slot.source == source {
+          raise AgentParseError("Duplicate #derive.durable_stream_slot source")
+        }
+      }
+      slots.push({
+        source,
+        name: props
+        .get("name")
+        .map(v => quoted_value(v, "durable_stream_slot", "name")),
+        content_type: props
+        .get("content_type")
+        .map(v => quoted_value(v, "durable_stream_slot", "content_type")),
+      })
+    } else if attr.raw.has_prefix("#derive.durable_streams") {
+      if route_seen {
+        raise AgentParseError("Duplicate #derive.durable_streams attribute")
+      }
+      route_seen = true
+      let props = parse_derive_properties(attr.raw, "durable_streams")
+      for key, value in props {
+        match key {
+          "allow_external_writes" =>
+            allow_external_writes = Some(
+              bool_value(value, "durable_streams", key),
+            )
+          "allow_stream_delete" =>
+            allow_stream_delete = Some(
+              bool_value(value, "durable_streams", key),
+            )
+          "allow_invocation_delete" =>
+            allow_invocation_delete = Some(
+              bool_value(value, "durable_streams", key),
+            )
+          "max_concurrent_readers_per_stream" =>
+            max_readers = Some(uint_value(value, "durable_streams", key))
+          "max_append_requests_per_second_per_stream" =>
+            max_appends = Some(uint_value(value, "durable_streams", key))
+          _ =>
+            raise AgentParseError(
+              "Unknown #derive.durable_streams property '\{key}'",
+            )
+        }
+      }
+    }
+  })
+  if slots.is_empty() && !route_seen {
+    None
+  } else {
+    Some({
+      slots,
+      allow_external_writes,
+      allow_stream_delete,
+      allow_invocation_delete,
+      max_concurrent_readers_per_stream: max_readers,
+      max_append_requests_per_second_per_stream: max_appends,
+    })
+  }
+}
+
+///|
 /// Extracts the HTTP endpoint from a `#derive.endpoint(get="/path")` attribute.
 fn extract_endpoint(
   attrs : @list.List[@attribute.Attribute],
@@ -848,6 +1113,11 @@ fn extract_endpoint(
   attrs.each(attr => {
     match attr.parsed {
       Some(Apply({ qual: Some("derive"), name: "endpoint", }, props)) => {
+        if result is Some(_) {
+          raise AgentParseError(
+            "Method must have exactly one #derive.endpoint attribute",
+          )
+        }
         let found : Array[(String, String)] = []
         props.each(fn(prop) {
           match prop {
@@ -875,6 +1145,7 @@ fn extract_endpoint(
             headers: [],
             auth: None,
             cors: [],
+            durable_streams: None,
           })
         }
       }
@@ -956,6 +1227,7 @@ fn build_endpoint_info(
   attrs : @list.List[@attribute.Attribute],
 ) -> HttpEndpointInfo? raise AgentParseError {
   let endpoint = extract_endpoint(attrs)
+  let durable_streams = extract_durable_streams(attrs)
   if has_http_annotation(attrs, "http_handler") {
     if endpoint is Some(_) ||
       attrs.any(a => a.raw.has_prefix("#derive.endpoint")) {
@@ -969,6 +1241,7 @@ fn build_endpoint_info(
       headers: [],
       auth: None,
       cors: [],
+      durable_streams: None,
     })
   }
   match endpoint {
@@ -976,9 +1249,16 @@ fn build_endpoint_info(
       let headers = extract_endpoint_headers(attrs)
       let auth = extract_endpoint_auth(attrs)
       let cors = extract_endpoint_cors(attrs)
-      Some({ ..ep, headers, auth, cors, })
+      Some({ ..ep, headers, auth, cors, durable_streams, })
     }
-    None => None
+    None => {
+      if durable_streams is Some(_) {
+        raise AgentParseError(
+          "Durable stream attributes require exactly one #derive.endpoint",
+        )
+      }
+      None
+    }
   }
 }
 

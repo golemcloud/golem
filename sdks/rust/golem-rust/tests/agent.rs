@@ -26,7 +26,7 @@ mod tests {
     use golem_rust::agentic::{HttpRequest, HttpResponse, HttpRouter, Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, AgentTypeKind,
-        CachePolicy, Snapshotting, SnapshottingConfig,
+        CachePolicy, DurableStreamSlotSource, Snapshotting, SnapshottingConfig,
     };
     use golem_rust::schema::VariantValuePayload;
     use golem_rust::{
@@ -1045,7 +1045,22 @@ mod tests {
         )]
         fn path_and_header(&self, resource_id: String, request_id: String) -> String;
 
-        #[endpoint(get = "/greet?l={location}&n={name}")]
+        #[endpoint(
+            get = "/greet?l={location}&n={name}",
+            durable_streams(
+                input("location", name = "messages"),
+                output(
+                    "$result",
+                    name = "results",
+                    content_type = "application/vnd.golem.events"
+                ),
+                allow_external_writes = true,
+                allow_stream_delete = false,
+                allow_invocation_delete = false,
+                max_concurrent_readers_per_stream = 8,
+                max_append_requests_per_second_per_stream = 25,
+            )
+        )]
         fn greet1(&self, location: String, name: String) -> String;
 
         #[endpoint(get = "/greet?l={location}&n={name}")]
@@ -1118,7 +1133,46 @@ mod tests {
             "All methods should have HTTP endpoint details"
         );
 
-        assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),)
+        assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),);
+
+        let greet1 = agent
+            .methods
+            .iter()
+            .find(|method| method.name == "greet1")
+            .unwrap();
+        let options = greet1.http_endpoint[0].durable_streams.as_ref().unwrap();
+        assert_eq!(options.slots.len(), 2);
+        assert!(
+            matches!(&options.slots[0].source, DurableStreamSlotSource::Input(slot) if slot == "location")
+        );
+        assert_eq!(options.slots[0].name.as_deref(), Some("messages"));
+        assert_eq!(options.slots[0].content_type, None);
+        assert!(
+            matches!(&options.slots[1].source, DurableStreamSlotSource::Output(slot) if slot == "$result")
+        );
+        assert_eq!(options.slots[1].name.as_deref(), Some("results"));
+        assert_eq!(
+            options.slots[1].content_type.as_deref(),
+            Some("application/vnd.golem.events")
+        );
+        assert_eq!(options.allow_external_writes, Some(true));
+        assert_eq!(options.allow_stream_delete, Some(false));
+        assert_eq!(options.allow_invocation_delete, Some(false));
+        let load = options.load.as_ref().unwrap();
+        assert_eq!(load.max_concurrent_readers_per_stream, Some(8));
+        assert_eq!(load.max_append_requests_per_second_per_stream, Some(25));
+
+        let greet2 = agent
+            .methods
+            .iter()
+            .find(|method| method.name == "greet2")
+            .unwrap();
+        assert!(
+            greet2
+                .http_endpoint
+                .iter()
+                .all(|endpoint| endpoint.durable_streams.is_none())
+        );
     }
 
     #[agent_definition(mount = "/chats/{agent-type}")]

@@ -1558,6 +1558,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _public_session_id: &str,
         ) -> Result<Option<golem_common::model::DurableStreamPublicBinding>, String> {
             unimplemented!()
@@ -1574,6 +1575,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _status: &AgentStatusRecord,
             _key: &golem_common::model::IdempotencyKey,
         ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, String> {
@@ -1590,6 +1592,8 @@ mod tests {
             &self,
             _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
@@ -1597,20 +1601,23 @@ mod tests {
         async fn remove_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
 
-        async fn get_agent_mode(
+        async fn resolve_agent_identity(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Option<AgentMode>, WorkerExecutorError> {
+        ) -> Result<Option<crate::services::worker::ResolvedAgentIdentity>, WorkerExecutorError>
+        {
             Ok(None)
         }
 
         async fn write_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _previous_status: Option<&AgentStatusRecord>,
             status_value: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -1620,6 +1627,7 @@ mod tests {
         async fn read_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _agent_mode: AgentMode,
         ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
             Ok(None)
@@ -1628,6 +1636,7 @@ mod tests {
         async fn write_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _previous_checkpoint: Option<&AgentStatusRecord>,
             checkpoint: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -1637,7 +1646,16 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _status_value: &AgentStatusRecord,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn remove_assignment_tracking(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
         ) -> Result<(), String> {
             Ok(())
         }

@@ -13,6 +13,7 @@ export class AbortableStreamIterable<A, E, R> implements AsyncIterableIterator<A
   constructor(
     private readonly stream: Stream.Stream<A, E, R>,
     context: Context.Context<R>,
+    private readonly dispose?: (exit: Exit.Exit<unknown, unknown>) => Promise<void>,
   ) {
     this.runPromise = Effect.runPromiseWith(context)
   }
@@ -44,18 +45,20 @@ export class AbortableStreamIterable<A, E, R> implements AsyncIterableIterator<A
       )
       this.execution = pulling
       const chunk = await pulling
+      if (this.pending === controller) this.pending = undefined
       if (chunk.length === 0) {
-        await this.close()
+        await this.close(Exit.void)
         return { done: true, value: undefined }
       }
       this.current = chunk[Symbol.iterator]()
       return this.current.next()
     } catch (error) {
+      if (this.pending === controller) this.pending = undefined
       if (controller.signal.aborted) {
         await this.close()
         return { done: true, value: undefined }
       }
-      await this.close().catch(() => undefined)
+      await this.close(Exit.die(error)).catch(() => undefined)
       throw error
     } finally {
       if (this.pending === controller) this.pending = undefined
@@ -66,12 +69,16 @@ export class AbortableStreamIterable<A, E, R> implements AsyncIterableIterator<A
     return this.close().then(() => ({ done: true, value: undefined }))
   }
 
-  close(): Promise<void> {
+  close(exit: Exit.Exit<unknown, unknown> = Exit.interrupt()): Promise<void> {
     if (!this.closePromise) {
       this.pending?.abort()
       this.closePromise = (async () => {
         await this.execution?.catch(() => undefined)
-        await this.runPromise(Scope.close(this.scope, Exit.void))
+        try {
+          await this.runPromise(Scope.close(this.scope, exit))
+        } finally {
+          await this.dispose?.(exit)
+        }
       })()
     }
     return this.closePromise

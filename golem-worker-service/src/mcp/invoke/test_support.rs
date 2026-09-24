@@ -345,6 +345,18 @@ struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     prepared_agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
+    durable_stream_controls: Arc<Mutex<Vec<
+        golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
+    >>>,
+    durable_stream_forks: Arc<Mutex<Vec<
+        golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotRequest,
+    >>>,
+    durable_stream_fork_result: Arc<Mutex<Option<
+        golem_api_grpc::proto::golem::workerexecutor::v1::fork_stream_slot_response::Result,
+    >>>,
+    durable_stream_reads: Arc<Mutex<VecDeque<
+        golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess,
+    >>>,
     contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     invocation_output: AgentInvocationOutput,
     file_reads: Arc<FileReadMock>,
@@ -635,6 +647,56 @@ impl WorkerClient for RecordingWorkerClient {
         Ok(self.invocation_output.clone())
     }
 
+    async fn control_export_stream(
+        &self,
+        _: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::ExportStreamControlResult>
+    {
+        self.durable_stream_controls.lock().unwrap().push(request);
+        Ok(golem_api_grpc::proto::golem::workerexecutor::v1::ExportStreamControlResult::Applied)
+    }
+
+    async fn fork_stream_slot(
+        &self,
+        _: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotRequest,
+    ) -> WorkerResult<
+        golem_api_grpc::proto::golem::workerexecutor::v1::fork_stream_slot_response::Result,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            ForkStreamSlotRejection, fork_stream_slot_rejection, fork_stream_slot_response,
+        };
+        self.durable_stream_forks.lock().unwrap().push(request);
+        Ok(self
+            .durable_stream_fork_result
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| {
+                fork_stream_slot_response::Result::Rejected(ForkStreamSlotRejection {
+                    reason: fork_stream_slot_rejection::Reason::NotFound as i32,
+                    ..Default::default()
+                })
+            }))
+    }
+
+    async fn read_stream_slot(
+        &self,
+        _: &AgentId,
+        _: golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess>>
+    {
+        self.durable_stream_reads
+            .lock()
+            .unwrap()
+            .pop_front()
+            .map(Some)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal("no scripted durable stream read response".to_string())
+            })
+    }
+
     async fn deliver_card_transfer(
         &self,
         _: &AgentId,
@@ -673,6 +735,18 @@ pub(crate) struct InvocationHarness {
     pub(crate) file_reads: Arc<FileReadMock>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
+    durable_stream_controls: Arc<Mutex<Vec<
+        golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
+    >>>,
+    durable_stream_forks: Arc<Mutex<Vec<
+        golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotRequest,
+    >>>,
+    durable_stream_fork_result: Arc<Mutex<Option<
+        golem_api_grpc::proto::golem::workerexecutor::v1::fork_stream_slot_response::Result,
+    >>>,
+    durable_stream_reads: Arc<Mutex<VecDeque<
+        golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess,
+    >>>,
     pub(crate) contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
 }
 
@@ -735,12 +809,20 @@ impl InvocationHarness {
         let agent_ids = Arc::new(Mutex::new(Vec::new()));
         let prepared_agent_ids = Arc::new(Mutex::new(Vec::new()));
         let method_params = Arc::new(Mutex::new(Vec::new()));
+        let durable_stream_controls = Arc::new(Mutex::new(Vec::new()));
+        let durable_stream_forks = Arc::new(Mutex::new(Vec::new()));
+        let durable_stream_fork_result = Arc::new(Mutex::new(None));
+        let durable_stream_reads = Arc::new(Mutex::new(VecDeque::new()));
         let file_reads = Arc::new(FileReadMock::default());
         let contexts = Arc::new(Mutex::new(Vec::new()));
         let worker_client = Arc::new(RecordingWorkerClient {
             agent_ids: agent_ids.clone(),
             prepared_agent_ids,
             method_params: method_params.clone(),
+            durable_stream_controls: durable_stream_controls.clone(),
+            durable_stream_forks: durable_stream_forks.clone(),
+            durable_stream_fork_result: durable_stream_fork_result.clone(),
+            durable_stream_reads: durable_stream_reads.clone(),
             contexts: contexts.clone(),
             invocation_output,
             file_reads: file_reads.clone(),
@@ -766,6 +848,10 @@ impl InvocationHarness {
             file_reads,
             agent_ids,
             method_params,
+            durable_stream_controls,
+            durable_stream_forks,
+            durable_stream_fork_result,
+            durable_stream_reads,
             contexts,
         }
     }
@@ -782,6 +868,32 @@ impl InvocationHarness {
             .expect("method params were recorded")
             .try_into()
             .expect("method params decode back into SchemaValue")
+    }
+
+    pub(crate) fn recorded_durable_stream_controls(
+        &self,
+    ) -> Vec<golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest>
+    {
+        self.durable_stream_controls.lock().unwrap().clone()
+    }
+
+    pub(crate) fn recorded_durable_stream_forks(
+        &self,
+    ) -> Vec<golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotRequest> {
+        self.durable_stream_forks.lock().unwrap().clone()
+    }
+
+    pub(crate) fn script_durable_stream_fork_success(
+        &self,
+        success: golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotSuccess,
+        reads: Vec<golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess>,
+    ) {
+        *self.durable_stream_fork_result.lock().unwrap() = Some(
+            golem_api_grpc::proto::golem::workerexecutor::v1::fork_stream_slot_response::Result::Success(
+                success,
+            ),
+        );
+        self.durable_stream_reads.lock().unwrap().extend(reads);
     }
 }
 

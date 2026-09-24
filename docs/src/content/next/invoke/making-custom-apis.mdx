@@ -585,6 +585,157 @@ pub(all) struct Gateway {
 </Tabs.Tab>
 </Tabs>
 
+## Customizing Durable Stream Routes
+
+An endpoint with stream inputs or outputs is exposed as a [Durable Streams](https://github.com/durable-streams/durable-streams) URL family. By default, each URL uses the canonical method parameter name (and `$result` for a direct stream result), JSON streams use `application/json`, byte streams use `application/octet-stream`, external writes and both deletion operations are enabled, and the worker-service defaults control admission.
+
+Route metadata can customize that HTTP surface without changing the agent method or the durable stream itself:
+
+| Customization | Effect |
+| --- | --- |
+| Slot `name` | Replaces the canonical slot name in the public URL and OpenAPI document. The canonical name remains the source selector in metadata and is not also accepted as a URL alias. |
+| Slot `contentType` | Replaces `application/octet-stream` for a direct `stream<u8>` slot. Ordinary reads and metadata, append negotiation, and OpenAPI use the custom MIME type; SSE remains `text/event-stream` with base64 data. |
+| `allowExternalWrites: false` | Removes `POST` from writable input slots. |
+| `allowStreamDelete: false` | Removes `DELETE` from stream URLs. |
+| `allowInvocationDelete: false` | Removes `DELETE` from invocation-session URLs. |
+| Reader limit | Caps concurrent admitted live readers (long-poll and SSE) per stream for this route. |
+| Append limit | Caps admitted append requests per second per stream for this route. |
+
+Disabled operations return `405 Method Not Allowed` with an `Allow` header that lists only the enabled methods. Admission exhaustion returns `429 Too Many Requests` with `Retry-After: 1`. Limits are maintained independently for each deployed route and worker-service node; they do not replace executor protocol limits or form a cluster-wide quota.
+
+<Callout type="info">
+  These options preserve the official Durable Streams wire protocol: they choose
+  URL names, an opaque byte-stream media type, optional protocol operations, and
+  stricter gateway admission. Custom media types are supported only for direct
+  byte streams (`stream<u8>`) and must be concrete non-text, non-JSON types
+  without parameters or wildcards. JSON-shaped streams remain
+  `application/json`. Native `text/plain` for `stream<string>` is not supported;
+  use the JSON representation so byte sub-offset forks cannot split a UTF-8
+  value.
+</Callout>
+
+Only `$result` has an implicit canonical name. Other slot selectors must identify an existing top-level input or output slot. Public names must be unique across the route, and canonical selectors must remain valid and unique even when a public name is supplied.
+
+The same route customization looks like this in each SDK:
+
+<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-durable-stream-route-customization">
+<Tabs.Tab>
+```typescript
+http: http.post('/events', {
+  durableStreams: {
+    slots: [
+      { source: 'input', slot: 'input', name: 'uploads' },
+      {
+        source: 'output',
+        slot: '$result',
+        name: 'events',
+        contentType: 'application/vnd.example.events',
+      },
+    ],
+    allowExternalWrites: true,
+    allowStreamDelete: false,
+    allowInvocationDelete: false,
+    load: {
+      maxConcurrentReadersPerStream: 8,
+      maxAppendRequestsPerSecondPerStream: 25,
+    },
+  },
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+http: [Http.post('/events', {
+  durableStreams: {
+    slots: [
+      { source: 'input', slot: 'input', name: 'uploads' },
+      {
+        source: 'output',
+        slot: '$result',
+        name: 'events',
+        contentType: 'application/vnd.example.events',
+      },
+    ],
+    allowExternalWrites: true,
+    allowStreamDelete: false,
+    allowInvocationDelete: false,
+    load: {
+      maxConcurrentReadersPerStream: 8,
+      maxAppendRequestsPerSecondPerStream: 25,
+    },
+  },
+})],
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[endpoint(
+    post = "/events",
+    durable_streams(
+        input("input", name = "uploads"),
+        output(
+            "$result",
+            name = "events",
+            content_type = "application/vnd.example.events"
+        ),
+        allow_external_writes = true,
+        allow_stream_delete = false,
+        allow_invocation_delete = false,
+        max_concurrent_readers_per_stream = 8,
+        max_append_requests_per_second_per_stream = 25,
+    )
+)]
+fn events(&mut self, input: AgentStream<u8>) -> AgentStream<u8>;
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@endpoint(method = "POST", path = "/events")
+@durableStreamSlot(source = "input", slot = "input", name = "uploads")
+@durableStreamSlot(
+  source = "output",
+  slot = "$result",
+  name = "events",
+  contentType = "application/vnd.example.events"
+)
+@durableStreams(
+  allowExternalWrites = true,
+  allowStreamDelete = false,
+  allowInvocationDelete = false,
+  maxConcurrentReadersPerStream = 8,
+  maxAppendRequestsPerSecondPerStream = 25
+)
+def events(
+  input: golem.schema.AgentStream[golem.UByte]
+): Future[golem.schema.AgentStream[golem.UByte]]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.endpoint(post = "/events")
+#derive.durable_stream_slot(input = "input", name = "uploads")
+#derive.durable_stream_slot(
+  output = "$result",
+  name = "events",
+  content_type = "application/vnd.example.events",
+)
+#derive.durable_streams(
+  allow_external_writes = true,
+  allow_stream_delete = false,
+  allow_invocation_delete = false,
+  max_concurrent_readers_per_stream = 8,
+  max_append_requests_per_second_per_stream = 25,
+)
+pub fn MyAgent::events(
+  self : Self,
+  input : @schema.AgentStream[Byte],
+) -> @schema.AgentStream[Byte] {
+  // ...
+}
+```
+</Tabs.Tab>
+</Tabs>
+
 ## Deployments
 
 To make the code-first routes accessible, a deployment section is needed in the application manifest (`golem.yaml`). This maps agents to domains per environment:
@@ -624,7 +775,7 @@ Methods with stream parameters or results appear as Durable Streams URL families
 - `PUT`, `GET`, `HEAD`, and `DELETE` on `{base}/invocations/{session}` create, inspect, or cooperatively cancel a session.
 - Each stream has a concrete path under `{base}/invocations/{session}/streams/`. Input streams support `POST` for appending; output streams do not. `DELETE` cancels and tombstones an individual stream.
 
-The document includes the schema and direction of every slot, with `x-golem-route-mode: durable-streams` and `x-golem-stream-slot` metadata. The direct result slot is spelled `%24result` in the OpenAPI path. JSON reads return arrays of the element type; byte streams use `application/octet-stream`. Reads also support long-poll and SSE through the `live` query parameter. SSE returns `text/event-stream`, so clients need an SSE parser rather than a JSON response parser.
+The document includes the schema and direction of every slot, with `x-golem-route-mode: durable-streams` and `x-golem-stream-slot` metadata. Without a public name override, the direct result slot is spelled `%24result` in the OpenAPI path. JSON reads return arrays of the element type; byte streams use their configured media type. Reads also support long-poll and SSE through the `live` query parameter. SSE returns `text/event-stream`, so clients need an SSE parser rather than a JSON response parser; byte-stream SSE data is base64 encoded and declares `Stream-SSE-Data-Encoding: base64`.
 
 Non-stream arguments belong to session creation and retain their path, query, header, or body bindings. Create the session before appending when the method requires body or header arguments. Append operations document producer retry headers and `Stream-Closed` for atomic closure. JSON array bodies are batches; an array-valued message needs an outer batch array. Empty append bodies are valid only when closing the stream.
 
