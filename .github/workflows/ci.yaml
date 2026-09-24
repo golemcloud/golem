@@ -822,10 +822,10 @@ jobs:
         run: moon test cmd lib
         working-directory: sdks/moonbit/golem_sdk_tools
 
-  # The Rust SDK test suite is dominated by three integration test targets that each shell out to
-  # cargo (tool: one `cargo check` per test, tool_middleware_component: a full wasm component
-  # build, ui: trybuild). They run as separate matrix entries; the `check` entry runs lint and every
-  # other test target and fails if a test target is added without being assigned to an entry.
+  # The Rust SDK test suite is dominated by two integration test targets that each shell out to
+  # cargo (tool: one `cargo check` per test, ui: trybuild). They run as separate matrix entries;
+  # the `check` entry runs lint and every other test target, and fails if a test target is added
+  # without being assigned to an entry.
   build-golem-rust:
     name: build-golem-rust (${{ matrix.part.name }})
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -837,8 +837,6 @@ jobs:
             test-args: --lib --bins --test agent --test http_router --test tool_canonical --test schema_reexport --test reflection_recipe_compile
           - name: tool
             test-args: --test tool
-          - name: tool-middleware-component
-            test-args: --test tool_middleware_component
           - name: ui
             test-args: --test ui
     steps:
@@ -869,7 +867,6 @@ jobs:
           schema_reexport
           tool
           tool_canonical
-          tool_middleware_component
           ui'
           actual=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[].targets[] | select(.kind | index("test")) | .name' | sort)

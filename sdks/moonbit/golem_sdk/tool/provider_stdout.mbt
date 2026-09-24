@@ -293,7 +293,7 @@ pub async fn invoke_with_stdout(
   @async-core.protect_from_cancel(() => stdout.complete(reason)) catch {
     error =>
       match result {
-        Ok(value) => {
+        Ok(value) if error is @async-core.Cancelled::Cancelled => {
           match value.result {
             Some(payload) => @model.drop_wit_capabilities(payload.value)
             None => ()
