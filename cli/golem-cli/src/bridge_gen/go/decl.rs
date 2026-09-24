@@ -44,7 +44,9 @@
 //! generators apply. Generated files carry Go's DO NOT EDIT marker, so the
 //! linter check that would object to `OrderId` skips them anyway.
 
-use crate::bridge_gen::go::go::{to_exported_ident, to_field_ident, unique_idents};
+use crate::bridge_gen::go::go::{
+    go_string, lower_first, to_exported_ident, to_field_ident, unique_idents,
+};
 use crate::bridge_gen::go::go_writer::GoWriter;
 use golem_common::schema::MetadataEnvelope;
 use golem_common::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
@@ -332,45 +334,6 @@ fn write_member_doc(name: &str, metadata: &MetadataEnvelope, writer: &mut GoWrit
     {
         writer.doc(&format!("{name} is {}", lower_first(doc)));
     }
-}
-
-/// Lower-cases the first character so the schema's sentence reads as the tail
-/// of "<Name> is …". A doc that already starts lower-case, or with something
-/// that has no case, is left alone.
-fn lower_first(doc: &str) -> String {
-    let doc = doc.trim();
-    let mut chars = doc.chars();
-    match chars.next() {
-        Some(first) if first.is_uppercase() => {
-            // Only when the second character is not also upper-case, so an
-            // acronym such as "HTTP status" is not mangled.
-            if doc.chars().nth(1).is_some_and(|c| c.is_uppercase()) {
-                doc.to_string()
-            } else {
-                first.to_lowercase().collect::<String>() + chars.as_str()
-            }
-        }
-        _ => doc.to_string(),
-    }
-}
-
-/// A Go string literal. Schema case names are identifiers, but a quote or a
-/// backslash would still produce source that does not parse.
-fn go_string(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(test)]

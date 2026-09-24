@@ -223,6 +223,42 @@ pub fn unique_idents_with_reserved(idents: Vec<String>, reserved: &[&str]) -> Ve
     result
 }
 
+/// Lower-cases the first character, so a schema sentence reads as the tail of
+/// "<Name> is …" — Go's doc-comment form. An acronym ("HTTP status") and a
+/// sentence that already starts lower-case are left alone.
+pub fn lower_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) if first.is_uppercase() => {
+            if s.chars().nth(1).is_some_and(|c| c.is_uppercase()) {
+                s.to_string()
+            } else {
+                first.to_lowercase().collect::<String>() + chars.as_str()
+            }
+        }
+        _ => s.to_string(),
+    }
+}
+
+/// A Go string literal. Schema names are identifiers, but a quote or a
+/// backslash would still produce source that does not parse.
+pub fn go_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
