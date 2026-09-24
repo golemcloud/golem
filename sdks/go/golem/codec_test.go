@@ -9,6 +9,7 @@ import (
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // ---------------------------------------------------------------------------
@@ -614,6 +615,59 @@ func TestVariantSchemaNamesCasesInDeclarationOrder(t *testing.T) {
 	want := []string{"card", "cash", "transfer"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("variant cases = %v, want %v", names, want)
+	}
+}
+
+// An empty-struct case is a payloadless case in the schema, not a case carrying
+// an empty record. The round trip above passes either way — only the schema
+// tells them apart, and it is the schema another language reads.
+func TestAnEmptyStructCaseCarriesNoPayload(t *testing.T) {
+	g := graphBuilder{d: defs}
+	root := g.node(defs.compile(reflect.TypeFor[PaymentMethod]()))
+	graph := g.build()
+
+	cases := graph.TypeNodes[root].Body.VariantType()
+	payloads := map[string]bool{}
+	for _, c := range cases {
+		payloads[c.Name] = c.Payload.IsSome()
+	}
+	if payloads["cash"] {
+		t.Fatalf("cash is declared as struct{} and must carry no payload")
+	}
+	if !payloads["card"] || !payloads["transfer"] {
+		t.Fatalf("cases with fields must keep their payload: %v", payloads)
+	}
+}
+
+// A payloadless case travels with no payload, so a peer that declares one —
+// in Rust, say — can decode it, and one it sends decodes here.
+func TestAPayloadlessCaseTravelsWithoutAPayload(t *testing.T) {
+	b := &valBuilder{}
+	c := defs.compile(reflect.TypeFor[PaymentMethod]())
+	root := c.encode(b, reflect.ValueOf(PaymentMethod(Cash{})))
+	node := b.nodes[root]
+	if node.Tag() != types.SchemaValueNodeVariantValue {
+		t.Fatalf("expected a variant value, got tag %d", node.Tag())
+	}
+	if node.VariantValue().Payload.IsSome() {
+		t.Fatalf("a payloadless case must be encoded with no payload")
+	}
+}
+
+// Receiving a payload for a case that declares none is a schema mismatch, and
+// reported as one rather than silently dropped.
+func TestAPayloadForAPayloadlessCaseIsRejected(t *testing.T) {
+	c := defs.compile(reflect.TypeFor[PaymentMethod]())
+	b := &valBuilder{}
+	inner := b.push(types.MakeSchemaValueNodeBoolValue(true))
+	root := b.push(types.MakeSchemaValueNodeVariantValue(types.VariantValuePayload{
+		Case:    1, // cash
+		Payload: witTypes.Some(inner),
+	}))
+	var out PaymentMethod
+	err := c.decode(&decoder{nodes: b.nodes}, reflect.ValueOf(&out).Elem(), root)
+	if err == nil || !strings.Contains(err.Error(), "declares no payload") {
+		t.Fatalf("got %v, want a payload-mismatch error", err)
 	}
 }
 

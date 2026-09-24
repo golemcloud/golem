@@ -111,7 +111,7 @@ Parameter and result types are Go structs; each exported field becomes one WIT f
 
 - Use sized integers (`int64`, `uint64`, …). Bare `int`/`uint` are **rejected** — their width is platform-dependent.
 - A `*T` field means `option<T>`. A nil slice/map is an **empty** list/map, never "absent" — use `*[]T` if you must distinguish.
-- Variants/enums are declared with `golem.DefineVariant` / `golem.DefineEnum`.
+- Variants/enums are declared with `golem.DefineVariant` / `golem.DefineEnum`. A variant case type is its payload; a case with no payload is an empty struct (`type Cash struct{}`).
 
 ## Returning Failures
 

@@ -36,6 +36,11 @@ import (
 //	    golem.Case[Cash]("cash"),
 //	)
 //
+// A case type is its payload: Card's fields are what the card case carries. A
+// case with nothing to carry is an empty struct, and publishes as a case with
+// no payload — Cash above is `cash`, not `cash(record {})`. That matters beyond
+// Go: it is the only way to match a payloadless case another language declares.
+//
 // An unexported marker method keeps the set closed: no type outside the
 // declaring package can join the variant.
 

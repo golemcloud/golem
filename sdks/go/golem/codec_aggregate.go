@@ -240,19 +240,24 @@ func compileResult(c *codec, okC, errC *codec) {
 
 func (d *definitions) compileVariant(c *codec, vd *variantDef) {
 	caseCodecs := make([]*codec, len(vd.cases))
+	unit := make([]bool, len(vd.cases))
 	byType := make(map[reflect.Type]int, len(vd.cases))
 	for i, cs := range vd.cases {
-		caseCodecs[i] = d.compile(cs.typ)
+		unit[i] = isUnitCase(cs.typ)
+		if !unit[i] {
+			caseCodecs[i] = d.compile(cs.typ)
+		}
 		byType[cs.typ] = i
 	}
 
 	c.body = func(g *graphBuilder) types.SchemaTypeBody {
 		out := make([]types.VariantCaseType, 0, len(vd.cases))
 		for i, cs := range vd.cases {
-			out = append(out, types.VariantCaseType{
-				Name:    cs.name,
-				Payload: witTypes.Some(g.node(caseCodecs[i])),
-			})
+			payload := witTypes.None[int32]()
+			if !unit[i] {
+				payload = witTypes.Some(g.node(caseCodecs[i]))
+			}
+			out = append(out, types.VariantCaseType{Name: cs.name, Payload: payload})
 		}
 		return types.MakeSchemaTypeBodyVariantType(out)
 	}
@@ -268,6 +273,12 @@ func (d *definitions) compileVariant(c *codec, vd *variantDef) {
 		i, ok := byType[concrete.Type()]
 		if !ok {
 			panic(&encodeError{fmt.Sprintf("%s is not a registered case of variant %s", concrete.Type(), c.typ)})
+		}
+		if unit[i] {
+			return b.push(types.MakeSchemaValueNodeVariantValue(types.VariantValuePayload{
+				Case:    uint32(i),
+				Payload: witTypes.None[int32](),
+			}))
 		}
 		payload := caseCodecs[i].encode(b, concrete)
 		return b.push(types.MakeSchemaValueNodeVariantValue(types.VariantValuePayload{
@@ -288,16 +299,33 @@ func (d *definitions) compileVariant(c *codec, vd *variantDef) {
 		if int(p.Case) >= len(vd.cases) {
 			return fmt.Errorf("%s: case index %d out of range (%d cases)", c.typ, p.Case, len(vd.cases))
 		}
+		out := reflect.New(vd.cases[p.Case].typ).Elem()
+		if unit[p.Case] {
+			if p.Payload.IsSome() {
+				return fmt.Errorf("%s: case %q declares no payload but one arrived", c.typ, vd.cases[p.Case].name)
+			}
+			dst.Set(out)
+			return nil
+		}
 		if p.Payload.IsNone() {
 			return fmt.Errorf("%s: case %q carries no payload", c.typ, vd.cases[p.Case].name)
 		}
-		out := reflect.New(vd.cases[p.Case].typ).Elem()
 		if err := caseCodecs[p.Case].decode(dec, out, p.Payload.Some()); err != nil {
 			return fmt.Errorf("%s case %q: %w", c.typ, vd.cases[p.Case].name, err)
 		}
 		dst.Set(out)
 		return nil
 	}
+}
+
+// isUnitCase reports whether a variant case carries no payload. Go spells a
+// case with nothing in it as an empty struct — `type Cash struct{}` — so that
+// is what "no payload" means here. Publishing it as an empty record instead
+// would be a different schema from a payloadless case, and a Go caller could
+// then neither send nor receive the payloadless cases another language
+// declares.
+func isUnitCase(t reflect.Type) bool {
+	return t.Kind() == reflect.Struct && t.NumField() == 0
 }
 
 func compileEnum(c *codec, d *enumDef) {
