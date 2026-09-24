@@ -2,61 +2,63 @@
 
 ///|
 ///
-pub impl @schema.IntoSchema for ReadFileResult with fn type_id() {
+pub impl @schema.IntoSchema for ReadFileResult with type_id() {
   "component.ReadFileResult"
 }
 
 ///|
 ///
-pub impl @schema.IntoSchema for ReadFileResult with fn register_in(b) {
+pub impl @schema.IntoSchema for ReadFileResult with register_in(b) {
   b.register(
     "component.ReadFileResult",
     () => {
       @model.schema_type(
-        Record([
-          @model.field(
-            "content",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+        Record(
+          [
+            @model.field(
+              "content",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+              ),
             ),
-          ),
-          @model.field(
-            "start_line",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[UInt64?]),
+            @model.field(
+              "start_line",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64?]),
+              ),
             ),
-          ),
-          @model.field(
-            "end_line",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[UInt64?]),
+            @model.field(
+              "end_line",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64?]),
+              ),
             ),
-          ),
-          @model.field(
-            "total_lines",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
+            @model.field(
+              "total_lines",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
             ),
-          ),
-          @model.field(
-            "truncated_before",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+            @model.field(
+              "truncated_before",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+              ),
             ),
-          ),
-          @model.field(
-            "truncated_after",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[Bool]),
+            @model.field(
+              "truncated_after",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+              ),
             ),
-          ),
-        ]),
+          ],
+        ),
       )
     },
     Some("component.ReadFileResult"),
@@ -65,37 +67,39 @@ pub impl @schema.IntoSchema for ReadFileResult with fn register_in(b) {
 
 ///|
 ///
-pub impl @schema.IntoSchema for ReadFileResult with fn to_value(self) {
-  Record([
-    @schema.to_value_as(self.content),
-    @schema.to_value_as(self.start_line),
-    @schema.to_value_as(self.end_line),
-    @schema.to_value_as(self.total_lines),
-    @schema.to_value_as(self.truncated_before),
-    @schema.to_value_as(self.truncated_after),
-  ])
+pub impl @schema.IntoSchema for ReadFileResult with to_value(self) {
+  Record(
+    [
+      @schema.to_value_as(self.content),
+      @schema.to_value_as(self.start_line),
+      @schema.to_value_as(self.end_line),
+      @schema.to_value_as(self.total_lines),
+      @schema.to_value_as(self.truncated_before),
+      @schema.to_value_as(self.truncated_after),
+    ],
+  )
 }
 
 ///|
 ///
-pub impl @schema.FromSchema for ReadFileResult with fn from_value(v) {
+pub impl @schema.FromSchema for ReadFileResult with from_value(v) {
   let fields = @schema.expect_record(v, "component.ReadFileResult")
-  let content : String = @schema.from_value_as(
+  let content :String = @schema.from_value_as(
     @schema.record_field(fields, 0, "component.ReadFileResult"),
   )
-  let start_line : UInt64? = @schema.from_value_as(
+  let start_line :UInt64? = @schema.from_value_as(
     @schema.record_field(fields, 1, "component.ReadFileResult"),
   )
-  let end_line : UInt64? = @schema.from_value_as(
+  let end_line :UInt64? = @schema.from_value_as(
     @schema.record_field(fields, 2, "component.ReadFileResult"),
   )
-  let total_lines : UInt64 = @schema.from_value_as(
+  let total_lines :UInt64 = @schema.from_value_as(
     @schema.record_field(fields, 3, "component.ReadFileResult"),
   )
-  let truncated_before : Bool = @schema.from_value_as(
+  let truncated_before :Bool = @schema.from_value_as(
     @schema.record_field(fields, 4, "component.ReadFileResult"),
   )
-  let truncated_after : Bool = @schema.from_value_as(
+  let truncated_after :Bool = @schema.from_value_as(
     @schema.record_field(fields, 5, "component.ReadFileResult"),
   )
   {
@@ -110,13 +114,121 @@ pub impl @schema.FromSchema for ReadFileResult with fn from_value(v) {
 
 ///|
 ///
-pub impl @schema.IntoSchema for WriteDisposition with fn type_id() {
+pub impl @schema.IntoWire for ReadFileResult with append_wire(self, encoder) {
+  let fields = [
+    @schema.IntoWire::append_wire(self.content, encoder),
+    @schema.IntoWire::append_wire(self.start_line, encoder),
+    @schema.IntoWire::append_wire(self.end_line, encoder),
+    @schema.IntoWire::append_wire(self.total_lines, encoder),
+    @schema.IntoWire::append_wire(self.truncated_before, encoder),
+    @schema.IntoWire::append_wire(self.truncated_after, encoder),
+  ]
+  encoder.push(@types.SchemaValueNode::RecordValue(fields))
+}
+
+///|
+///
+pub impl @schema.IntoWire for ReadFileResult with release_wire(self, releaser) {
+  @schema.IntoWire::release_wire(self.content, releaser)
+  @schema.IntoWire::release_wire(self.start_line, releaser)
+  @schema.IntoWire::release_wire(self.end_line, releaser)
+  @schema.IntoWire::release_wire(self.total_lines, releaser)
+  @schema.IntoWire::release_wire(self.truncated_before, releaser)
+  @schema.IntoWire::release_wire(self.truncated_after, releaser)
+}
+
+///|
+///
+pub impl @schema.FromWire for ReadFileResult with read_wire(tree, index) {
+  let fields = @schema.wire_record(tree, index, 6, "component.ReadFileResult")
+  let content :String = @schema.FromWire::read_wire(tree, fields[0])
+  let start_line :UInt64? = @schema.FromWire::read_wire(tree, fields[1])
+  let end_line :UInt64? = @schema.FromWire::read_wire(tree, fields[2])
+  let total_lines :UInt64 = @schema.FromWire::read_wire(tree, fields[3])
+  let truncated_before :Bool = @schema.FromWire::read_wire(tree, fields[4])
+  let truncated_after :Bool = @schema.FromWire::read_wire(tree, fields[5])
+  {
+    content,
+    start_line,
+    end_line,
+    total_lines,
+    truncated_before,
+    truncated_after,
+  }
+}
+
+///|
+///
+pub impl @schema.WireSchema for ReadFileResult with append_wire_type(encoder) {
+  encoder.named(
+    "component.ReadFileResult", () => {
+      encoder.push(
+        @types.SchemaTypeBody::RecordType(
+          [
+            {
+              name: "content",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+            {
+              name: "start_line",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64?]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+            {
+              name: "end_line",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64?]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+            {
+              name: "total_lines",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+            {
+              name: "truncated_before",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+            {
+              name: "truncated_after",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+          ],
+        ),
+      )
+    },
+  )
+}
+
+///|
+///
+pub impl @schema.IntoSchema for WriteDisposition with type_id() {
   "component.WriteDisposition"
 }
 
 ///|
 ///
-pub impl @schema.IntoSchema for WriteDisposition with fn register_in(b) {
+pub impl @schema.IntoSchema for WriteDisposition with register_in(b) {
   b.register(
     "component.WriteDisposition",
     () => @model.schema_type(Enum(["Created", "Replaced"])),
@@ -126,7 +238,7 @@ pub impl @schema.IntoSchema for WriteDisposition with fn register_in(b) {
 
 ///|
 ///
-pub impl @schema.IntoSchema for WriteDisposition with fn to_value(self) {
+pub impl @schema.IntoSchema for WriteDisposition with to_value(self) {
   match self {
     Created => Enum(0)
     Replaced => Enum(1)
@@ -135,7 +247,7 @@ pub impl @schema.IntoSchema for WriteDisposition with fn to_value(self) {
 
 ///|
 ///
-pub impl @schema.FromSchema for WriteDisposition with fn from_value(v) {
+pub impl @schema.FromSchema for WriteDisposition with from_value(v) {
   let case = @schema.expect_enum(v, "component.WriteDisposition")
   @schema.check_case_index(case, 2, "component.WriteDisposition")
   match case {
@@ -145,40 +257,84 @@ pub impl @schema.FromSchema for WriteDisposition with fn from_value(v) {
       let err = @schema.FromSchemaError::custom(
         "unreachable enum case for component.WriteDisposition",
       )
-      raise err
+      raise  err
     }
   }
 }
 
 ///|
 ///
-pub impl @schema.IntoSchema for WriteFileResult with fn type_id() {
+pub impl @schema.IntoWire for WriteDisposition with append_wire(self, encoder) {
+  let case :UInt = match self {
+    Created => 0U
+    Replaced => 1U
+  }
+  encoder.push(@types.SchemaValueNode::EnumValue(case))
+}
+
+///|
+///
+pub impl @schema.FromWire for WriteDisposition with read_wire(tree, index) {
+  let case = match @schema.wire_node(tree, index) {
+    @types.SchemaValueNode::EnumValue(case) => case
+    _ => {
+      raise  @schema.WireError::Invalid(
+        "component.WriteDisposition: expected enum value",
+      )
+    }
+  }
+  match case {
+    0 => Created
+    1 => Replaced
+    _ => {
+      raise  @schema.WireError::Invalid(
+        "component.WriteDisposition: enum case out of range",
+      )
+    }
+  }
+}
+
+///|
+///
+pub impl @schema.WireSchema for WriteDisposition with append_wire_type(encoder) {
+  encoder.named(
+    "component.WriteDisposition", () => {
+      encoder.push(@types.SchemaTypeBody::EnumType(["Created", "Replaced"]))
+    },
+  )
+}
+
+///|
+///
+pub impl @schema.IntoSchema for WriteFileResult with type_id() {
   "component.WriteFileResult"
 }
 
 ///|
 ///
-pub impl @schema.IntoSchema for WriteFileResult with fn register_in(b) {
+pub impl @schema.IntoSchema for WriteFileResult with register_in(b) {
   b.register(
     "component.WriteFileResult",
     () => {
       @model.schema_type(
-        Record([
-          @model.field(
-            "disposition",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[WriteDisposition]),
+        Record(
+          [
+            @model.field(
+              "disposition",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[WriteDisposition]),
+              ),
             ),
-          ),
-          @model.field(
-            "bytes_written",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
+            @model.field(
+              "bytes_written",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
             ),
-          ),
-        ]),
+          ],
+        ),
       )
     },
     Some("component.WriteFileResult"),
@@ -187,62 +343,124 @@ pub impl @schema.IntoSchema for WriteFileResult with fn register_in(b) {
 
 ///|
 ///
-pub impl @schema.IntoSchema for WriteFileResult with fn to_value(self) {
-  Record([
-    @schema.to_value_as(self.disposition),
-    @schema.to_value_as(self.bytes_written),
-  ])
+pub impl @schema.IntoSchema for WriteFileResult with to_value(self) {
+  Record(
+    [
+      @schema.to_value_as(self.disposition),
+      @schema.to_value_as(self.bytes_written),
+    ],
+  )
 }
 
 ///|
 ///
-pub impl @schema.FromSchema for WriteFileResult with fn from_value(v) {
+pub impl @schema.FromSchema for WriteFileResult with from_value(v) {
   let fields = @schema.expect_record(v, "component.WriteFileResult")
-  let disposition : WriteDisposition = @schema.from_value_as(
+  let disposition :WriteDisposition = @schema.from_value_as(
     @schema.record_field(fields, 0, "component.WriteFileResult"),
   )
-  let bytes_written : UInt64 = @schema.from_value_as(
+  let bytes_written :UInt64 = @schema.from_value_as(
     @schema.record_field(fields, 1, "component.WriteFileResult"),
   )
-  { disposition, bytes_written, }
+  { disposition, bytes_written }
 }
 
 ///|
 ///
-pub impl @schema.IntoSchema for EditFileResult with fn type_id() {
+pub impl @schema.IntoWire for WriteFileResult with append_wire(self, encoder) {
+  let fields = [
+    @schema.IntoWire::append_wire(self.disposition, encoder),
+    @schema.IntoWire::append_wire(self.bytes_written, encoder),
+  ]
+  encoder.push(@types.SchemaValueNode::RecordValue(fields))
+}
+
+///|
+///
+pub impl @schema.IntoWire for WriteFileResult with release_wire(self, releaser) {
+  @schema.IntoWire::release_wire(self.disposition, releaser)
+  @schema.IntoWire::release_wire(self.bytes_written, releaser)
+}
+
+///|
+///
+pub impl @schema.FromWire for WriteFileResult with read_wire(tree, index) {
+  let fields = @schema.wire_record(tree, index, 2, "component.WriteFileResult")
+  let disposition :WriteDisposition = 
+    @schema.FromWire::read_wire(tree, fields[0])
+  let bytes_written :UInt64 = @schema.FromWire::read_wire(tree, fields[1])
+  { disposition, bytes_written }
+}
+
+///|
+///
+pub impl @schema.WireSchema for WriteFileResult with append_wire_type(encoder) {
+  encoder.named(
+    "component.WriteFileResult", () => {
+      encoder.push(
+        @types.SchemaTypeBody::RecordType(
+          [
+            {
+              name: "disposition",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[WriteDisposition]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+            {
+              name: "bytes_written",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+          ],
+        ),
+      )
+    },
+  )
+}
+
+///|
+///
+pub impl @schema.IntoSchema for EditFileResult with type_id() {
   "component.EditFileResult"
 }
 
 ///|
 ///
-pub impl @schema.IntoSchema for EditFileResult with fn register_in(b) {
+pub impl @schema.IntoSchema for EditFileResult with register_in(b) {
   b.register(
     "component.EditFileResult",
     () => {
       @model.schema_type(
-        Record([
-          @model.field(
-            "replacements",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
+        Record(
+          [
+            @model.field(
+              "replacements",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
             ),
-          ),
-          @model.field(
-            "bytes_before",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
+            @model.field(
+              "bytes_before",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
             ),
-          ),
-          @model.field(
-            "bytes_after",
-            @schema.register_in_with(
-              b,
-              (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
+            @model.field(
+              "bytes_after",
+              @schema.register_in_with(
+                b,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
             ),
-          ),
-        ]),
+          ],
+        ),
       )
     },
     Some("component.EditFileResult"),
@@ -251,26 +469,97 @@ pub impl @schema.IntoSchema for EditFileResult with fn register_in(b) {
 
 ///|
 ///
-pub impl @schema.IntoSchema for EditFileResult with fn to_value(self) {
-  Record([
-    @schema.to_value_as(self.replacements),
-    @schema.to_value_as(self.bytes_before),
-    @schema.to_value_as(self.bytes_after),
-  ])
+pub impl @schema.IntoSchema for EditFileResult with to_value(self) {
+  Record(
+    [
+      @schema.to_value_as(self.replacements),
+      @schema.to_value_as(self.bytes_before),
+      @schema.to_value_as(self.bytes_after),
+    ],
+  )
 }
 
 ///|
 ///
-pub impl @schema.FromSchema for EditFileResult with fn from_value(v) {
+pub impl @schema.FromSchema for EditFileResult with from_value(v) {
   let fields = @schema.expect_record(v, "component.EditFileResult")
-  let replacements : UInt64 = @schema.from_value_as(
+  let replacements :UInt64 = @schema.from_value_as(
     @schema.record_field(fields, 0, "component.EditFileResult"),
   )
-  let bytes_before : UInt64 = @schema.from_value_as(
+  let bytes_before :UInt64 = @schema.from_value_as(
     @schema.record_field(fields, 1, "component.EditFileResult"),
   )
-  let bytes_after : UInt64 = @schema.from_value_as(
+  let bytes_after :UInt64 = @schema.from_value_as(
     @schema.record_field(fields, 2, "component.EditFileResult"),
   )
-  { replacements, bytes_before, bytes_after, }
+  { replacements, bytes_before, bytes_after }
 }
+
+///|
+///
+pub impl @schema.IntoWire for EditFileResult with append_wire(self, encoder) {
+  let fields = [
+    @schema.IntoWire::append_wire(self.replacements, encoder),
+    @schema.IntoWire::append_wire(self.bytes_before, encoder),
+    @schema.IntoWire::append_wire(self.bytes_after, encoder),
+  ]
+  encoder.push(@types.SchemaValueNode::RecordValue(fields))
+}
+
+///|
+///
+pub impl @schema.IntoWire for EditFileResult with release_wire(self, releaser) {
+  @schema.IntoWire::release_wire(self.replacements, releaser)
+  @schema.IntoWire::release_wire(self.bytes_before, releaser)
+  @schema.IntoWire::release_wire(self.bytes_after, releaser)
+}
+
+///|
+///
+pub impl @schema.FromWire for EditFileResult with read_wire(tree, index) {
+  let fields = @schema.wire_record(tree, index, 3, "component.EditFileResult")
+  let replacements :UInt64 = @schema.FromWire::read_wire(tree, fields[0])
+  let bytes_before :UInt64 = @schema.FromWire::read_wire(tree, fields[1])
+  let bytes_after :UInt64 = @schema.FromWire::read_wire(tree, fields[2])
+  { replacements, bytes_before, bytes_after }
+}
+
+///|
+///
+pub impl @schema.WireSchema for EditFileResult with append_wire_type(encoder) {
+  encoder.named(
+    "component.EditFileResult", () => {
+      encoder.push(
+        @types.SchemaTypeBody::RecordType(
+          [
+            {
+              name: "replacements",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+            {
+              name: "bytes_before",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+            {
+              name: "bytes_after",
+              body: @schema.append_wire_type_with(
+                encoder,
+                (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+              ),
+              metadata: @schema.empty_wire_metadata(),
+            },
+          ],
+        ),
+      )
+    },
+  )
+}
+

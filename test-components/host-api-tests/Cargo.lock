@@ -443,7 +443,7 @@ dependencies = [
  "uuid",
  "wasi-logger",
  "wasip3",
- "wit-bindgen 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd)",
+ "wit-bindgen 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557)",
 ]
 
 [[package]]
@@ -471,7 +471,7 @@ dependencies = [
  "thiserror",
  "uuid",
  "wasip2",
- "wit-bindgen 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd)",
+ "wit-bindgen 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557)",
 ]
 
 [[package]]
@@ -1491,11 +1491,11 @@ dependencies = [
 [[package]]
 name = "wit-bindgen"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557#d1d16370eff379655f68df661891b7a2116c7557"
 dependencies = [
  "bitflags",
  "futures",
- "wit-bindgen-rust-macro 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd)",
+ "wit-bindgen-rust-macro 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557)",
 ]
 
 [[package]]
@@ -1521,7 +1521,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557#d1d16370eff379655f68df661891b7a2116c7557"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
@@ -1569,7 +1569,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557#d1d16370eff379655f68df661891b7a2116c7557"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
@@ -1577,7 +1577,7 @@ dependencies = [
  "prettyplease",
  "syn 2.0.119",
  "wasm-metadata 0.253.0",
- "wit-bindgen-core 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd)",
+ "wit-bindgen-core 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557)",
  "wit-component 0.253.0",
 ]
 
@@ -1613,7 +1613,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust-macro"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557#d1d16370eff379655f68df661891b7a2116c7557"
 dependencies = [
  "anyhow",
  "macro-string",
@@ -1621,8 +1621,8 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "wit-bindgen-core 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd)",
- "wit-bindgen-rust 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd)",
+ "wit-bindgen-core 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557)",
+ "wit-bindgen-rust 0.59.0 (git+https://github.com/golemcloud/wit-bindgen?rev=d1d16370eff379655f68df661891b7a2116c7557)",
 ]
 
 [[package]]

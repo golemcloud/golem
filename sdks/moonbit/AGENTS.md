@@ -154,7 +154,7 @@ files. Regenerate with the script, which requires this exact revision of the
 
 ```sh
 cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
-  --rev ca628b5d78c346f8b51973931d45c0ce08c784dd wit-bindgen-cli
+  --rev d1d16370eff379655f68df661891b7a2116c7557 wit-bindgen-cli
 ```
 
 The pin incorporates Bytecode Alliance's draft
@@ -535,7 +535,7 @@ published to mooncakes.io for the release template to work.
 ## Dependencies & Tools
 
 - **wit-bindgen** — Golem's fork pinned at
-  `ca628b5d78c346f8b51973931d45c0ce08c784dd`. It combines draft upstream PR #1659's MoonBit
+  `d1d16370eff379655f68df661891b7a2116c7557`. It combines draft upstream PR #1659's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
   disambiguation changes, 64 KiB component byte-stream batching, shared cross-interface export ABI
   lifting and lowering, and

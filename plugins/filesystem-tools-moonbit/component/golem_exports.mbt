@@ -2,9 +2,12 @@
 
 ///|
 fn init {
-  @toolGuest.handlers.val = Some({
-    discover_tools: @toolExports.discover_tools,
-    get_tool: @toolExports.get_tool,
-    invoke: @toolExports.invoke,
-  })
+  @toolGuest.handlers.val = Some(
+    {
+      discover_tools: @toolExports.discover_tools,
+      get_tool: @toolExports.get_tool,
+      invoke: @toolExports.invoke,
+    },
+  )
 }
+

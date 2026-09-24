@@ -3,10 +3,13 @@ members = [
     "agent",
     "canonical-floor",
     "empty",
+    "mixed",
     "non-reflective",
+    "raw-floor",
     "reflection",
     "tool",
     "tool-client",
+    "typed-floor",
 ]
 resolver = "2"
 
@@ -16,7 +19,7 @@ edition = "2024"
 
 [workspace.dependencies]
 golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "ca628b5d78c346f8b51973931d45c0ce08c784dd", version = "=0.59.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", rev = "d1d16370eff379655f68df661891b7a2116c7557", version = "=0.59.0", features = ["async", "async-spawn", "inter-task-wakeup"] }
 
 [profile.release]
 opt-level = "s"

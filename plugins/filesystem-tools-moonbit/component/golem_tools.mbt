@@ -3,140 +3,144 @@
 ///|
 ///
 #warnings("-unused_try")
-pub impl @tool.ToolErrorSchema for FilesystemToolError with fn error_cases() {
-  Ok([
-    {
-      name: "unsafe-path",
-      doc: {
-        summary: "The path is empty, contains NUL, or contains a parent traversal component.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 2,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-    {
-      name: "invalid-range",
-      doc: {
-        summary: "The requested line range is invalid.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 2,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-    {
-      name: "not-found",
-      doc: {
-        summary: "The path does not exist.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
-      exit_code: 1,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-    {
-      name: "not-a-file",
-      doc: {
-        summary: "The path exists but is not a regular file.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
-      exit_code: 1,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-    {
-      name: "binary-file",
-      doc: {
-        summary: "File contents are not text suitable for these tools.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
-      exit_code: 1,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-    {
-      name: "empty-old-text",
-      doc: {
-        summary: "The edit search text is empty.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 2,
-      payload: None,
-    },
-    {
-      name: "stale-edit",
-      doc: {
-        summary: "The expected text was not found; the caller likely has stale content.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
-      exit_code: 1,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-    {
-      name: "ambiguous-edit",
-      doc: {
-        summary: "The expected text occurs more than once and cannot be edited unambiguously.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 2,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-    {
-      name: "io",
-      doc: {
-        summary: "A filesystem operation failed.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
-      exit_code: 1,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-  ]) catch {
+pub impl @tool.ToolErrorSchema for FilesystemToolError with error_cases() {
+  try {
+    Ok(
+      [
+        {
+          name: "unsafe-path",
+          doc: {
+            summary: "The path is empty, contains NUL, or contains a parent traversal component.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 2,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+        {
+          name: "invalid-range",
+          doc: {
+            summary: "The requested line range is invalid.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 2,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+        {
+          name: "not-found",
+          doc: {
+            summary: "The path does not exist.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+          exit_code: 1,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+        {
+          name: "not-a-file",
+          doc: {
+            summary: "The path exists but is not a regular file.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+          exit_code: 1,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+        {
+          name: "binary-file",
+          doc: {
+            summary: "File contents are not text suitable for these tools.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+          exit_code: 1,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+        {
+          name: "empty-old-text",
+          doc: {
+            summary: "The edit search text is empty.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 2,
+          payload: None,
+        },
+        {
+          name: "stale-edit",
+          doc: {
+            summary: "The expected text was not found; the caller likely has stale content.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+          exit_code: 1,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+        {
+          name: "ambiguous-edit",
+          doc: {
+            summary: "The expected text occurs more than once and cannot be edited unambiguously.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 2,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+        {
+          name: "io",
+          doc: {
+            summary: "A filesystem operation failed.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+          exit_code: 1,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+      ],
+    )
+  } catch{
     __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
@@ -144,64 +148,101 @@ pub impl @tool.ToolErrorSchema for FilesystemToolError with fn error_cases() {
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for FilesystemToolError with fn to_error_payload_value(
+pub impl @tool.ToolErrorSchema for FilesystemToolError with to_error_payload_value(
   self,
 ) {
   match self {
-    UnsafePath(__golem_payload) =>
-      Ok(("unsafe-path", @schema.try_into_typed_schema_value(__golem_payload))) catch {
+    UnsafePath(__golem_payload) => {
+      try {
+        Ok(
+          ("unsafe-path", @schema.try_into_typed_schema_value(__golem_payload)),
+        )
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    InvalidRange(__golem_payload) =>
-      Ok(
-        ("invalid-range", @schema.try_into_typed_schema_value(__golem_payload)),
-      ) catch {
+    }
+    InvalidRange(__golem_payload) => {
+      try {
+        Ok(
+          (
+            "invalid-range",
+            @schema.try_into_typed_schema_value(__golem_payload),
+          ),
+        )
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    NotFound(__golem_payload) =>
-      Ok(("not-found", @schema.try_into_typed_schema_value(__golem_payload))) catch {
+    }
+    NotFound(__golem_payload) => {
+      try {
+        Ok(("not-found", @schema.try_into_typed_schema_value(__golem_payload)))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    NotAFile(__golem_payload) =>
-      Ok(("not-a-file", @schema.try_into_typed_schema_value(__golem_payload))) catch {
+    }
+    NotAFile(__golem_payload) => {
+      try {
+        Ok(("not-a-file", @schema.try_into_typed_schema_value(__golem_payload)))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    BinaryFile(__golem_payload) =>
-      Ok(("binary-file", @schema.try_into_typed_schema_value(__golem_payload))) catch {
+    }
+    BinaryFile(__golem_payload) => {
+      try {
+        Ok(
+          ("binary-file", @schema.try_into_typed_schema_value(__golem_payload)),
+        )
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    EmptyOldText =>
-      Ok(("empty-old-text", @schema.try_into_typed_schema_value(()))) catch {
+    }
+    EmptyOldText => {
+      try {
+        Ok(("empty-old-text", @schema.try_into_typed_schema_value(())))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    StaleEdit(__golem_payload) =>
-      Ok(("stale-edit", @schema.try_into_typed_schema_value(__golem_payload))) catch {
+    }
+    StaleEdit(__golem_payload) => {
+      try {
+        Ok(("stale-edit", @schema.try_into_typed_schema_value(__golem_payload)))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    AmbiguousEdit(__golem_payload) =>
-      Ok(
-        ("ambiguous-edit", @schema.try_into_typed_schema_value(__golem_payload)),
-      ) catch {
+    }
+    AmbiguousEdit(__golem_payload) => {
+      try {
+        Ok(
+          (
+            "ambiguous-edit",
+            @schema.try_into_typed_schema_value(__golem_payload),
+          ),
+        )
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    Io(__golem_payload) =>
-      Ok(("io", @schema.try_into_typed_schema_value(__golem_payload))) catch {
+    }
+    Io(__golem_payload) => {
+      try {
+        Ok(("io", @schema.try_into_typed_schema_value(__golem_payload)))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
+    }
   }
 }
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for FilesystemToolError with fn from_error_payload_value(
+pub impl @tool.ToolErrorSchema for FilesystemToolError with from_error_payload_value(
   __golem_name,
   __golem_value,
 ) {
   match __golem_name {
     "unsafe-path" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -210,9 +251,9 @@ pub impl @tool.ToolErrorSchema for FilesystemToolError with fn from_error_payloa
       Err("remote tool error payload is malformed for case `unsafe-path`")
     }
     "invalid-range" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -221,9 +262,9 @@ pub impl @tool.ToolErrorSchema for FilesystemToolError with fn from_error_payloa
       Err("remote tool error payload is malformed for case `invalid-range`")
     }
     "not-found" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -232,9 +273,9 @@ pub impl @tool.ToolErrorSchema for FilesystemToolError with fn from_error_payloa
       Err("remote tool error payload is malformed for case `not-found`")
     }
     "not-a-file" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -243,9 +284,9 @@ pub impl @tool.ToolErrorSchema for FilesystemToolError with fn from_error_payloa
       Err("remote tool error payload is malformed for case `not-a-file`")
     }
     "binary-file" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -254,9 +295,9 @@ pub impl @tool.ToolErrorSchema for FilesystemToolError with fn from_error_payloa
       Err("remote tool error payload is malformed for case `binary-file`")
     }
     "empty-old-text" => {
-      let __golem_decoded : Unit? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :Unit? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -265,9 +306,9 @@ pub impl @tool.ToolErrorSchema for FilesystemToolError with fn from_error_payloa
       Err("remote tool error payload is malformed for case `empty-old-text`")
     }
     "stale-edit" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -276,9 +317,9 @@ pub impl @tool.ToolErrorSchema for FilesystemToolError with fn from_error_payloa
       Err("remote tool error payload is malformed for case `stale-edit`")
     }
     "ambiguous-edit" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -287,9 +328,9 @@ pub impl @tool.ToolErrorSchema for FilesystemToolError with fn from_error_payloa
       Err("remote tool error payload is malformed for case `ambiguous-edit`")
     }
     "io" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -332,10 +373,7 @@ fn __golem_tool_concat_globals(
 
 ///|
 ///
-fn __golem_tool_rebase_node(
-  node : @tool.CommandNodeDef,
-  offset : Int,
-) -> @tool.CommandNodeDef {
+fn __golem_tool_rebase_node(node : @tool.CommandNodeDef, offset : Int) -> @tool.CommandNodeDef {
   {
     name: node.name,
     aliases: node.aliases,
@@ -357,14 +395,11 @@ fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
 
 ///|
 ///
-fn __golem_tool_append_prepared(
-  def : @tool.ToolDef,
-  child : @tool.ToolDef,
-) -> @tool.ToolDef {
+fn __golem_tool_append_prepared(def : @tool.ToolDef, child : @tool.ToolDef) -> @tool.ToolDef {
   let offset = def.commands.length()
   let commands = def.commands.copy()
   let root = commands[0]
-  commands[0] = {
+  commands[0] =  {
     name: root.name,
     aliases: root.aliases,
     doc: root.doc,
@@ -375,14 +410,14 @@ fn __golem_tool_append_prepared(
   for node in child.commands {
     commands.push(__golem_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands, }
+  { version: def.version, commands }
 }
 
 ///|
 ///
 fn __golem_tool_def_raw_ReadFile() -> @tool.ToolDef {
   try {
-    let def : @tool.ToolDef = {
+    let def :@tool.ToolDef = {
       version: "0.1.0-moonbit",
       commands: [
         {
@@ -393,7 +428,7 @@ fn __golem_tool_def_raw_ReadFile() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [1],
           body: None,
         },
@@ -405,75 +440,83 @@ fn __golem_tool_def_raw_ReadFile() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
-                {
-                  name: "path",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
-                },
-              ],
-              tail: Some({
-                name: "range",
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                item_type: @schema.into_schema_graph(
-                  (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "path",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: Some(
+                  {
+                    name: "range",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    item_type: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                    ),
+                    min: 0U,
+                    max: None,
+                    separator: None,
+                    verbatim: false,
+                    accepts_stdio: false,
+                  },
                 ),
-                min: 0U,
-                max: None,
-                separator: None,
-                verbatim: false,
-                accepts_stdio: false,
-              }),
-            },
-            options: [],
-            flags: [],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[ReadFileResult]),
-              ),
-              doc: {
-                summary: "Read text while preserving its original line endings.",
-                description: "",
-                examples: [],
               },
-              formatters: [
+              options: [],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: Some(
                 {
-                  name: "default",
-                  doc: { summary: "", description: "", examples: [], },
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[ReadFileResult]),
+                  ),
+                  doc: {
+                    summary: "Read text while preserving its original line endings.",
+                    description: "",
+                    examples: [],
+                  },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
                 },
-              ],
-              default_formatter: "default",
-            }),
-            errors: match FilesystemToolError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              ),
+              errors: match FilesystemToolError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
+              },
+              annotations: Some(
+                {
+                  read_only: true,
+                  destructive: false,
+                  idempotent: true,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: true,
-              destructive: false,
-              idempotent: true,
-              open_world: true,
-            }),
-          }),
+          ),
         },
       ],
     }
     def
-  } catch {
+  } catch{
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -488,13 +531,13 @@ fn __golem_tool_def_prepare_ReadFile(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier : @tool.ToolDef = {
+    let carrier :@tool.ToolDef = {
       version: "0.1.0-moonbit",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
+          doc: { summary: "", description: "", examples: [] },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -513,7 +556,7 @@ fn __golem_tool_def_prepare_ReadFile(
     )
     let def = prepared
     def
-  } catch {
+  } catch{
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -521,13 +564,15 @@ fn __golem_tool_def_prepare_ReadFile(
 ///|
 ///
 fn __golem_tool_def_ReadFile() -> @tool.ToolDef {
-  __golem_tool_def_prepare_ReadFile(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
+  try {
+    __golem_tool_def_prepare_ReadFile(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -542,106 +587,232 @@ async fn __golem_tool_invoke_ReadFile(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_ReadFile()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+  if __golem_command_path.length() == 1 && ["read-file"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        2,
+        "tool read-file-moonbit command read-file",
       )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool read-file-moonbit invocation",
-  ) catch {
-    __golem_error =>
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-  }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool read-file-moonbit command read-file: " + repr(__golem_error),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let path :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
+            "tool read-file-moonbit command read-file: failed decoding `path`: " + repr(
+              __golem_error,
+            ),
           ),
         )
       }
-      let path : String = @tool.decode_canonical_field(
-        __golem_decoded, "path", "tool read-file-moonbit command read-file",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
+    }
+    let range :Array[UInt64] = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool read-file-moonbit command read-file: failed decoding `range`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
       }
-      let range : Array[UInt64] = @tool.decode_canonical_field(
-        __golem_decoded, "range", "tool read-file-moonbit command read-file",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool read-file-moonbit command read-file: " + repr(__golem_error),
+          ),
+        )
       }
-      match ReadFile::read_file(path, range) {
-        Ok(__golem_value) =>
-          Ok(
-            @tool.invocation_result_value(__golem_value) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
-              @types.ToolError::InvalidResult(message) =>
-                return Err(@types.ToolError::InvalidResult(message))
-              error => raise error
-            },
-          )
-        Err(error) => {
-          let (__golem_error_name, payload) = match
-            FilesystemToolError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
-                ),
-              )
-          }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
+    }
+    return match ReadFile::read_file(path, range) {
+      Ok(__golem_value) => {
+        Ok(
+          try {
+            @tool.invocation_result_wire(__golem_value)
+          } catch{
+            @asyncCore.Cancelled::Cancelled as error => raise  error
+            @types.ToolError::InvalidResult(message) => {
               return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
+            }
+            error => raise  error
+          },
+        )
+      }
+      Err(error) => {
+        match error {
+          UnsafePath(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "unsafe-path", payload }))
           }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
+          InvalidRange(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "invalid-range", payload }),
+            )
+          }
+          NotFound(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "not-found", payload }))
+          }
+          NotAFile(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "not-a-file", payload }))
+          }
+          BinaryFile(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "binary-file", payload }))
+          }
+          EmptyOldText => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "empty-old-text", payload }),
+            )
+          }
+          StaleEdit(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "stale-edit", payload }))
+          }
+          AmbiguousEdit(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "ambiguous-edit", payload }),
+            )
+          }
+          Io(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "io", payload }))
+          }
         }
       }
     }
-    _ =>
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
   }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
 ///
 fn __golem_tool_def_raw_WriteFile() -> @tool.ToolDef {
   try {
-    let def : @tool.ToolDef = {
+    let def :@tool.ToolDef = {
       version: "0.1.0-moonbit",
       commands: [
         {
@@ -652,7 +823,7 @@ fn __golem_tool_def_raw_WriteFile() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [1],
           body: None,
         },
@@ -664,86 +835,91 @@ fn __golem_tool_def_raw_WriteFile() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "path",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "content",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
+              options: [],
+              flags: [
                 {
-                  name: "path",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                  long: "create-parent-directories",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
                   ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
-                },
-                {
-                  name: "content",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
+                  env_var: None,
                 },
               ],
-              tail: None,
-            },
-            options: [],
-            flags: [
-              {
-                long: "create-parent-directories",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-            ],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[WriteFileResult]),
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[WriteFileResult]),
+                  ),
+                  doc: {
+                    summary: "Write a file, optionally creating missing parent directories.",
+                    description: "",
+                    examples: [],
+                  },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
+                },
               ),
-              doc: {
-                summary: "Write a file, optionally creating missing parent directories.",
-                description: "",
-                examples: [],
+              errors: match FilesystemToolError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
               },
-              formatters: [
+              annotations: Some(
                 {
-                  name: "default",
-                  doc: { summary: "", description: "", examples: [], },
+                  read_only: false,
+                  destructive: true,
+                  idempotent: true,
+                  open_world: true,
                 },
-              ],
-              default_formatter: "default",
-            }),
-            errors: match FilesystemToolError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: true,
-              open_world: true,
-            }),
-          }),
+          ),
         },
       ],
     }
     def
-  } catch {
+  } catch{
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -758,13 +934,13 @@ fn __golem_tool_def_prepare_WriteFile(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier : @tool.ToolDef = {
+    let carrier :@tool.ToolDef = {
       version: "0.1.0-moonbit",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
+          doc: { summary: "", description: "", examples: [] },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -783,7 +959,7 @@ fn __golem_tool_def_prepare_WriteFile(
     )
     let def = prepared
     def
-  } catch {
+  } catch{
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -791,13 +967,15 @@ fn __golem_tool_def_prepare_WriteFile(
 ///|
 ///
 fn __golem_tool_def_WriteFile() -> @tool.ToolDef {
-  __golem_tool_def_prepare_WriteFile(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
+  try {
+    __golem_tool_def_prepare_WriteFile(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -812,114 +990,247 @@ async fn __golem_tool_invoke_WriteFile(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_WriteFile()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+  if __golem_command_path.length() == 1 && ["write-file"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        3,
+        "tool write-file-moonbit command write-file",
       )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool write-file-moonbit invocation",
-  ) catch {
-    __golem_error =>
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-  }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool write-file-moonbit command write-file: " + repr(__golem_error),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let path :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
+            "tool write-file-moonbit command write-file: failed decoding `path`: " + repr(
+              __golem_error,
+            ),
           ),
         )
       }
-      let path : String = @tool.decode_canonical_field(
-        __golem_decoded, "path", "tool write-file-moonbit command write-file",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
+    }
+    let content :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool write-file-moonbit command write-file: failed decoding `content`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
       }
-      let content : String = @tool.decode_canonical_field(
-        __golem_decoded, "content", "tool write-file-moonbit command write-file",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
+    }
+    let create_parent_directories :Bool = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool write-file-moonbit command write-file: failed decoding `create-parent-directories`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
       }
-      let create_parent_directories : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "create-parent-directories", "tool write-file-moonbit command write-file",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool write-file-moonbit command write-file: " + repr(__golem_error),
+          ),
+        )
       }
-      match WriteFile::write_file(path, content, create_parent_directories) {
-        Ok(__golem_value) =>
-          Ok(
-            @tool.invocation_result_value(__golem_value) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
-              @types.ToolError::InvalidResult(message) =>
-                return Err(@types.ToolError::InvalidResult(message))
-              error => raise error
-            },
-          )
-        Err(error) => {
-          let (__golem_error_name, payload) = match
-            FilesystemToolError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
-                ),
-              )
-          }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
+    }
+    return match WriteFile::write_file(path, content, create_parent_directories) {
+      Ok(__golem_value) => {
+        Ok(
+          try {
+            @tool.invocation_result_wire(__golem_value)
+          } catch{
+            @asyncCore.Cancelled::Cancelled as error => raise  error
+            @types.ToolError::InvalidResult(message) => {
               return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
+            }
+            error => raise  error
+          },
+        )
+      }
+      Err(error) => {
+        match error {
+          UnsafePath(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "unsafe-path", payload }))
           }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
+          InvalidRange(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "invalid-range", payload }),
+            )
+          }
+          NotFound(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "not-found", payload }))
+          }
+          NotAFile(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "not-a-file", payload }))
+          }
+          BinaryFile(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "binary-file", payload }))
+          }
+          EmptyOldText => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "empty-old-text", payload }),
+            )
+          }
+          StaleEdit(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "stale-edit", payload }))
+          }
+          AmbiguousEdit(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "ambiguous-edit", payload }),
+            )
+          }
+          Io(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "io", payload }))
+          }
         }
       }
     }
-    _ =>
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
   }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
 }
 
 ///|
 ///
 fn __golem_tool_def_raw_EditFile() -> @tool.ToolDef {
   try {
-    let def : @tool.ToolDef = {
+    let def :@tool.ToolDef = {
       version: "0.1.0-moonbit",
       commands: [
         {
@@ -930,7 +1241,7 @@ fn __golem_tool_def_raw_EditFile() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [1],
           body: None,
         },
@@ -942,85 +1253,91 @@ fn __golem_tool_def_raw_EditFile() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
-                {
-                  name: "path",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
-                },
-                {
-                  name: "old-text",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
-                },
-                {
-                  name: "new-text",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
-                },
-              ],
-              tail: None,
-            },
-            options: [],
-            flags: [],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[EditFileResult]),
-              ),
-              doc: {
-                summary: "Make exactly one replacement and reject stale or ambiguous edits.",
-                description: "",
-                examples: [],
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "path",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "old-text",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "new-text",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
               },
-              formatters: [
+              options: [],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: Some(
                 {
-                  name: "default",
-                  doc: { summary: "", description: "", examples: [], },
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[EditFileResult]),
+                  ),
+                  doc: {
+                    summary: "Make exactly one replacement and reject stale or ambiguous edits.",
+                    description: "",
+                    examples: [],
+                  },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
                 },
-              ],
-              default_formatter: "default",
-            }),
-            errors: match FilesystemToolError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              ),
+              errors: match FilesystemToolError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
+              },
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
       ],
     }
     def
-  } catch {
+  } catch{
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -1035,13 +1352,13 @@ fn __golem_tool_def_prepare_EditFile(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier : @tool.ToolDef = {
+    let carrier :@tool.ToolDef = {
       version: "0.1.0-moonbit",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
+          doc: { summary: "", description: "", examples: [] },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -1060,7 +1377,7 @@ fn __golem_tool_def_prepare_EditFile(
     )
     let def = prepared
     def
-  } catch {
+  } catch{
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -1068,13 +1385,15 @@ fn __golem_tool_def_prepare_EditFile(
 ///|
 ///
 fn __golem_tool_def_EditFile() -> @tool.ToolDef {
-  __golem_tool_def_prepare_EditFile(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
+  try {
+    __golem_tool_def_prepare_EditFile(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -1089,106 +1408,1021 @@ async fn __golem_tool_invoke_EditFile(
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
-  let __golem_def = __golem_tool_def_EditFile()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
+  if __golem_command_path.length() == 1 && ["edit-file"].contains(
+    __golem_command_path[0],
+  ) {
+    let __golem_reader = @schema.WireReader::new(__golem_input.value)
+    let __golem_fields = try {
+      @schema.wire_record(
+        __golem_reader,
+        __golem_input.value.root,
+        3,
+        "tool edit-file-moonbit command edit-file",
       )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool edit-file-moonbit invocation",
-  ) catch {
-    __golem_error =>
-      return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
-  }
-  match __golem_index {
-    1 => {
-      if __golem_stdin is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdin stream",
+            "tool edit-file-moonbit command edit-file: " + repr(__golem_error),
           ),
         )
       }
-      if __golem_stdout is Some(_) {
-        return @tool.reject_decoded_invocation(
-          __golem_decoded,
+    }
+    if __golem_stdin is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput("command does not accept a stdin stream"),
+      )
+    }
+    if __golem_stdout is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stdout stream",
+        ),
+      )
+    }
+    let path :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[0])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
           __golem_stdin,
           @types.ToolError::InvalidInput(
-            "command does not accept a stdout stream",
+            "tool edit-file-moonbit command edit-file: failed decoding `path`: " + repr(
+              __golem_error,
+            ),
           ),
         )
       }
-      let path : String = @tool.decode_canonical_field(
-        __golem_decoded, "path", "tool edit-file-moonbit command edit-file",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
+    }
+    let old_text :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[1])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool edit-file-moonbit command edit-file: failed decoding `old-text`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
       }
-      let old_text : String = @tool.decode_canonical_field(
-        __golem_decoded, "old-text", "tool edit-file-moonbit command edit-file",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
+    }
+    let new_text :String = try {
+      @schema.FromWire::read_wire(__golem_reader, __golem_fields[2])
+    } catch{
+      __golem_error => {
+        __golem_reader.abort()
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool edit-file-moonbit command edit-file: failed decoding `new-text`: " + repr(
+              __golem_error,
+            ),
+          ),
+        )
       }
-      let new_text : String = @tool.decode_canonical_field(
-        __golem_decoded, "new-text", "tool edit-file-moonbit command edit-file",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
+    }
+    try {
+      __golem_reader.finish()
+    } catch{
+      __golem_error => {
+        return @tool.reject_undecoded_invocation(
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "tool edit-file-moonbit command edit-file: " + repr(__golem_error),
+          ),
+        )
       }
-      match EditFile::edit_file(path, old_text, new_text) {
-        Ok(__golem_value) =>
-          Ok(
-            @tool.invocation_result_value(__golem_value) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
-              @types.ToolError::InvalidResult(message) =>
-                return Err(@types.ToolError::InvalidResult(message))
-              error => raise error
-            },
-          )
-        Err(error) => {
-          let (__golem_error_name, payload) = match
-            FilesystemToolError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
-                ),
-              )
-          }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
+    }
+    return match EditFile::edit_file(path, old_text, new_text) {
+      Ok(__golem_value) => {
+        Ok(
+          try {
+            @tool.invocation_result_wire(__golem_value)
+          } catch{
+            @asyncCore.Cancelled::Cancelled as error => raise  error
+            @types.ToolError::InvalidResult(message) => {
               return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
+            }
+            error => raise  error
+          },
+        )
+      }
+      Err(error) => {
+        match error {
+          UnsafePath(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "unsafe-path", payload }))
           }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
+          InvalidRange(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "invalid-range", payload }),
+            )
+          }
+          NotFound(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "not-found", payload }))
+          }
+          NotAFile(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "not-a-file", payload }))
+          }
+          BinaryFile(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "binary-file", payload }))
+          }
+          EmptyOldText => {
+            let payload = try {
+              @tool.encode_wire_result(())
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "empty-old-text", payload }),
+            )
+          }
+          StaleEdit(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "stale-edit", payload }))
+          }
+          AmbiguousEdit(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(
+              @types.ToolError::CustomError({ name: "ambiguous-edit", payload }),
+            )
+          }
+          Io(__golem_payload) => {
+            let payload = try {
+              @tool.encode_wire_result(__golem_payload)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            }
+            Err(@types.ToolError::CustomError({ name: "io", payload }))
+          }
         }
       }
     }
-    _ =>
-      @tool.reject_decoded_invocation(
-        __golem_decoded,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
+  }
+  @tool.reject_wire_invocation(
+    __golem_input,
+    __golem_stdin,
+    @types.ToolError::InvalidCommandPath(__golem_command_path),
+  )
+}
+
+///|
+///
+fn __golem_tool_wire_ReadFile() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "read-file-moonbit",
+        aliases: [],
+        doc: {
+          summary: "Read a UTF-8 regular file, optionally selecting a 1-based inclusive line range.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "read-file",
+        aliases: [],
+        doc: {
+          summary: "Read text while preserving its original line endings.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "path",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: Some(
+                {
+                  name: "range",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  item_type: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                  ).index,
+                  min: 0U,
+                  max: None,
+                  separator: None,
+                  verbatim: false,
+                  accepts_stdio: false,
+                },
+              ),
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[ReadFileResult]),
+                ).index,
+                doc: {
+                  summary: "Read text while preserving its original line endings.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [
+              {
+                name: "unsafe-path",
+                doc: {
+                  summary: "The path is empty, contains NUL, or contains a parent traversal component.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "invalid-range",
+                doc: {
+                  summary: "The requested line range is invalid.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "not-found",
+                doc: {
+                  summary: "The path does not exist.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "not-a-file",
+                doc: {
+                  summary: "The path exists but is not a regular file.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "binary-file",
+                doc: {
+                  summary: "File contents are not text suitable for these tools.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "empty-old-text",
+                doc: {
+                  summary: "The edit search text is empty.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: None,
+              },
+              {
+                name: "stale-edit",
+                doc: {
+                  summary: "The expected text was not found; the caller likely has stale content.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "ambiguous-edit",
+                doc: {
+                  summary: "The expected text occurs more than once and cannot be edited unambiguously.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "io",
+                doc: {
+                  summary: "A filesystem operation failed.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: true,
+                destructive: false,
+                idempotent: true,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.1.0-moonbit",
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_WriteFile() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "write-file-moonbit",
+        aliases: [],
+        doc: {
+          summary: "Create or replace a regular file with exact UTF-8 content.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "write-file",
+        aliases: [],
+        doc: {
+          summary: "Write a file, optionally creating missing parent directories.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "path",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "content",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [
+              {
+                long: "create-parent-directories",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[WriteFileResult]),
+                ).index,
+                doc: {
+                  summary: "Write a file, optionally creating missing parent directories.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [
+              {
+                name: "unsafe-path",
+                doc: {
+                  summary: "The path is empty, contains NUL, or contains a parent traversal component.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "invalid-range",
+                doc: {
+                  summary: "The requested line range is invalid.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "not-found",
+                doc: {
+                  summary: "The path does not exist.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "not-a-file",
+                doc: {
+                  summary: "The path exists but is not a regular file.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "binary-file",
+                doc: {
+                  summary: "File contents are not text suitable for these tools.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "empty-old-text",
+                doc: {
+                  summary: "The edit search text is empty.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: None,
+              },
+              {
+                name: "stale-edit",
+                doc: {
+                  summary: "The expected text was not found; the caller likely has stale content.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "ambiguous-edit",
+                doc: {
+                  summary: "The expected text occurs more than once and cannot be edited unambiguously.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "io",
+                doc: {
+                  summary: "A filesystem operation failed.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: true,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.1.0-moonbit",
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_EditFile() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "edit-file-moonbit",
+        aliases: [],
+        doc: {
+          summary: "Replace one unambiguous occurrence of text in a UTF-8 regular file.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "edit-file",
+        aliases: [],
+        doc: {
+          summary: "Make exactly one replacement and reject stale or ambiguous edits.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "path",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "old-text",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "new-text",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[EditFileResult]),
+                ).index,
+                doc: {
+                  summary: "Make exactly one replacement and reject stale or ambiguous edits.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [
+              {
+                name: "unsafe-path",
+                doc: {
+                  summary: "The path is empty, contains NUL, or contains a parent traversal component.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "invalid-range",
+                doc: {
+                  summary: "The requested line range is invalid.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "not-found",
+                doc: {
+                  summary: "The path does not exist.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "not-a-file",
+                doc: {
+                  summary: "The path exists but is not a regular file.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "binary-file",
+                doc: {
+                  summary: "File contents are not text suitable for these tools.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "empty-old-text",
+                doc: {
+                  summary: "The edit search text is empty.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: None,
+              },
+              {
+                name: "stale-edit",
+                doc: {
+                  summary: "The expected text was not found; the caller likely has stale content.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "ambiguous-edit",
+                doc: {
+                  summary: "The expected text occurs more than once and cannot be edited unambiguously.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "io",
+                doc: {
+                  summary: "A filesystem operation failed.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.1.0-moonbit",
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
   }
 }
 
@@ -1196,19 +2430,19 @@ async fn __golem_tool_invoke_EditFile(
 ///
 fn init {
   try {
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_ReadFile(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_ReadFile(),
       __golem_tool_invoke_ReadFile,
     )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_WriteFile(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_WriteFile(),
       __golem_tool_invoke_WriteFile,
     )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_EditFile(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_EditFile(),
       __golem_tool_invoke_EditFile,
     )
-  } catch {
+  } catch{
     error => abort("failed to register generated tools: " + repr(error))
   }
 }

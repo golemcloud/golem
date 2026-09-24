@@ -25,29 +25,140 @@ pub async fn ReadFileMoonbitClient::read_file(
   path : String,
   range : Array[UInt64],
 ) -> Result[ReadFileResult, @tool.ToolError[FilesystemToolError]] {
-  let __golem_def = __golem_tool_def_ReadFile()
-  let __golem_index = match __golem_def.command_index_by_path(["read-file"]) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return Err(
-        @tool.tool_protocol_error(
-          "generated command path is missing from descriptor",
-        ),
-      )
+  let __golem_values :Array[&@schema.IntoWire] = []
+  __golem_values.push(path)
+  __golem_values.push(range)
+  let __golem_schema = @schema.WireTypeEncoder::new()
+  let __golem_root = try {
+    __golem_schema.push(
+      @types.RecordType(
+        [
+          {
+            name: "path",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+          {
+            name: "range",
+            body: __golem_schema.push(
+              @types.ListType(
+                @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                ).index,
+              ),
+            ),
+            metadata: @schema.empty_wire_metadata(),
+          },
+        ],
+      ),
+    )
+  } catch{
+    error => {
+      @schema.release_wire_fields(__golem_values)
+      return Err(@tool.tool_protocol_error(repr(error)))
+    }
   }
-  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_value = try {
+    @schema.into_wire_record_async(__golem_values)
+  } catch{
+    @asyncCore.Cancelled::Cancelled as error => raise  error
+    error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_values = []
-  __golem_values.push(("path", @schema.to_value_as(path)))
-  __golem_values.push(("range", @schema.to_value_as(range)))
-  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_input :@types.TypedSchemaValue = {
+    graph: {
+      type_nodes: __golem_schema.nodes,
+      defs: __golem_schema.defs,
+      root: __golem_root,
+    },
+    value: __golem_value,
   }
-  match
-    self.client.invoke_and_await_tool_error(["read-file"], __golem_input, None) {
+  match self
+    .client
+    .invoke_and_await_wire(
+      ["read-file"], __golem_input, None, fn(__golem_name, __golem_value) {
+        match __golem_name {
+          "unsafe-path" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(UnsafePath(__golem_payload)))
+          }
+          "invalid-range" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(InvalidRange(__golem_payload)))
+          }
+          "not-found" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(NotFound(__golem_payload)))
+          }
+          "not-a-file" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(NotAFile(__golem_payload)))
+          }
+          "binary-file" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(BinaryFile(__golem_payload)))
+          }
+          "empty-old-text" => {
+            let __golem_payload :Unit = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(EmptyOldText))
+          }
+          "stale-edit" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(StaleEdit(__golem_payload)))
+          }
+          "ambiguous-edit" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(AmbiguousEdit(__golem_payload)))
+          }
+          "io" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(Io(__golem_payload)))
+          }
+          _ => None
+        }
+      },
+    ) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_result) => @tool.decode_result_value(__golem_result)
+    Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
 }
 
@@ -77,35 +188,145 @@ pub async fn WriteFileMoonbitClient::write_file(
   content : String,
   create_parent_directories : Bool,
 ) -> Result[WriteFileResult, @tool.ToolError[FilesystemToolError]] {
-  let __golem_def = __golem_tool_def_WriteFile()
-  let __golem_index = match __golem_def.command_index_by_path(["write-file"]) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return Err(
-        @tool.tool_protocol_error(
-          "generated command path is missing from descriptor",
-        ),
-      )
+  let __golem_values :Array[&@schema.IntoWire] = []
+  __golem_values.push(path)
+  __golem_values.push(content)
+  __golem_values.push(create_parent_directories)
+  let __golem_schema = @schema.WireTypeEncoder::new()
+  let __golem_root = try {
+    __golem_schema.push(
+      @types.RecordType(
+        [
+          {
+            name: "path",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+          {
+            name: "content",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+          {
+            name: "create-parent-directories",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[Bool]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+        ],
+      ),
+    )
+  } catch{
+    error => {
+      @schema.release_wire_fields(__golem_values)
+      return Err(@tool.tool_protocol_error(repr(error)))
+    }
   }
-  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_value = try {
+    @schema.into_wire_record_async(__golem_values)
+  } catch{
+    @asyncCore.Cancelled::Cancelled as error => raise  error
+    error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_values = []
-  __golem_values.push(("path", @schema.to_value_as(path)))
-  __golem_values.push(("content", @schema.to_value_as(content)))
-  __golem_values.push(
-    (
-      "create-parent-directories",
-      @schema.to_value_as(create_parent_directories),
-    ),
-  )
-  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_input :@types.TypedSchemaValue = {
+    graph: {
+      type_nodes: __golem_schema.nodes,
+      defs: __golem_schema.defs,
+      root: __golem_root,
+    },
+    value: __golem_value,
   }
-  match
-    self.client.invoke_and_await_tool_error(["write-file"], __golem_input, None) {
+  match self
+    .client
+    .invoke_and_await_wire(
+      ["write-file"], __golem_input, None, fn(__golem_name, __golem_value) {
+        match __golem_name {
+          "unsafe-path" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(UnsafePath(__golem_payload)))
+          }
+          "invalid-range" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(InvalidRange(__golem_payload)))
+          }
+          "not-found" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(NotFound(__golem_payload)))
+          }
+          "not-a-file" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(NotAFile(__golem_payload)))
+          }
+          "binary-file" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(BinaryFile(__golem_payload)))
+          }
+          "empty-old-text" => {
+            let __golem_payload :Unit = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(EmptyOldText))
+          }
+          "stale-edit" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(StaleEdit(__golem_payload)))
+          }
+          "ambiguous-edit" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(AmbiguousEdit(__golem_payload)))
+          }
+          "io" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(Io(__golem_payload)))
+          }
+          _ => None
+        }
+      },
+    ) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_result) => @tool.decode_result_value(__golem_result)
+    Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
 }
 
@@ -135,29 +356,144 @@ pub async fn EditFileMoonbitClient::edit_file(
   old_text : String,
   new_text : String,
 ) -> Result[EditFileResult, @tool.ToolError[FilesystemToolError]] {
-  let __golem_def = __golem_tool_def_EditFile()
-  let __golem_index = match __golem_def.command_index_by_path(["edit-file"]) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return Err(
-        @tool.tool_protocol_error(
-          "generated command path is missing from descriptor",
-        ),
-      )
+  let __golem_values :Array[&@schema.IntoWire] = []
+  __golem_values.push(path)
+  __golem_values.push(old_text)
+  __golem_values.push(new_text)
+  let __golem_schema = @schema.WireTypeEncoder::new()
+  let __golem_root = try {
+    __golem_schema.push(
+      @types.RecordType(
+        [
+          {
+            name: "path",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+          {
+            name: "old-text",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+          {
+            name: "new-text",
+            body: @tool.wire_tool_type(
+              __golem_schema,
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ).index,
+            metadata: @schema.empty_wire_metadata(),
+          },
+        ],
+      ),
+    )
+  } catch{
+    error => {
+      @schema.release_wire_fields(__golem_values)
+      return Err(@tool.tool_protocol_error(repr(error)))
+    }
   }
-  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_value = try {
+    @schema.into_wire_record_async(__golem_values)
+  } catch{
+    @asyncCore.Cancelled::Cancelled as error => raise  error
+    error => return Err(@tool.tool_protocol_error(repr(error)))
   }
-  let __golem_values = []
-  __golem_values.push(("path", @schema.to_value_as(path)))
-  __golem_values.push(("old-text", @schema.to_value_as(old_text)))
-  __golem_values.push(("new-text", @schema.to_value_as(new_text)))
-  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
-    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  let __golem_input :@types.TypedSchemaValue = {
+    graph: {
+      type_nodes: __golem_schema.nodes,
+      defs: __golem_schema.defs,
+      root: __golem_root,
+    },
+    value: __golem_value,
   }
-  match
-    self.client.invoke_and_await_tool_error(["edit-file"], __golem_input, None) {
+  match self
+    .client
+    .invoke_and_await_wire(
+      ["edit-file"], __golem_input, None, fn(__golem_name, __golem_value) {
+        match __golem_name {
+          "unsafe-path" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(UnsafePath(__golem_payload)))
+          }
+          "invalid-range" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(InvalidRange(__golem_payload)))
+          }
+          "not-found" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(NotFound(__golem_payload)))
+          }
+          "not-a-file" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(NotAFile(__golem_payload)))
+          }
+          "binary-file" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(BinaryFile(__golem_payload)))
+          }
+          "empty-old-text" => {
+            let __golem_payload :Unit = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(EmptyOldText))
+          }
+          "stale-edit" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(StaleEdit(__golem_payload)))
+          }
+          "ambiguous-edit" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(AmbiguousEdit(__golem_payload)))
+          }
+          "io" => {
+            let __golem_payload :String = try {
+              @schema.from_wire(__golem_value.value)
+            } catch{
+              error => return Some(Err(repr(error)))
+            }
+            Some(Ok(Io(__golem_payload)))
+          }
+          _ => None
+        }
+      },
+    ) {
     Err(__golem_error) => Err(__golem_error)
-    Ok(__golem_result) => @tool.decode_result_value(__golem_result)
+    Ok(__golem_result) => @tool.decode_wire_result_value(__golem_result)
   }
 }
