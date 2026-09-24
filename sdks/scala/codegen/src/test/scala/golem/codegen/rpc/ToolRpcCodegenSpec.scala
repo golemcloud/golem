@@ -127,15 +127,15 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
       )
     )
     assert(content.contains("_root_.scala.Some(stdin)"))
-    assert(content.contains("ToolClientRuntime.start"))
-    assert(content.contains("decodeValueResult"))
+    assert(content.contains("WireToolClientRuntime.start"))
+    assert(content.contains("WireToolClientRuntime.decodeValue"))
   }
 
   test("the implicit-body root command invokes with an empty command path") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
     // `grep` is the tool's root command: no path element is appended
     assert(
-      content.contains("_root_.golem.tool.ToolClientRuntime.start(__transport, _root_.scala.Nil, __input")
+      content.contains("WireToolClientRuntime.start(__wireTransport, _root_.scala.Nil, __input")
     )
   }
 
@@ -143,7 +143,8 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val content = generate("Grep.scala" -> grepSource).files.head.content
     assert(content.contains("private lazy val __errorSchema_GrepError: _root_.golem.tool.ToolErrorSchema[GrepError]"))
     assert(content.contains("_root_.golem.runtime.macros.ToolErrorSchemaDerivation.derive[GrepError]"))
-    assert(content.contains("__errorSchema_GrepError.fromErrorValue(_)"))
+    assert(content.contains("ToolErrorSchemaDerivation.wireDecoder[GrepError]"))
+    assert(!content.contains("ConcreteCodec.derived[GrepError]"))
     // subcommands inherit the root global `caseSensitive`
     assert(
       content.contains(
@@ -161,12 +162,12 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
           "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[_root_.scala.Nothing], String]]"
       )
     )
-    assert(content.contains("runInfallible"))
+    assert(content.contains("WireToolClientRuntime.run"))
   }
 
-  test("count-flag parameters encode through countFlagValue") {
+  test("count-flag parameters use a concrete field codec") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
-    assert(content.contains("""("times", _root_.golem.tool.ToolClientRuntime.countFlagValue(times))"""))
+    assert(content.contains("ConcreteCodec.uint.xmap[Int]"))
   }
 
   test("subcommands inherit root globals and use canonical field names") {
@@ -182,12 +183,12 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     )
     assert(
       content.contains(
-        """("git-dir", _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[Option[String]]].toValue(gitDir))"""
+        """("git-dir", _root_.golem.schema.wire.ConcreteCodec.derived[Option[String]]"""
       )
     )
     assert(
       content.contains(
-        """_root_.golem.tool.ToolClientRuntime.run[GitError](__transport, _root_.scala.List("status"), __input"""
+        """WireToolClientRuntime.run(__wireTransport, _root_.scala.List("status"), __input"""
       )
     )
     assert(content.contains("""private lazy val __model_status"""))
@@ -430,6 +431,6 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val content = generate("Grep2.scala" -> source).files.head.content
     assert(content.contains("""val toolName: _root_.scala.Predef.String = "super-grep""""))
     // the overridden root command is the implicit body: empty command path
-    assert(content.contains("runInfallible(__transport, _root_.scala.Nil, __input"))
+    assert(content.contains("WireToolClientRuntime.run(__wireTransport, _root_.scala.Nil, __input"))
   }
 }

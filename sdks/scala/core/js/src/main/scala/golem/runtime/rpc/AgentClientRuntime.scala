@@ -18,7 +18,10 @@ package golem.runtime.rpc
 
 import golem.config.ConfigOverride
 import golem.host.js.schema.JsSchemaValueTree
+import golem.host.SchemaWireInterop
 import golem.runtime.{AgentMethod, AgentType, OutputCodec, OutputMetadata}
+import golem.runtime.{WireAgentClientType, WireClientMethod}
+import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody, WitSchemaValueTree}
 import golem.FutureInterop
 import golem.Uuid
 import golem.Datetime
@@ -36,6 +39,43 @@ object AgentClientRuntime {
     constructorArgs: Constructor
   ): Either[String, ResolvedAgent[Trait]] =
     resolveWithPhantom(agentType, constructorArgs, phantom = None)
+
+  def resolveWire[Trait, Constructor](
+    agentType: WireAgentClientType[Trait, Constructor],
+    constructorArgs: Constructor,
+    phantom: Option[Uuid] = None,
+    configOverrides: List[ConfigOverride] = Nil
+  ): Either[String, WireResolvedAgent[Trait]] =
+    encodeWireSync(agentType.ctorCodec, constructorArgs).flatMap { payload =>
+      resolveRemote(agentType.metadata.name, payload, phantom, configOverrides)
+        .map(remote => WireResolvedAgent(agentType, remote))
+    }
+
+  private def encodeWireSync[A](codec: ConcreteCodec[A], value: A): Either[String, JsSchemaValueTree] =
+    if (codec.graph.typeNodes.exists(_.body.isInstanceOf[WitSchemaTypeBody.StreamType]))
+      Left("live streams cannot cross fire-and-forget or scheduled agent invocation boundaries")
+    else
+      try Right(SchemaWireInterop.valueTreeToJs(codec.encodeValue(value)))
+      catch { case NonFatal(error) => Left(String.valueOf(error.getMessage)) }
+
+  private def encodeWireAsync[A](codec: ConcreteCodec[A], value: A): Future[JsSchemaValueTree] =
+    try SchemaWireInterop.ownedValueTreeToJsAsync(codec.encodeValue(value))
+    catch { case NonFatal(error) => Future.failed(error) }
+
+  private def decodeWire[A](codec: Option[ConcreteCodec[A]], value: Option[JsSchemaValueTree]): A =
+    codec match {
+      case None =>
+        if (value.nonEmpty) throw new IllegalArgumentException("agent result unexpectedly contained a value")
+        ().asInstanceOf[A]
+      case Some(concrete) =>
+        concrete.decode(
+          value
+            .map(SchemaWireInterop.valueTreeFromJs)
+            .getOrElse(
+              throw new IllegalArgumentException("agent result did not contain a value")
+            )
+        )
+    }
 
   def resolveWithPhantom[Trait, Constructor](
     agentType: AgentType[Trait, Constructor],
@@ -263,7 +303,107 @@ object AgentClientRuntime {
     }
   }
 
+  final case class WireResolvedAgent[Trait](agentType: WireAgentClientType[Trait, ?], client: RemoteAgentClient) {
+    def agentId: String = client.agentId
+
+    private lazy val methods = agentType.methods.iterator.map(m => m.name -> m).toMap
+
+    private[rpc] def methodByName[In, Out](name: String): WireClientMethod[Trait] {
+      type Input = In; type Output = Out
+    } =
+      methods
+        .getOrElse(name, throw new IllegalStateException(s"Method definition for $name not found"))
+        .asInstanceOf[WireClientMethod[Trait] { type Input = In; type Output = Out }]
+
+    def await[In, Out](
+      method: WireClientMethod[Trait] { type Input = In; type Output = Out },
+      input: In
+    ): Future[Out] = {
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      encodeWireAsync(method.input, input)
+        .flatMap(client.rpc.asyncInvokeAndAwait(method.name, _))
+        .map(r => decodeWire(method.output, r))
+    }
+
+    def cancelableAwait[In, Out](
+      method: WireClientMethod[Trait] { type Input = In; type Output = Out },
+      input: In
+    ): (Future[Out], CancellationToken) = {
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      var underlying  = Option.empty[CancellationToken]
+      var cancelled   = false
+      val token       = CancellationToken.fromFunction { () => cancelled = true; underlying.foreach(_.cancel()) }
+      val result      = encodeWireAsync(method.input, input).flatMap { params =>
+        val (future, raw) = client.rpc.cancelableAsyncInvokeAndAwait(method.name, params)
+        underlying = Some(raw)
+        if (cancelled) raw.cancel()
+        future.map(r => decodeWire(method.output, r))
+      }
+      (result, token)
+    }
+
+    private def immediate[In, A](method: WireClientMethod[Trait] { type Input = In }, input: In)(
+      invoke: JsSchemaValueTree => Either[String, A]
+    ): Future[A] = FutureInterop.fromEither(encodeWireSync(method.input, input).flatMap(invoke))
+
+    def trigger[In](method: WireClientMethod[Trait] { type Input = In }, input: In): Future[Unit] =
+      immediate(method, input)(client.rpc.invoke(method.name, _))
+    def schedule[In](method: WireClientMethod[Trait] { type Input = In }, when: Datetime, input: In): Future[Unit] =
+      immediate(method, input)(client.rpc.scheduleInvocation(when, method.name, _))
+    def scheduleCancelable[In](
+      method: WireClientMethod[Trait] { type Input = In },
+      when: Datetime,
+      input: In
+    ): Future[CancellationToken] =
+      immediate(method, input)(client.rpc.scheduleCancelableInvocation(when, method.name, _))
+
+    def awaitWithMetadata[In, Out](
+      method: WireClientMethod[Trait] { type Input = In; type Output = Out },
+      input: In
+    ): Future[InvocationResult[Out]] = {
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      encodeWireAsync(method.input, input)
+        .flatMap(params => FutureInterop.fromEither(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, params)))
+        .flatMap(raw => raw.result.map(r => decodeWire(method.output, r)).map(InvocationResult(raw.metadata, _)))
+    }
+    def cancelableAwaitWithMetadata[In, Out](
+      method: WireClientMethod[Trait] { type Input = In; type Output = Out },
+      input: In
+    ): Future[CancelableAsyncInvocation[Out]] = {
+      implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      encodeWireAsync(method.input, input)
+        .flatMap(params => FutureInterop.fromEither(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, params)))
+        .map { raw =>
+          CancelableAsyncInvocation(
+            raw.metadata,
+            raw.result.map(r => decodeWire(method.output, r)),
+            raw.cancellationToken
+          )
+        }
+    }
+    def triggerWithMetadata[In](
+      method: WireClientMethod[Trait] { type Input = In },
+      input: In
+    ): Future[InvocationReceipt] =
+      immediate(method, input)(p => client.rpc.invokeWithMetadata(method.name, p).map(InvocationReceipt(_)))
+    def scheduleWithMetadata[In](
+      method: WireClientMethod[Trait] { type Input = In },
+      when: Datetime,
+      input: In
+    ): Future[InvocationReceipt] =
+      immediate(method, input)(client.rpc.scheduleInvocationWithMetadata(when, method.name, _))
+    def scheduleCancelableWithMetadata[In](
+      method: WireClientMethod[Trait] { type Input = In },
+      when: Datetime,
+      input: In
+    ): Future[CancelableInvocationReceipt] =
+      immediate(method, input)(client.rpc.scheduleCancelableInvocationWithMetadata(when, method.name, _))
+  }
+
   private[rpc] object TestHooks {
+    def encodeImmediate[A](codec: ConcreteCodec[A], value: A): Either[String, JsSchemaValueTree] =
+      encodeWireSync(codec, value)
+
     def withRemoteResolver[T](
       resolver: (String, JsSchemaValueTree) => Either[String, RemoteAgentClient]
     )(thunk: => T): T = {

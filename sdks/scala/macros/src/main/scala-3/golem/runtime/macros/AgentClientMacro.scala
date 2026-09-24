@@ -27,6 +27,8 @@ import golem.runtime.{
   ParamCodec
 }
 import golem.schema.{FromSchema, IntoSchema}
+import golem.schema.wire.ConcreteCodec
+import golem.runtime.{WireAgentClientType, WireClientMethod}
 // Macro annotations live in a separate module; do not depend on them here.
 
 import scala.quoted.*
@@ -38,6 +40,59 @@ object AgentClientMacro {
       "Use `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n"
   transparent inline def agentType[Trait]: AgentType[Trait, ?] =
     ${ agentTypeImpl[Trait] }
+
+  transparent inline def wireType[Trait]: WireAgentClientType[Trait, ?] =
+    ${ wireTypeImpl[Trait] }
+
+  private def wireTypeImpl[Trait: Type](using Quotes): Expr[WireAgentClientType[Trait, ?]] = {
+    import quotes.reflect.*
+    val traitRepr = TypeRepr.of[Trait]
+    val symbol    = traitRepr.typeSymbol
+    if !symbol.flags.is(Flags.Trait) then
+      report.errorAndAbort(s"Agent client target must be a trait, found: ${symbol.fullName}")
+    val params     = agentInputParams(traitRepr)
+    val ctorAccess = methodAccess(params)
+    val ctorType   = inputTypeFor(ctorAccess, params)
+    val methods    = symbol.methodMembers.collect {
+      case method if method.flags.is(Flags.Deferred) && method.isDefDef && method.name != "new" =>
+        val ps       = extractParameters(method)
+        val access   = methodAccess(ps)
+        val in       = inputTypeFor(access, ps)
+        val (_, out) = methodInvocationInfo(method)
+        (in.asType, out.asType) match {
+          case ('[i], '[o]) =>
+            val inCodec                                  = wireInputCodecExpr[i](access, ps)
+            val outCodec: Expr[Option[ConcreteCodec[o]]] =
+              if TypeRepr.of[o] =:= TypeRepr.of[Unit] then '{ None } else '{ Some(ConcreteCodec.derived[o]) }
+            '{ WireClientMethod[Trait, i, o](${ Expr(method.name) }, $inCodec, $outCodec) }
+        }
+    }
+    ctorType.asType match {
+      case '[ctor] =>
+        val ctor       = wireInputCodecExpr[ctor](ctorAccess, params)
+        val methodList = Expr.ofList(methods)
+        '{ WireAgentClientType[Trait, ctor](AgentDefinitionMacro.generateWire[Trait], $ctor, $methodList) }
+    }
+  }
+
+  private def wireInputCodecExpr[In: Type](using
+    Quotes
+  )(
+    access: MethodParamAccess,
+    params: List[(String, quotes.reflect.TypeRepr)]
+  ): Expr[ConcreteCodec[In]] = {
+    val fields = Expr.ofList(params.map { case (name, tpe) =>
+      tpe.asType match {
+        case '[a] => '{ (${ Expr(name) }, ConcreteCodec.derived[a].asInstanceOf[ConcreteCodec[Any]]) }
+      }
+    })
+    val record = '{ ConcreteCodec.record($fields.toVector) }
+    access match {
+      case MethodParamAccess.NoArgs    => '{ $record.xmap[In](_ => ().asInstanceOf[In], _ => Vector.empty) }
+      case MethodParamAccess.SingleArg => '{ $record.xmap[In](_.head.asInstanceOf[In], value => Vector(value)) }
+      case MethodParamAccess.MultiArgs => record.asExprOf[ConcreteCodec[In]]
+    }
+  }
 
   private def agentTypeImpl[Trait: Type](using Quotes): Expr[AgentType[Trait, ?]] = {
     import quotes.reflect.*

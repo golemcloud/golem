@@ -78,6 +78,14 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     def rpcCallTrigger(payload: String): Unit
   }
 
+  final case class ConcreteOnly(value: String)
+
+  @agentDefinition()
+  trait ConcreteOnlyClientAgent {
+    class Id(owner: ConcreteOnly)
+    def roundTrip(value: ConcreteOnly): Future[ConcreteOnly]
+  }
+
   private final class EphemeralAgentImpl extends EphemeralAgent {
     override def ping(): Future[String] = Future.successful("pong")
   }
@@ -173,6 +181,10 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
         val triggerMethod =
           agentType.methods.find(_.metadata.name == "rpcCallTrigger").get
         assertTrue(triggerMethod.invocation == MethodInvocation.FireAndForget)
+      },
+      test("wire client derivation does not require owned schema codecs") {
+        val client = AgentClientMacro.wireType[ConcreteOnlyClientAgent]
+        assertTrue(client.metadata.name == "ConcreteOnlyClientAgent", client.methods.map(_.name) == List("roundTrip"))
       },
       test("AgentImplementationMacro preserves method invocation kinds") {
         val awaitable =

@@ -27,6 +27,22 @@ import scala.quoted.*
 object WireToolMacro {
   inline def handle[Trait, Impl <: Trait]: WireToolImplementation = ${ implementation[Trait, Impl] }
 
+  inline def inputGraph[Trait](inline path: List[String]): WitSchemaGraph = ${ inputGraphImpl[Trait]('path) }
+
+  private def inputGraphImpl[Trait: Type](path: Expr[List[String]])(using Quotes): Expr[WitSchemaGraph] = {
+    val core = new ToolMacroCore
+    import core.q.reflect.*
+    val metadata = new CompiledWireMetadata[core.type](core)
+    val tool     = metadata.tool(TypeRepr.of[Trait])
+    val index    = tool
+      .commandIndexByPath(path.valueOrAbort)
+      .getOrElse(report.errorAndAbort("Unknown compiled tool command path"))
+    val graph = tool
+      .canonicalInputRecordSchema(index)
+      .fold(error => report.errorAndAbort(error.toString), identity)
+    metadata.literal(SchemaWire.schemaGraphToWit(graph))
+  }
+
   private def implementation[Trait: Type, Impl: Type](using Quotes): Expr[WireToolImplementation] = {
     val core = new ToolMacroCore
     new WireToolAssembler(core).implementation[Trait, Impl]

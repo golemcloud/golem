@@ -138,10 +138,8 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
           () => Future.successful(None),
           () => { closes += 1; Future.successful(()) }
         )
-        given ConcreteCodec[String] =
-          ConcreteCodec.string.xmap[String](identity, _ => throw SchemaEncodeError("bad output"))
-        val codec  = ConcreteCodec.derived[(AgentStream[Int], String)]
-        val result = Try(codec.encodeValue((source, "reject")))
+        val codec  = ConcreteCodec.derived[(AgentStream[Int], golem.UInt)]
+        val result = Try(codec.encodeValue((source, new golem.UInt(-1))))
         Future.successful(assertTrue(result.isFailure, closes == 1))
       }
     },

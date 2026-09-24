@@ -24,7 +24,7 @@ import golem.runtime.annotations.{DurabilityMode, agentDefinition, agentImplemen
 import golem.FutureInterop
 import golem.host.js.schema.{JsSchemaValueTree, JsSchemaValueNode}
 import golem.host.SchemaWireInterop
-import golem.schema.wire.{ConcreteCodec, WitSchemaValueNode}
+import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody, WitSchemaValueNode}
 import golem.schema.{FromSchema, IntoSchema}
 import zio._
 import zio.test._
@@ -65,6 +65,23 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
   }
 
   private lazy val wireDefn = AgentImplementation.registerClass[WireOnlyAgent, WireOnlyImpl]
+
+  final case class CustomWire(value: String)
+  object CustomWire {
+    implicit val codec: ConcreteCodec[CustomWire] = ConcreteCodec.string.xmap(CustomWire(_), _.value)
+  }
+
+  @agentDefinition("custom-wire-agent")
+  trait CustomWireAgent extends BaseAgent {
+    class Id()
+    def echo(value: CustomWire): CustomWire
+  }
+
+  final class CustomWireImpl() extends CustomWireAgent {
+    def echo(value: CustomWire): CustomWire = value
+  }
+
+  private lazy val customWireDefn = AgentImplementation.registerClass[CustomWireAgent, CustomWireImpl]
 
   // ---------------------------------------------------------------------------
   // Agent with many method signatures for roundtrip testing
@@ -148,6 +165,36 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
   // ---------------------------------------------------------------------------
 
   def spec = suite("AgentEndToEndSpec")(
+    test("generated structural protocol is independent of ambient custom codecs") {
+      val descriptor = customWireDefn.descriptor
+      val root       = descriptor.methods.head.parameters.head.schema
+      val advertised = descriptor.schema.typeNodes(root).body match {
+        case WitSchemaTypeBody.RefType(index) =>
+          descriptor.schema.typeNodes(descriptor.schema.defs(index).body).body
+        case body => body
+      }
+      val input = JsSchemaValueTree(
+        js.Array(
+          JsSchemaValueNode.stringValue("structural"),
+          JsSchemaValueNode.recordValue(js.Array(0)),
+          JsSchemaValueNode.recordValue(js.Array(1))
+        ),
+        2
+      )
+      ZIO.fromFuture { implicit ec =>
+        FutureInterop
+          .fromPromise(customWireDefn.invoke(new CustomWireImpl(), "echo", input, testPrincipal))
+          .map { result =>
+            val output = SchemaWireInterop.valueTreeFromJs(result.get)
+            assertTrue(
+              advertised.isInstanceOf[WitSchemaTypeBody.RecordType],
+              ConcreteCodec.derived[CustomWire].decode(output) == CustomWire("structural"),
+              CustomWire.codec.encodeValue(CustomWire("explicit")).valueNodes ==
+                Vector(WitSchemaValueNode.StringValue("explicit"))
+            )
+          }
+      }
+    },
     test("generated registration and invocation need no owned schema instances") {
       val constructor =
         JsSchemaValueTree(js.Array(JsSchemaValueNode.s32Value(9), JsSchemaValueNode.recordValue(js.Array(0))), 1)

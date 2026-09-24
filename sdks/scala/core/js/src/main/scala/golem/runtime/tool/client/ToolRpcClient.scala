@@ -23,7 +23,7 @@ import golem.host.js.schema.JsTypedSchemaValue
 import golem.runtime.tool.JsToolInputStream
 import golem.runtime.tool.host.ToolHostApi
 import golem.schema.TypedSchemaValue
-import golem.schema.wire.SchemaWire
+import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
 
 import scala.concurrent.Future
@@ -39,6 +39,57 @@ object ToolRpcClient {
   /** A transport bound to one remote tool name. */
   def transport(toolName: String): ToolRpcTransport =
     new JsToolRpcTransport(new ToolHostApi.RawToolRpc(toolName))
+
+  def wireTransport(toolName: String): WireToolRpcTransport =
+    new JsWireToolRpcTransport(new ToolHostApi.RawToolRpc(toolName))
+}
+
+private[golem] final class JsWireToolRpcTransport(rpc: ToolHostApi.RawToolRpc) extends WireToolRpcTransport {
+  private implicit val ec: scala.concurrent.ExecutionContext = ToolInvokerRuntime.executionContext
+
+  def start(
+    commandPath: List[String],
+    input: WitTypedSchemaValue,
+    stdin: Option[ToolInputStream],
+    stdout: Boolean
+  ): Either[WireToolRpcFailure, WireToolRpcStarted] = {
+    var observer  = Option.empty[ToolHostApi.RawToolFutureInvokeResult]
+    var cancelled = false
+    try {
+      val stdoutEndpoints = if (stdout) Some(ToolHostApi.createStdout()) else None
+      val pumpTransport   = new JsToolRpcTransport(rpc)
+      val result          = SchemaWireInterop
+        .typedToJsAsync(input)
+        .flatMap { jsInput =>
+          val stdinEndpoints = stdin.map(_ => ToolHostApi.createStdin())
+          stdinEndpoints.foreach { case (writer, _, closed) => pumpTransport.pump(stdin.get, writer, closed) }
+          val started = rpc.asyncInvokeAndAwait(
+            commandPath.toJSArray,
+            jsInput,
+            stdinEndpoints.map(_._2).orUndefined,
+            stdoutEndpoints.map(_._1).orUndefined
+          )
+          observer = Some(started)
+          if (cancelled) started.cancel()
+          FutureInterop.fromPromise(started.get())
+        }
+        .map(value => Right(WireToolInvokeResult(value.result.toOption.map(SchemaWireInterop.typedFromJs))))
+        .recover { case js.JavaScriptException(error) => Left(ToolHostApi.decodeWireRpcFailure(error)) }
+        .recover { case error: Throwable =>
+          Left(WireToolRpcFailure.ProtocolError(s"failed to encode tool input: ${String.valueOf(error.getMessage)}"))
+        }
+      Right(
+        WireToolRpcStarted(
+          stdoutEndpoints.map(e => new JsToolInputStream(e._2)),
+          result,
+          () => { cancelled = true; observer.foreach(_.cancel()) }
+        )
+      )
+    } catch {
+      case js.JavaScriptException(error) => Left(ToolHostApi.decodeWireRpcFailure(error))
+      case error: Throwable              => Left(WireToolRpcFailure.ProtocolError(String.valueOf(error.getMessage)))
+    }
+  }
 }
 
 /**

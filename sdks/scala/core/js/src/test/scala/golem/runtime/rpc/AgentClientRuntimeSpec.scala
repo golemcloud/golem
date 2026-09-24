@@ -22,6 +22,7 @@ import golem.BaseAgent
 import golem.runtime.{AgentMethod, AgentType}
 import golem.runtime.rpc.AgentClientRuntimeSpecFixtures._
 import golem.schema.{AgentStream, IntoSchema}
+import golem.schema.wire.ConcreteCodec
 import zio._
 import zio.test._
 import zio.blocks.schema.Schema
@@ -117,6 +118,22 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
             )
           }
         }
+      }
+    },
+    test("wire immediate encoding rejects a live stream before transferring ownership") {
+      var closed = 0
+      val stream = AgentStream.fromPull[String](
+        () => Future.successful(Some("still-owned")),
+        () => { closed += 1; Future.successful(()) }
+      )
+      val encoded = AgentClientRuntime.TestHooks.encodeImmediate(ConcreteCodec.derived[AgentStream[String]], stream)
+
+      ZIO.fromFuture(_ => stream.pull()).map { remaining =>
+        assertTrue(
+          encoded.left.exists(_.contains("live streams cannot cross")),
+          remaining.contains("still-owned"),
+          closed == 0
+        )
       }
     }
   )

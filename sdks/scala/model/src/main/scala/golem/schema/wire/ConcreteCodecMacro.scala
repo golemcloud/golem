@@ -32,10 +32,6 @@ private[wire] object ConcreteCodecMacro {
     def build[T: Type](registry: Expr[ConcreteCodecs], active: Set[String]): Expr[ConcreteCodec[T]] = {
       val tpe = TypeRepr.of[T].dealias
       val key = id(tpe)
-      Expr.summon[ConcreteCodec[T]] match {
-        case Some(codec) => return codec
-        case None        => ()
-      }
       if (active(key)) return '{ $registry.ref[T](${ Expr(key) }) }
       val next = active + key
 
@@ -98,7 +94,7 @@ private[wire] object ConcreteCodecMacro {
               }
             case None =>
               val mirror = Expr.summon[Mirror.SumOf[T]].getOrElse {
-                report.errorAndAbort(s"No concrete wire codec for ${tpe.show}; define a ConcreteCodec for this type")
+                report.errorAndAbort(s"Cannot structurally derive a concrete wire codec for ${tpe.show}")
               }
               val cases = tpe.typeSymbol.children.map { c =>
                 val caseTpe            = if (c.isTerm) c.termRef else c.typeRef
