@@ -85,6 +85,8 @@ pub struct AtomicResourceEntry {
     unsynced_rpc_calls: AtomicU64,
     syncing_rpc_calls: AtomicU64,
 
+    blob_storage_quota: Mutex<BlobStorageQuota>,
+
     // Maximum number of concurrently running agents on a single executor for this
     // account. Uses the unlimited sentinel (10^18) when unlimited.
     // Refreshed via update_last_known_limits when batch sync responses arrive.
@@ -141,6 +143,13 @@ struct CapturedUsageUpdate {
     update: ResourceUsageUpdate,
     durable_memory_gb_seconds_delta: i64,
     ephemeral_memory_gb_seconds_delta: i64,
+}
+
+#[derive(Debug)]
+struct BlobStorageQuota {
+    available_from_server: u64,
+    unsynced_delta: i64,
+    syncing_delta: i64,
 }
 
 #[derive(Debug)]
@@ -423,6 +432,11 @@ impl AtomicResourceEntry {
             available_rpc_calls_from_server: AtomicU64::new(available_rpc_calls),
             unsynced_rpc_calls: AtomicU64::new(0),
             syncing_rpc_calls: AtomicU64::new(0),
+            blob_storage_quota: Mutex::new(BlobStorageQuota {
+                available_from_server: u64::MAX,
+                unsynced_delta: 0,
+                syncing_delta: 0,
+            }),
             max_concurrent_agents_per_executor: AtomicU64::new(max_concurrent_agents_per_executor),
             oplog_writes_per_second: AtomicU64::new(oplog_writes_per_second),
         }
@@ -721,7 +735,8 @@ impl AtomicResourceEntry {
                 .as_ref()
                 .is_some_and(|accumulator| accumulator.lock().unwrap().is_active())
             || self.unsynced_http_calls.load(Ordering::Acquire) > 0
-            || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0;
+            || self.unsynced_rpc_calls.load(Ordering::Acquire) > 0
+            || self.blob_storage_quota.lock().unwrap().unsynced_delta != 0;
         let stale = self.secs_since_last_refresh() >= refresh_threshold_secs;
 
         if !active && !stale {
@@ -746,6 +761,13 @@ impl AtomicResourceEntry {
         let ephemeral_storage_byte_seconds_delta = captured_usage.ephemeral_storage_byte_seconds;
         let http_count = self.unsynced_http_calls.swap(0, Ordering::AcqRel);
         let rpc_count = self.unsynced_rpc_calls.swap(0, Ordering::AcqRel);
+        let blob_storage_bytes_delta = {
+            let mut quota = self.blob_storage_quota.lock().unwrap();
+            let delta = quota.unsynced_delta;
+            quota.unsynced_delta = 0;
+            quota.syncing_delta = quota.syncing_delta.saturating_add(delta);
+            delta
+        };
         if http_count > 0 {
             self.syncing_http_calls
                 .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
@@ -796,6 +818,7 @@ impl AtomicResourceEntry {
                 rpc_call_count_delta: rpc_count,
                 durable_storage_byte_seconds_delta,
                 ephemeral_storage_byte_seconds_delta,
+                blob_storage_bytes_delta,
                 metering: golem_service_base::clients::registry::ResourceUsageMetering {
                     compute: self.metering.compute,
                     memory: self.metering.memory,
@@ -927,6 +950,41 @@ impl AtomicResourceEntry {
             })
             .ok();
         true
+    }
+
+    pub fn try_record_blob_storage_delta(&self, delta: i64) -> bool {
+        let mut quota = self.blob_storage_quota.lock().unwrap();
+        if delta <= 0 {
+            quota.unsynced_delta = quota.unsynced_delta.saturating_add(delta);
+            return true;
+        }
+
+        let pending = quota.unsynced_delta.saturating_add(quota.syncing_delta);
+        let available = if pending >= 0 {
+            quota.available_from_server.saturating_sub(pending as u64)
+        } else {
+            quota
+                .available_from_server
+                .saturating_add(pending.unsigned_abs())
+        };
+        if available < delta as u64 {
+            return false;
+        }
+        quota.unsynced_delta = quota.unsynced_delta.saturating_add(delta);
+        true
+    }
+
+    pub fn rollback_blob_storage_delta(&self, delta: i64) {
+        let mut quota = self.blob_storage_quota.lock().unwrap();
+        quota.unsynced_delta = quota.unsynced_delta.saturating_sub(delta);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_available_blob_storage_bytes(&self, value: u64) {
+        self.blob_storage_quota
+            .lock()
+            .unwrap()
+            .available_from_server = value;
     }
 
     pub fn max_concurrent_agents_per_executor(&self) -> u64 {
@@ -1091,7 +1149,7 @@ impl ResourceLimitsGrpc {
                 }
 
                 tracing::debug!(
-                    "Sending batch: {} fuel, {} memory, {} durable storage, {} ephemeral storage, {} http, {} rpc, {} stale idle account(s)",
+                    "Sending batch: {} fuel, {} memory, {} durable storage, {} ephemeral storage, {} http, {} rpc, {} blob storage, {} stale idle account(s)",
                     updates.values().filter(|u| u.fuel_delta != 0).count(),
                     updates
                         .values()
@@ -1115,6 +1173,10 @@ impl ResourceLimitsGrpc {
                         .count(),
                     updates
                         .values()
+                        .filter(|u| u.blob_storage_bytes_delta != 0)
+                        .count(),
+                    updates
+                        .values()
                         .filter(|u| {
                             u.fuel_delta == 0
                                 && u.memory_gb_seconds_delta == 0
@@ -1122,6 +1184,7 @@ impl ResourceLimitsGrpc {
                                 && u.ephemeral_storage_byte_seconds_delta == 0
                                 && u.http_call_count_delta == 0
                                 && u.rpc_call_count_delta == 0
+                                && u.blob_storage_bytes_delta == 0
                         })
                         .count(),
                 );
@@ -1206,15 +1269,17 @@ impl ResourceLimitsGrpc {
                                 || update.ephemeral_storage_byte_seconds_delta != 0
                                 || update.http_call_count_delta > 0
                                 || update.rpc_call_count_delta > 0
+                                || update.blob_storage_bytes_delta != 0
                             {
                                 error!(
-                                    "Lost resource usage updates for account {account_id}: fuel_delta={}, memory_gb_seconds_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}",
+                                    "Lost resource usage updates for account {account_id}: fuel_delta={}, memory_gb_seconds_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}, blob_storage_bytes_delta={}",
                                     update.fuel_delta,
                                     update.memory_gb_seconds_delta,
                                     update.durable_storage_byte_seconds_delta,
                                     update.ephemeral_storage_byte_seconds_delta,
                                     update.http_call_count_delta,
                                     update.rpc_call_count_delta,
+                                    update.blob_storage_bytes_delta,
                                 );
                                 self.reset_in_flight_delta(*account_id).await;
                             }
@@ -1289,6 +1354,11 @@ impl ResourceLimitsGrpc {
             entry
                 .available_rpc_calls_from_server
                 .store(updated_limits.available_rpc_calls, Ordering::Release);
+            {
+                let mut quota = entry.blob_storage_quota.lock().unwrap();
+                quota.syncing_delta = 0;
+                quota.available_from_server = updated_limits.available_blob_storage_bytes;
+            }
             entry.max_concurrent_agents_per_executor.store(
                 updated_limits.max_concurrent_agents_per_executor,
                 Ordering::Release,
@@ -1343,21 +1413,25 @@ impl ResourceLimits for ResourceLimitsGrpc {
         let entry = cell
             .get_or_try_init(|| async {
                 let fetched = self.fetch_resource_limits(account_id).await?;
-                Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(Arc::new(
-                    AtomicResourceEntry::new_with_all_limits_and_metering(
-                        fetched.available_fuel,
-                        fetched.max_memory_per_worker as usize,
-                        fetched.max_table_elements_per_worker as usize,
-                        fetched.max_disk_space_per_worker,
-                        fetched.per_invocation_http_call_limit,
-                        fetched.per_invocation_rpc_call_limit,
-                        fetched.available_http_calls,
-                        fetched.available_rpc_calls,
-                        fetched.max_concurrent_agents_per_executor,
-                        fetched.oplog_writes_per_second,
-                        self.metering,
-                    ),
-                ))
+                let entry = Arc::new(AtomicResourceEntry::new_with_all_limits_and_metering(
+                    fetched.available_fuel,
+                    fetched.max_memory_per_worker as usize,
+                    fetched.max_table_elements_per_worker as usize,
+                    fetched.max_disk_space_per_worker,
+                    fetched.per_invocation_http_call_limit,
+                    fetched.per_invocation_rpc_call_limit,
+                    fetched.available_http_calls,
+                    fetched.available_rpc_calls,
+                    fetched.max_concurrent_agents_per_executor,
+                    fetched.oplog_writes_per_second,
+                    self.metering,
+                ));
+                entry
+                    .blob_storage_quota
+                    .lock()
+                    .unwrap()
+                    .available_from_server = fetched.available_blob_storage_bytes;
+                Ok::<Arc<AtomicResourceEntry>, WorkerExecutorError>(entry)
             })
             .await?;
 
@@ -2011,6 +2085,57 @@ mod tests {
     }
 
     #[test]
+    fn blob_storage_admission_is_atomic_and_deletions_release_capacity() {
+        let entry = Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+        ));
+        entry
+            .blob_storage_quota
+            .lock()
+            .unwrap()
+            .available_from_server = 10;
+
+        let admitted = std::thread::scope(|scope| {
+            let handles = (0..4)
+                .map(|_| {
+                    let entry = entry.clone();
+                    scope.spawn(move || entry.try_record_blob_storage_delta(6))
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .filter(|admitted| *admitted)
+                .count()
+        });
+
+        assert_eq!(admitted, 1);
+        assert!(entry.try_record_blob_storage_delta(-4));
+        assert!(entry.try_record_blob_storage_delta(8));
+        assert!(!entry.try_record_blob_storage_delta(1));
+
+        entry.rollback_blob_storage_delta(8);
+        assert!(entry.try_record_blob_storage_delta(8));
+
+        let full = AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX, u64::MAX, u64::MAX);
+        full.set_available_blob_storage_bytes(10);
+        assert!(full.try_record_blob_storage_delta(10));
+        let captured = full.capture_usage_update(i64::MAX).unwrap();
+        assert_eq!(captured.update.blob_storage_bytes_delta, 10);
+        assert!(!full.try_record_blob_storage_delta(1));
+
+        let deletion_credit =
+            AtomicResourceEntry::new(u64::MAX, usize::MAX, usize::MAX, u64::MAX, u64::MAX);
+        deletion_credit.set_available_blob_storage_bytes(0);
+        assert!(deletion_credit.try_record_blob_storage_delta(-4));
+        assert!(deletion_credit.try_record_blob_storage_delta(4));
+    }
+
+    #[test]
     fn http_and_rpc_budgets_are_independent() {
         // HTTP exhausted, RPC still available.
         let entry = AtomicResourceEntry::new_with_all_limits(
@@ -2140,6 +2265,7 @@ mod tests {
             per_invocation_rpc_call_limit: u64::MAX,
             available_http_calls: 5,
             available_rpc_calls: 3,
+            available_blob_storage_bytes: u64::MAX,
             max_concurrent_agents_per_executor: u64::MAX,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             usage_update_applied: true,
@@ -2166,6 +2292,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: 50,
                 available_rpc_calls: 40,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -2200,6 +2327,7 @@ mod tests {
             per_invocation_rpc_call_limit: u64::MAX,
             available_http_calls: 10,
             available_rpc_calls: 10,
+            available_blob_storage_bytes: u64::MAX,
             max_concurrent_agents_per_executor: u64::MAX,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             usage_update_applied: true,
@@ -2216,6 +2344,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: 10,
                 available_rpc_calls: 10,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -2315,6 +2444,7 @@ mod tests {
                     per_invocation_rpc_call_limit: u64::MAX,
                     available_http_calls: u64::MAX,
                     available_rpc_calls: u64::MAX,
+                    available_blob_storage_bytes: u64::MAX,
                     max_concurrent_agents_per_executor: u64::MAX,
                     oplog_writes_per_second: u64::MAX,
                     usage_update_applied: true,
@@ -2731,6 +2861,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -2774,6 +2905,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -2837,6 +2969,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -2872,6 +3005,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -2940,6 +3074,22 @@ mod tests {
     }
 
     #[test]
+    async fn failed_blob_usage_batch_keeps_local_stock_reserved() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        mock.set_batch_update_error();
+        let svc = make_grpc(mock);
+        let id = account_id();
+
+        let entry = svc.initialize_account(id).await.unwrap();
+        entry.set_available_blob_storage_bytes(10);
+        assert!(entry.try_record_blob_storage_delta(10));
+
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        assert!(!entry.try_record_blob_storage_delta(1));
+    }
+
+    #[test]
     async fn connectivity_outage_keeps_fuel_non_zero_and_allows_borrowing() {
         let mock = Arc::new(MockRegistryService::new(500, 512));
         mock.set_batch_update_error();
@@ -2974,6 +3124,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -3007,6 +3158,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -3067,6 +3219,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -3107,6 +3260,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -3181,6 +3335,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -3214,6 +3369,7 @@ mod tests {
             per_invocation_rpc_call_limit: u64::MAX,
             available_http_calls: u64::MAX,
             available_rpc_calls: u64::MAX,
+            available_blob_storage_bytes: u64::MAX,
             max_concurrent_agents_per_executor: limit,
             oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             usage_update_applied: true,
@@ -3265,6 +3421,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: 10,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,
@@ -3300,6 +3457,7 @@ mod tests {
                 per_invocation_rpc_call_limit: u64::MAX,
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: u64::MAX,
                 max_concurrent_agents_per_executor: 3,
                 oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
                 usage_update_applied: true,

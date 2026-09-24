@@ -129,6 +129,40 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error>;
 
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<(PathBuf, BlobMetadata)>, Error> {
+        let mut pending = vec![path.to_path_buf()];
+        let mut blobs = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in self
+                .list_dir(target_label, op_label, namespace.clone(), &directory)
+                .await?
+            {
+                match self
+                    .exists(target_label, op_label, namespace.clone(), &entry)
+                    .await?
+                {
+                    ExistsResult::File => {
+                        if let Some(metadata) = self
+                            .get_metadata(target_label, op_label, namespace.clone(), &entry)
+                            .await?
+                        {
+                            blobs.push((entry, metadata));
+                        }
+                    }
+                    ExistsResult::Directory => pending.push(entry),
+                    ExistsResult::DoesNotExist => {}
+                }
+            }
+        }
+        Ok(blobs)
+    }
+
     /// Deletes the directory at the path and all the entries below it, at any depth.
     ///
     /// A root path changes nothing and returns false. A path is at the root when it has no

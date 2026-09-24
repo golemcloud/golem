@@ -451,6 +451,65 @@ define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_m
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
 
 #[test]
+async fn s3_list_blobs_below_handles_implicit_and_explicit_nested_directories(
+    #[tagged_as("s3")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let root = Path::new("recursive-list");
+    storage
+        .create_dir("recursive_list", "create-root", namespace.clone(), root)
+        .await
+        .unwrap();
+    storage
+        .create_dir(
+            "recursive_list",
+            "create-explicit",
+            namespace.clone(),
+            &root.join("explicit"),
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "recursive_list",
+            "put-explicit",
+            namespace.clone(),
+            &root.join("explicit/object"),
+            &[1, 2, 3],
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "recursive_list",
+            "put-implicit",
+            namespace.clone(),
+            &root.join("implicit/deep/object"),
+            &[4, 5, 6, 7],
+        )
+        .await
+        .unwrap();
+
+    let mut blobs = storage
+        .list_blobs_below("recursive_list", "list", namespace.clone(), root)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(path, metadata)| (path, metadata.size))
+        .collect::<Vec<_>>();
+    blobs.sort_by(|left, right| left.0.cmp(&right.0));
+
+    assert_eq!(
+        blobs,
+        vec![
+            (root.join("explicit/object"), 3),
+            (root.join("implicit/deep/object"), 4),
+        ]
+    );
+}
+
+#[test]
 #[tracing::instrument]
 async fn get_put_get_root(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,

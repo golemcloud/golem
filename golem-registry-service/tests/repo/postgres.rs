@@ -247,7 +247,10 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
-        environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
+        environment_repo: std::sync::Arc::new(DbEnvironmentRepo::logged(pool.clone())),
+        blob_storage: std::sync::Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ),
         environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(pool.clone())),
         environment_tool_middleware_grant_repo: Box::new(
             DbEnvironmentToolMiddlewareGrantRepo::logged(pool.clone()),

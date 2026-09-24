@@ -915,6 +915,49 @@ impl BlobStorage for S3BlobStorage {
             .collect::<Vec<_>>())
     }
 
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<(PathBuf, BlobMetadata)>, Error> {
+        validate_relative_blob_path(path)?;
+        let bucket = self.bucket_of(&namespace);
+        let namespace_root = self.prefix_of(&namespace);
+        let prefix = namespace_root.join(path);
+
+        Ok(self
+            .list_objects(target_label, op_label, bucket, &prefix)
+            .await?
+            .into_iter()
+            .filter_map(|object| {
+                let key = object.key?;
+                let object_path = PathBuf::from(key);
+                if object_path.file_name().and_then(|name| name.to_str()) == Some("__dir_marker") {
+                    return None;
+                }
+                let path = object_path
+                    .strip_prefix(&namespace_root)
+                    .ok()?
+                    .to_path_buf();
+                let last_modified = object.last_modified?;
+                Some((
+                    path,
+                    BlobMetadata {
+                        size: object.size.unwrap_or_default().max(0) as u64,
+                        last_modified_at: Timestamp::from(
+                            last_modified
+                                .to_millis()
+                                .expect("failed to convert date-time value to millis")
+                                as u64,
+                        ),
+                    },
+                ))
+            })
+            .collect())
+    }
+
     async fn delete_dir(
         &self,
         target_label: &'static str,

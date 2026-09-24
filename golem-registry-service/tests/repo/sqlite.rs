@@ -97,7 +97,10 @@ async fn deps(db: &SqliteDb) -> Deps {
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
-        environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
+        environment_repo: std::sync::Arc::new(DbEnvironmentRepo::logged(db.pool.clone())),
+        blob_storage: std::sync::Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ),
         environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(db.pool.clone())),
         environment_tool_middleware_grant_repo: Box::new(
             DbEnvironmentToolMiddlewareGrantRepo::logged(db.pool.clone()),

@@ -1519,6 +1519,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.created_by
     }
 
+    pub(crate) fn account_resource_limits(&self) -> Arc<AtomicResourceEntry> {
+        self.resource_limits.clone()
+    }
+
     pub fn created_by_email(&self) -> &AccountEmail {
         &self.state.created_by_email
     }
