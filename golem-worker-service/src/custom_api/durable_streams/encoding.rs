@@ -18,13 +18,14 @@
 use super::super::error::RequestHandlerError;
 use super::super::{ResponseBody, RouteExecutionResult};
 use super::expiry::{add_expiry_headers, cache_control};
-use super::{body_response, response};
+use super::response;
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{ReadStreamSlotSuccess, stream_slot_item};
 use golem_common::model::OplogIndex;
 use golem_common::model::durable_stream::StreamOffset;
 use golem_common::schema::SchemaValue;
 use golem_schema::schema::render::to_json_value;
+use golem_service_base::custom_api::{DurableStreamRepresentation, DurableStreamSlot};
 use http::{HeaderName, StatusCode};
 use prost::Message;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,14 +40,6 @@ pub(super) fn offset_text(v: &[u8]) -> Result<String, RequestHandlerError> {
         StreamOffset::from_bytes(bytes).map_err(anyhow::Error::msg)?
     };
     Ok(offset.to_string())
-}
-
-pub(super) fn content_type(r: &ReadStreamSlotSuccess) -> &'static str {
-    if r.content_type == "application/octet-stream" {
-        "application/octet-stream"
-    } else {
-        "application/json"
-    }
 }
 
 pub(super) fn etag(
@@ -68,12 +61,13 @@ pub(super) fn etag(
 pub(super) fn metadata_response(
     r: &ReadStreamSlotSuccess,
     head: bool,
+    slot: &DurableStreamSlot,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     if r.tombstoned {
         return Ok(response(StatusCode::GONE));
     }
     let mut out = response(StatusCode::OK);
-    headers(&mut out, r, head)?;
+    headers(&mut out, r, head, slot)?;
     out.headers
         .insert(http::header::CACHE_CONTROL, "no-store".into());
     if head {
@@ -96,7 +90,7 @@ pub(super) fn metadata_response(
     if !head {
         out.body = ResponseBody::PoemBody {
             body: poem::Body::empty(),
-            content_type: Some(content_type(r)),
+            content_type: None,
         };
     }
     Ok(out)
@@ -106,9 +100,10 @@ fn headers(
     out: &mut RouteExecutionResult,
     r: &ReadStreamSlotSuccess,
     head: bool,
+    slot: &DurableStreamSlot,
 ) -> Result<(), RequestHandlerError> {
     out.headers
-        .insert(http::header::CONTENT_TYPE, content_type(r).into());
+        .insert(http::header::CONTENT_TYPE, slot.content_type.clone());
     out.headers.insert(
         HeaderName::from_static("stream-next-offset"),
         offset_text(&r.next_offset)?,
@@ -133,10 +128,15 @@ fn headers(
 pub(super) fn data_response(
     r: &ReadStreamSlotSuccess,
     sensitive: bool,
+    slot: &DurableStreamSlot,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
-    let body = render_items(r)?;
-    let mut out = body_response(StatusCode::OK, body, content_type(r));
-    headers(&mut out, r, false)?;
+    let body = render_items(r, slot.representation)?;
+    let mut out = response(StatusCode::OK);
+    out.body = ResponseBody::PoemBody {
+        body: poem::Body::from_bytes(body.into()),
+        content_type: None,
+    };
+    headers(&mut out, r, false, slot)?;
     out.headers.insert(
         http::header::CACHE_CONTROL,
         cache_control(
@@ -148,8 +148,11 @@ pub(super) fn data_response(
     Ok(out)
 }
 
-fn render_items(r: &ReadStreamSlotSuccess) -> Result<Vec<u8>, RequestHandlerError> {
-    if content_type(r) == "application/octet-stream" {
+fn render_items(
+    r: &ReadStreamSlotSuccess,
+    representation: DurableStreamRepresentation,
+) -> Result<Vec<u8>, RequestHandlerError> {
+    if representation == DurableStreamRepresentation::Bytes {
         let mut bytes = Vec::new();
         for item in &r.items {
             let Some(stream_slot_item::Content::PackedU8(value)) = &item.content else {
@@ -186,12 +189,13 @@ fn render_items(r: &ReadStreamSlotSuccess) -> Result<Vec<u8>, RequestHandlerErro
 pub(super) fn sse_batch(
     r: &ReadStreamSlotSuccess,
     cursor: &mut Option<u64>,
+    representation: DurableStreamRepresentation,
 ) -> Result<Vec<u8>, RequestHandlerError> {
     use base64::Engine;
-    let binary = content_type(r) == "application/octet-stream";
+    let binary = representation == DurableStreamRepresentation::Bytes;
     let mut body = String::new();
     if !r.items.is_empty() {
-        let bytes = render_items(r)?;
+        let bytes = render_items(r, representation)?;
         let data = if binary {
             base64::engine::general_purpose::STANDARD.encode(bytes)
         } else {
@@ -259,8 +263,28 @@ mod tests {
         }
     }
 
+    fn slot(representation: DurableStreamRepresentation, content_type: &str) -> DurableStreamSlot {
+        DurableStreamSlot {
+            canonical_name: "$result".into(),
+            public_name: "responses".into(),
+            direction: golem_service_base::custom_api::DurableStreamSlotDirection::Output,
+            content_type: content_type.into(),
+            representation,
+        }
+    }
+
+    fn binary_slot() -> DurableStreamSlot {
+        slot(
+            DurableStreamRepresentation::Bytes,
+            "application/octet-stream",
+        )
+    }
+
     fn control(batch: &ReadStreamSlotSuccess) -> serde_json::Value {
-        let text = String::from_utf8(sse_batch(batch, &mut None).unwrap()).unwrap();
+        let text = String::from_utf8(
+            sse_batch(batch, &mut None, DurableStreamRepresentation::Bytes).unwrap(),
+        )
+        .unwrap();
         let control = text.split("event: control\ndata: ").nth(1).unwrap();
         serde_json::from_str(control.trim()).unwrap()
     }
@@ -268,12 +292,43 @@ mod tests {
     #[test]
     fn binary_sse_encodes_payload_not_control() {
         let batch = binary_batch();
-        let text = String::from_utf8(sse_batch(&batch, &mut None).unwrap()).unwrap();
+        let text = String::from_utf8(
+            sse_batch(&batch, &mut None, DurableStreamRepresentation::Bytes).unwrap(),
+        )
+        .unwrap();
         assert!(text.starts_with("event: data\ndata: AP8KDQ==\n\n"));
         let control = control(&batch);
         assert_eq!(control["upToDate"], false);
         assert!(control["streamCursor"].is_string());
         assert!(control.get("streamClosed").is_none());
+    }
+
+    #[test]
+    fn custom_binary_mime_preserves_raw_bytes_and_uses_base64_sse() {
+        let mut batch = binary_batch();
+        batch.items[0].content = Some(stream_slot_item::Content::PackedU8(vec![
+            0xe2, 0x82, 0xac, 0xe2, 0x82,
+        ]));
+        let slot = slot(
+            DurableStreamRepresentation::Bytes,
+            "application/vnd.golem.fragment",
+        );
+
+        assert_eq!(
+            render_items(&batch, slot.representation).unwrap(),
+            vec![0xe2, 0x82, 0xac, 0xe2, 0x82]
+        );
+        assert_eq!(
+            metadata_response(&batch, true, &slot).unwrap().headers[&http::header::CONTENT_TYPE],
+            "application/vnd.golem.fragment"
+        );
+        assert_eq!(
+            data_response(&batch, false, &slot).unwrap().headers[&http::header::CONTENT_TYPE],
+            "application/vnd.golem.fragment"
+        );
+        let sse =
+            String::from_utf8(sse_batch(&batch, &mut None, slot.representation).unwrap()).unwrap();
+        assert!(sse.starts_with("event: data\ndata: 4oKs4oI=\n\n"));
     }
 
     #[test]
@@ -301,7 +356,12 @@ mod tests {
         let mut cursor = Some(1_000_000_000);
         for _ in 0..3 {
             let previous = cursor.unwrap();
-            let bytes = sse_batch(&binary_batch(), &mut cursor).unwrap();
+            let bytes = sse_batch(
+                &binary_batch(),
+                &mut cursor,
+                DurableStreamRepresentation::Bytes,
+            )
+            .unwrap();
             let text = String::from_utf8(bytes).unwrap();
             let control: serde_json::Value =
                 serde_json::from_str(text.split("event: control\ndata: ").nth(1).unwrap().trim())
@@ -323,13 +383,13 @@ mod tests {
             offset: Vec::new(),
             content: Some(stream_slot_item::Content::Value(Vec::new())),
         });
-        assert!(render_items(&batch).is_err());
-        assert!(sse_batch(&batch, &mut None).is_err());
+        assert!(render_items(&batch, DurableStreamRepresentation::Bytes).is_err());
+        assert!(sse_batch(&batch, &mut None, DurableStreamRepresentation::Bytes).is_err());
         batch.content_type = "application/json".into();
         batch.element_schema = Some(SchemaGraph::anonymous(SchemaType::string()).into());
-        assert!(render_items(&batch).is_err());
+        assert!(render_items(&batch, DurableStreamRepresentation::Json).is_err());
         batch.items[0].content = None;
-        assert!(render_items(&batch).is_err());
+        assert!(render_items(&batch, DurableStreamRepresentation::Json).is_err());
     }
 
     #[test]
@@ -356,10 +416,16 @@ mod tests {
         };
         let expected = serde_json::json!(["árvíz\nline two", "quotes: \" and \\"]);
         assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&render_items(&batch).unwrap()).unwrap(),
+            serde_json::from_slice::<serde_json::Value>(
+                &render_items(&batch, DurableStreamRepresentation::Json).unwrap(),
+            )
+            .unwrap(),
             expected
         );
-        let text = String::from_utf8(sse_batch(&batch, &mut None).unwrap()).unwrap();
+        let text = String::from_utf8(
+            sse_batch(&batch, &mut None, DurableStreamRepresentation::Json).unwrap(),
+        )
+        .unwrap();
         let data = text
             .strip_prefix("event: data\ndata: ")
             .unwrap()
@@ -378,7 +444,8 @@ mod tests {
     fn closed_historic_page_is_cacheable_but_not_eof() {
         let mut batch = binary_batch();
         batch.closed = true;
-        let page = data_response(&batch, false).unwrap();
+        let slot = binary_slot();
+        let page = data_response(&batch, false, &slot).unwrap();
         let closed = HeaderName::from_static("stream-closed");
         assert_eq!(page.headers[&closed], "false");
         assert_eq!(
@@ -386,15 +453,15 @@ mod tests {
             "public, max-age=31536000, immutable"
         );
         assert_eq!(
-            data_response(&batch, true).unwrap().headers[&http::header::CACHE_CONTROL],
+            data_response(&batch, true, &slot).unwrap().headers[&http::header::CACHE_CONTROL],
             "no-store"
         );
         assert_eq!(
-            metadata_response(&batch, true).unwrap().headers[&closed],
+            metadata_response(&batch, true, &slot).unwrap().headers[&closed],
             "true"
         );
         batch.up_to_date = true;
-        let final_page = data_response(&batch, false).unwrap();
+        let final_page = data_response(&batch, false, &slot).unwrap();
         assert_eq!(final_page.headers[&closed], "true");
         assert_eq!(final_page.headers[&http::header::CACHE_CONTROL], "no-store");
     }
@@ -428,12 +495,13 @@ mod tests {
             assert!(offset_text(&invalid).is_err());
             let mut batch = binary_batch();
             batch.next_offset = invalid.clone();
-            assert!(data_response(&batch, false).is_err());
-            assert!(sse_batch(&batch, &mut None).is_err());
-            assert!(metadata_response(&batch, true).is_err());
+            let slot = binary_slot();
+            assert!(data_response(&batch, false, &slot).is_err());
+            assert!(sse_batch(&batch, &mut None, DurableStreamRepresentation::Bytes).is_err());
+            assert!(metadata_response(&batch, true, &slot).is_err());
             batch.next_offset.clear();
             batch.head_offset = invalid;
-            assert!(metadata_response(&batch, true).is_err());
+            assert!(metadata_response(&batch, true, &slot).is_err());
         }
     }
 
@@ -443,7 +511,7 @@ mod tests {
         batch.head_offset = StreamOffset::new(OplogIndex::from_u64(23), 7)
             .as_bytes()
             .to_vec();
-        let result = metadata_response(&batch, true).unwrap();
+        let result = metadata_response(&batch, true, &binary_slot()).unwrap();
         assert!(matches!(result.body, ResponseBody::NoBody));
         assert_eq!(
             result.headers[&http::header::CONTENT_TYPE],
@@ -460,7 +528,7 @@ mod tests {
     fn tombstone_metadata_is_not_cacheable() {
         let mut batch = binary_batch();
         batch.tombstoned = true;
-        let result = metadata_response(&batch, true).unwrap();
+        let result = metadata_response(&batch, true, &binary_slot()).unwrap();
         assert_eq!(result.status, StatusCode::GONE);
         assert_eq!(result.headers[&http::header::CACHE_CONTROL], "no-store");
     }

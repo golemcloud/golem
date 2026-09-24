@@ -16,6 +16,7 @@ use crate::custom_api::openapi::HttpApiOpenApiSpec;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{BinarySource, TextSource};
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
 use golem_service_base::custom_api::{
@@ -65,6 +66,7 @@ pub struct RichCompiledRoute {
     pub account_id: AccountId,
     pub account_email: AccountEmail,
     pub environment_id: EnvironmentId,
+    pub deployment_revision: DeploymentRevision,
     pub route_id: RouteId,
     pub method: Method,
     pub path: Vec<PathSegment>,

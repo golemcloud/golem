@@ -30,12 +30,9 @@ pub enum LoadRejection {
 }
 
 impl LoadRejection {
-    /// Distinguishes exhausted reader capacity (503) from per-stream rate limits (429).
+    /// Returns the Durable Streams gateway admission status.
     pub fn status_code(self) -> StatusCode {
-        match self {
-            Self::PerStreamReaders | Self::PerNodeReaders => StatusCode::SERVICE_UNAVAILABLE,
-            Self::CatchUpRate | Self::AppendRate => StatusCode::TOO_MANY_REQUESTS,
-        }
+        StatusCode::TOO_MANY_REQUESTS
     }
 
     fn metric_reason(self) -> &'static str {
@@ -100,7 +97,11 @@ impl DurableStreamLoadLimiter {
     }
 
     /// Reserves one live reader until the returned permit is dropped, without waiting for capacity.
-    pub fn try_acquire_reader(&self, stream_key: &str) -> Result<LiveReaderPermit, LoadRejection> {
+    pub fn try_acquire_reader(
+        &self,
+        stream_key: &str,
+        route_limit: Option<usize>,
+    ) -> Result<LiveReaderPermit, LoadRejection> {
         let mut state = self
             .inner
             .state
@@ -111,7 +112,9 @@ impl DurableStreamLoadLimiter {
             .get(stream_key)
             .copied()
             .unwrap_or(0);
-        if stream_readers >= self.inner.config.max_concurrent_readers_per_stream {
+        let per_stream_limit =
+            route_limit.unwrap_or(self.inner.config.max_concurrent_readers_per_stream);
+        if stream_readers >= per_stream_limit {
             return reject(LoadRejection::PerStreamReaders);
         }
         if state.readers_on_node >= self.inner.config.max_concurrent_readers_per_node {
@@ -146,15 +149,24 @@ impl DurableStreamLoadLimiter {
     }
 
     /// Charges one append request against the stream's current one-second rate window.
-    pub fn check_append(&self, stream_key: &str) -> Result<(), LoadRejection> {
-        self.check_append_at(stream_key, Instant::now())
+    pub fn check_append(
+        &self,
+        stream_key: &str,
+        route_limit: Option<u32>,
+    ) -> Result<(), LoadRejection> {
+        self.check_append_at(stream_key, route_limit, Instant::now())
     }
 
-    fn check_append_at(&self, stream_key: &str, now: Instant) -> Result<(), LoadRejection> {
+    fn check_append_at(
+        &self,
+        stream_key: &str,
+        route_limit: Option<u32>,
+        now: Instant,
+    ) -> Result<(), LoadRejection> {
         self.check_rate_at(
             stream_key,
             now,
-            self.inner.config.max_append_requests_per_second_per_stream,
+            route_limit.unwrap_or(self.inner.config.max_append_requests_per_second_per_stream),
             LoadRejection::AppendRate,
         )
     }
@@ -232,22 +244,65 @@ mod tests {
     #[test]
     fn reader_limits_and_raii_release_are_enforced() {
         let limiter = DurableStreamLoadLimiter::new(config());
-        let first = limiter.try_acquire_reader("a").unwrap();
-        let second = limiter.try_acquire_reader("a").unwrap();
+        let first = limiter.try_acquire_reader("a", None).unwrap();
+        let second = limiter.try_acquire_reader("a", None).unwrap();
         assert_eq!(
-            limiter.try_acquire_reader("a").err(),
+            limiter.try_acquire_reader("a", None).err(),
             Some(LoadRejection::PerStreamReaders)
         );
-        let third = limiter.try_acquire_reader("b").unwrap();
+        let third = limiter.try_acquire_reader("b", None).unwrap();
         assert_eq!(
-            limiter.try_acquire_reader("c").err(),
+            limiter.try_acquire_reader("c", None).err(),
             Some(LoadRejection::PerNodeReaders)
         );
 
         drop(first);
-        limiter.try_acquire_reader("c").unwrap();
+        limiter.try_acquire_reader("c", None).unwrap();
         drop(second);
         drop(third);
+    }
+
+    #[test]
+    fn route_reader_overrides_can_lower_or_raise_the_default_but_not_the_node_cap() {
+        let limiter = DurableStreamLoadLimiter::new(config());
+
+        let lower = limiter.try_acquire_reader("lower", Some(1)).unwrap();
+        assert_eq!(
+            limiter.try_acquire_reader("lower", Some(1)).err(),
+            Some(LoadRejection::PerStreamReaders)
+        );
+        drop(lower);
+
+        let first = limiter.try_acquire_reader("higher", Some(3)).unwrap();
+        let second = limiter.try_acquire_reader("higher", Some(3)).unwrap();
+        let third = limiter.try_acquire_reader("higher", Some(3)).unwrap();
+        assert_eq!(
+            limiter.try_acquire_reader("higher", Some(3)).err(),
+            Some(LoadRejection::PerStreamReaders)
+        );
+        assert_eq!(
+            limiter.try_acquire_reader("other-route", Some(3)).err(),
+            Some(LoadRejection::PerNodeReaders)
+        );
+        drop((first, second, third));
+    }
+
+    #[test]
+    fn reader_budgets_are_isolated_by_route_key_for_the_same_underlying_stream() {
+        let limiter = DurableStreamLoadLimiter::new(config());
+        let first_route = limiter
+            .try_acquire_reader("route-1:stream-a", Some(1))
+            .unwrap();
+        assert_eq!(
+            limiter
+                .try_acquire_reader("route-1:stream-a", Some(1))
+                .err(),
+            Some(LoadRejection::PerStreamReaders)
+        );
+        let second_route = limiter
+            .try_acquire_reader("route-2:stream-a", Some(1))
+            .unwrap();
+        drop((first_route, second_route));
     }
 
     #[test]
@@ -268,14 +323,52 @@ mod tests {
     fn append_limit_expires_and_is_per_stream() {
         let limiter = DurableStreamLoadLimiter::new(config());
         let now = Instant::now();
-        assert!(limiter.check_append_at("a", now).is_ok());
-        assert!(limiter.check_append_at("a", now).is_ok());
+        assert!(limiter.check_append_at("a", None, now).is_ok());
+        assert!(limiter.check_append_at("a", None, now).is_ok());
         assert_eq!(
-            limiter.check_append_at("a", now),
+            limiter.check_append_at("a", None, now),
             Err(LoadRejection::AppendRate)
         );
-        assert!(limiter.check_append_at("b", now).is_ok());
-        assert!(limiter.check_append_at("a", now + RATE_WINDOW).is_ok());
+        assert!(limiter.check_append_at("b", None, now).is_ok());
+        assert!(
+            limiter
+                .check_append_at("a", None, now + RATE_WINDOW)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn append_overrides_and_route_keys_have_independent_windows() {
+        let limiter = DurableStreamLoadLimiter::new(config());
+        let now = Instant::now();
+        assert!(
+            limiter
+                .check_append_at("route-1:stream-a", Some(1), now)
+                .is_ok()
+        );
+        assert_eq!(
+            limiter.check_append_at("route-1:stream-a", Some(1), now),
+            Err(LoadRejection::AppendRate)
+        );
+        assert!(
+            limiter
+                .check_append_at("route-2:stream-a", Some(3), now)
+                .is_ok()
+        );
+        assert!(
+            limiter
+                .check_append_at("route-2:stream-a", Some(3), now)
+                .is_ok()
+        );
+        assert!(
+            limiter
+                .check_append_at("route-2:stream-a", Some(3), now)
+                .is_ok()
+        );
+        assert_eq!(
+            limiter.check_append_at("route-2:stream-a", Some(3), now),
+            Err(LoadRejection::AppendRate)
+        );
     }
 
     #[test]
@@ -288,10 +381,10 @@ mod tests {
             limiter.check_catch_up_at("a", now),
             Err(LoadRejection::CatchUpRate)
         );
-        assert!(limiter.check_append_at("a", now).is_ok());
-        assert!(limiter.check_append_at("a", now).is_ok());
+        assert!(limiter.check_append_at("a", None, now).is_ok());
+        assert!(limiter.check_append_at("a", None, now).is_ok());
         assert_eq!(
-            limiter.check_append_at("a", now),
+            limiter.check_append_at("a", None, now),
             Err(LoadRejection::AppendRate)
         );
     }
@@ -300,11 +393,11 @@ mod tests {
     fn rejection_statuses_match_the_http_contract() {
         assert_eq!(
             LoadRejection::PerStreamReaders.status_code(),
-            StatusCode::SERVICE_UNAVAILABLE
+            StatusCode::TOO_MANY_REQUESTS
         );
         assert_eq!(
             LoadRejection::PerNodeReaders.status_code(),
-            StatusCode::SERVICE_UNAVAILABLE
+            StatusCode::TOO_MANY_REQUESTS
         );
         assert_eq!(
             LoadRejection::CatchUpRate.status_code(),

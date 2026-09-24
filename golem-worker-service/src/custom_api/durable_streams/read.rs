@@ -19,11 +19,13 @@ use super::super::error::RequestHandlerError;
 use super::super::route_resolver::ResolvedRouteEntry;
 use super::super::{ResponseBody, RichRequest, RichRouteSecurity, RouteExecutionResult};
 use super::encoding::{
-    content_type, data_response, etag, live_cursor, metadata_response, offset_text, sse_batch,
+    data_response, etag, live_cursor, metadata_response, offset_text, sse_batch,
 };
 use super::load::LiveReaderPermit;
+use super::session::declared_slot;
 use super::{
     DurableStreamsHandler, MAX_BYTES, MAX_ITEMS, rejection_response, response, route_method,
+    route_stream_load_key,
 };
 use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -31,6 +33,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::durable_stream::StreamOffset;
 use golem_common::model::{AgentId, OplogIndex};
+use golem_service_base::custom_api::{CallAgentBehaviour, DurableStreamRepresentation};
 use golem_service_base::model::auth::AuthCtx;
 use http::{HeaderName, Method, StatusCode};
 use std::str::FromStr;
@@ -47,16 +50,20 @@ impl DurableStreamsHandler {
         &self,
         request: &RichRequest,
         route: &ResolvedRouteEntry,
+        behaviour: &CallAgentBehaviour,
         agent_id: &AgentId,
         session: String,
         slot: String,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let declared_slot = declared_slot(behaviour, &slot)?.ok_or_else(|| {
+            anyhow::anyhow!("request resolved to undeclared stream slot '{slot}'")
+        })?;
         if request.underlying.method() == Method::HEAD {
             let read = self
                 .read_slot(route, agent_id, &session, &slot, Vec::new(), 0, 0)
                 .await?;
             return Ok(read
-                .map(|r| metadata_response(&r, true))
+                .map(|r| metadata_response(&r, true, declared_slot))
                 .transpose()?
                 .unwrap_or_else(|| response(StatusCode::NOT_FOUND)));
         }
@@ -82,14 +89,28 @@ impl DurableStreamsHandler {
             None => None,
         };
         let offset = single_query_param(request, "offset").unwrap_or("-1");
-        let key = format!("{}:{agent_id}:{session}:{slot}", route.route.environment_id);
+        let stream_key = format!("{}:{agent_id}:{session}:{slot}", route.route.environment_id);
         let permit = if live.is_some() {
-            match self.limiter.try_acquire_reader(&key) {
+            let route_key = route_stream_load_key(
+                route.route.environment_id,
+                route.route.deployment_revision,
+                route.route.route_id,
+                agent_id,
+                &session,
+                &slot,
+            );
+            let route_limit = behaviour
+                .durable_streams
+                .as_ref()
+                .and_then(|policy| policy.load.as_ref())
+                .and_then(|load| load.max_concurrent_readers_per_stream)
+                .map(|limit| limit as usize);
+            match self.limiter.try_acquire_reader(&route_key, route_limit) {
                 Ok(permit) => Some(permit),
                 Err(rejection) => return Ok(rejection_response(rejection)),
             }
         } else {
-            if let Err(rejection) = self.limiter.check_catch_up(&key) {
+            if let Err(rejection) = self.limiter.check_catch_up(&stream_key) {
                 return Ok(rejection_response(rejection));
             }
             None
@@ -163,7 +184,7 @@ impl DurableStreamsHandler {
             return Ok(response(StatusCode::GONE));
         }
         if live == Some(Live::LongPoll) && read.items.is_empty() {
-            let mut r = metadata_response(&read, false)?;
+            let mut r = metadata_response(&read, false, declared_slot)?;
             r.status = StatusCode::NO_CONTENT;
             r.headers.insert(
                 HeaderName::from_static("stream-cursor"),
@@ -172,11 +193,11 @@ impl DurableStreamsHandler {
             return Ok(r);
         }
         if live == Some(Live::Sse) {
-            let mut result = metadata_response(&read, false)?;
+            let mut result = metadata_response(&read, false, declared_slot)?;
             result
                 .headers
                 .insert(http::header::CONTENT_TYPE, "text/event-stream".into());
-            if content_type(&read) == "application/octet-stream" {
+            if declared_slot.representation == DurableStreamRepresentation::Bytes {
                 result.headers.insert(
                     HeaderName::from_static("stream-sse-data-encoding"),
                     "base64".into(),
@@ -204,13 +225,14 @@ impl DurableStreamsHandler {
                     read,
                     permit,
                     cursor,
+                    declared_slot.representation,
                 ),
                 content_type: Some("text/event-stream"),
             };
             return Ok(result);
         }
         let sensitive = !matches!(route.route.security, RichRouteSecurity::None);
-        let mut result = data_response(&read, sensitive)?;
+        let mut result = data_response(&read, sensitive, declared_slot)?;
         let etag = etag(&read, &start_offset, &read.next_offset)?;
         result.headers.insert(http::header::ETAG, etag.clone());
         if live.is_some() {
@@ -257,6 +279,7 @@ fn sse_body(
     first: ReadStreamSlotSuccess,
     permit: Option<LiveReaderPermit>,
     cursor: Option<u64>,
+    representation: DurableStreamRepresentation,
 ) -> poem::Body {
     let stream = futures::stream::try_unfold(
         (Some(first), read_request, permit, false, cursor),
@@ -283,7 +306,8 @@ fn sse_body(
                 }
                 let closed = batch.closed && batch.up_to_date;
                 request.from_offset = batch.next_offset.clone();
-                let data = sse_batch(&batch, &mut cursor).map_err(std::io::Error::other)?;
+                let data = sse_batch(&batch, &mut cursor, representation)
+                    .map_err(std::io::Error::other)?;
                 Ok::<_, std::io::Error>(Some((
                     bytes::Bytes::from(data),
                     (None, request, permit, closed, cursor),

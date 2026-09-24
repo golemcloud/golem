@@ -143,6 +143,7 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         account_id: Default::default(),
         account_email: golem_common::model::account::AccountEmail::new("test@golem"),
         environment_id: Default::default(),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 1,
         method: Method::GET,
         path: vec![PathSegment::Literal {

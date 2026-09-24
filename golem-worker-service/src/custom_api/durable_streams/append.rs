@@ -8,10 +8,10 @@ use super::super::error::RequestHandlerError;
 use super::super::route_resolver::ResolvedRouteEntry;
 use super::super::{RichRequest, RouteExecutionResult};
 use super::encoding::offset_text;
-use super::session::{arguments_come_from_url, content_type_mismatch, declared_slot_content_type};
+use super::session::{arguments_come_from_url, content_type_mismatch, declared_slot};
 use super::{
     DurableStreamsHandler, MAX_ITEMS, body_response, has_header, rejection_response, response,
-    route_method,
+    route_method, route_stream_load_key,
 };
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -40,10 +40,26 @@ impl DurableStreamsHandler {
         session: &str,
         slot: &str,
         allow_create: bool,
+        allow: &str,
         expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let key = format!("{}:{agent_id}:{session}:{slot}", route.route.environment_id);
-        if let Err(rejection) = self.limiter.check_append(&key) {
+        let Some(declared_slot) = declared_slot(behaviour, slot)? else {
+            return Ok(response(StatusCode::NOT_FOUND));
+        };
+        let route_key = route_stream_load_key(
+            route.route.environment_id,
+            route.route.deployment_revision,
+            route.route.route_id,
+            agent_id,
+            session,
+            slot,
+        );
+        let route_limit = behaviour
+            .durable_streams
+            .as_ref()
+            .and_then(|policy| policy.load.as_ref())
+            .and_then(|load| load.max_append_requests_per_second_per_stream);
+        if let Err(rejection) = self.limiter.check_append(&route_key, route_limit) {
             return Ok(rejection_response(rejection));
         }
         let metadata = self
@@ -56,7 +72,7 @@ impl DurableStreamsHandler {
             return Ok(response(StatusCode::GONE));
         }
         if metadata.as_ref().is_some_and(|m| !m.writable) {
-            return Ok(read_only_response());
+            return Ok(read_only_response(allow));
         }
         let graph: SchemaGraph = match &metadata {
             Some(metadata) => metadata
@@ -83,11 +99,7 @@ impl DurableStreamsHandler {
                             field.name == slot && matches!(field.source, FieldSource::UserSupplied)
                         })
                 else {
-                    return Ok(if declared_slot_content_type(behaviour, slot)?.is_some() {
-                        read_only_response()
-                    } else {
-                        response(StatusCode::NOT_FOUND)
-                    });
+                    return Ok(read_only_response(allow));
                 };
                 let SchemaType::Stream {
                     inner: Some(inner), ..
@@ -143,12 +155,8 @@ impl DurableStreamsHandler {
                 "Append body exceeds the configured limit",
             ));
         }
-        let binary = matches!(
-            graph
-                .resolve_ref(&graph.root)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-            SchemaType::U8 { .. }
-        );
+        let binary = declared_slot.representation
+            == golem_service_base::custom_api::DurableStreamRepresentation::Bytes;
         if !body.is_empty() {
             if !has_header(request, "content-type") {
                 return Ok(problem(
@@ -157,20 +165,14 @@ impl DurableStreamsHandler {
                     "Content-Type is required for an append body",
                 ));
             }
-            if content_type_mismatch(
-                request,
-                if binary {
-                    "application/octet-stream"
-                } else {
-                    "application/json"
-                },
-            )? {
+            if content_type_mismatch(request, &declared_slot.content_type)? {
                 if let Some(metadata) = metadata.as_ref().filter(|metadata| metadata.closed) {
                     return append_response(
                         Outcome::Closed(Default::default()),
                         producer.as_ref(),
                         metadata.head_offset.clone(),
                         Some(metadata.closed),
+                        allow,
                     );
                 }
                 return Ok(response(StatusCode::CONFLICT));
@@ -229,6 +231,7 @@ impl DurableStreamsHandler {
             producer.as_ref(),
             append.stream_head_offset,
             append.stream_closed,
+            allow,
         )
     }
 }
@@ -321,6 +324,7 @@ fn append_response(
     producer: Option<&ExternalStreamProducer>,
     stream_head_offset: Vec<u8>,
     stream_closed: Option<bool>,
+    allow: &str,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     let mut result = response(StatusCode::NO_CONTENT);
     let (offset, sequence) = match outcome {
@@ -363,7 +367,7 @@ fn append_response(
         }
         Outcome::Gone(_) => return Ok(response(StatusCode::GONE)),
         Outcome::NotFound(_) => return Ok(response(StatusCode::NOT_FOUND)),
-        Outcome::ReadOnly(_) => return Ok(read_only_response()),
+        Outcome::ReadOnly(_) => return Ok(read_only_response(allow)),
         Outcome::Failure(_) => return Err(anyhow::anyhow!("unmapped append failure").into()),
     };
     result.headers.insert(
@@ -389,11 +393,9 @@ fn append_response(
     Ok(result)
 }
 
-pub(super) fn read_only_response() -> RouteExecutionResult {
+fn read_only_response(allow: &str) -> RouteExecutionResult {
     let mut result = response(StatusCode::METHOD_NOT_ALLOWED);
-    result
-        .headers
-        .insert(http::header::ALLOW, "PUT, HEAD, GET, DELETE".into());
+    result.headers.insert(http::header::ALLOW, allow.into());
     result
 }
 
@@ -515,6 +517,7 @@ mod tests {
             }),
             Vec::new(),
             Some(false),
+            "PUT, HEAD, GET, DELETE, POST",
         )
         .unwrap();
         assert_eq!(result.status, StatusCode::NO_CONTENT);
@@ -552,6 +555,7 @@ mod tests {
                 None,
                 Vec::new(),
                 None,
+                "PUT, HEAD, GET, DELETE, POST",
             )
             .is_err()
         );

@@ -34,10 +34,11 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
-    FieldSource, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
-    schema_value_to_proto_with_streams,
+    FieldSource, SchemaType, SchemaValue, schema_value_to_proto_with_streams,
 };
-use golem_service_base::custom_api::{CallAgentBehaviour, MethodParameter};
+use golem_service_base::custom_api::{
+    CallAgentBehaviour, DurableStreamRepresentation, DurableStreamSlot, MethodParameter,
+};
 use golem_service_base::model::auth::AuthCtx;
 use http::{HeaderName, Method, StatusCode};
 use tokio::io::AsyncReadExt;
@@ -182,6 +183,9 @@ impl DurableStreamsHandler {
         expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         if let Some(slot) = slot {
+            let Some(declared_slot) = declared_slot(behaviour, slot)? else {
+                return Ok(response(StatusCode::NOT_FOUND));
+            };
             let mut body = request.underlying.take_body().into_async_read();
             if body
                 .read(&mut [0u8; 1])
@@ -199,7 +203,9 @@ impl DurableStreamsHandler {
                 if !policies_match(&metadata.expiry_policy, &expiry_policy) {
                     return Ok(response(StatusCode::CONFLICT));
                 }
-                if metadata.tombstoned || content_type_mismatch(request, &metadata.content_type)? {
+                if metadata.tombstoned
+                    || content_type_mismatch(request, &declared_slot.content_type)?
+                {
                     return Ok(response(StatusCode::CONFLICT));
                 }
                 if args_from_url {
@@ -233,9 +239,9 @@ impl DurableStreamsHandler {
                         )
                         .into());
                     };
-                    return created_slot_response(&metadata, created.replayed);
+                    return created_slot_response(&metadata, created.replayed, declared_slot);
                 }
-                return metadata_response(&metadata, true);
+                return metadata_response(&metadata, true, declared_slot);
             }
             if self
                 .read_slot(route, agent_id, session, "", Vec::new(), 0, 0)
@@ -244,10 +250,7 @@ impl DurableStreamsHandler {
             {
                 return Ok(response(StatusCode::NOT_FOUND));
             }
-            let Some(content_type) = declared_slot_content_type(behaviour, slot)? else {
-                return Ok(response(StatusCode::NOT_FOUND));
-            };
-            if content_type_mismatch(request, content_type)? {
+            if content_type_mismatch(request, &declared_slot.content_type)? {
                 return Ok(response(StatusCode::CONFLICT));
             }
             if !args_from_url {
@@ -280,7 +283,12 @@ impl DurableStreamsHandler {
                 )
                 .await?
             {
-                Some(metadata) => created_slot_response(&metadata, created.replayed),
+                Some(metadata) => {
+                    let declared_slot = declared_slot(behaviour, slot)?.ok_or_else(|| {
+                        anyhow::anyhow!("created undeclared Durable Streams slot '{slot}'")
+                    })?;
+                    created_slot_response(&metadata, created.replayed, declared_slot)
+                }
                 None => Err(anyhow::anyhow!("created stream session has no requested slot").into()),
             },
             None => {
@@ -333,6 +341,7 @@ impl DurableStreamsHandler {
         &self,
         request: &RichRequest,
         route: &ResolvedRouteEntry,
+        behaviour: &CallAgentBehaviour,
         agent_id: &AgentId,
         session: &str,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
@@ -359,6 +368,14 @@ impl DurableStreamsHandler {
         let mut streams = Vec::new();
         let mut closed = true;
         for slot in &read.slots {
+            let declared_slot = behaviour
+                .durable_streams
+                .as_ref()
+                .and_then(|policy| policy.slot_by_canonical_name(slot))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("executor returned undeclared Durable Streams slot '{slot}'")
+                })?
+                .clone();
             let Some(metadata) = self
                 .read_slot_admitted(
                     route,
@@ -377,8 +394,8 @@ impl DurableStreamsHandler {
             };
             closed &= metadata.closed || metadata.tombstoned;
             streams.push(serde_json::json!({
-                "name": slot,
-                "contentType": metadata.content_type,
+                "name": declared_slot.public_name,
+                "contentType": declared_slot.content_type,
                 "nextOffset": offset_text(&metadata.head_offset)?,
                 "closed": metadata.closed,
                 "cancelled": metadata.cancelled,
@@ -429,11 +446,12 @@ fn created_status(replayed: bool) -> StatusCode {
 fn created_slot_response(
     metadata: &golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess,
     replayed: bool,
+    slot: &DurableStreamSlot,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     if metadata.tombstoned {
         return Ok(response(StatusCode::CONFLICT));
     }
-    let mut result = metadata_response(metadata, true)?;
+    let mut result = metadata_response(metadata, true, slot)?;
     result.status = created_status(replayed);
     Ok(result)
 }
@@ -465,66 +483,22 @@ pub(super) fn content_type_mismatch(
         }))
 }
 
-/// Content type of a slot declared by the route's method signature: an input
-/// stream field, the `$result` output, or a stream field of a record output.
-/// `None` when the route declares no such slot.
-pub(super) fn declared_slot_content_type(
-    behaviour: &CallAgentBehaviour,
+pub(super) fn declared_slot<'a>(
+    behaviour: &'a CallAgentBehaviour,
     slot: &str,
-) -> Result<Option<&'static str>, RequestHandlerError> {
-    fn stream_type(
-        graph: &SchemaGraph,
-        ty: &SchemaType,
-    ) -> Result<Option<&'static str>, RequestHandlerError> {
-        let ty = graph
-            .resolve_ref(ty)
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        match ty {
-            SchemaType::Stream {
-                inner: Some(inner), ..
-            } => Ok(Some(
-                if matches!(
-                    graph
-                        .resolve_ref(inner)
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-                    SchemaType::U8 { .. }
-                ) {
-                    "application/octet-stream"
-                } else {
-                    "application/json"
-                },
-            )),
-            _ => Ok(None),
-        }
+) -> Result<Option<&'a DurableStreamSlot>, RequestHandlerError> {
+    Ok(behaviour
+        .durable_streams
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Durable Streams route has no resolved policy"))?
+        .slot_by_canonical_name(slot))
+}
+
+pub(super) fn canonical_content_type(representation: DurableStreamRepresentation) -> &'static str {
+    match representation {
+        DurableStreamRepresentation::Json => "application/json",
+        DurableStreamRepresentation::Bytes => "application/octet-stream",
     }
-    if let Some(field) = behaviour
-        .method_input
-        .input_schema
-        .fields()
-        .iter()
-        .find(|field| field.name == slot && matches!(field.source, FieldSource::UserSupplied))
-        && let Some(content_type) = stream_type(&behaviour.method_input.graph, &field.schema)?
-    {
-        return Ok(Some(content_type));
-    }
-    let graph = &behaviour.expected_agent_response.graph;
-    let OutputSchema::Single(output) = &behaviour.expected_agent_response.output_schema else {
-        return Ok(None);
-    };
-    if slot == "$result" {
-        return Ok(stream_type(graph, output)?.or_else(|| {
-            (!golem_common::schema::agent::contains_stream_in_graph(graph, output))
-                .then_some("application/json")
-        }));
-    }
-    if let SchemaType::Record { fields, .. } = graph
-        .resolve_ref(output)
-        .map_err(|e| anyhow::anyhow!(e.to_string()))?
-        && let Some(field) = fields.iter().find(|field| field.name == slot)
-    {
-        return stream_type(graph, &field.body);
-    }
-    Ok(None)
 }
 
 #[cfg(test)]
@@ -534,13 +508,59 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn public_mime_comparison_uses_case_insensitive_essence() {
+        let request = |content_type: Option<&str>| {
+            let mut builder = poem::Request::builder();
+            if let Some(content_type) = content_type {
+                builder = builder.header(http::header::CONTENT_TYPE, content_type);
+            }
+            RichRequest::new(builder.finish())
+        };
+
+        assert!(
+            !content_type_mismatch(
+                &request(Some("Application/Vnd.Golem.Fragment; charset=binary")),
+                "application/vnd.golem.fragment",
+            )
+            .unwrap()
+        );
+        assert!(
+            content_type_mismatch(
+                &request(Some("application/octet-stream")),
+                "application/vnd.golem.fragment",
+            )
+            .unwrap()
+        );
+        assert!(!content_type_mismatch(&request(None), "application/vnd.golem.fragment").unwrap());
+    }
+
+    #[test]
+    fn compiled_representation_maps_to_executor_content_type() {
+        assert_eq!(
+            canonical_content_type(DurableStreamRepresentation::Json),
+            "application/json"
+        );
+        assert_eq!(
+            canonical_content_type(DurableStreamRepresentation::Bytes),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
     fn tombstoned_created_slot_is_a_conflict_not_a_success() {
         let metadata = ReadStreamSlotSuccess {
             tombstoned: true,
             ..Default::default()
         };
+        let slot = DurableStreamSlot {
+            canonical_name: "$result".into(),
+            public_name: "responses".into(),
+            direction: golem_service_base::custom_api::DurableStreamSlotDirection::Output,
+            content_type: "application/json".into(),
+            representation: DurableStreamRepresentation::Json,
+        };
         for replayed in [false, true] {
-            let response = created_slot_response(&metadata, replayed).unwrap();
+            let response = created_slot_response(&metadata, replayed, &slot).unwrap();
             assert_eq!(response.status, StatusCode::CONFLICT);
             assert_eq!(response.headers[&http::header::CACHE_CONTROL], "no-store");
         }

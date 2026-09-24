@@ -208,6 +208,7 @@ impl RouteResolver {
                 account_id: compiled_routes.account_id,
                 account_email: compiled_routes.account_email.clone(),
                 environment_id: compiled_routes.environment_id,
+                deployment_revision: compiled_routes.deployment_revision,
                 route_id: route.route_id,
                 method: route
                     .method
@@ -242,6 +243,7 @@ impl RouteResolver {
                 account_id: compiled_routes.account_id,
                 account_email: compiled_routes.account_email.clone(),
                 environment_id: compiled_routes.environment_id,
+                deployment_revision: compiled_routes.deployment_revision,
                 // TODO: Have some helper for synthethic vs user defined routes
                 route_id: -1,
                 method: http::Method::GET,
