@@ -1332,6 +1332,18 @@ The generator reads only the release's safe tool definition and metadata digest.
 
   <Field
     meta={{
+      path: "componentTemplates.<template-name>.guestLanguage",
+      noSpecialization: true,
+    }}
+  >
+    ***Optional guest language*** of the components built with the template: `ts`, `effect`, `rust`, `scala` or `moonbit`.
+
+    A component's guest language comes from the templates applied to it, directly or through template inheritance. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. The built-in templates (e.g. `ts`, `rust`, `ts-tool-middleware`) declare their language, so custom templates inheriting them don't need to declare it; custom templates that don't inherit a built-in template can declare it to enable these features. The templates applied to a component must not declare different languages.
+
+  </Field>
+
+  <Field
+    meta={{
       path: "componentTemplates.<template-name>.componentWasm",
     }}
   ></Field>

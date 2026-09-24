@@ -24,6 +24,9 @@ componentTemplates:                # Reusable property layers (build, env, plugi
 components:                        # Component definitions by name (namespace:name)
   <ns:name>: { ... }
 
+tools:                             # Canonical tool implementation declarations
+  <tool-name>: { ... }
+
 agents:                            # Agent type definitions by PascalCase name
   <AgentName>: { ... }
 
@@ -75,6 +78,8 @@ components:
       - command: cargo build --target wasm32-wasip1
     env:                           # Environment variables
       LOG_LEVEL: info
+    tools:                         # Owner authorization; inherited by the component's agents
+      search: {}
     plugins:                       # Plugin installations
       - name: otlp-exporter
         version: "0.1.0"
@@ -104,6 +109,8 @@ components:
 | `build` | array | Build commands (see Build Commands) |
 | `env` | map | Environment variables (string → string) |
 | `envMergeMode` | enum | `upsert` (default), `replace`, or `remove` |
+| `tools` | map | Tool bindings authorized for component owners and inherited by the component's agents |
+| `toolsMergeMode` | enum | `upsert` (default), `replace`, or `remove` |
 | `plugins` | array | Plugin installations |
 | `pluginsMergeMode` | enum | `append` (default), `prepend`, or `replace` |
 | `files` | array | Initial filesystem entries |
@@ -121,19 +128,20 @@ Templates define reusable property layers. Components reference them via `templa
 
 ```yaml
 componentTemplates:
-  rust:
-    build:
-      - command: cargo build --target wasm32-wasip1
+  my-rust:
+    templates: [rust]              # Inherits the built-in "rust" template (build, guestLanguage)
     env:
       RUST_LOG: info
 
 components:
   my-app:service:
-    templates: [rust]              # Inherits build and env from "rust" template
+    templates: [my-rust]           # Inherits from "my-rust" and, through it, from "rust"
     dir: service
 ```
 
-Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`.
+Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`. The built-in templates (`rust`, `ts`, `effect`, `scala`, `moonbit`, and the `*-tool-middleware` variants) are provided by the CLI; don't define templates with these names.
+
+Templates can declare the guest language of the components built with them via `guestLanguage` (`ts`, `effect`, `rust`, `scala` or `moonbit`). The built-in templates declare it, so templates inheriting them don't need to. A custom template that builds a component on its own (without inheriting a built-in template) should declare it, otherwise language-specific CLI features (dependency checks, bridge generation, REPL) are unavailable for its components. The templates applied to a component must not declare different languages.
 
 ## Agents
 
@@ -201,6 +209,24 @@ Each level can override or merge with its parent using merge modes:
 | `plugins` | `pluginsMergeMode` | vec | `append` | `append`, `prepend`, `replace` |
 | `files` | `filesMergeMode` | vec | `append` | `append`, `prepend`, `replace` |
 | `build` | `buildMergeMode` | vec | `append` | `append`, `prepend`, `replace` |
+| `tools` | `toolsMergeMode` | map | `upsert` | `upsert`, `replace`, `remove` |
+
+Component tool bindings authorize fresh component owners (including tools-only MCP calls) and default into real agents exported by that component. An agent-only binding does not authorize a fresh component owner. To opt an agent out of an inherited tool, remove it explicitly:
+
+```yaml
+components:
+  my-app:service:
+    tools:
+      search: {}
+
+agents:
+  RestrictedAgent:
+    toolsMergeMode: remove
+    tools:
+      search: {}
+```
+
+When agents should not receive the defaults, prefer a separate component with no agents as the tool owner.
 
 ## Presets
 
@@ -411,15 +437,29 @@ Each deployment must define exactly one of:
 - `domain`: a full custom domain such as `mcp.example.com` for custom DNS or custom server environments.
 
 ```yaml
+components:
+  my-app:search-implementation:
+    componentWasm: build/search-implementation.wasm
+  my-app:tool-owner:
+    componentWasm: build/tool-owner.wasm
+    tools:
+      search: {}
+
+tools:
+  search:
+    component: my-app:search-implementation
+
 mcp:
   deployments:
     local:
       - subdomain: my-mcp  # resolves to my-mcp.localhost:9007 by default
-        agents:
-          ToolAgent: {}
-          SecureToolAgent:
-            securityScheme: my-oidc
+        tools:
+          search:
+            ownerComponent: my-app:tool-owner
+            include: [query]
 ```
+
+The MCP tool must also have a top-level implementation declaration and a `components.my-app:tool-owner.tools.search` binding. No agent is required. The implementation and owner components may differ; `include`/`exclude` selects exported commands. A remote declaration requires an environment grant, which application deployment automatically reconciles when the deploy actor has permission.
 
 ## Bridge SDK Generation
 
@@ -678,12 +718,14 @@ This table shows where each property can be defined:
 | Field | Root | Component Template | Component | Agent | Component Preset | Agent Preset |
 |-------|:----:|:------------------:|:---------:|:-----:|:----------------:|:------------:|
 | `templates` | — | ✅ | ✅ | ✅ | — | — |
+| `guestLanguage` | — | ✅ | — | — | — | — |
 | `build` | — | ✅ | ✅ | — | ✅ | — |
 | `env` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `wasiConfig` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `plugins` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `files` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `config` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `tools` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `customCommands` | ✅ | ✅ | ✅ | — | ✅ | — |
 | `clean` | ✅ | ✅ | ✅ | — | ✅ | — |
 | `dir` | — | — | ✅ | — | — | — |
