@@ -2854,6 +2854,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         mark_durable_call_trap_context(err, context)
     }
 
+    pub fn trap_semantic_retry_override(
+        &mut self,
+        payload: SemanticTrapRetryOverride,
+        kind: HostFailureKind,
+        message: impl Into<String>,
+    ) -> anyhow::Error {
+        self.trap(semantic_trap_retry_override_error(payload, kind, message))
+    }
+
     /// Retry wrapper around [`InFunctionRetryController::try_trigger_retry`]. On the `Err` branch
     /// (a trap is being raised to trigger an oplog-level retry) it automatically
     /// [`abandon_for_trap`](Self::abandon_for_trap)s, so `?`-style call sites stay correct without

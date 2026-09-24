@@ -2447,6 +2447,7 @@ Fork input:   [A, B] ── cut ── [X, Y]
       return setResult(rt.res, 'warn', 'FallBackToTrap \u2014 atomic region', '<ol><li>' + steps.join('</li><li>') + '</li></ol>');
     }
     steps.push('Not inside an atomic region.');
+    steps.push('If the selected policy contains a <code>TimeBox</code>, its first-decision timestamp and monotonic elapsed high-water mark come from the persisted retry state. Reconstruction therefore continues the same elapsed budget; the boundary is inclusive, so <code>elapsed &gt;= limit</code> gives up.');
     if (rt.policy.value === 'none') {
       steps.push('No named retry policy matches the failure\u2019s properties: <code>Exhausted</code>. The failure is persisted as the call\u2019s result; the guest sees the error.');
       return setResult(rt.res, 'hint', 'Exhausted \u2014 no applicable policy', '<ol><li>' + steps.join('</li><li>') + '</li></ol>');

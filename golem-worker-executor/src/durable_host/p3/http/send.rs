@@ -25,7 +25,8 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
-    InFunctionRetryState, TaskRetryContext, try_trigger_host_trap_retry,
+    InFunctionRetryState, TaskRetryContext, semantic_trap_retry_override_error,
+    try_trigger_host_trap_retry,
 };
 use crate::durable_host::http::policy::{
     apply_managed_http_headers, golem_managed_http_headers, http_transparent_retry_allowed,
@@ -564,6 +565,7 @@ where
     )
     .await;
 
+    let mut send_semantic_override = None;
     let send_result = loop {
         let interrupt = store.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
@@ -688,7 +690,7 @@ where
                                 }
                             }
                         }
-                        AsyncRetryDecision::FallBackToTrap => {
+                        AsyncRetryDecision::FallBackToTrap(semantic_override) => {
                             let status = response.status().as_u16();
                             let properties = http_retry_properties(
                                 store,
@@ -704,13 +706,23 @@ where
                                     "HTTP status {status} matched retry policy but exceeded the in-function retry delay threshold"
                                 ),
                             });
-                            if let Err(err) = try_trigger_host_trap_retry(
-                                &mut retry_task_ctx,
-                                failure,
-                                properties,
-                            )
-                            .await
-                            {
+                            let trap = if let Some(payload) = semantic_override {
+                                Some(anyhow::Error::new(
+                                    crate::durable_host::durability::SemanticTrapRetryOverrideMarker {
+                                        payload,
+                                        inner: failure,
+                                    },
+                                ))
+                            } else {
+                                try_trigger_host_trap_retry(
+                                    &mut retry_task_ctx,
+                                    failure,
+                                    properties,
+                                )
+                                .await
+                                .err()
+                            };
+                            if let Some(err) = trap {
                                 poison_p3_pooled_connection(&pooled_connection);
                                 return Err(HttpError::trap(wasmtime::Error::from_anyhow(
                                     handle.trap(err),
@@ -764,7 +776,11 @@ where
                     AsyncRetryDecision::RetryAfterDelay(_) => {
                         break Err(error_code);
                     }
-                    AsyncRetryDecision::FallBackToTrap | AsyncRetryDecision::Exhausted => {
+                    AsyncRetryDecision::FallBackToTrap(semantic_override) => {
+                        send_semantic_override = semantic_override;
+                        break Err(error_code);
+                    }
+                    AsyncRetryDecision::Exhausted => {
                         break Err(error_code);
                     }
                 }
@@ -878,21 +894,32 @@ where
                     "transient",
                     &serialized_request.method,
                 );
-                let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
-                    store,
-                    handle.trap_context().retry_from,
-                    properties.clone(),
-                )
-                .await;
-                let failure = anyhow::Error::new(ClassifiedHostError {
-                    kind: HostFailureKind::Transient,
-                    message: error_code.to_string(),
-                });
-                try_trigger_host_trap_retry(&mut retry_task_ctx, failure, properties)
-                    .await
-                    .map_err(|err| {
-                        HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(err)))
-                    })?;
+                if let Some(semantic_override) = send_semantic_override.take() {
+                    let failure = semantic_trap_retry_override_error(
+                        semantic_override,
+                        HostFailureKind::Transient,
+                        error_code.to_string(),
+                    );
+                    return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                        handle.trap(failure),
+                    )));
+                } else {
+                    let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
+                        store,
+                        handle.trap_context().retry_from,
+                        properties.clone(),
+                    )
+                    .await;
+                    let failure = anyhow::Error::new(ClassifiedHostError {
+                        kind: HostFailureKind::Transient,
+                        message: error_code.to_string(),
+                    });
+                    try_trigger_host_trap_retry(&mut retry_task_ctx, failure, properties)
+                        .await
+                        .map_err(|err| {
+                            HttpError::trap(wasmtime::Error::from_anyhow(handle.trap(err)))
+                        })?;
+                }
             }
 
             let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
