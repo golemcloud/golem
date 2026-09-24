@@ -1683,49 +1683,76 @@ fn nice_recording_storage() -> (Arc<ScriptedBlobStorage>, NiceCalls) {
     (storage, calls)
 }
 
-/// Takes the recorded calls with the operation label.
+/// Takes the recorded calls as the operation label, the path and the nice value.
 #[cfg(target_os = "linux")]
-fn taken_calls(calls: &NiceCalls, op_label: &str) -> Vec<(String, i32)> {
+fn taken_calls(calls: &NiceCalls) -> Vec<(String, String, i32)> {
     std::mem::take(
         &mut *calls
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     )
     .into_iter()
-    .filter(|(op, _, _, _)| op == op_label)
-    .map(|(_, path, _, nice)| (path, nice))
+    .map(|(op_label, path, _, nice)| (op_label, path, nice))
     .collect()
+}
+
+/// Gives the operation labels of the calls, and each call that does not run at nice 19.
+#[cfg(target_os = "linux")]
+fn labels_and_calls_not_at_nice_19(
+    calls: &[(String, String, i32)],
+) -> (Vec<&str>, Vec<&(String, String, i32)>) {
+    let mut labels = calls
+        .iter()
+        .map(|(op_label, _, _)| op_label.as_str())
+        .collect::<Vec<_>>();
+    labels.sort_unstable();
+    labels.dedup();
+    let not_at_nice_19 = calls.iter().filter(|(_, _, nice)| *nice != 19).collect();
+    (labels, not_at_nice_19)
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-async fn the_writes_of_a_save_run_at_nice_19() {
+async fn the_storage_calls_of_a_save_run_at_nice_19() {
+    // The publish of the snapshot file runs on the async runtime after the work, so it keeps
+    // the normal priority. The second save reads the config, the index, the snapshot files and
+    // the trees of its parent, and writes the added file.
     let (storage, calls) = nice_recording_storage();
     let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
     let scope = new_scope();
     let tree = fixture_tree();
-
     store
         .save(&scope, &name("p-1"), tree.path(), None)
         .await
         .unwrap();
-    let writes = taken_calls(&calls, "write");
+    std::fs::write(tree.path().join("added.txt"), b"added").unwrap();
+    taken_calls(&calls);
+
+    store
+        .save(
+            &scope,
+            &name("p-2"),
+            tree.path(),
+            Some((&name("p-1"), ChangeDetection::SizeMtime)),
+        )
+        .await
+        .unwrap();
+    let work = taken_calls(&calls)
+        .into_iter()
+        .filter(|(op_label, _, _)| op_label != "publish")
+        .collect::<Vec<_>>();
 
     assert_eq!(
-        (
-            writes.is_empty(),
-            writes
-                .iter()
-                .filter(|(_, nice)| *nice != 19)
-                .collect::<Vec<_>>()
-        ),
-        (false, Vec::<&(String, i32)>::new())
+        labels_and_calls_not_at_nice_19(&work),
+        (vec!["list", "read", "stat", "write"], Vec::new())
     );
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-async fn the_writes_of_a_prune_run_at_nice_19() {
+async fn the_storage_calls_of_a_prune_run_at_nice_19() {
+    // The forget of a delete runs before the ledger read at the normal priority, and the ledger
+    // read and writes run on the async runtime. The prune runs between them.
     let (storage, calls) = nice_recording_storage();
     let store = store(storage, policy(LONG_DEADLINE, 1, Duration::ZERO));
     let scope = new_scope();
@@ -1738,20 +1765,18 @@ async fn the_writes_of_a_prune_run_at_nice_19() {
         .save(&scope, &name("p-kept"), kept_tree.path(), None)
         .await
         .unwrap();
-    taken_calls(&calls, "write");
+    taken_calls(&calls);
 
     store.delete(&scope, &name("p-deleted")).await.unwrap();
-    let writes = taken_calls(&calls, "write");
+    let prune = taken_calls(&calls)
+        .into_iter()
+        .skip_while(|(op_label, _, _)| op_label != "read_ledger")
+        .filter(|(op_label, _, _)| op_label != "read_ledger" && op_label != "write_ledger")
+        .collect::<Vec<_>>();
 
     assert_eq!(
-        (
-            writes.is_empty(),
-            writes
-                .iter()
-                .filter(|(_, nice)| *nice != 19)
-                .collect::<Vec<_>>()
-        ),
-        (false, Vec::<&(String, i32)>::new())
+        labels_and_calls_not_at_nice_19(&prune),
+        (vec!["delete", "list", "read", "stat", "write"], Vec::new())
     );
 }
 
