@@ -64,6 +64,7 @@ humantime-serde.workspace = true
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 include_dir = { workspace = true }
+jsonschema = { workspace = true }
 mime = { workspace = true }
 mime_guess = { workspace = true }
 openidconnect = { workspace = true }
@@ -110,6 +111,8 @@ golem-test-framework.workspace = true
 
 assert2 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
+fastrand = {workspace = true }
+h2 = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }
@@ -117,4 +120,5 @@ rustls = { workspace = true, features = ["ring"] }
 rustls-pemfile = { workspace = true }
 tempfile.workspace = true
 test-r = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tryhard = { workspace = true }

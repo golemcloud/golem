@@ -83,6 +83,7 @@ proptest! {
 fn sample_agent_type_schema() -> AgentTypeSchema {
     AgentTypeSchema {
         type_name: AgentTypeName("weather-agent".to_string()),
+        kind: crate::schema::agent::AgentTypeKind::Regular,
         description: "A weather agent".to_string(),
         source_language: "rust".to_string(),
         schema: SchemaGraph {

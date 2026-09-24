@@ -19,6 +19,7 @@ mod http_parameter_conversion;
 mod mcp;
 mod read;
 mod route_compilation;
+mod router_file_index;
 mod routes;
 mod write;
 

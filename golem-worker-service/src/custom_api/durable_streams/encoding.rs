@@ -25,7 +25,7 @@ use golem_common::model::OplogIndex;
 use golem_common::model::durable_stream::StreamOffset;
 use golem_common::schema::SchemaValue;
 use golem_schema::schema::render::to_json_value;
-use http::{HeaderName, StatusCode};
+use http::{HeaderName, HeaderValue, StatusCode};
 use prost::Message;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -74,23 +74,29 @@ pub(super) fn metadata_response(
     }
     let mut out = response(StatusCode::OK);
     headers(&mut out, r, head)?;
-    out.headers
-        .insert(http::header::CACHE_CONTROL, "no-store".into());
+    out.headers.insert(
+        http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
     if head {
         add_expiry_headers(&mut out, &r.expiry_policy);
     }
     out.headers.insert(
         HeaderName::from_static("x-content-type-options"),
-        "nosniff".into(),
+        HeaderValue::from_static("nosniff"),
     );
     out.headers.insert(
         http::header::ETAG,
-        etag(r, &offset_text(&[])?, &r.head_offset)?,
+        etag(r, &offset_text(&[])?, &r.head_offset)?
+            .parse()
+            .map_err(anyhow::Error::from)?,
     );
     if head {
         out.headers.insert(
             HeaderName::from_static("stream-next-offset"),
-            offset_text(&r.head_offset)?,
+            offset_text(&r.head_offset)?
+                .parse()
+                .map_err(anyhow::Error::from)?,
         );
     }
     if !head {
@@ -107,23 +113,35 @@ fn headers(
     r: &ReadStreamSlotSuccess,
     head: bool,
 ) -> Result<(), RequestHandlerError> {
-    out.headers
-        .insert(http::header::CONTENT_TYPE, content_type(r).into());
+    out.headers.insert(
+        http::header::CONTENT_TYPE,
+        HeaderValue::from_static(content_type(r)),
+    );
     out.headers.insert(
         HeaderName::from_static("stream-next-offset"),
-        offset_text(&r.next_offset)?,
+        offset_text(&r.next_offset)?
+            .parse()
+            .map_err(anyhow::Error::from)?,
     );
     out.headers.insert(
         HeaderName::from_static("stream-closed"),
-        (r.closed && (head || r.up_to_date)).to_string(),
+        HeaderValue::from_static(if r.closed && (head || r.up_to_date) {
+            "true"
+        } else {
+            "false"
+        }),
     );
     if r.cancelled && (head || r.up_to_date) {
-        out.headers
-            .insert(HeaderName::from_static("stream-cancelled"), "true".into());
+        out.headers.insert(
+            HeaderName::from_static("stream-cancelled"),
+            HeaderValue::from_static("true"),
+        );
     }
     if r.up_to_date {
-        out.headers
-            .insert(HeaderName::from_static("stream-up-to-date"), "true".into());
+        out.headers.insert(
+            HeaderName::from_static("stream-up-to-date"),
+            HeaderValue::from_static("true"),
+        );
     }
     Ok(())
 }
@@ -143,7 +161,9 @@ pub(super) fn data_response(
             &r.expiry_policy,
             r.expiry_deadline_millis,
             !sensitive && r.closed && !r.up_to_date,
-        ),
+        )
+        .parse()
+        .map_err(anyhow::Error::from)?,
     );
     Ok(out)
 }
@@ -380,10 +400,10 @@ mod tests {
         batch.closed = true;
         let page = data_response(&batch, false).unwrap();
         let closed = HeaderName::from_static("stream-closed");
-        assert_eq!(page.headers[&closed], "false");
+        assert_eq!(page.headers[&closed], HeaderValue::from_static("false"));
         assert_eq!(
             page.headers[&http::header::CACHE_CONTROL],
-            "public, max-age=31536000, immutable"
+            HeaderValue::from_static("public, max-age=31536000, immutable")
         );
         assert_eq!(
             data_response(&batch, true).unwrap().headers[&http::header::CACHE_CONTROL],
@@ -391,7 +411,7 @@ mod tests {
         );
         assert_eq!(
             metadata_response(&batch, true).unwrap().headers[&closed],
-            "true"
+            HeaderValue::from_static("true")
         );
         batch.up_to_date = true;
         let final_page = data_response(&batch, false).unwrap();
@@ -447,13 +467,19 @@ mod tests {
         assert!(matches!(result.body, ResponseBody::NoBody));
         assert_eq!(
             result.headers[&http::header::CONTENT_TYPE],
-            "application/octet-stream"
+            HeaderValue::from_static("application/octet-stream")
         );
         assert_eq!(
             result.headers[&HeaderName::from_static("stream-next-offset")],
-            offset_text(&batch.head_offset).unwrap()
+            offset_text(&batch.head_offset)
+                .unwrap()
+                .parse::<HeaderValue>()
+                .unwrap()
         );
-        assert_eq!(result.headers[&http::header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            result.headers[&http::header::CACHE_CONTROL],
+            HeaderValue::from_static("no-store")
+        );
     }
 
     #[test]

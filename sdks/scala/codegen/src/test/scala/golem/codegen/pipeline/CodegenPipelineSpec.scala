@@ -58,6 +58,66 @@ class CodegenPipelineSpec extends munit.FunSuite {
   private def discover(sources: SourceDiscovery.SourceInput*): SourceDiscovery.Result =
     SourceDiscovery.discover(sources)
 
+  private val httpCorpus = {
+    val input = getClass.getResourceAsStream("/corpus.json")
+    require(input != null, "shared HTTP corpus is missing")
+    try ujson.read(input)("cases").arr.toList
+    finally input.close()
+  }
+
+  httpCorpus
+    .filter(c =>
+      c("suite").str == "tooling" &&
+        Set("provisioning", "bridge-client").contains(c("input")("consumer").str)
+    )
+    .foreach { c =>
+      test(c("id").str) {
+        val input      = c("input")
+        val annotation =
+          if (input("kind").str == "http-router") "@httpRouter(\"Surface\", \"/\")"
+          else "@agentDefinition(mount = \"/\", exposeFiles = Array((\"/*\", \"/public/$1\")))"
+        val source = SourceDiscovery.SourceInput(
+          "Surface.scala",
+          s"""
+        package example
+        $annotation
+        trait Surface { class Id() }
+        @agentImplementation() final class SurfaceImpl() extends Surface
+      """
+        )
+        val generated = CodegenPipeline.run(discover(source), Some("example"), rpcEnabled = true)
+        val included  =
+          if (input("consumer").str == "provisioning") generated.autoRegister.exists(_.implCount == 1)
+          else generated.rpc.files.exists(_.content.contains("SurfaceClient"))
+        assertEquals(included, c("expect")("included").bool)
+      }
+    }
+
+  test("router registration is retained while only regular clients are generated") {
+    val router = SourceDiscovery.SourceInput(
+      "Website.scala",
+      """
+      package example
+      @httpRouter(typeName = "site", mount = "/")
+      trait Website { @httpHandler def serve(request: HttpRequest): Future[HttpResponse] }
+      @agentImplementation()
+      final class WebsiteImpl() extends Website {
+        def serve(request: HttpRequest): Future[HttpResponse] = ???
+      }
+    """
+    )
+    val discovered = discover(router, agentSource)
+    val site       = discovered.traits.find(_.name == "Website").get
+    assertEquals(site.kind, "http-router")
+    assertEquals(site.mode, Some("ephemeral"))
+    assertEquals(site.constructorParams, Nil)
+    val result = CodegenPipeline.run(discovered, Some("example"), rpcEnabled = true)
+    assertEquals(result.autoRegister.get.implCount, 2)
+    assert(result.autoRegister.get.files.exists(_.content.contains("WebsiteImpl")))
+    assertEquals(result.rpc.files.size, 1)
+    assert(result.rpc.files.head.content.contains("CounterAgentClient"))
+  }
+
   test("pipeline with both auto-register and rpc enabled") {
     val discovered = discover(agentSource)
     val result     = CodegenPipeline.run(discovered, Some("example"), rpcEnabled = true)

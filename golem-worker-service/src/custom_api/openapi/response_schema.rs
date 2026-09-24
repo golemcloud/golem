@@ -158,6 +158,9 @@ pub fn get_route_response_schema(
                 },
             );
         }
+        RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
+            responses.insert(501, ResponseBodyOpenApiSchema::NoBody);
+        }
     }
 
     Ok(RouteResponseOpenApiSchema {
@@ -340,5 +343,6 @@ fn http_method_name(method: &HttpMethod) -> String {
         HttpMethod::Trace(_) => "TRACE".to_string(),
         HttpMethod::Patch(_) => "PATCH".to_string(),
         HttpMethod::Custom(custom) => custom.value.to_uppercase(),
+        HttpMethod::Any(_) => "<any>".to_string(),
     }
 }

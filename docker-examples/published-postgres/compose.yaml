@@ -1,7 +1,7 @@
 x-aliases:
   blob-storage-env-vars: &blob-storage-env-vars
     GOLEM__BLOB_STORAGE__TYPE: "LocalFileSystem"
-    GOLEM__BLOB_STORAGE__CONFIG__ROOT: "/worker_executor_store"
+    GOLEM__BLOB_STORAGE__CONFIG__ROOT: "/blob_storage"
 
 services:
   router:
@@ -47,6 +47,7 @@ services:
     pull_policy: always
     restart: on-failure
     environment:
+      <<: [*blob-storage-env-vars]
       GOLEM_ENVIRONMENT: local
       RUST_BACKTRACE: 1
       RUST_LOG=info,h2=warn,hyper=warn,tower: warn
@@ -70,6 +71,8 @@ services:
 
       GOLEM__COMPILATION__CONFIG__HOST: golem-component-compilation-service
       GOLEM__COMPILATION__CONFIG__PORT: ${COMPONENT_COMPILATION_SERVICE_GRPC_PORT}
+    volumes:
+      - blob_storage:/blob_storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,6 +111,7 @@ services:
     pull_policy: always
     restart: on-failure
     environment:
+      <<: [*blob-storage-env-vars]
       RUST_BACKTRACE: 1
       RUST_LOG=info,h2=warn,hyper=warn,tower: warn
       GOLEM__ENVIRONMENT: local

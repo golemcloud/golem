@@ -99,9 +99,7 @@ use golem_worker_executor::durable_host::{
     DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
     SnapshotBoundaryBlocker,
 };
-use golem_worker_executor::model::{
-    AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
-};
+use golem_worker_executor::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use golem_worker_executor::native_tool::{
     NativeToolAdapter, NativeToolCatalog, NativeToolRegistration,
 };
@@ -1057,6 +1055,22 @@ impl TestWorkerExecutor {
         self.additional_test_deps
             .active_agents
             .get()?
+            .try_get_active_agent(owned_agent_id)
+            .await
+    }
+
+    pub async fn production_active_agent(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<
+        Arc<
+            golem_worker_executor::services::active_agents::ActiveAgent<
+                golem_worker_executor::workerctx::default::Context,
+            >,
+        >,
+    > {
+        self.production_active_agents
+            .as_ref()?
             .try_get_active_agent(owned_agent_id)
             .await
     }
@@ -2837,13 +2851,6 @@ impl FileSystemReading for TestWorkerCtx {
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        self.durable_ctx.read_file(path).await
     }
 }
 

@@ -40,7 +40,9 @@ object AgentSurfaceExportMacro {
     if !typeSymbol.flags.is(Flags.Trait) then
       report.errorAndAbort(s"AgentSurfaceExport target must be a trait, found: ${typeSymbol.fullName}")
 
-    val agentDefinitionFQN       = "golem.runtime.annotations.agentDefinition"
+    val router             = HttpDeclarationMacro.isRouter(typeSymbol)
+    val agentDefinitionFQN =
+      if (router) "golem.runtime.annotations.httpRouter" else "golem.runtime.annotations.agentDefinition"
     val descriptionAnnotationFQN = "golem.runtime.annotations.description"
 
     // Extract @agentDefinition annotation
@@ -69,22 +71,25 @@ object AgentSurfaceExportMacro {
     }.flatten
 
     // Extract mode from @agentDefinition
-    val mode: String = annArgsOpt.flatMap { args =>
-      val rawModeArg: Option[Term] =
-        args.collectFirst { case NamedArg("mode", arg: Term) => arg }.orElse {
-          args.lift(1).collect { case t: Term if !t.toString.contains("$default$") => t }
-        }
-      rawModeArg.flatMap {
-        case Literal(StringConstant(value)) =>
-          val v = value.trim.toLowerCase
-          if (v.isEmpty) None else Some(v)
-        case Select(_, name) if !name.contains("$") =>
-          Some(name.toLowerCase)
-        case Ident(name) if !name.contains("$") =>
-          Some(name.toLowerCase)
-        case _ => None
-      }
-    }.getOrElse("durable")
+    val mode: String =
+      if (router) "ephemeral"
+      else
+        annArgsOpt.flatMap { args =>
+          val rawModeArg: Option[Term] =
+            args.collectFirst { case NamedArg("mode", arg: Term) => arg }.orElse {
+              args.lift(1).collect { case t: Term if !t.toString.contains("$default$") => t }
+            }
+          rawModeArg.flatMap {
+            case Literal(StringConstant(value)) =>
+              val v = value.trim.toLowerCase
+              if (v.isEmpty) None else Some(v)
+            case Select(_, name) if !name.contains("$") =>
+              Some(name.toLowerCase)
+            case Ident(name) if !name.contains("$") =>
+              Some(name.toLowerCase)
+            case _ => None
+          }
+        }.getOrElse("durable")
 
     // Extract snapshotting from @agentDefinition
     val snapshotting: String = extractStringArg(typeSymbol, agentDefinitionFQN, "snapshotting", 7)
@@ -108,7 +113,8 @@ object AgentSurfaceExportMacro {
         }
       }
       constructorClass match {
-        case None =>
+        case None if router => Nil
+        case None           =>
           report.errorAndAbort(
             s"Agent trait ${typeSymbol.name} must define a `class Id(...)` to declare its constructor parameters. Use `class Id()` for agents with no constructor parameters."
           )
@@ -140,7 +146,8 @@ object AgentSurfaceExportMacro {
     writeKey(sb, "simpleName"); writeString(sb, simpleName); sb.append(",")
     writeKey(sb, "typeName"); writeString(sb, rawTypeName); sb.append(",")
     writeKey(sb, "constructor"); writeConstructor(sb, constructorParams); sb.append(",")
-    writeKey(sb, "metadata"); writeMetadata(sb, description, mode, snapshotting)
+    writeKey(sb, "metadata");
+    writeMetadata(sb, description, mode, snapshotting, if (router) "http-router" else "regular")
     sb.append("}")
 
     Expr(sb.toString)
@@ -214,7 +221,8 @@ object AgentSurfaceExportMacro {
     sb: StringBuilder,
     description: Option[String],
     mode: String,
-    snapshotting: String
+    snapshotting: String,
+    kind: String
   ): Unit = {
     sb.append("{")
     writeKey(sb, "description")
@@ -223,6 +231,7 @@ object AgentSurfaceExportMacro {
       case None    => sb.append("null")
     }
     sb.append(",")
+    writeKey(sb, "kind"); writeString(sb, kind); sb.append(",")
     writeKey(sb, "mode"); writeString(sb, mode); sb.append(",")
     writeKey(sb, "snapshotting"); writeString(sb, snapshotting)
     sb.append("}")

@@ -37,6 +37,7 @@ import {
 } from 'golem:agent/common@2.0.0';
 import { parsePath } from './internal/http/path';
 import { parseQuery } from './internal/http/query';
+import { compileFileMappings, type FileExposure } from './httpRouterContract';
 import { rejectEmptyString, rejectQueryParamsInPath } from './internal/http/validation';
 import type {
   EndpointBound,
@@ -183,6 +184,8 @@ export interface HttpMountSpec<
   readonly cors?: readonly string[];
   /** Mark this agent as a phantom agent (fresh instance per request). */
   readonly phantomAgent?: boolean;
+  /** Ordered live file mappings, only for durable non-phantom agents. */
+  readonly exposeFiles?: readonly FileExposure[];
   /** Optional custom webhook-suffix path (same rules as the mount path). */
   readonly webhookSuffix?: PathInput;
 }
@@ -370,6 +373,8 @@ export interface MountOptionsFor<W extends string = string> {
   readonly cors?: readonly string[];
   /** Mark this agent as a phantom agent (one fresh instance per HTTP request). */
   readonly phantomAgent?: boolean;
+  /** Ordered live file mappings, only for durable non-phantom agents. */
+  readonly exposeFiles?: readonly FileExposure[];
   /**
    * Optional custom webhook suffix path. Validated with the same
    * {@link ValidMountPath} rules as the mount path; a non-literal `string`
@@ -439,6 +444,9 @@ export function compileMount(spec: HttpMountSpec): HttpMountDetails {
     phantomAgent: spec.phantomAgent ?? false,
     corsOptions: { allowedPatterns: spec.cors ? [...spec.cors] : [] },
     webhookSuffix: spec.webhookSuffix ? resolvePath(spec.webhookSuffix, 'webhook suffix') : [],
+    staticBindings: [],
+    filesystemBindings: compileFileMappings(spec.exposeFiles ?? []),
+    openapiProviderMethod: undefined,
   };
 }
 

@@ -108,7 +108,11 @@ fn http_endpoint_str(endpoint : HttpEndpointInfo?) -> String {
         "{ query_param_name: \"\{escape_string_lit(q.query_param_name)}\", variable_name: \"\{escape_string_lit(q.variable_name)}\" }"
       })
       let query = "[" + query_parts.join(", ") + "]"
-      "[{ http_method: \{http_method_str(ep.http_method)}, path_suffix: \{path_suffix}, header_vars: \{header_vars}, query_vars: \{query}, auth_details: \{auth_details_str(ep.auth)}, cors_options: \{cors_options_str(ep.cors)} }]"
+      let matcher = match ep.http_method {
+        Any => "@common.HttpMethod::Any"
+        Concrete(name) => http_method_str(name)
+      }
+      "[{ http_method: \{matcher}, path_suffix: \{path_suffix}, header_vars: \{header_vars}, query_vars: \{query}, auth_details: \{auth_details_str(ep.auth)}, cors_options: \{cors_options_str(ep.cors)} }]"
     }
   }
 }
@@ -119,7 +123,23 @@ fn http_mount_str(mount : HttpMountInfo?) -> String {
   match mount {
     None => "None"
     Some(info) => {
-      let segments = parse_path_only(info.path) catch {
+      let segments = try {
+        if info.router {
+          literal_http_path(info.path).map(s => PathSegmentInfo::{
+            kind: Literal(s),
+          })
+        } else if !info.filesystem_bindings.is_empty() {
+          parse_path_only(info.path).map(s => {
+            match s.kind {
+              Literal(raw) =>
+                PathSegmentInfo::{ kind: Literal(decode_http_segment(raw)), }
+              _ => s
+            }
+          })
+        } else {
+          parse_path_only(info.path)
+        }
+      } catch {
         e =>
           abort(
             "Failed to parse mount path '\{info.path}': \{@debug.to_string(e)}",
@@ -138,7 +158,30 @@ fn http_mount_str(mount : HttpMountInfo?) -> String {
           path_segments_str(s)
         }
       }
-      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix} })"
+      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix}, static_bindings: \{file_mappings_str(info.static_bindings)}, filesystem_bindings: \{file_mappings_str(info.filesystem_bindings)}, openapi_provider_method: \{opt_string_lit(info.openapi_provider_method)} })"
     }
   }
+}
+
+///|
+fn file_mappings_str(mappings : Array[HttpFileMapping]) -> String {
+  "[" +
+  mappings
+  .map(m => {
+    let (segments, target) = match m {
+      Exact(s, t) | Subtree(s, t) => (s, t)
+    }
+    let paths = "[" +
+      segments.map(s => "\"\{escape_string_lit(s)}\"").join(", ") +
+      "]"
+    let target = "\"\{escape_string_lit(target)}\""
+    match m {
+      Exact(_, _) =>
+        "@common.FileMapping::Exact({ public_path: \{paths}, file_path: \{target} })"
+      Subtree(_, _) =>
+        "@common.FileMapping::Subtree({ public_prefix: \{paths}, filesystem_root: \{target} })"
+    }
+  })
+  .join(", ") +
+  "]"
 }

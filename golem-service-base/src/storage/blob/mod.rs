@@ -32,6 +32,23 @@ pub mod memory;
 pub mod s3;
 pub mod sqlite;
 
+pub const BLOB_STREAM_CHUNK_SIZE: usize = 64 * 1024;
+
+pub struct BlobRangeStream {
+    pub total_size: u64,
+    pub stream: BoxStream<'static, Result<Bytes, Error>>,
+}
+
+fn validate_range(offset: u64, length: u64, total_size: u64) -> Result<(), Error> {
+    if offset
+        .checked_add(length)
+        .is_none_or(|end| end > total_size)
+    {
+        return Err(anyhow!("Blob range outside object"));
+    }
+    Ok(())
+}
+
 #[async_trait]
 pub trait BlobStorage: Debug + Send + Sync {
     async fn get_raw(
@@ -49,6 +66,20 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error>;
+
+    /// Opens a bounded selection without collecting the object. Missing objects return
+    /// None; out-of-bounds selections are errors. Empty selections are allowed, including
+    /// at EOF. Chunks are at most BLOB_STREAM_CHUNK_SIZE bytes; dropping the stream releases
+    /// the reader. The total size describes the opened object, not the selection.
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error>;
 
     async fn get_raw_slice(
         &self,

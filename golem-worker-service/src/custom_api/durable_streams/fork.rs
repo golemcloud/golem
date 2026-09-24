@@ -61,9 +61,12 @@ impl DurableStreamsHandler {
             Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
         };
         let source_agent_id = match parsed.source_fork.as_deref() {
-            Some(fork) => self.call_agent.build_agent_id(
+            Some(fork) => super::CallAgentHandler::build_agent_id(
                 route,
-                behaviour,
+                behaviour.component_id,
+                &behaviour.agent_type,
+                &behaviour.constructor_input,
+                &behaviour.constructor_parameters,
                 Some(fork_phantom_id(root_agent_id, fork)),
             )?,
             None => root_agent_id.clone(),
@@ -156,7 +159,12 @@ impl DurableStreamsHandler {
                 };
                 out.headers.insert(
                     http::header::LOCATION,
-                    request.underlying.uri().path().to_owned(),
+                    request
+                        .underlying
+                        .uri()
+                        .path()
+                        .parse()
+                        .map_err(anyhow::Error::from)?,
                 );
                 Ok(out)
             }
@@ -180,7 +188,7 @@ impl DurableStreamsHandler {
                 if status == StatusCode::TOO_MANY_REQUESTS && rejected.retry_after_seconds > 0 {
                     out.headers.insert(
                         http::header::RETRY_AFTER,
-                        rejected.retry_after_seconds.to_string(),
+                        rejected.retry_after_seconds.into(),
                     );
                 }
                 Ok(out)

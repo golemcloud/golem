@@ -60,6 +60,9 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::filesystem::{
+    FileByteSelection, FileReadError, FileReadHead, validate_file_read_path,
+};
 use golem_common::model::invocation_session_public::{
     InvocationSelector, PublicConfigEntry, PublicNativeToolTarget, PublicTypedValue,
 };
@@ -84,7 +87,7 @@ use golem_common::schema::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
@@ -1238,6 +1241,30 @@ impl WorkerService {
             .await
     }
 
+    /// Reads a path selected by an authorized HTTP filesystem mount using its trusted owner.
+    pub(crate) async fn read_mounted_file(
+        &self,
+        agent_id: &AgentId,
+        path: &str,
+        selection: FileByteSelection,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+    ) -> WorkerResult<FileReadResponse> {
+        validate_file_read_path(path)?;
+        let path =
+            CanonicalFilePath::from_abs_str(path).map_err(|_| FileReadError::InvalidTarget)?;
+        self.worker_client
+            .get_file_contents(
+                agent_id,
+                path,
+                selection,
+                environment_id,
+                account_id,
+                AuthCtx::System,
+            )
+            .await
+    }
+
     pub async fn get_file_contents(
         &self,
         agent_id: &AgentId,
@@ -1261,14 +1288,27 @@ impl WorkerService {
             .worker_client
             .get_file_contents(
                 agent_id,
-                path,
+                path.clone(),
+                FileByteSelection::Full,
                 component.environment_id,
                 component.account_id,
                 auth_ctx,
             )
             .await?;
-
-        Ok(contents_stream)
+        match contents_stream.head {
+            FileReadHead::File(_) => Ok(Box::pin(
+                contents_stream
+                    .body
+                    .map(|item| item.map_err(WorkerServiceError::FileRead)),
+            )),
+            FileReadHead::Absent => Err(WorkerServiceError::FileNotFound(path)),
+            FileReadHead::NotRegular | FileReadHead::Symlink => {
+                Err(WorkerServiceError::BadFileType(path))
+            }
+            FileReadHead::PermissionDenied => {
+                Err(WorkerExecutorError::permission_denied("filesystem read denied").into())
+            }
+        }
     }
 
     async fn resolve_agent_plugin_name(
@@ -3497,9 +3537,8 @@ mod tests {
     use crate::service::limit::{LimitService, LimitServiceError};
     use crate::service::worker::{WorkerClient, WorkerResult, WorkerServiceError, WorkerStream};
     use async_trait::async_trait;
-    use bytes::Bytes;
     use chrono::Utc;
-    use futures::{Stream, StreamExt, stream};
+    use futures::{StreamExt, stream};
     use golem_api_grpc::proto::golem::worker::{
         InvocationContext, InvocationStart, LogEvent, ResumeAttach, ResumeOperation,
         invocation_request,
@@ -3533,6 +3572,7 @@ mod tests {
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
     use golem_common::model::invocation_session_public::InvocationSelector;
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
@@ -4402,13 +4442,23 @@ mod tests {
             &self,
             _: &AgentId,
             _: CanonicalFilePath,
+            _: FileByteSelection,
             _: EnvironmentId,
             _: AccountId,
             _: AuthCtx,
-        ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>
-        {
+        ) -> WorkerResult<golem_service_base::model::FileReadResponse> {
             self.effects.lock().unwrap().push("file-contents");
-            Ok(Box::pin(futures::stream::empty()))
+            Ok(golem_service_base::model::FileReadResponse {
+                head: FileReadHead::File(golem_common::model::filesystem::FileReadMetadata {
+                    total_size: 0,
+                    selection: golem_common::model::filesystem::FileReadExtent::Selected {
+                        offset: 0,
+                        length: 0,
+                    },
+                    modified_at: None,
+                }),
+                body: Box::pin(futures::stream::empty()),
+            })
         }
 
         async fn activate_plugin(
@@ -4874,6 +4924,7 @@ mod tests {
 
     fn test_agent_type(agent_type_name: AgentTypeName, mode: AgentMode) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type_name,
             description: String::new(),
             source_language: String::new(),

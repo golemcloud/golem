@@ -1055,5 +1055,22 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
         b.get_initial_worker_metadata().fingerprint,
         b_stream.expected_producer_fingerprint
     );
+
+    // Shutdown must wake and stop both reconcilers even when healthy attachments leave them
+    // parked without a retry timer.
+    drop(executor);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            a.wait_for_durable_stream_attachment_reconciler(),
+            b.wait_for_durable_stream_attachment_reconciler()
+        );
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("durable stream reconcilers did not stop within 10s"))?;
+    let a_stopped_at = a.oplog().current_oplog_index().await;
+    let b_stopped_at = b.oplog().current_oplog_index().await;
+    tokio::time::sleep(CACHE_TTL * 3).await;
+    assert_eq!(a.oplog().current_oplog_index().await, a_stopped_at);
+    assert_eq!(b.oplog().current_oplog_index().await, b_stopped_at);
     Ok(())
 }

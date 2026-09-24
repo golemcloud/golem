@@ -13,7 +13,8 @@ and guide disagree, the code wins and the guide needs a fix. The scoped `AGENTS.
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong
 model), `streams.md` (durable streams and streaming invocations), `tools.md` (tool invocations
-and entity bodies) and `retries.md` (in-function versus trap-based retries).
+and entity bodies), `retries.md` (in-function versus trap-based retries), and
+`filesystem-inspection.md` (exact-path live reads, shared scheduling and generation-pinned production).
 
 ## Three axioms
 
@@ -221,8 +222,12 @@ wake deferred session completion after the status fold. Only failed or unfinishe
 retry deadline. Stale producer attachments are reconciled lazily, including before deletion decides
 which dependencies remain. A source read repairs a missing producer activation only after checking
 the exact committed Active consumer topology; healthy reads do not enter the mutation lane.
+Each reconciler uses a child of the executor shutdown token, so graph shutdown stops new recovery
+passes and wakes parked reconcilers. Explicit owner retirement, revert, and
+deletion cancel and join the reconciler's in-flight pass; TTL cache retirement does not itself cancel
+or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
-existing-only acquisition, and reciprocal cold topologies.
+existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, and plugin changes never create an absent agent. Delete
@@ -606,6 +611,13 @@ so handles issued by the discarded generation cannot control the rebuilt streams
 are built in hidden staged oplogs and published atomically; matching retries trust the immutable
 target receipt while that target remains live. Do not model staging by adding provenance to stream
 records.
+
+The primary remains `ExecutionStatus::Running` after the guest returns while owned output
+streams drain and invocation/session completion runs. `materialize_streaming_result`
+(`worker/invocation.rs`) publishes the early result and preserves typed traps during production
+and settlement. Suspension belongs to the outer live invocation or replay boundary, not the
+guest-result boundary; interruption must still reach a producer that no longer writes to its
+stream. Snapshot calls retain their own settled suspension boundary.
 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.

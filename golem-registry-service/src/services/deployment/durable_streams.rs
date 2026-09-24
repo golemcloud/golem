@@ -292,6 +292,7 @@ mod tests {
         };
         let agent = AgentTypeSchema {
             type_name: AgentTypeName("test".into()),
+            kind: golem_common::schema::AgentTypeKind::Regular,
             description: String::new(),
             source_language: String::new(),
             schema: SchemaGraph::empty(),
@@ -323,6 +324,9 @@ mod tests {
                     allowed_patterns: vec![],
                 },
                 webhook_suffix: vec![],
+                static_bindings: vec![],
+                filesystem_bindings: vec![],
+                openapi_provider_method: None,
             },
             HttpEndpointDetails {
                 http_method: HttpMethod::Post(Empty {}),
