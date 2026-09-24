@@ -44,6 +44,7 @@ import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.typedarray.Uint8Array
+import scala.util.{Failure, Success}
 import scala.util.control.NonFatal
 
 /**
@@ -271,6 +272,12 @@ object Guest {
       Future
         .sequence(cleanup.map(action => AgentStreamOwnership.cleanup(action())))
         .flatMap(_ => Future.fromTry(result))
+        .map {
+          case Right(res) =>
+            JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined)
+          case Left(error) =>
+            throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
+        }
     }
 
     FutureInterop.toPromise(completed)

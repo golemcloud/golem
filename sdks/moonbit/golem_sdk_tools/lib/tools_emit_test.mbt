@@ -24,6 +24,7 @@ test "tool emitters generate root, leaf, registration, and typed clients" {
     @lib.generate_tool_client_code(tools),
   )
   assert_true(clients.contains("pub(all) struct GrepClient"))
+  assert_true(clients.contains("GrepClient::new_for"))
   assert_true(clients.contains("GrepClient::count"))
   assert_true(clients.contains("[\"count\"]"))
   assert_true(clients.contains("@tool.NoToolError"))
@@ -1533,7 +1534,15 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
     rel_path: "golem_moonbit_examples",
     dir: "../golem_sdk_example1/golem_moonbit_examples",
   }
-  let tools = @lib.parse_tools(@lib.scan_package(package_info).files)
+  let fixture_names = [
+    "canonical-grep", "canonical-git", "remote", "stash", "canonical-big-bound",
+    "moonbit-streaming",
+  ]
+  let tools = @lib.parse_tools(@lib.scan_package(package_info).files).filter(fn(
+    tool,
+  ) {
+    fixture_names.contains(tool.name)
+  })
   assert_eq(tools.length(), 6)
   let grep = canonical_tool(tools, "canonical-grep")
   assert_eq(grep.version, Some("2.0.0"))

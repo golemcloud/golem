@@ -15,7 +15,7 @@
 use super::super::{get_tool_middleware_by_name, get_tool_middleware_invoker_by_name};
 use crate::agentic::ToolErrorSchema;
 use crate::schema::wit::{GuestQuotaTokenHandle, GuestSecretHandle, wire as schema_wire};
-use crate::schema::{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue};
+use crate::schema::{FromSchema, IntoSchema, SchemaType, SchemaValue, TypedSchemaValue};
 use crate::tool::wire;
 use crate::tool::{
     InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError,
@@ -141,6 +141,22 @@ fn canonical_input<T: ToolUnderlying>(
     let model = tool
         .canonical_input_model(command_index)
         .expect("acceptance canonical input model builds");
+    let fields = model
+        .fields
+        .iter()
+        .zip(fields)
+        .map(|(field, value)| {
+            if matches!(field.type_, SchemaType::Option { .. })
+                && !matches!(value, SchemaValue::Option { .. })
+            {
+                SchemaValue::Option {
+                    inner: Some(Box::new(value)),
+                }
+            } else {
+                value
+            }
+        })
+        .collect();
     TypedSchemaValue::new(model.record_schema, SchemaValue::Record { fields })
 }
 
@@ -668,7 +684,9 @@ fn nested_transparent_underlying(calls: NestedCalls) -> UnderlyingTool {
         let SchemaValue::Record { fields } = input.value() else {
             panic!("nested input is a record")
         };
-        let count = u32::from_value(&fields[0]).unwrap();
+        let count = Option::<u32>::from_value(&fields[0])
+            .unwrap()
+            .expect("count is present");
         let name = String::from_value(&fields[1]).unwrap();
         calls.borrow_mut().push((path, count, name.clone()));
         Box::pin(async move { Ok(typed_result(format!("nested:{count}:{name}"))) })

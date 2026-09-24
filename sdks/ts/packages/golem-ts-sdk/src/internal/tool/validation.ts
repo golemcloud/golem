@@ -857,8 +857,9 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
         discriminatorMatches(graph, branch, value.body)
       );
     }
-    case 'future':
     case 'stream':
+      return value.tag === 'stream';
+    case 'future':
     case 'ref':
       return false;
   }

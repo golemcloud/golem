@@ -121,7 +121,34 @@
     "/stream": {
       "put": {
         "operationId": "TestAgent-test_method-put-2f73747265616d",
-        "parameters": [],
+        "parameters": [
+          {
+            "description": "Header parameter: Stream-TTL",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-TTL",
+            "required": false,
+            "schema": {
+              "description": "Sliding idle timeout in whole seconds. Mutually exclusive with Stream-Expires-At.",
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Expires-At",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Expires-At",
+            "required": false,
+            "schema": {
+              "description": "Future absolute session expiry. Mutually exclusive with Stream-TTL.",
+              "format": "date-time",
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Existing invocation",
@@ -166,6 +193,7 @@
             }
           }
         },
+        "security": [],
         "summary": "create-session"
       },
       "x-golem-route-mode": "durable-streams"
@@ -223,7 +251,7 @@
             }
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "404": {
             "description": "Session or slot not found"
@@ -240,6 +268,7 @@
             }
           }
         },
+        "security": [],
         "summary": "get-fork"
       },
       "head": {
@@ -283,11 +312,25 @@
                 "schema": {
                   "type": "boolean"
                 }
+              },
+              "Stream-Expires-At": {
+                "description": "Configured absolute session expiry",
+                "schema": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "Stream-TTL": {
+                "description": "Configured sliding idle timeout in whole seconds",
+                "schema": {
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
+                }
               }
             }
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "404": {
             "description": "Session or slot not found"
@@ -304,6 +347,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-fork"
       },
       "x-golem-route-mode": "durable-streams"
@@ -340,7 +384,7 @@
             "description": "Slot cancelled and tombstoned"
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "404": {
             "description": "Session or slot not found"
@@ -360,6 +404,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-$result"
       },
       "get": {
@@ -649,6 +694,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-$result"
       },
       "head": {
@@ -705,10 +751,24 @@
                   "type": "boolean"
                 }
               },
+              "Stream-Expires-At": {
+                "description": "Configured absolute session expiry",
+                "schema": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
               "Stream-Next-Offset": {
                 "description": "Next read cursor",
                 "schema": {
                   "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-TTL": {
+                "description": "Configured sliding idle timeout in whole seconds",
+                "schema": {
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
                 }
               },
               "Stream-Up-To-Date": {
@@ -720,7 +780,7 @@
             }
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "404": {
             "description": "Session or slot not found"
@@ -740,6 +800,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-$result"
       },
       "put": {
@@ -765,6 +826,32 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-TTL",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-TTL",
+            "required": false,
+            "schema": {
+              "description": "Sliding idle timeout in whole seconds. Mutually exclusive with Stream-Expires-At.",
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Expires-At",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Expires-At",
+            "required": false,
+            "schema": {
+              "description": "Future absolute session expiry. Mutually exclusive with Stream-TTL.",
+              "format": "date-time",
+              "type": "string"
             },
             "style": "simple"
           },
@@ -861,10 +948,24 @@
                   "type": "boolean"
                 }
               },
+              "Stream-Expires-At": {
+                "description": "Configured absolute session expiry",
+                "schema": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
               "Stream-Next-Offset": {
                 "description": "Next read cursor",
                 "schema": {
                   "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-TTL": {
+                "description": "Configured sliding idle timeout in whole seconds",
+                "schema": {
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
                 }
               },
               "Stream-Up-To-Date": {
@@ -908,10 +1009,24 @@
                   "type": "boolean"
                 }
               },
+              "Stream-Expires-At": {
+                "description": "Configured absolute session expiry",
+                "schema": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
               "Stream-Next-Offset": {
                 "description": "Next read cursor",
                 "schema": {
                   "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-TTL": {
+                "description": "Configured sliding idle timeout in whole seconds",
+                "schema": {
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
                 }
               },
               "Stream-Up-To-Date": {
@@ -923,7 +1038,7 @@
             }
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "403": {
             "description": "Initial body or Stream-Closed supplied for a read-only slot"
@@ -960,6 +1075,7 @@
             }
           }
         },
+        "security": [],
         "summary": "fork-$result"
       },
       "x-golem-route-mode": "durable-streams",
@@ -990,7 +1106,7 @@
             "description": "Open streams cooperatively cancelled; repeated cancellation succeeds. Does not interrupt agent execution."
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "404": {
             "description": "Session or slot not found"
@@ -1007,6 +1123,7 @@
             }
           }
         },
+        "security": [],
         "summary": "cancel-session"
       },
       "get": {
@@ -1050,7 +1167,7 @@
             }
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "404": {
             "description": "Session or slot not found"
@@ -1067,6 +1184,7 @@
             }
           }
         },
+        "security": [],
         "summary": "get-session"
       },
       "head": {
@@ -1099,11 +1217,25 @@
                 "schema": {
                   "type": "boolean"
                 }
+              },
+              "Stream-Expires-At": {
+                "description": "Configured absolute session expiry",
+                "schema": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "Stream-TTL": {
+                "description": "Configured sliding idle timeout in whole seconds",
+                "schema": {
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
+                }
               }
             }
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "404": {
             "description": "Session or slot not found"
@@ -1120,6 +1252,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-session"
       },
       "put": {
@@ -1133,6 +1266,32 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-TTL",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-TTL",
+            "required": false,
+            "schema": {
+              "description": "Sliding idle timeout in whole seconds. Mutually exclusive with Stream-Expires-At.",
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Expires-At",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Expires-At",
+            "required": false,
+            "schema": {
+              "description": "Future absolute session expiry. Mutually exclusive with Stream-TTL.",
+              "format": "date-time",
+              "type": "string"
             },
             "style": "simple"
           }
@@ -1165,6 +1324,7 @@
             }
           }
         },
+        "security": [],
         "summary": "ensure-session"
       },
       "x-golem-route-mode": "durable-streams"
@@ -1190,7 +1350,7 @@
             "description": "Slot cancelled and tombstoned"
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "404": {
             "description": "Session or slot not found"
@@ -1210,6 +1370,7 @@
             }
           }
         },
+        "security": [],
         "summary": "delete-$result"
       },
       "get": {
@@ -1488,6 +1649,7 @@
             }
           }
         },
+        "security": [],
         "summary": "read-$result"
       },
       "head": {
@@ -1533,10 +1695,24 @@
                   "type": "boolean"
                 }
               },
+              "Stream-Expires-At": {
+                "description": "Configured absolute session expiry",
+                "schema": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
               "Stream-Next-Offset": {
                 "description": "Next read cursor",
                 "schema": {
                   "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-TTL": {
+                "description": "Configured sliding idle timeout in whole seconds",
+                "schema": {
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
                 }
               },
               "Stream-Up-To-Date": {
@@ -1548,7 +1724,7 @@
             }
           },
           "400": {
-            "description": "Invalid request or unsupported TTL/expiry header"
+            "description": "Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"
           },
           "404": {
             "description": "Session or slot not found"
@@ -1568,6 +1744,7 @@
             }
           }
         },
+        "security": [],
         "summary": "head-$result"
       },
       "put": {
@@ -1582,6 +1759,32 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/GolemDSSessionId"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-TTL",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-TTL",
+            "required": false,
+            "schema": {
+              "description": "Sliding idle timeout in whole seconds. Mutually exclusive with Stream-Expires-At.",
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Header parameter: Stream-Expires-At",
+            "explode": false,
+            "in": "header",
+            "name": "Stream-Expires-At",
+            "required": false,
+            "schema": {
+              "description": "Future absolute session expiry. Mutually exclusive with Stream-TTL.",
+              "format": "date-time",
+              "type": "string"
             },
             "style": "simple"
           }
@@ -1614,10 +1817,24 @@
                   "type": "boolean"
                 }
               },
+              "Stream-Expires-At": {
+                "description": "Configured absolute session expiry",
+                "schema": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
               "Stream-Next-Offset": {
                 "description": "Next read cursor",
                 "schema": {
                   "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-TTL": {
+                "description": "Configured sliding idle timeout in whole seconds",
+                "schema": {
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
                 }
               },
               "Stream-Up-To-Date": {
@@ -1655,10 +1872,24 @@
                   "type": "boolean"
                 }
               },
+              "Stream-Expires-At": {
+                "description": "Configured absolute session expiry",
+                "schema": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
               "Stream-Next-Offset": {
                 "description": "Next read cursor",
                 "schema": {
                   "$ref": "#/components/schemas/GolemDSOffset"
+                }
+              },
+              "Stream-TTL": {
+                "description": "Configured sliding idle timeout in whole seconds",
+                "schema": {
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "type": "string"
                 }
               },
               "Stream-Up-To-Date": {
@@ -1690,6 +1921,7 @@
             }
           }
         },
+        "security": [],
         "summary": "ensure-$result"
       },
       "x-golem-route-mode": "durable-streams",
@@ -1703,9 +1935,6 @@
   "servers": [
     {
       "url": "https://example.com"
-    },
-    {
-      "url": "http://example.com"
     }
   ]
 }

@@ -947,14 +947,16 @@ fn prefix_value_builders(
     tool_name: &str,
     omitted_names: &[String],
 ) -> Vec<TokenStream> {
-    let mut inherited: Vec<&ParamIr> = inherited_params.iter().collect();
-    inherited.sort_by_key(|param| if is_flag_param(cmd, param) { 1 } else { 0 });
-    let mut current: Vec<&ParamIr> = cmd.params.iter().collect();
-    current.sort_by_key(|param| if is_flag_param(cmd, param) { 1 } else { 0 });
+    let mut inherited: Vec<(&ParamIr, bool)> =
+        inherited_params.iter().map(|param| (param, true)).collect();
+    inherited.sort_by_key(|(param, _)| if is_flag_param(cmd, param) { 1 } else { 0 });
+    let mut current: Vec<(&ParamIr, bool)> =
+        cmd.params.iter().map(|param| (param, false)).collect();
+    current.sort_by_key(|(param, _)| if is_flag_param(cmd, param) { 1 } else { 0 });
     inherited
         .into_iter()
         .chain(current)
-        .filter_map(|param| {
+        .filter_map(|(param, _from_root)| {
             if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
                 return None;
             }

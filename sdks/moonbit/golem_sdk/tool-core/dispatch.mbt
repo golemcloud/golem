@@ -189,8 +189,9 @@ fn value_matches_type(
       }
     @model.SchemaTypeBody::Option(inner) =>
       match value {
-        @model.SchemaValue::Option(payload) =>
-          optional_payload_matches(graph, Some(inner), payload)
+        @model.SchemaValue::Option(None) => true
+        @model.SchemaValue::Option(Some(payload)) =>
+          value_matches_type(graph, inner, payload)
         _ => false
       }
     @model.SchemaTypeBody::Result(ok_type, err_type) =>
@@ -223,6 +224,14 @@ fn value_matches_type(
     @model.SchemaTypeBody::Future(_) => false
     @model.SchemaTypeBody::Stream(_) => value is @model.SchemaValue::Stream(_)
   }
+}
+
+///|
+pub fn schema_value_matches_graph(
+  graph : @model.SchemaGraph,
+  value : @model.SchemaValue,
+) -> Bool {
+  value_matches_type(graph, graph.root, value)
 }
 
 ///|

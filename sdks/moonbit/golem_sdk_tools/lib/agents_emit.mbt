@@ -162,6 +162,8 @@ fn emit_agent_type_def(
   )
   buf.write_string("    let \{var_name} : @common.AgentType = {\n")
   buf.write_string("      type_name: \"\{escape_string_lit(agent.name)}\",\n")
+  let kind = if agent.is_http_router() { "HTTP_ROUTER" } else { "REGULAR" }
+  buf.write_string("      kind: @common.AgentTypeKind::\{kind},\n")
   buf.write_string(
     "      description: \"\{escape_string_lit(agent.description)}\",\n",
   )
@@ -266,7 +268,9 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
     .join(", ")
   buf.write_string("          params.finish()\n")
   buf.write_string("          let agent = \{agent.name}::new(\{args})\n")
-  let use_auto_json = agent.has_json_derives && !agent.has_snapshottable
+  let use_auto_json = agent.has_json_derives &&
+    !agent.has_snapshottable &&
+    !agent.is_http_router()
   let format = if agent.has_snapshottable {
     Some("Binary")
   } else if use_auto_json {
@@ -276,7 +280,15 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
   }
   emit_constructed_agent(buf, "          ", format)
   buf.write_string("        } catch {\n")
-  buf.write_string("          e => Err(e)\n")
+  for
+    variant in [
+      "InvalidInput", "InvalidMethod", "InvalidType", "InvalidAgentId", "CustomError",
+    ] {
+    buf.write_string(
+      "          @common.AgentError::\{variant}(value) => Err(@common.AgentError::\{variant}(value))\n",
+    )
+  }
+  buf.write_string("          e => raise e\n")
   buf.write_string("        }\n")
   buf.write_string("      },\n")
 }
@@ -284,7 +296,9 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
 ///|
 /// Emits the snapshot restoration factory for an agent's registration.
 fn emit_load_snapshot(buf : StringBuilder, agent : AgentInfo) -> Unit {
-  let use_auto_json = agent.has_json_derives && !agent.has_snapshottable
+  let use_auto_json = agent.has_json_derives &&
+    !agent.has_snapshottable &&
+    !agent.is_http_router()
   if !agent.has_snapshottable && !use_auto_json {
     buf.write_string("      load_snapshot: None,\n")
     return
@@ -421,7 +435,9 @@ fn emit_raw_agent(buf : StringBuilder, agent : AgentInfo) -> Unit {
 /// Emits the instance-based snapshot saver for an agent that derives JSON
 /// (`ToJson` + `FromJson`) and has no hand-written `Snapshottable`.
 fn emit_snapshottable(buf : StringBuilder, agent : AgentInfo) -> Unit {
-  if !agent.has_json_derives || agent.has_snapshottable {
+  if !agent.has_json_derives ||
+    agent.has_snapshottable ||
+    agent.is_http_router() {
     return
   }
   let name = agent.name

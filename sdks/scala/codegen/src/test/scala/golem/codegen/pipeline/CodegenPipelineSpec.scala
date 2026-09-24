@@ -1779,12 +1779,29 @@ class CodegenPipelineSpec extends munit.FunSuite {
 
     assertEquals(
       result.rpc.files.map(_.relativePath),
-      Seq("example/GrepClient.scala", "example/GrepMiddleware.scala")
+      Seq("example/GrepCallProjection.scala", "example/GrepClient.scala", "example/GrepMiddleware.scala")
     )
     assert(result.rpc.files.last.content.contains("trait GrepUnderlying"))
     assert(
       result.rpc.files.last.content.contains("trait GrepMiddleware extends GrepMiddleware.Adapter[GrepUnderlying]")
     )
+  }
+
+  test("pipeline rejects an existing object that collides with the generated call projection") {
+    val source = SourceDiscovery.SourceInput(
+      "ProjectionCollision.scala",
+      """|package example
+         |import golem.runtime.annotations._
+         |@toolDefinition(name = "grep")
+         |trait Grep { def run(): String }
+         |object GrepCallProjection
+         |""".stripMargin
+    )
+
+    val error = intercept[CodegenPipeline.PipelineException] {
+      CodegenPipeline.run(discover(source), None, rpcEnabled = true)
+    }
+    assert(error.getMessage.contains("GrepCallProjection"), error.getMessage)
   }
 
   test("pipeline rejects ambiguous flattened middleware methods") {
@@ -1889,7 +1906,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assert(result.rpc.files.nonEmpty)
     val content = result.rpc.files.head.content
     assert(content.contains("newPhantom"), s"ephemeral agent should have newPhantom:\n$content")
-    assert(!content.contains("getPhantom"), s"ephemeral agent should not accept an explicit phantom ID:\n$content")
+    assert(content.contains("getPhantom"), s"ephemeral agent should accept an explicit phantom ID:\n$content")
     assert(!content.contains("def get("), s"ephemeral agent should not have get:\n$content")
   }
 

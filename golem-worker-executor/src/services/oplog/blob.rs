@@ -17,7 +17,7 @@ use crate::services::oplog::reader::{
     OplogReadError, OplogReadSource, fail_stop, verify_persisted_entries,
 };
 use crate::services::oplog::{
-    CompressedOplogChunk, OplogArchiveService, cursor_value, next_scan_cursor, scan_modes,
+    CompressedOplogChunk, OplogArchiveService, decode_scan_cursor, next_scan_cursor,
 };
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
@@ -88,9 +88,8 @@ impl OplogArchiveService for BlobOplogArchiveService {
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         self.blob_storage
+            .with("blob_oplog", "delete")
             .delete_dir(
-                "blob_oplog",
-                "delete",
                 BlobStorageNamespace::CompressedOplog {
                     environment_id: owned_agent_id.environment_id(),
                     component_id: owned_agent_id.component_id(),
@@ -149,15 +148,13 @@ impl OplogArchiveService for BlobOplogArchiveService {
         cursor: ScanCursor,
         _count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
-        let layer = cursor.layer;
-        let (active_mode, next_mode) = scan_modes(modes, cursor.cursor);
-        let cursor_val = cursor_value(cursor.cursor);
-
-        if cursor_val != 0 {
-            return Err(WorkerExecutorError::unknown(
-                "Cannot use cursor with blob oplog archive",
+        let state = decode_scan_cursor(&cursor, modes)?;
+        if state.resume.is_some() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Blob oplog archive does not accept a storage resume cursor",
             ));
         }
+        let active_mode = state.mode;
 
         let blob_storage = self.blob_storage.with("blob_oplog", "scan_for_component");
         let owned_agent_ids = if blob_storage.exists(
@@ -202,9 +199,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
             Vec::new()
         };
 
-        // Storage cursor is always 0 (single-page scan), so let next_scan_cursor
-        // advance to the next mode if there is one.
-        let next_cursor = next_scan_cursor(0, active_mode, next_mode, layer);
+        let next_cursor = next_scan_cursor(state, modes, None)?;
         Ok((next_cursor, owned_agent_ids))
     }
 

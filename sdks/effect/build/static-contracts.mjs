@@ -289,8 +289,9 @@ export function staticContracts(runtime, publicEntries) {
       if (load("Multimodal.js").isMultimodal(value)) {
         const members = Object.entries(value.shape).map(([name, member]) => {
           const source = sourceNodes.get(member)
-          if (!source) throw new Error(`Missing multimodal member source: ${name}`)
-          return `__Schema.Struct({_tag:__Schema.Literal(${literal(name)}),value:${runtimeExpression(source)}})`
+          const expression = source ? runtimeExpression(source) : sourceValue.get(member)
+          if (!expression) throw new Error(`Missing multimodal member source: ${name}`)
+          return `__Schema.Struct({_tag:__Schema.Literal(${literal(name)}),value:${expression}})`
         })
         return `__Schema.Array(__Schema.Union([${members.join(",")}]))`
       }
@@ -377,7 +378,11 @@ export function staticContracts(runtime, publicEntries) {
       write = `return w.add({tag:${literal(tag)},val:[${fields.map((f, i) => `${children[i]}.write(v[${literal(f.name)}],w)`).join(",")}]});`
       read = `if(!Array.isArray(n.val)||n.val.length!==${fields.length})throw new TypeError("wrong field count");return ${body.tag === "record" ? "{" : "["}${fields.map((f, i) => (optional[i] ? `...((v)=>v===undefined?{}:{${literal(f.name)}:v})(${children[i]}.read(r,n.val[${i}]))` : `${body.tag === "record" ? literal(f.name) + ":" : ""}${children[i]}.read(r,n.val[${i}])`)).join(",")}${body.tag === "record" ? "}" : "]"};`
     } else if (body.tag === "list" || body.tag === "fixed-list") {
-      const mapKind = ast?.annotations?.typeConstructor?._tag
+      const representation = ast?.annotations?.representation?.id
+      const mapKind =
+        representation === "effect/schema/HashMap"
+          ? "effect/HashMap"
+          : ast?.annotations?.typeConstructor?._tag
       const map = ["ReadonlyMap", "effect/HashMap"].includes(mapKind)
       const typedArray = {
         u8: "Uint8Array",

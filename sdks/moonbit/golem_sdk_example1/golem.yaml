@@ -9,6 +9,9 @@ httpApi:
         agents:
           WeatherAgent: {}
           WebhookAgent: {}
+          Site: {}
+          StaticSite: {}
+          FileOwner: {}
 
 environments:
   local:
@@ -70,14 +73,32 @@ components:
   golem:moonbit-examples:
     templates: moonbit-local
     dir: golem_moonbit_examples
+    files:
+      - sourcePath: ./http-assets/message.txt
+        targetPath: /public/message.txt
+        permissions: read-only
   golem:tool-middleware-examples:
     templates: moonbit-local
     dir: golem_tool_middleware_examples
 
 tools:
   moonbit-streaming: {}
+  moonbit-reflection-test: {}
+  canonical-big-bound: {}
+  canonical-git: {}
+  canonical-grep: {}
+  middleware:
+    audit:
+      component: golem:tool-middleware-examples
+    message-policy:
+      component: golem:tool-middleware-examples
+    file-adapter:
+      component: golem:tool-middleware-examples
 
 agents:
   MoonBitToolStreamingCaller:
     tools:
       moonbit-streaming: {}
+  MoonBitToolReflectionCaller:
+    tools:
+      moonbit-reflection-test: {}

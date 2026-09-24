@@ -41,6 +41,27 @@ message HttpMountDetails {
   bool phantom_agent = 3;
   CorsOptions cors_options = 4;
   repeated PathSegment webhook_suffix = 5;
+  repeated FileMapping static_bindings = 6;
+  repeated FileMapping filesystem_bindings = 7;
+  // The name of a parameterless router method that returns the OpenAPI document as a string.
+  optional string openapi_provider_method = 8;
+}
+
+message FileMapping {
+  oneof value {
+    ExactFileMapping exact = 1;
+    SubtreeFileMapping subtree = 2;
+  }
+}
+
+message ExactFileMapping {
+  repeated string public_path = 1;
+  string file_path = 2;
+}
+
+message SubtreeFileMapping {
+  repeated string public_prefix = 1;
+  string filesystem_root = 2;
 }
 
 message HttpEndpointDetails {
@@ -69,6 +90,7 @@ message HttpMethod {
   oneof value {
     StandardHttpMethod standard = 1;
     string custom = 2;
+    golem.common.Empty any = 3;
   }
 }
 

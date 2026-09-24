@@ -19,7 +19,7 @@ use crate::durable_host::{
     SnapshotBoundaryBlocker,
 };
 use crate::metrics::wasm::record_allocated_memory;
-use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use crate::preview2::golem::agent::host::{
     AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
     FutureInvokeResult, Host as AgentHost, HostCancellationToken, HostFutureInvokeResult,
@@ -683,13 +683,6 @@ impl FileSystemReading for Context {
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        self.durable_ctx.read_file(path).await
     }
 }
 

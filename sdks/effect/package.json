@@ -38,6 +38,10 @@
       "types": "./dist/effect-golem-middleware.d.ts",
       "import": "./dist/middleware.mjs"
     },
+    "./ai": {
+      "types": "./dist/effect-golem-ai.d.ts",
+      "import": "./dist/ai.mjs"
+    },
     "./sqlite": {
       "types": "./dist/effect-golem-sqlite.d.ts",
       "import": "./dist/sqlite.mjs"
@@ -126,6 +130,7 @@
     "check:dts": "node ./scripts/check-dts.mjs",
     "check:contracts": "node ./scripts/check-stale-contracts.mjs",
     "check:artifacts": "node ./scripts/check-artifacts.mjs",
+    "check:ai-package": "node ./scripts/check-ai-package.mjs",
     "check:package": "node ./scripts/check-package.mjs",
     "clean": "node ./scripts/clean.mjs",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
@@ -141,11 +146,11 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",
-    "effect": "4.0.0-beta.98",
+    "effect": "4.0.0-rc.117",
     "typescript": "^5.7.2"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-beta.98",
+    "@effect/vitest": "4.0.0-rc.117",
     "@eslint/js": "^9.17.0",
     "@rollup/plugin-commonjs": "^29.0.2",
     "@rollup/plugin-node-resolve": "^16.0.3",
@@ -155,10 +160,11 @@
     "@typescript-eslint/parser": "^8.18.0",
     "eslint": "^9.17.0",
     "eslint-config-prettier": "^9.1.0",
+    "fast-check": "4.10.2",
     "prettier": "^3.4.2",
     "rollup": "^4.60.2",
     "rollup-plugin-typescript2": "^0.37.0",
     "typescript-eslint": "^8.18.0",
-    "vitest": "^3.2.4"
+    "vitest": "5.0.1"
   }
 }

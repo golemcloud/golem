@@ -388,6 +388,7 @@ pub fn decode_typed_owned(
 
 struct GraphCtx<'a> {
     wire: &'a wire::SchemaGraph,
+    decoded: std::cell::RefCell<std::collections::HashMap<wire::TypeNodeIndex, SchemaType>>,
 }
 
 impl<'a> GraphCtx<'a> {
@@ -398,7 +399,10 @@ impl<'a> GraphCtx<'a> {
                 return Err(DecodeError::DuplicateTypeId(TypeId(def.id.clone())));
             }
         }
-        Ok(GraphCtx { wire: wire_graph })
+        Ok(GraphCtx {
+            wire: wire_graph,
+            decoded: std::cell::RefCell::new(std::collections::HashMap::new()),
+        })
     }
 
     fn decode_type(
@@ -406,6 +410,9 @@ impl<'a> GraphCtx<'a> {
         idx: wire::TypeNodeIndex,
         visiting: &mut HashSet<wire::TypeNodeIndex>,
     ) -> Result<SchemaType, DecodeError> {
+        if let Some(decoded) = self.decoded.borrow().get(&idx) {
+            return Ok(decoded.clone());
+        }
         let node = self
             .wire
             .type_nodes
@@ -417,6 +424,9 @@ impl<'a> GraphCtx<'a> {
         }
         let result = self.decode_node(node, visiting);
         visiting.remove(&idx);
+        if let Ok(decoded) = &result {
+            self.decoded.borrow_mut().insert(idx, decoded.clone());
+        }
         result
     }
 
@@ -1553,5 +1563,29 @@ fn usize_index_v(i: wire::ValueNodeIndex) -> Result<usize, DecodeError> {
         Err(DecodeError::ValueNodeIndexOutOfRange(i))
     } else {
         Ok(i as usize)
+    }
+}
+
+#[cfg(test)]
+mod graph_decoder_tests {
+    use super::GraphDecoder;
+    use crate::schema::{MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType};
+    use test_r::test;
+
+    #[test]
+    fn shared_decoder_reuses_successfully_decoded_type_nodes() {
+        let graph = SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+            name: "entry".to_string(),
+            body: SchemaType::list(SchemaType::string()),
+            metadata: MetadataEnvelope::default(),
+        }]));
+        let wire = crate::schema::wit::encode_graph(&graph).unwrap();
+        let decoder = GraphDecoder::new(&wire).unwrap();
+
+        let first = decoder.decode_type_at(wire.root).unwrap();
+        let decoded_count = decoder.ctx.decoded.borrow().len();
+        assert!(decoded_count > 1);
+        assert_eq!(decoder.decode_type_at(wire.root).unwrap(), first);
+        assert_eq!(decoder.ctx.decoded.borrow().len(), decoded_count);
     }
 }

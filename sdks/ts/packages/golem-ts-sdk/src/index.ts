@@ -68,10 +68,21 @@ export * from './host/checkpoint';
 export * from './host/durable';
 
 export { defineAgent } from './defineAgent';
+export { defineHttpRouter } from './defineHttpRouter';
+export type {
+  HttpRouterBuilder,
+  HttpRouterOptions,
+  HttpRouterContext,
+  WebHttpRouterContext,
+  HttpRouterHandler,
+  RawHttpRouterHandler,
+} from './defineHttpRouter';
+export { withRawHeaders } from './httpRouterWeb';
+export type { HttpRequest, HttpResponse, HttpHeader, FileExposure } from './httpRouterContract';
 export type {
   AgentDefinition,
-  AgentClientBindingDefinition,
-  AgentClientDefinition,
+  MethodOnlyAgentClientDefinition,
+  FullAgentClientDefinition,
   AgentImpl,
   AgentImplementation,
   AgentSpec,
@@ -112,7 +123,8 @@ export {
   toolDefinition,
   universalToolMiddleware,
 } from './tool';
-export { client, ToolCallError } from './toolClient';
+export { client, toolClientDefinition, ToolCallError } from './toolClient';
+export type { ToolClientDefinition } from './toolClient';
 export type {
   CamelCase,
   ConstraintRef,
@@ -169,8 +181,11 @@ export type {
 export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputError } from './client';
 export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
 export type {
-  AgentClientFactory,
-  AgentClientSpec,
+  FullAgentClientFactory,
+  MethodOnlyAgentClientSpec,
+  AgentConfigEntry,
+  FullAgentClientSpec,
+  ConfigOverrides,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
@@ -202,6 +217,7 @@ export {
   getAgentTypeByAgentId,
   getAllAgentTypes,
   getAgentType as getReflectedAgentType,
+  getToolType as getReflectedToolType,
 } from './reflection';
 export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
 export type { StartedToolInvocation } from './bridge/tool';
@@ -610,7 +626,11 @@ function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapt
       controller?.error(invocationCompleted);
       if (!terminated) {
         terminated = true;
-        await writer.finish();
+        try {
+          await writer.finish();
+        } catch {
+          // The writer's selected or drop terminal reports completion failure independently.
+        }
       }
     },
     abort,

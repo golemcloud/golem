@@ -9,9 +9,9 @@ must not be advertised as implemented operations.
 
 | Resource | Method | Success | Request / response |
 | --- | --- | --- | --- |
-| Method base | PUT | 201 (200 for replay) | Compiled non-stream request body and arguments; empty response with session Location |
-| Invocation session | PUT | 201 / 200 | Same compiled body and arguments; empty response; conflicting invocation identity is 409 |
-| Invocation session | HEAD | 200 | No body; JSON Content-Type, Cache-Control: no-store, Stream-Closed |
+| Method base | PUT | 201 (200 for replay) | Compiled non-stream request body and arguments; optional expiry policy; empty response with session Location |
+| Invocation session | PUT | 201 / 200 | Same compiled body, arguments and optional expiry policy; empty response; conflicting invocation identity or policy is 409 |
+| Invocation session | HEAD | 200 | No body; JSON Content-Type, Cache-Control: no-store, Stream-Closed and configured expiry policy |
 | Invocation session | GET | 200 | Manifest: session, streams, closed |
 | Invocation session | DELETE | 204 | Cooperative cancellation; repeated cancellation succeeds; history remains readable |
 | Concrete stream slot | PUT | 201 / 200 | Empty body only; optional matching Content-Type; stream metadata response headers |
@@ -107,8 +107,24 @@ through the existing schema graph and preserve ordinary REST operations.
 
 Use x-golem-route-mode: durable-streams and x-golem-stream-slot metadata.
 Operation IDs must be stable and unique across families, slots and methods.
-Do not emit TTL/expiry support, subscriptions, SDK opt-outs or annotation
-overrides that do not exist. TTL/expiry headers are rejected with 400.
+Stream-TTL is a canonical non-negative decimal sliding idle timeout in seconds;
+Stream-Expires-At is a future RFC3339 timestamp. They are mutually exclusive,
+duplicates are invalid, and HEAD reports the configured policy without touching
+the deadline. Sliding activity means a new origin GET or an accepted/duplicate
+POST append. Repeated PUT, HEAD, continuation reads within long-poll/SSE, bytes
+flowing on an already-open response, and the agent's own production do not refresh
+the deadline. Refreshes are coalesced until they move the deadline by at least 10%
+of the TTL. Closed historic pages are cacheable only up to the remaining
+expiry lifetime and require revalidation; all other expiring responses are
+no-store. Do not emit subscriptions, SDK opt-outs or annotation overrides that
+do not exist.
+
+Public session IDs are stable URL identities, not invocation idempotency keys.
+Durable creation binds the public ID to a fresh invocation key; expiry retires that
+binding, and a later explicit PUT may recreate the same URL with another key.
+Ephemeral sessions are fail-stop and cannot be recreated. Export-fork retries use
+the immutable target creation receipt, so an already-created target remains
+discoverable after the source advances, expires, is tombstoned or is deleted.
 
 Fork sessions use `<base>/forks/{fork}/invocations/{session}` and expose GET/HEAD.
 Their concrete slot paths expose PUT with Stream-Forked-From, optional
@@ -122,7 +138,7 @@ nullable fork provenance (sourcePath, forkOffset and subOffset); fork provenance
 is not emitted as response headers.
 
 Browser preflight must allow the supported producer and closure request headers;
-responses must expose producer outcome headers alongside the read metadata.
+responses must expose producer outcome and expiry headers alongside the read metadata.
 Origin and credential policies remain unchanged.
 
 Deployment-spec snapshots and an actual generated-client integration test cover

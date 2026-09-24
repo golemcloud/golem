@@ -23,17 +23,17 @@ mod tests {
         AgentStream, AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::agentic::{Principal, create_webhook};
+    use golem_rust::agentic::{HttpRequest, HttpResponse, HttpRouter, Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, CachePolicy, Snapshotting,
-        SnapshottingConfig,
+        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, AgentTypeKind,
+        CachePolicy, Snapshotting, SnapshottingConfig,
     };
     use golem_rust::schema::VariantValuePayload;
     use golem_rust::{
         AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, FromWire, IntoSchema,
         IntoWire, MultimodalSchema, WireSchema,
     };
-    use golem_rust::{ScheduledTime, SchemaType, SchemaValue};
+    use golem_rust::{ScheduledTime, SchemaType, SchemaValue, http_router};
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent};
     use golem_rust_macro::{description, endpoint, prompt, read_only};
     use std::fmt::Debug;
@@ -2520,6 +2520,30 @@ mod tests {
         }
     }
 
+    struct HttpRouterAgent;
+
+    #[http_router(
+        name = "HttpRouterAgent",
+        mount = "/raw",
+        auth = false,
+        cors = ["https://allowed.test"],
+    )]
+    impl HttpRouter for HttpRouterAgent {
+        type Config = ();
+
+        fn new(_: golem_rust::agentic::Config<Self::Config>) -> Self {
+            Self
+        }
+
+        async fn handle(&self, request: HttpRequest) -> HttpResponse {
+            HttpResponse {
+                status: 200,
+                headers: request.headers,
+                body: request.body,
+            }
+        }
+    }
+
     #[test]
     fn test_all_http_methods_supported() {
         use golem_rust::agentic::get_all_agent_types;
@@ -2530,6 +2554,8 @@ mod tests {
             .iter()
             .find(|a| a.type_name == "AllHttpMethodsAgent")
             .expect("AllHttpMethodsAgent not found");
+
+        assert!(matches!(agent.kind, AgentTypeKind::Regular));
 
         let expected_methods = vec![
             ("get_method", "HttpMethod::Get"),
@@ -2562,5 +2588,35 @@ mod tests {
                 method_name
             );
         }
+
+        let router = agent_types
+            .iter()
+            .find(|agent| agent.type_name == "HttpRouterAgent")
+            .expect("HttpRouterAgent not found");
+        assert!(matches!(router.kind, AgentTypeKind::HttpRouter));
+        assert!(matches!(router.mode, AgentMode::Ephemeral));
+        assert!(matches!(router.snapshotting, Snapshotting::Disabled));
+
+        let mount = router.http_mount.as_ref().expect("HTTP mount not found");
+        assert_eq!(
+            mount.auth_details.as_ref().map(|auth| auth.required),
+            Some(false)
+        );
+        assert_eq!(
+            mount.cors_options.allowed_patterns,
+            vec!["https://allowed.test"]
+        );
+
+        let route = router
+            .methods
+            .iter()
+            .find(|method| method.name == "handle")
+            .expect("handle method not found");
+        assert_eq!(route.http_endpoint.len(), 1);
+        assert!(matches!(
+            route.http_endpoint[0].http_method,
+            golem_rust::golem_agentic::golem::agent::common::HttpMethod::Any
+        ));
+        assert!(route.http_endpoint[0].path_suffix.is_empty());
     }
 }

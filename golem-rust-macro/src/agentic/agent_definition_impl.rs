@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::agent_definition_attributes::{
-    AgentDefinitionAttributes, parse_agent_definition_attributes,
+    AgentDefinitionAttributes, AgentDefinitionKind, parse_agent_definition_attributes,
 };
 use crate::agentic::agent_definition_http_endpoint::{
     ParsedHttpEndpointDetails, extract_http_endpoints,
@@ -37,19 +37,43 @@ use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
+    expand_agent_definition(attrs.into(), item.into(), AgentDefinitionKind::Regular).into()
+}
+
+pub(crate) fn expand_agent_definition(
+    attrs: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+    definition_kind: AgentDefinitionKind,
+) -> proc_macro2::TokenStream {
+    let mut agent_definition_trait = match syn::parse2::<ItemTrait>(item) {
+        Ok(item) => item,
+        Err(error) => return error.to_compile_error(),
+    };
 
     let AgentDefinitionAttributes {
+        name,
+        filesystem_mount,
+        agent_kind,
         agent_mode,
         agent_is_durable,
         http_mount,
         snapshotting,
         snapshotting_enabled,
-    } = match parse_agent_definition_attributes(attrs) {
+    } = match parse_agent_definition_attributes(attrs, definition_kind) {
         Ok(v) => v,
-        Err(err) => return err.to_compile_error().into(),
+        Err(err) => return err.to_compile_error(),
     };
 
+    if let Err(error) = validate_http_constructor(
+        &agent_definition_trait,
+        &agent_kind,
+        filesystem_mount.as_ref(),
+    ) {
+        return error.to_compile_error();
+    }
+    let type_name = name
+        .map(|name| name.value())
+        .unwrap_or_else(|| agent_definition_trait.ident.to_string());
     let type_parameters = agent_definition_trait
         .generics
         .type_params()
@@ -59,11 +83,13 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
     let has_async_trait_attribute = agent_definition_trait.attrs.iter().any(is_async_trait_attr);
 
     if has_async_trait_attribute {
-        return async_trait_in_agent_definition_error(&agent_definition_trait).into();
+        return async_trait_in_agent_definition_error(&agent_definition_trait);
     }
 
     match get_agent_type_with_remote_client(
         &agent_definition_trait,
+        &type_name,
+        agent_kind,
         agent_mode,
         agent_is_durable,
         http_mount,
@@ -95,8 +121,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
             let load_snapshot_item = get_load_snapshot_item();
             let save_snapshot_item = get_save_snapshot_item();
             let auto_snapshot_item = get_auto_snapshot_item(snapshotting_enabled);
-            let agent_type_name_item =
-                get_agent_type_name_item(&agent_definition_trait.ident.to_string());
+            let agent_type_name_item = get_agent_type_name_item(&type_name);
             let agent_implementation_annotation_item = get_agent_implementation_annotation_item();
 
             agent_definition_trait.items.push(load_snapshot_item);
@@ -116,11 +141,84 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
                 #remote_client
             };
 
-            result.into()
+            result
         }
 
-        Err(invalid_trait_error) => invalid_trait_error,
+        Err(invalid_trait_error) => invalid_trait_error.into(),
     }
+}
+
+fn validate_http_constructor(
+    agent: &ItemTrait,
+    kind: &syn::Ident,
+    mount: Option<&syn::LitStr>,
+) -> syn::Result<()> {
+    if kind != "HttpRouter" && mount.is_none() {
+        return Ok(());
+    }
+    let mut params = std::collections::HashSet::new();
+    for item in &agent.items {
+        if let syn::TraitItem::Fn(method) = item
+            && is_constructor_method(&method.sig, None)
+        {
+            for input in &method.sig.inputs {
+                if let syn::FnArg::Typed(param) = input {
+                    if has_agent_config_attr(param) {
+                        continue;
+                    }
+                    if kind == "HttpRouter" {
+                        return Err(syn::Error::new_spanned(
+                            param,
+                            "HTTP routers have no constructor identity inputs; use #[agent_config] for configuration",
+                        ));
+                    }
+                    let syn::Pat::Ident(name) = &*param.pat else {
+                        return Err(syn::Error::new_spanned(
+                            param,
+                            "filesystem constructor parameters must be named",
+                        ));
+                    };
+                    params.insert(name.ident.to_string());
+                }
+            }
+        }
+    }
+    if let Some(mount) = mount {
+        let value = mount.value();
+        let path = value.strip_prefix('/').ok_or_else(|| {
+            syn::Error::new_spanned(mount, "filesystem mount must be an absolute path")
+        })?;
+        for segment in path.split('/').filter(|_| !path.is_empty()) {
+            if let Some(name) = segment.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                if matches!(name, "agent-type" | "agent-version") {
+                    continue;
+                }
+                if !params.remove(name) {
+                    return Err(syn::Error::new_spanned(
+                        mount,
+                        format!(
+                            "filesystem mount capture {{{name}}} must bind one constructor parameter exactly once"
+                        ),
+                    ));
+                }
+            } else {
+                golem_schema::http::FileMapping::compile(&format!("/{segment}"), "/mount")
+                    .map_err(|_| syn::Error::new_spanned(mount, "filesystem mount must contain safe literals and whole-segment constructor captures"))?;
+            }
+        }
+        if !params.is_empty() {
+            let mut names = params.into_iter().collect::<Vec<_>>();
+            names.sort();
+            return Err(syn::Error::new_spanned(
+                mount,
+                format!(
+                    "filesystem mount must bind all constructor parameters exactly once; missing: {}",
+                    names.join(", ")
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn get_load_snapshot_item() -> syn::TraitItem {
@@ -186,15 +284,14 @@ struct AgentTypeWithRemoteClient {
 
 fn get_agent_type_with_remote_client(
     agent_definition_trait: &ItemTrait,
+    agent_trait_name: &str,
+    kind_value: syn::Ident,
     mode_value: proc_macro2::TokenStream,
     agent_is_durable: bool,
     http_options: Option<proc_macro2::TokenStream>,
     snapshotting_value: proc_macro2::TokenStream,
     type_parameters: &[String],
 ) -> Result<AgentTypeWithRemoteClient, TokenStream> {
-    let agent_def_trait_ident = &agent_definition_trait.ident;
-    let agent_trait_name = agent_def_trait_ident.to_string();
-
     let mut constructor_methods = vec![];
 
     for item in &agent_definition_trait.items {
@@ -227,6 +324,13 @@ fn get_agent_type_with_remote_client(
                     return Some(err.to_compile_error());
                 }
             };
+
+            if kind_value == "Regular" && parsed_endpoint_details.iter().any(|endpoint| endpoint.http_method == "any") {
+                return Some(syn::Error::new_spanned(
+                    &trait_fn.sig.ident,
+                    "ANY endpoints require an HTTP router defined with #[http_router]",
+                ).to_compile_error());
+            }
 
             if !parsed_endpoint_details.is_empty() && is_constructor_method(&trait_fn.sig, None) {
                 return Some(
@@ -541,15 +645,19 @@ fn get_agent_type_with_remote_client(
         };
     };
 
-    let remote_client = get_remote_client(
-        agent_definition_trait,
-        &client_data_value_param_defs,
-        &client_data_value_param_idents,
-        &client_agent_config_param_defs,
-        &client_agent_config_param_idents,
-        type_parameters,
-        agent_is_durable,
-    );
+    let remote_client = if kind_value == "HttpRouter" {
+        quote! {}
+    } else {
+        get_remote_client(
+            agent_definition_trait,
+            &client_data_value_param_defs,
+            &client_data_value_param_idents,
+            &client_agent_config_param_defs,
+            &client_agent_config_param_idents,
+            type_parameters,
+            agent_is_durable,
+        )
+    };
 
     let constructor_prompt_hint = if constructor_prompt.is_empty() {
         quote! { None }
@@ -606,6 +714,7 @@ fn get_agent_type_with_remote_client(
             let root = __golem_schema.push(golem_rust::schema::wit::wire::SchemaTypeBody::RecordType(vec![]));
             golem_rust::golem_agentic::golem::agent::common::AgentType {
                 type_name: #agent_trait_name.to_string(),
+                kind: golem_rust::golem_agentic::golem::agent::common::AgentTypeKind::#kind_value,
                 description: #high_level_description_ident.to_string(),
                 source_language: "rust".to_string(),
                 methods,

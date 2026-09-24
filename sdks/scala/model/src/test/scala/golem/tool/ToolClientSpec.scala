@@ -184,7 +184,7 @@ object ToolClientSpec extends ZIOSpecDefault {
       invocation.cancel()
       assertTrue(before, cancelled)
     },
-    test("invoke_and_await_maps_framing_errors_to_rpc_errors") {
+    test("invoke_and_await_distinguishes_rpc_and_remote_tool_errors") {
       for {
         denied <- ZIO.fromFuture(_ =>
                     ToolClientRuntime.invokeAndAwaitPayloadError[String](
@@ -208,12 +208,34 @@ object ToolClientSpec extends ZIOSpecDefault {
           case _                                             => false
         }
         val remoteOk = remote match {
-          case Left(ToolError.Rpc(RpcError.Protocol(message))) =>
-            message.contains("remote tool error: invalid input: bad wire input")
+          case Left(ToolError.RemoteTool(ToolInvokeError.InvalidInput(message))) =>
+            message == "bad wire input"
           case _ => false
         }
         assertTrue(deniedOk, remoteOk)
       }
+    },
+    test("all structural remote tool errors retain their variants") {
+      val errors: List[ToolInvokeError[TypedSchemaValue]] = List(
+        ToolInvokeError.InvalidToolName("bad name"),
+        ToolInvokeError.InvalidCommandPath(List("bad")),
+        ToolInvokeError.InvalidInput("input"),
+        ToolInvokeError.ConstraintViolation("constraint"),
+        ToolInvokeError.InvalidResult("result")
+      )
+      assertTrue(
+        errors.forall(error =>
+          ToolClientRuntime.mapRemoteToolError(error, decodeCliError) == ToolError.RemoteTool(error)
+        )
+      )
+    },
+    test("infallible pending results retain structural remote tool errors") {
+      ZIO
+        .fromFuture(_ =>
+          ToolClientRuntime
+            .invokeAndAwaitInfallible(new FailingToolRpc(FakeFailure.RemoteInvalidInput), Nil, unitInput, None)
+        )
+        .map(result => assertTrue(result == Left(ToolError.RemoteTool(ToolInvokeError.InvalidInput("bad wire input")))))
     }
   )
 }

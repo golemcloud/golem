@@ -171,11 +171,11 @@ fn encode(
         (SchemaType::S8 { .. }, SchemaValue::S8(i)) => Ok(json_number_i64(*i as i64)),
         (SchemaType::S16 { .. }, SchemaValue::S16(i)) => Ok(json_number_i64(*i as i64)),
         (SchemaType::S32 { .. }, SchemaValue::S32(i)) => Ok(json_number_i64(*i as i64)),
-        (SchemaType::S64 { .. }, SchemaValue::S64(i)) => Ok(json_number_i64(*i)),
+        (SchemaType::S64 { .. }, SchemaValue::S64(i)) => Ok(Value::String(i.to_string())),
         (SchemaType::U8 { .. }, SchemaValue::U8(u)) => Ok(json_number_u64(*u as u64)),
         (SchemaType::U16 { .. }, SchemaValue::U16(u)) => Ok(json_number_u64(*u as u64)),
         (SchemaType::U32 { .. }, SchemaValue::U32(u)) => Ok(json_number_u64(*u as u64)),
-        (SchemaType::U64 { .. }, SchemaValue::U64(u)) => Ok(json_number_u64(*u)),
+        (SchemaType::U64 { .. }, SchemaValue::U64(u)) => Ok(Value::String(u.to_string())),
         (SchemaType::F32 { .. }, SchemaValue::F32(f)) => json_number_f64(*f as f64, &r.path),
         (SchemaType::F64 { .. }, SchemaValue::F64(f)) => json_number_f64(*f, &r.path),
         (SchemaType::Char { .. }, SchemaValue::Char(c)) => Ok(Value::String(c.to_string())),
@@ -560,7 +560,7 @@ fn from_json_body(
             check_int_range::<i32>(json, path)?;
             Ok(SchemaValue::S32(json_i64(json, path)? as i32))
         }
-        SchemaType::S64 { .. } => Ok(SchemaValue::S64(json_i64(json, path)?)),
+        SchemaType::S64 { .. } => Ok(SchemaValue::S64(json_i64_string(json, path)?)),
         SchemaType::U8 { .. } => {
             check_int_range::<u8>(json, path)?;
             Ok(SchemaValue::U8(json_u64(json, path)? as u8))
@@ -573,7 +573,7 @@ fn from_json_body(
             check_int_range::<u32>(json, path)?;
             Ok(SchemaValue::U32(json_u64(json, path)? as u32))
         }
-        SchemaType::U64 { .. } => Ok(SchemaValue::U64(json_u64(json, path)?)),
+        SchemaType::U64 { .. } => Ok(SchemaValue::U64(json_u64_string(json, path)?)),
         SchemaType::F32 { .. } => {
             let value = json_f64(json, path)?;
             check_f32_in_range(value, path)?;
@@ -1042,6 +1042,55 @@ fn json_i64(json: &Value, path: &mut PathStack) -> Result<i64, RenderError> {
 fn json_u64(json: &Value, path: &mut PathStack) -> Result<u64, RenderError> {
     json.as_u64()
         .ok_or_else(|| mismatch(path, "expected JSON non-negative integer".to_string()))
+}
+
+fn json_i64_string(json: &Value, path: &mut PathStack) -> Result<i64, RenderError> {
+    let value = json
+        .as_str()
+        .ok_or_else(|| mismatch(path, "expected canonical signed integer string".to_string()))?;
+    if !is_canonical_signed_integer(value) {
+        return Err(mismatch(
+            path,
+            "expected canonical signed integer string".to_string(),
+        ));
+    }
+    value
+        .parse()
+        .map_err(|_| mismatch(path, "signed 64-bit integer out of range".to_string()))
+}
+
+fn json_u64_string(json: &Value, path: &mut PathStack) -> Result<u64, RenderError> {
+    let value = json.as_str().ok_or_else(|| {
+        mismatch(
+            path,
+            "expected canonical unsigned integer string".to_string(),
+        )
+    })?;
+    if value != "0" && !canonical_nonzero_digits(value) {
+        return Err(mismatch(
+            path,
+            "expected canonical unsigned integer string".to_string(),
+        ));
+    }
+    value
+        .parse()
+        .map_err(|_| mismatch(path, "unsigned 64-bit integer out of range".to_string()))
+}
+
+fn is_canonical_signed_integer(value: &str) -> bool {
+    value == "0"
+        || value
+            .strip_prefix('-')
+            .is_some_and(canonical_nonzero_digits)
+        || canonical_nonzero_digits(value)
+}
+
+fn canonical_nonzero_digits(value: &str) -> bool {
+    value
+        .as_bytes()
+        .first()
+        .is_some_and(|digit| matches!(digit, b'1'..=b'9'))
+        && value.bytes().all(|digit| digit.is_ascii_digit())
 }
 
 fn json_f64(json: &Value, path: &mut PathStack) -> Result<f64, RenderError> {

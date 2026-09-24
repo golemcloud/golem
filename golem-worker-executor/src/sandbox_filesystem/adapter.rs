@@ -14,7 +14,10 @@
 
 use super::*;
 use bytes::Bytes;
-use cap_fs_ext::{FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt, OpenOptionsMaybeDirExt};
+use cap_fs_ext::{
+    FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt, OpenOptionsMaybeDirExt,
+    OpenOptionsSyncExt,
+};
 use cap_std::fs::FileExt as _;
 use fs_set_times::{SetTimes as _, SystemTimeSpec};
 use std::ffi::OsString;
@@ -526,7 +529,12 @@ impl SandboxResolvedNamespaceTarget {
 impl SandboxTargetIdentity {
     /// Reports whether two policy targets share a namespace entry or native object identity.
     pub(crate) fn matches(&self, other: &Self) -> bool {
-        self.namespace == other.namespace
+        // Conservative coordination keys deliberately collide for distinct sibling names.
+        // Use proven name equivalence or resolved object identity for policy checks.
+        (self.namespace.parent == other.namespace.parent
+            && (self.namespace.name.name == other.namespace.name.name
+                || (self.namespace.name.mode != NativeNameComparisonMode::Conservative
+                    && self.namespace.name == other.namespace.name)))
             || self
                 .object_identity
                 .as_ref()
@@ -635,6 +643,8 @@ pub(crate) enum SandboxFileDisposition {
 /// that may create or truncate a regular file and must not be used for directories.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SandboxOpenOptions {
+    /// Read-only, no-follow inspection of one path component, rejecting special files.
+    Inspection { expected: SandboxObjectKind },
     Existing {
         expected: SandboxObjectKind,
         access: SandboxAccessMode,
@@ -645,6 +655,47 @@ pub(crate) enum SandboxOpenOptions {
         disposition: SandboxFileDisposition,
         follow: SandboxFollow,
     },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SandboxInspectionFailure {
+    Symlink,
+    NotRegular,
+}
+
+impl Display for SandboxInspectionFailure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Symlink => "inspection target is a symlink",
+            Self::NotRegular => "inspection target has the wrong file type",
+        })
+    }
+}
+
+impl std::error::Error for SandboxInspectionFailure {}
+
+fn check_inspection_kind(
+    metadata: &cap_std::fs::Metadata,
+    expected: SandboxObjectKind,
+) -> std::io::Result<()> {
+    let failure = if metadata.is_symlink() {
+        Some(SandboxInspectionFailure::Symlink)
+    } else if match expected {
+        SandboxObjectKind::Directory => metadata.is_dir(),
+        SandboxObjectKind::File => metadata.is_file(),
+        SandboxObjectKind::Symlink => false,
+    } {
+        None
+    } else {
+        Some(SandboxInspectionFailure::NotRegular)
+    };
+    match failure {
+        Some(failure) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            failure,
+        )),
+        None => Ok(()),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1012,6 +1063,24 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 let mut native_options = cap_std::fs::OpenOptions::new();
                 native_options.maybe_dir(true);
                 let (expected, access, follow, disposition) = match options {
+                    SandboxOpenOptions::Inspection { expected } => {
+                        let mut components = target.path.components();
+                        if !matches!(components.next(), Some(Component::Normal(name)) if name == target.path.as_os_str())
+                            || components.next().is_some()
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "inspection requires a single normal path component",
+                            ));
+                        }
+                        // Reject FIFOs/devices before opening. Recheck the opened descriptor below.
+                        check_inspection_kind(
+                            &directory.symlink_metadata(&target.path)?,
+                            expected,
+                        )?;
+                        native_options.nonblock(true);
+                        (expected, SandboxAccessMode::Read, SandboxFollow::No, None)
+                    }
                     SandboxOpenOptions::Existing {
                         expected,
                         access,
@@ -1059,6 +1128,9 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 });
                 let opened = directory.open_with(&target.path, &native_options)?;
                 let metadata = opened.metadata()?;
+                if let SandboxOpenOptions::Inspection { expected } = options {
+                    check_inspection_kind(&metadata, expected)?;
+                }
                 let kind = object_kind(&metadata);
                 if kind != expected {
                     return Err(std::io::Error::new(
@@ -4730,6 +4802,64 @@ mod tests {
         <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
             .await
             .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    async fn conservative_policy_identity_distinguishes_siblings_but_protects_aliases() {
+        let parent = tempfile::tempdir().unwrap();
+        let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
+            unmanaged_provisioning(parent.path().to_path_buf()),
+            name(),
+            None,
+        )
+        .await
+        .unwrap();
+        std::fs::create_dir(filesystem.root().join("public")).unwrap();
+        std::fs::write(filesystem.root().join("public/ro.txt"), b"read-only").unwrap();
+        std::fs::write(filesystem.root().join("public/rw.txt"), b"writable").unwrap();
+        std::fs::hard_link(
+            filesystem.root().join("public/ro.txt"),
+            filesystem.root().join("public/alias.txt"),
+        )
+        .unwrap();
+        let mut identities = Vec::new();
+        for path in ["ro.txt", "rw.txt", "missing", "alias.txt", "ro.txt"] {
+            let target = filesystem
+                .resolve_namespace_target(SandboxPath::at_root(format!("public/{path}")))
+                .await
+                .unwrap();
+            let mut identity = target.target_identity(SandboxFollow::No).unwrap();
+            identity.namespace.name.mode = NativeNameComparisonMode::Conservative;
+            identities.push(identity);
+        }
+        let read_only = &identities[0];
+        assert!(read_only.namespace == identities[1].namespace);
+        assert!(!read_only.matches(&identities[1]));
+        assert!(!read_only.matches(&identities[2]));
+        assert!(read_only.matches(&identities[3]));
+        assert!(read_only.matches(&identities[4]));
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn policy_identity_matches_case_insensitive_namespace_entries_without_object_identity() {
+        let parent = SandboxDirectoryCoordinationKey(NativeFileIdentity::Scripted("parent".into()));
+        let identity = |name: &str| SandboxTargetIdentity {
+            namespace: SandboxNamespaceCoordinationKey {
+                parent: parent.clone(),
+                name: NativeNameCoordinationKey {
+                    name: name.into(),
+                    mode: NativeNameComparisonMode::WindowsInsensitive,
+                },
+            },
+            object_identity: None,
+        };
+
+        assert!(identity("READ-ONLY.TXT").matches(&identity("read-only.txt")));
+        assert!(!identity("READ-ONLY.TXT").matches(&identity("other.txt")));
     }
 
     #[cfg(unix)]

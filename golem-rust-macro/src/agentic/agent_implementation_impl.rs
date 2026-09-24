@@ -112,14 +112,14 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
     let constructor_param_extraction_call_back = match constructor_kind {
         Asyncness::Future => {
             quote! {
-                let agent_instance_raw = <#self_ty>::#ctor_ident(#(#ctor_param_idents),*).await;
+                let agent_instance_raw = <#self_ty as #trait_path>::#ctor_ident(#(#ctor_param_idents),*).await;
                 let agent_instance = Box::new(agent_instance_raw);
                 Ok(golem_rust::agentic::ResolvedAgent::new(agent_instance))
             }
         }
         Asyncness::Immediate => {
             quote! {
-                let agent_instance = Box::new(<#self_ty>::#ctor_ident(#(#ctor_param_idents),*));
+                let agent_instance = Box::new(<#self_ty as #trait_path>::#ctor_ident(#(#ctor_param_idents),*));
                 Ok(golem_rust::agentic::ResolvedAgent::new(agent_instance))
             }
         }
@@ -209,6 +209,7 @@ fn build_match_arms(
 ) -> (Vec<proc_macro2::TokenStream>, Option<&syn::ImplItemFn>) {
     let mut match_arms = Vec::new();
     let mut constructor_method = None;
+    let (_, trait_path) = extract_trait(impl_block);
 
     // First pass: collect eligible methods with their metadata
     struct MethodInfo<'a> {
@@ -268,7 +269,7 @@ fn build_match_arms(
         let fn_output_info = FunctionOutputInfo::from_signature(&info.method.sig);
         let post_method_param_extraction_logic = match fn_output_info.async_ness {
             Asyncness::Future if !fn_output_info.is_unit => quote! {
-                let result = self.#ident(#(#param_idents),*).await;
+                let result = <Self as #trait_path>::#ident(self, #(#param_idents),*).await;
                 golem_rust::schema::wit::direct::encode_async(&result).await
                     .map(|value| golem_rust::agentic::AgentInvocationResult { value: Some(value) }).map_err(|e| {
                     golem_rust::agentic::custom_error(format!(
@@ -278,11 +279,11 @@ fn build_match_arms(
                 })
             },
             Asyncness::Future => quote! {
-                let _ = self.#ident(#(#param_idents),*).await;
+                let _ = <Self as #trait_path>::#ident(self, #(#param_idents),*).await;
                 Ok(golem_rust::agentic::AgentInvocationResult { value: None })
             },
             Asyncness::Immediate if !fn_output_info.is_unit => quote! {
-                let result = self.#ident(#(#param_idents),*);
+                let result = <Self as #trait_path>::#ident(self, #(#param_idents),*);
                 golem_rust::schema::wit::direct::encode_async(&result).await
                     .map(|value| golem_rust::agentic::AgentInvocationResult { value: Some(value) }).map_err(|e| {
                     golem_rust::agentic::custom_error(format!(
@@ -292,7 +293,7 @@ fn build_match_arms(
                 })
             },
             Asyncness::Immediate => quote! {
-                let _ = self.#ident(#(#param_idents),*);
+                let _ = <Self as #trait_path>::#ident(self, #(#param_idents),*);
                 Ok(golem_rust::agentic::AgentInvocationResult { value: None })
             },
         };

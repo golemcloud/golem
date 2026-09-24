@@ -32,12 +32,68 @@
 
 use std::sync::{Arc, Mutex};
 
-use tracing::span::{Attributes, Id};
+use golem_common::tracing::{TracingConfig, init_tracing};
+use tracing::span::{Attributes, Id, Record};
 use tracing::subscriber::DefaultGuard;
-use tracing::{Subscriber, subscriber};
+use tracing::{Dispatch, Event, Metadata, Subscriber, subscriber};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{Layer, Registry};
+
+struct OpenCallsites;
+
+impl Subscriber for OpenCallsites {
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &Attributes<'_>) -> Id {
+        Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+    fn event(&self, _event: &Event<'_>) {}
+
+    fn enter(&self, _span: &Id) {}
+
+    fn exit(&self, _span: &Id) {}
+
+    fn register_callsite(
+        &self,
+        _metadata: &'static Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        tracing::subscriber::Interest::always()
+    }
+}
+
+/// Process-wide tracing state shared by tests running in one test-r worker.
+pub struct Tracing {
+    // A live dispatcher that is always interested prevents another thread from
+    // disabling a callsite process-wide while a thread-local recorder is active.
+    _open_callsites: Dispatch,
+}
+
+impl Tracing {
+    pub(crate) fn init() -> Self {
+        let open_callsites = Dispatch::new(OpenCallsites);
+        init_tracing(
+            &TracingConfig::test("worker-executor-unit-tests"),
+            |_output| golem_common::tracing::filter::boxed::debug_env_with_directives(Vec::new()),
+        );
+        Self {
+            _open_callsites: open_callsites,
+        }
+    }
+}
+
+pub(crate) fn get_tracing_dependency(
+    dependency_view: &impl test_r::core::DependencyView,
+) -> Arc<Tracing> {
+    crate::test_r_get_dep_tracing(dependency_view)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RecordedSpan {
@@ -82,7 +138,7 @@ pub struct SpanRecorder {
 
 /// Installs a span-recording subscriber for the current thread. Recording stops
 /// when the returned [`SpanRecorder`] is dropped.
-pub fn record_spans() -> SpanRecorder {
+pub fn record_spans(_tracing: &Tracing) -> SpanRecorder {
     let layer = RecordingLayer::default();
     let guard = subscriber::set_default(Registry::default().with(layer.clone()));
     SpanRecorder {
@@ -127,5 +183,27 @@ impl SpanRecorder {
         let spans = self.spans();
         let open: Vec<&str> = spans.iter().filter(|s| !s.closed).map(|s| s.name).collect();
         assert!(open.is_empty(), "spans left open: {open:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_r_get_dep_tracing;
+    use test_r::test;
+
+    fn create_regression_span() {
+        let span = tracing::info_span!("span_test_support_regression");
+        let _guard = span.enter();
+    }
+
+    #[test]
+    fn callsite_first_used_on_another_thread_remains_open(tracing: &Tracing) {
+        let recorder = record_spans(tracing);
+
+        std::thread::spawn(create_regression_span).join().unwrap();
+        create_regression_span();
+
+        recorder.assert_closed_span("span_test_support_regression");
     }
 }

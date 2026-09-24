@@ -14,8 +14,9 @@
 
 use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_return_type_error};
 use crate::rpc_client_common::{
-    FunctionOutputInfo, collect_kept_args, collect_typed_params, find_generic_param_in_inputs,
-    find_generic_param_in_return, is_principal_param, is_static_method,
+    FunctionOutputInfo, collect_kept_args, collect_typed_params, decode_result_value,
+    encode_value_only_carrier, find_generic_param_in_inputs, find_generic_param_in_return,
+    is_principal_param, is_static_method, positional_record_schema_value,
 };
 use quote::{format_ident, quote};
 use std::collections::{HashMap, HashSet};
@@ -30,14 +31,42 @@ pub fn get_remote_client(
     agent_type_parameter_names: &[String],
     agent_is_durable: bool,
 ) -> proc_macro2::TokenStream {
-    let remote_client_type_name = format_ident!("{}Client", item_trait.ident);
+    get_remote_client_for_type(
+        item_trait,
+        &item_trait.ident.to_string(),
+        constructor_data_value_param_defs,
+        constructor_data_value_param_idents,
+        constructor_agent_config_param_defs,
+        constructor_agent_config_param_idents,
+        agent_type_parameter_names,
+        agent_is_durable,
+        false,
+    )
+}
 
-    let type_name = item_trait.ident.to_string();
+pub fn get_remote_client_for_type(
+    item_trait: &ItemTrait,
+    type_name: &str,
+    constructor_data_value_param_defs: &[proc_macro2::TokenStream],
+    constructor_data_value_param_idents: &[proc_macro2::Ident],
+    constructor_agent_config_param_defs: &[proc_macro2::TokenStream],
+    constructor_agent_config_param_idents: &[proc_macro2::Ident],
+    agent_type_parameter_names: &[String],
+    agent_is_durable: bool,
+    construction_fallible: bool,
+) -> proc_macro2::TokenStream {
+    let remote_client_type_name = format_ident!("{}Client", item_trait.ident);
+    let constructor_schema_type_name = format_ident!("__{}Constructor", item_trait.ident);
 
     let RemoteAgentMethodsInfo {
         methods_impl,
         mut method_names,
-    } = get_remote_agent_methods_info(item_trait, agent_type_parameter_names, agent_is_durable);
+    } = get_remote_agent_methods_info(
+        item_trait,
+        agent_type_parameter_names,
+        agent_is_durable,
+        construction_fallible,
+    );
 
     let get_method_ident = agent_is_durable.then(|| {
         if method_names.contains("get") {
@@ -47,20 +76,20 @@ pub fn get_remote_client(
         }
     });
     let new_phantom_method_ident = method_names.fresh_ident("new_phantom");
-    let get_phantom_method_ident =
-        agent_is_durable.then(|| method_names.fresh_ident("get_phantom"));
+    let get_phantom_method_ident = method_names.fresh_ident("get_phantom");
     let get_with_config_method_ident = (agent_is_durable
         && !constructor_agent_config_param_defs.is_empty())
     .then(|| method_names.fresh_ident("get_with_config"));
     let new_phantom_with_config_method_ident = (!constructor_agent_config_param_defs.is_empty())
         .then(|| method_names.fresh_ident("new_phantom_with_config"));
-    let get_phantom_with_config_method_ident = (agent_is_durable
-        && !constructor_agent_config_param_defs.is_empty())
-    .then(|| method_names.fresh_ident("get_phantom_with_config"));
+    let get_phantom_with_config_method_ident = (!constructor_agent_config_param_defs.is_empty())
+        .then(|| method_names.fresh_ident("get_phantom_with_config"));
     let phantom_id_accessor_ident =
         agent_is_durable.then(|| method_names.fresh_ident("phantom_id"));
     let get_agent_id_accessor_ident =
         agent_is_durable.then(|| method_names.fresh_ident("get_agent_id"));
+    let agent_id_helper_ident = method_names.fresh_ident("agent_id");
+    let bind_helper_ident = agent_is_durable.then(|| method_names.fresh_ident("bind"));
     let constructor_param_idents = constructor_data_value_param_idents
         .iter()
         .chain(constructor_agent_config_param_idents)
@@ -69,13 +98,31 @@ pub fn get_remote_client(
     let phantom_id_param_ident = fresh_param_ident(&constructor_param_idents, "phantom_id");
     let rpc_config_params_ident =
         fresh_param_ident(&constructor_param_idents, "__golem_rpc_config_params");
+    let remote_agent_type_ident =
+        fresh_param_ident(&constructor_param_idents, "__golem_agent_type");
     let phantom_uuid_ident = fresh_param_ident(&constructor_param_idents, "phantom_uuid");
     let constructor_value_ident = fresh_param_ident(&constructor_param_idents, "constructor_value");
     let agent_id_ident = fresh_param_ident(&constructor_param_idents, "agent_id");
     let encode_constructor = generate_constructor_data_value_params_encoding(
         constructor_data_value_param_idents,
         &constructor_value_ident,
+        construction_fallible,
     );
+    let constructor_schema_fields = constructor_data_value_param_defs;
+    let constructor_schema_definition =
+        (construction_fallible && agent_type_parameter_names.is_empty()).then(|| {
+            quote! {
+                #[doc(hidden)]
+                #[derive(golem_rust::IntoSchema)]
+                struct #constructor_schema_type_name {
+                    #(#constructor_schema_fields,)*
+                }
+            }
+        });
+    let agent_id_body = quote! {{
+        #encode_constructor
+        #constructor_value_ident
+    }};
 
     let agent_config_params_as_rpc_param = {
         let add_rpc_params_entries = constructor_agent_config_param_idents.iter().map(|param_ident|
@@ -97,34 +144,75 @@ pub fn get_remote_client(
     // The constructor value is therefore encoded freshly for each host call
     // (`make-agent-id` and the `wasm-rpc` constructor), the agent-id is computed
     // eagerly, and only the resulting `String` is kept in the client struct.
+    let constructor_return_type = if construction_fallible {
+        quote! { Result<#remote_client_type_name, golem_rust::GolemReflectError> }
+    } else {
+        quote! { #remote_client_type_name }
+    };
     let build_constructor_body =
         |prelude: proc_macro2::TokenStream,
          phantom_wire: proc_macro2::TokenStream,
          phantom_struct: proc_macro2::TokenStream,
          config: proc_macro2::TokenStream| {
-            quote! {
-                #encode_constructor
+            if construction_fallible {
+                quote! {
+                    #encode_constructor
 
-                #prelude
+                    #prelude
 
-                let #agent_id_ident = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
-                    #type_name,
-                    #constructor_value_ident(),
-                    #phantom_wire,
-                )
-                .expect("Internal Error: Failed to make agent id");
+                    let #remote_agent_type_ident =
+                        golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name)
+                            .ok_or_else(|| golem_rust::GolemReflectError::AgentTypeNotFound(#type_name.to_string()))?;
+                    let __golem_constructor = golem_rust::encode_schema_value(&#constructor_value_ident)
+                        .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
+                    let #agent_id_ident = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
+                        #type_name,
+                        __golem_constructor,
+                        #phantom_wire,
+                    )
+                    .map_err(golem_rust::agentic::reflection::agentic_agent_error_to_reflect)?;
+                    let __golem_constructor = golem_rust::encode_schema_value(&#constructor_value_ident)
+                        .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
+                    let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
+                        #type_name,
+                        __golem_constructor,
+                        #phantom_wire,
+                        #config,
+                    )
+                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
 
-                let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
-                    #type_name,
-                    #constructor_value_ident(),
-                    #phantom_wire,
-                    #config,
-                );
+                    Ok(#remote_client_type_name {
+                        agent_id: #agent_id_ident,
+                        phantom_id: #phantom_struct,
+                        component_id: #remote_agent_type_ident.implemented_by,
+                        wasm_rpc,
+                    })
+                }
+            } else {
+                quote! {
+                    #encode_constructor
 
-                #remote_client_type_name {
-                    agent_id: #agent_id_ident,
-                    phantom_id: #phantom_struct,
-                    wasm_rpc,
+                    #prelude
+
+                    let #agent_id_ident = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
+                        #type_name,
+                        #constructor_value_ident(),
+                        #phantom_wire,
+                    )
+                    .expect("Internal Error: Failed to make agent id");
+
+                    let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+                        #type_name,
+                        #constructor_value_ident(),
+                        #phantom_wire,
+                        #config,
+                    );
+
+                    #remote_client_type_name {
+                        agent_id: #agent_id_ident,
+                        phantom_id: #phantom_struct,
+                        wasm_rpc,
+                    }
                 }
             }
         };
@@ -142,7 +230,7 @@ pub fn get_remote_client(
             agent_config_params_as_rpc_param.clone(),
         );
         quote! {
-            pub fn #get_with_config_method_ident(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
+            pub fn #get_with_config_method_ident(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #constructor_return_type {
                 #body
             }
         }
@@ -170,15 +258,17 @@ pub fn get_remote_client(
         } else {
             build_ephemeral_constructor_body(
                 &remote_client_type_name,
-                &type_name,
+                type_name,
                 &encode_constructor,
                 &constructor_value_ident,
+                quote! { None },
                 agent_config_params_as_rpc_param.clone(),
+                construction_fallible,
             )
         };
         quote! {
             #[doc = #new_phantom_doc]
-            pub fn #new_phantom_with_config_method_ident(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
+            pub fn #new_phantom_with_config_method_ident(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #constructor_return_type {
                 #body
             }
         }
@@ -186,20 +276,30 @@ pub fn get_remote_client(
         quote! {}
     };
 
-    let optional_get_phantom_with_config_impl = if agent_is_durable
-        && !constructor_agent_config_param_defs.is_empty()
-    {
+    let optional_get_phantom_with_config_impl = if !constructor_agent_config_param_defs.is_empty() {
         let get_phantom_with_config_method_ident = get_phantom_with_config_method_ident
             .as_ref()
             .expect("agents with config allocate get_phantom_with_config");
-        let body = build_constructor_body(
-            quote! {},
-            quote! { Some(#phantom_id_param_ident.into()) },
-            quote! { Some(#phantom_id_param_ident) },
-            agent_config_params_as_rpc_param.clone(),
-        );
+        let body = if agent_is_durable {
+            build_constructor_body(
+                quote! {},
+                quote! { Some(#phantom_id_param_ident.into()) },
+                quote! { Some(#phantom_id_param_ident) },
+                agent_config_params_as_rpc_param.clone(),
+            )
+        } else {
+            build_ephemeral_constructor_body(
+                &remote_client_type_name,
+                type_name,
+                &encode_constructor,
+                &constructor_value_ident,
+                quote! { Some(#phantom_id_param_ident.into()) },
+                agent_config_params_as_rpc_param.clone(),
+                construction_fallible,
+            )
+        };
         quote! {
-            pub fn #get_phantom_with_config_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #remote_client_type_name {
+            pub fn #get_phantom_with_config_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #constructor_return_type {
                 #body
             }
         }
@@ -218,7 +318,7 @@ pub fn get_remote_client(
             quote! { Vec::new() },
         );
         quote! {
-            pub fn #get_method_ident(#(#constructor_data_value_param_defs,)*) -> #remote_client_type_name {
+            pub fn #get_method_ident(#(#constructor_data_value_param_defs,)*) -> #constructor_return_type {
                 #body
             }
         }
@@ -236,48 +336,134 @@ pub fn get_remote_client(
     } else {
         build_ephemeral_constructor_body(
             &remote_client_type_name,
-            &type_name,
+            type_name,
             &encode_constructor,
             &constructor_value_ident,
+            quote! { None },
             quote! { Vec::new() },
+            construction_fallible,
         )
     };
 
-    let get_phantom_body = build_constructor_body(
-        quote! {},
-        quote! { Some(#phantom_id_param_ident.into()) },
-        quote! { Some(#phantom_id_param_ident) },
-        quote! { Vec::new() },
-    );
+    let get_phantom_body = if agent_is_durable {
+        build_constructor_body(
+            quote! {},
+            quote! { Some(#phantom_id_param_ident.into()) },
+            quote! { Some(#phantom_id_param_ident) },
+            quote! { Vec::new() },
+        )
+    } else {
+        build_ephemeral_constructor_body(
+            &remote_client_type_name,
+            type_name,
+            &encode_constructor,
+            &constructor_value_ident,
+            quote! { Some(#phantom_id_param_ident.into()) },
+            quote! { Vec::new() },
+            construction_fallible,
+        )
+    };
 
+    let component_id_field = construction_fallible.then(|| {
+        quote! { component_id: golem_rust::schema::wit::wire::ComponentId, }
+    });
     let durable_fields = agent_is_durable.then(|| {
         quote! {
             agent_id: String,
             phantom_id: Option<golem_rust::Uuid>,
+            #component_id_field
         }
     });
-    let get_phantom_impl = agent_is_durable.then(|| quote! {
-        pub fn #get_phantom_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)*) -> #remote_client_type_name { #get_phantom_body }
-    });
+    let get_phantom_impl = quote! {
+        pub fn #get_phantom_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)*) -> #constructor_return_type { #get_phantom_body }
+    };
     let accessors = agent_is_durable.then(|| {
         quote! {
             pub fn #phantom_id_accessor_ident(&self) -> Option<golem_rust::Uuid> { self.phantom_id }
             pub fn #get_agent_id_accessor_ident(&self) -> String { self.agent_id.clone() }
         }
     });
+    let create_bound_transport = if construction_fallible {
+        quote! {
+            let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
+                #type_name,
+                golem_rust::encode_schema_value(&parts.constructor_value)
+                    .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?,
+                parts.phantom_id.map(Into::into),
+                Vec::new(),
+            )
+            .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+        }
+    } else {
+        quote! {
+            let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+                #type_name,
+                golem_rust::encode_schema_value(&parts.constructor_value)
+                    .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?,
+                parts.phantom_id.map(Into::into),
+                Vec::new(),
+            );
+        }
+    };
+    let bind_impl = (construction_fallible
+        && agent_is_durable
+        && agent_type_parameter_names.is_empty())
+        .then(|| {
+        quote! {
+            pub fn #bind_helper_ident(agent_id: &golem_rust::ParsedAgentId)
+                -> Result<Self, golem_rust::GolemReflectError>
+            {
+                let parts = agent_id.parts()?;
+                if parts.type_name != #type_name {
+                    return Err(golem_rust::GolemReflectError::InvalidType(format!(
+                        "full client expects `{}`, identity is `{}`",
+                        #type_name,
+                        parts.type_name,
+                    )));
+                }
+                let expected = golem_rust::schema::try_into_schema_graph::<#constructor_schema_type_name>()
+                    .map_err(|error| golem_rust::GolemReflectError::InvalidType(error.to_string()))?;
+                golem_rust::SchemaRef::new(expected).validate_value(&parts.constructor_value)?;
+                let agent_type = golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name)
+                    .ok_or_else(|| golem_rust::GolemReflectError::AgentTypeNotFound(#type_name.to_string()))?;
+                #create_bound_transport
+                Ok(Self {
+                    agent_id: agent_id.as_str().to_string(),
+                    phantom_id: parts.phantom_id,
+                    component_id: agent_type.implemented_by,
+                    wasm_rpc,
+                })
+            }
+        }
+    });
+    let agent_id_helper_impl = construction_fallible.then(|| quote! {
+        pub fn #agent_id_helper_ident(
+            #(#constructor_data_value_param_defs,)*
+            #phantom_id_param_ident: Option<golem_rust::Uuid>,
+        ) -> Result<golem_rust::ParsedAgentId, golem_rust::GolemReflectError> {
+            let constructor = #agent_id_body;
+            golem_rust::ParsedAgentId::from_value(#type_name, constructor, #phantom_id_param_ident)
+        }
+    });
     quote! {
+        #constructor_schema_definition
+
         pub struct #remote_client_type_name {
             #durable_fields
             wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc,
         }
 
         impl #remote_client_type_name {
+            #agent_id_helper_impl
+
+            #bind_impl
+
             #get_impl
 
             #optional_get_with_config_impl
 
             #[doc = #new_phantom_doc]
-            pub fn #new_phantom_method_ident(#(#constructor_data_value_param_defs,)*) -> #remote_client_type_name {
+            pub fn #new_phantom_method_ident(#(#constructor_data_value_param_defs,)*) -> #constructor_return_type {
                 #new_phantom_body
             }
 
@@ -299,17 +485,35 @@ fn build_ephemeral_constructor_body(
     type_name: &str,
     encode_constructor: &proc_macro2::TokenStream,
     constructor_value: &syn::Ident,
+    phantom_id: proc_macro2::TokenStream,
     config: proc_macro2::TokenStream,
+    fallible: bool,
 ) -> proc_macro2::TokenStream {
-    quote! {
-        #encode_constructor
-        let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
-            #type_name,
-            #constructor_value(),
-            None,
-            #config,
-        );
-        #client { wasm_rpc }
+    if fallible {
+        quote! {
+            #encode_constructor
+            let __golem_constructor = golem_rust::encode_schema_value(&#constructor_value)
+                .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
+            let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::create(
+                #type_name,
+                __golem_constructor,
+                #phantom_id,
+                #config,
+            )
+            .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+            Ok(#client { wasm_rpc })
+        }
+    } else {
+        quote! {
+            #encode_constructor
+            let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
+                #type_name,
+                #constructor_value(),
+                #phantom_id,
+                #config,
+            );
+            #client { wasm_rpc }
+        }
     }
 }
 
@@ -319,10 +523,31 @@ mod tests;
 fn generate_constructor_data_value_params_encoding(
     param_idents: &[proc_macro2::Ident],
     constructor_value_ident: &proc_macro2::Ident,
+    fallible: bool,
 ) -> proc_macro2::TokenStream {
-    let constructor_record = encode_parameters(param_idents, false, true);
+    if !fallible {
+        let constructor_record = encode_parameters(param_idents, false, true);
+        return quote! {
+            let #constructor_value_ident = || #constructor_record;
+        };
+    }
+
+    let constructor_record =
+        positional_record_schema_value(param_idents, "Failed to convert constructor parameter");
+    let validate = if fallible {
+        quote! {
+            golem_rust::agentic::__reject_quota_tokens_in_agent_constructor(&#constructor_value_ident)
+                .map_err(golem_rust::GolemReflectError::InvalidInput)?;
+        }
+    } else {
+        quote! {
+            golem_rust::agentic::__reject_quota_tokens_in_agent_constructor(&#constructor_value_ident)
+                .unwrap_or_else(|err| panic!("Invalid agent constructor parameters: {err}"));
+        }
+    };
     quote! {
-        let #constructor_value_ident = || #constructor_record;
+        let #constructor_value_ident = #constructor_record;
+        #validate
     }
 }
 
@@ -362,6 +587,7 @@ fn get_remote_agent_methods_info(
     tr: &ItemTrait,
     type_parameter_names: &[String],
     agent_is_durable: bool,
+    fallible: bool,
 ) -> RemoteAgentMethodsInfo {
     let user_method_names = tr
         .items
@@ -406,6 +632,7 @@ fn get_remote_agent_methods_info(
 
             let method_name = &method.sig.ident;
             let trigger_name = agent_method_names.fresh_ident(format!("trigger_{method_name}"));
+            let pending_name = agent_method_names.fresh_ident(format!("pending_{method_name}"));
             let schedule_name = agent_method_names.fresh_ident(format!("schedule_{method_name}"));
             let schedule_cancelable_name =
                 agent_method_names.fresh_ident(format!("schedule_cancelable_{method_name}"));
@@ -413,12 +640,14 @@ fn get_remote_agent_methods_info(
             Some(generate_method_code(
                 method_name,
                 &trigger_name,
+                &pending_name,
                 &schedule_name,
                 &schedule_cancelable_name,
                 &input_defs,
                 &input_idents,
                 &method.sig,
                 agent_is_durable,
+                fallible,
             ))
         })
         .collect::<Vec<_>>();
@@ -436,6 +665,378 @@ fn extract_method(item: &syn::TraitItem) -> Option<&syn::TraitItemFn> {
 }
 
 fn generate_method_code(
+    method_name: &syn::Ident,
+    trigger_name: &syn::Ident,
+    pending_name: &syn::Ident,
+    schedule_name: &syn::Ident,
+    schedule_cancelable_name: &syn::Ident,
+    input_defs: &[&syn::FnArg],
+    input_idents: &[syn::Ident],
+    sig: &syn::Signature,
+    agent_is_durable: bool,
+    fallible: bool,
+) -> proc_macro2::TokenStream {
+    if !fallible {
+        return generate_direct_method_code(
+            method_name,
+            trigger_name,
+            schedule_name,
+            schedule_cancelable_name,
+            input_defs,
+            input_idents,
+            sig,
+            agent_is_durable,
+        );
+    }
+
+    let remote_method_name = method_name.to_string();
+    let remote_token = quote! { #remote_method_name };
+    let fn_output_info = FunctionOutputInfo::from_signature(sig);
+    let return_type = match &sig.output {
+        syn::ReturnType::Type(_, ty) => quote! { #ty },
+        syn::ReturnType::Default => quote! { () },
+    };
+    let stream_types = sig
+        .inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(param) => Some(param.ty.as_ref()),
+            syn::FnArg::Receiver(_) => None,
+        })
+        .chain(match &sig.output {
+            syn::ReturnType::Type(_, ty) => Some(ty.as_ref()),
+            syn::ReturnType::Default => None,
+        })
+        .collect::<Vec<_>>();
+    let reject_non_awaited_stream_invocation = quote! {
+        if false #(|| <#stream_types as golem_rust::agentic::Schema>::contains_stream())* {
+            let _ = (#(&#input_idents),*);
+            panic!("live streams cannot cross remote or scheduled agent invocation boundaries")
+        }
+    };
+    let process_invoke_result = match &sig.output {
+        syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => decode_result_value(
+            ty,
+            quote! { rpc_result_ok.expect("remote method returned no value") },
+        ),
+        _ => quote! {},
+    };
+
+    let input_record = positional_record_schema_value(input_idents, "Failed to encode parameter");
+    let encoded_input = encode_value_only_carrier(input_record.clone());
+    let encode_input = quote! { let input = #encoded_input; };
+    let encode_input_async = quote! {
+        let input_value = #input_record;
+        let input = golem_rust::encode_schema_value_async(&input_value)
+            .await
+            .expect("Failed to encode parameters");
+    };
+    let scheduled_time_param = fresh_param_ident(input_idents, "scheduled_time");
+    if fallible {
+        let reject_non_awaited_stream_invocation = quote! {
+            if false #(|| <#stream_types as golem_rust::agentic::Schema>::contains_stream())* {
+                let _ = (#(&#input_idents),*);
+                return Err(golem_rust::GolemReflectError::InvalidType(
+                    "live streams cannot cross trigger or scheduled agent invocation boundaries".to_string(),
+                ));
+            }
+        };
+        let decode_value = match &sig.output {
+            syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => quote! {
+                let __golem_value = rpc_result_ok.ok_or_else(||
+                    golem_rust::GolemReflectError::MalformedRemoteOutput(
+                        format!("method `{}` returned unit instead of a value", #remote_token),
+                    )
+                )?;
+                static __GOLEM_RPC_GRAPH_CACHE: ::std::sync::OnceLock<golem_rust::SchemaGraph> =
+                    ::std::sync::OnceLock::new();
+                let __golem_graph = __GOLEM_RPC_GRAPH_CACHE.get_or_init(|| {
+                    <#ty as golem_rust::agentic::Schema>::get_type()
+                        .get_schema_graph()
+                        .expect("rpc result type must have a concrete schema graph")
+                });
+                <#ty as golem_rust::agentic::Schema>::from_schema_value(
+                    __golem_value,
+                    golem_rust::agentic::StructuredSchema::Default(__golem_graph.clone()),
+                )
+                .map_err(golem_rust::GolemReflectError::MalformedRemoteOutput)?
+            },
+            _ => quote! {
+                if rpc_result_ok.is_some() {
+                    return Err(golem_rust::GolemReflectError::MalformedRemoteOutput(
+                        format!("method `{}` returned a value instead of unit", #remote_token),
+                    ));
+                }
+                ()
+            },
+        };
+        let pending_decode = match &sig.output {
+            syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => quote! {
+                |rpc_result_ok| {
+                    let __golem_value = rpc_result_ok.ok_or_else(||
+                        golem_rust::GolemReflectError::MalformedRemoteOutput(
+                            format!("method `{}` returned unit instead of a value", #remote_token),
+                        )
+                    )?;
+                    static __GOLEM_RPC_GRAPH_CACHE: ::std::sync::OnceLock<golem_rust::SchemaGraph> =
+                        ::std::sync::OnceLock::new();
+                    let __golem_graph = __GOLEM_RPC_GRAPH_CACHE.get_or_init(|| {
+                        <#ty as golem_rust::agentic::Schema>::get_type()
+                            .get_schema_graph()
+                            .expect("rpc result type must have a concrete schema graph")
+                    });
+                    <#ty as golem_rust::agentic::Schema>::from_schema_value(
+                        __golem_value,
+                        golem_rust::agentic::StructuredSchema::Default(__golem_graph.clone()),
+                    )
+                    .map_err(golem_rust::GolemReflectError::MalformedRemoteOutput)
+                }
+            },
+            _ => quote! {
+                |rpc_result_ok| {
+                    if rpc_result_ok.is_some() {
+                        return Err(golem_rust::GolemReflectError::MalformedRemoteOutput(
+                            format!("method `{}` returned a value instead of unit", #remote_token),
+                        ));
+                    }
+                    Ok(())
+                }
+            },
+        };
+        let encode_input_async = quote! {
+            let input_value = #input_record;
+            let input = golem_rust::encode_schema_value_async(&input_value)
+                .await
+                .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
+        };
+        let encode_input = quote! {
+            let input_value = #input_record;
+            let input = golem_rust::encode_schema_value(&input_value)
+                .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
+        };
+        if agent_is_durable {
+            return quote! {
+                pub async fn #method_name(#(#input_defs),*)
+                    -> Result<#return_type, golem_rust::GolemReflectError>
+                {
+                    #encode_input_async
+                    let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
+                        #remote_token,
+                        input,
+                        None,
+                    ).future;
+                    let rpc_result_ok = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future)
+                        .await
+                        .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+                    Ok({ #decode_value })
+                }
+
+                pub fn #trigger_name(#(#input_defs),*)
+                    -> Result<(), golem_rust::GolemReflectError>
+                {
+                    #reject_non_awaited_stream_invocation
+                    #encode_input
+                    self.wasm_rpc.invoke(#remote_token, input, None)
+                        .map(|_| ())
+                        .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
+                }
+
+                pub fn #pending_name(#(#input_defs),*)
+                    -> Result<golem_rust::CallerPendingInvocation<#return_type>, golem_rust::GolemReflectError>
+                {
+                    #reject_non_awaited_stream_invocation
+                    let input_value = #input_record;
+                    golem_rust::agentic::reflection::start_caller_pending(
+                        &self.wasm_rpc,
+                        #remote_token,
+                        input_value,
+                        #pending_decode,
+                    )
+                }
+
+                pub fn #schedule_name(
+                    #(#input_defs,)*
+                    #scheduled_time_param: golem_rust::ScheduledTime,
+                ) -> Result<(), golem_rust::GolemReflectError> {
+                    #reject_non_awaited_stream_invocation
+                    #encode_input
+                    self.wasm_rpc.schedule_invocation(
+                        #scheduled_time_param,
+                        #remote_token,
+                        input,
+                        None,
+                    )
+                    .map(|_| ())
+                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
+                }
+
+                pub fn #schedule_cancelable_name(
+                    #(#input_defs,)*
+                    #scheduled_time_param: golem_rust::ScheduledTime,
+                ) -> Result<golem_rust::golem_agentic::golem::agent::host::CancellationToken, golem_rust::GolemReflectError> {
+                    #reject_non_awaited_stream_invocation
+                    #encode_input
+                    self.wasm_rpc.schedule_cancelable_invocation(
+                        #scheduled_time_param,
+                        #remote_token,
+                        input,
+                        None,
+                    )
+                    .map(|receipt| receipt.cancellation_token)
+                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
+                }
+            };
+        }
+
+        return quote! {
+            pub async fn #method_name(#(#input_defs),*)
+                -> Result<golem_rust::agentic::EphemeralInvocationResult<#return_type>, golem_rust::GolemReflectError>
+            {
+                #encode_input_async
+                let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input, None);
+                let metadata = invocation.metadata;
+                let rpc_result_ok = golem_rust::agentic::await_invoke_schema_value_result(invocation.future)
+                    .await
+                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+                let value = { #decode_value };
+                Ok(golem_rust::agentic::EphemeralInvocationResult { metadata, value })
+            }
+
+            pub fn #trigger_name(#(#input_defs),*)
+                -> Result<golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, golem_rust::GolemReflectError>
+            {
+                #reject_non_awaited_stream_invocation
+                #encode_input
+                self.wasm_rpc.invoke(#remote_token, input, None)
+                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
+            }
+
+            pub fn #pending_name(#(#input_defs),*)
+                -> Result<golem_rust::CallerPendingInvocation<#return_type>, golem_rust::GolemReflectError>
+            {
+                #reject_non_awaited_stream_invocation
+                let input_value = #input_record;
+                golem_rust::agentic::reflection::start_caller_pending(
+                    &self.wasm_rpc,
+                    #remote_token,
+                    input_value,
+                    #pending_decode,
+                )
+            }
+
+            pub fn #schedule_name(
+                #(#input_defs,)*
+                #scheduled_time_param: golem_rust::ScheduledTime,
+            ) -> Result<golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, golem_rust::GolemReflectError> {
+                #reject_non_awaited_stream_invocation
+                #encode_input
+                self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input, None)
+                    .map(|receipt| receipt.metadata)
+                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
+            }
+
+            pub fn #schedule_cancelable_name(
+                #(#input_defs,)*
+                #scheduled_time_param: golem_rust::ScheduledTime,
+            ) -> Result<golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt, golem_rust::GolemReflectError> {
+                #reject_non_awaited_stream_invocation
+                #encode_input
+                self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None)
+                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
+            }
+        };
+    }
+    if agent_is_durable {
+        return quote! {
+        pub async fn #method_name(#(#input_defs),*) -> #return_type {
+            #encode_input_async
+
+            let rpc_result_future = self.wasm_rpc.async_invoke_and_await(
+                #remote_token,
+                input,
+                None
+            ).future;
+
+            let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
+                golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await;
+
+            let rpc_result_ok =
+                rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
+
+            #process_invoke_result
+        }
+
+        pub fn #trigger_name(#(#input_defs),*) {
+            #reject_non_awaited_stream_invocation
+            #encode_input
+
+            let rpc_result: Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> =
+                self.wasm_rpc.invoke(#remote_token, input, None).map(|_| ());
+
+            rpc_result.unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e));
+        }
+
+        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> {
+            #reject_non_awaited_stream_invocation
+            #encode_input
+
+            self.wasm_rpc.schedule_invocation(
+                #scheduled_time_param,
+                #remote_token,
+                input,
+                None
+            ).map(|_| ())
+        }
+
+        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancellationToken, golem_rust::golem_agentic::golem::agent::host::RpcError> {
+            #reject_non_awaited_stream_invocation
+            #encode_input
+
+            self.wasm_rpc.schedule_cancelable_invocation(
+                #scheduled_time_param,
+                #remote_token,
+                input,
+                None
+            ).map(|receipt| receipt.cancellation_token)
+        }
+        };
+    }
+
+    quote! {
+        pub async fn #method_name(#(#input_defs),*) -> golem_rust::agentic::EphemeralInvocationResult<#return_type> {
+            #encode_input_async
+            let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input, None);
+            let metadata = invocation.metadata;
+            let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
+                golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await;
+            let rpc_result_ok = rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
+            let value = { #process_invoke_result };
+            golem_rust::agentic::EphemeralInvocationResult { metadata, value }
+        }
+
+        pub fn #trigger_name(#(#input_defs),*) -> golem_rust::golem_agentic::golem::agent::host::InvocationMetadata {
+            #reject_non_awaited_stream_invocation
+            #encode_input
+            self.wasm_rpc.invoke(#remote_token, input, None)
+                .unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e))
+        }
+
+        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::golem_agentic::golem::agent::host::InvocationMetadata, golem_rust::golem_agentic::golem::agent::host::RpcError> {
+            #reject_non_awaited_stream_invocation
+            #encode_input
+            self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input, None)
+                .map(|receipt| receipt.metadata)
+        }
+
+        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt, golem_rust::golem_agentic::golem::agent::host::RpcError> {
+            #reject_non_awaited_stream_invocation
+            #encode_input
+            self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None)
+        }
+    }
+}
+
+fn generate_direct_method_code(
     method_name: &syn::Ident,
     trigger_name: &syn::Ident,
     schedule_name: &syn::Ident,
@@ -575,7 +1176,7 @@ fn generate_method_code(
 fn fresh_param_ident(occupied: &[syn::Ident], preferred_name: &str) -> syn::Ident {
     let occupied = occupied
         .iter()
-        .map(ToString::to_string)
+        .map(|ident| syn::ext::IdentExt::unraw(ident).to_string())
         .collect::<HashSet<_>>();
     if !occupied.contains(preferred_name) {
         return format_ident!("{}", preferred_name);

@@ -34,6 +34,17 @@ pub mod workerctx;
 pub mod span_test_support;
 
 #[cfg(test)]
+use span_test_support::Tracing;
+#[cfg(test)]
+use test_r::test_dep;
+
+#[cfg(test)]
+#[test_dep(scope = PerWorker)]
+fn tracing() -> Tracing {
+    Tracing::init()
+}
+
+#[cfg(test)]
 test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
@@ -352,6 +363,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc
     }
 
+    fn wrap_worker_enumeration_service(
+        &self,
+        service: Arc<dyn WorkerEnumerationService>,
+    ) -> Arc<dyn WorkerEnumerationService> {
+        service
+    }
+
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
@@ -387,6 +405,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: crate::durable_host::websocket::WebSocketConnectionPool,
+        mcp_transport: Arc<services::mcp::McpTransport>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>> {
         let native_tool_catalog = self.create_native_tool_catalog()?;
@@ -431,6 +450,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             shutdown_token.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
+            mcp_transport.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -474,6 +494,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             external_durable_streams.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
+            mcp_transport.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -513,6 +534,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool.clone(),
+            mcp_transport,
             environment_state_service.clone(),
             native_tool_catalog,
             additional_deps,
@@ -833,6 +855,9 @@ pub async fn create_worker_executor_impl<
     let websocket_connection_pool = crate::durable_host::websocket::WebSocketConnectionPool::new(
         golem_config.max_websocket_connections,
     );
+    let mcp_transport = Arc::new(services::mcp::McpTransport::new(
+        golem_config.mcp_transport,
+    )?);
     let golem_config = Arc::new(golem_config);
 
     let shard_service = bootstrap.create_shard_service();
@@ -989,12 +1014,13 @@ pub async fn create_worker_executor_impl<
         component_service.clone(),
         golem_config.clone(),
     ));
-    let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
-        worker_service.clone(),
-        oplog_service.clone(),
-        component_service.clone(),
-        golem_config.clone(),
-    ));
+    let worker_enumeration_service =
+        bootstrap.wrap_worker_enumeration_service(Arc::new(DefaultWorkerEnumerationService::new(
+            worker_service.clone(),
+            oplog_service.clone(),
+            component_service.clone(),
+            golem_config.clone(),
+        )));
 
     let promise_service = Arc::new(LazyPromiseService::new());
 
@@ -1075,6 +1101,7 @@ pub async fn create_worker_executor_impl<
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             leak_sentinel,
         )
         .await?;
@@ -1144,6 +1171,7 @@ pub async fn bootstrap_and_run_worker_executor<
     start_registry_invalidation_handler: bool,
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing worker executor");
+    golem_config.validate()?;
 
     let memory_snapshot = crate::services::active_agents::memory_probe::default_probe(
         golem_config.memory.system_memory_override,

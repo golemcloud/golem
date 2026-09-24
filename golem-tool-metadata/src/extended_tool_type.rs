@@ -16,7 +16,7 @@ use crate::tool_literal::{ToolLiteral, value_is_literal_to_schema_value};
 use golem_schema::schema::tool as native;
 use golem_schema::schema::tool as wire;
 use golem_schema::schema::tool::validation::ToolValidationError;
-use golem_schema::schema::validation::validate_value;
+use golem_schema::schema::validation::{is_equivalent_cross_graph, validate_value};
 
 use golem_schema::schema::{SchemaGraph, SchemaType, SchemaValue, merge_agent_graphs};
 use std::collections::{BTreeMap, BTreeSet};
@@ -816,6 +816,57 @@ impl CanonicalInputModel {
     }
 }
 
+/// Adapts one decoded canonical input field to the schema expected by a
+/// generated implementation parameter or forwarded child command field.
+///
+/// Canonical records use an option carrier for scalar inputs that may be
+/// absent. Generated Rust methods keep their authored parameter type, so a
+/// present carrier is unwrapped when the destination is required and a bare
+/// value is wrapped when the destination retains the optional carrier.
+pub fn adapt_canonical_input_value(
+    source: CanonicalInputValue,
+    target_name: &str,
+    target_schema: &SchemaGraph,
+) -> Result<SchemaValue, String> {
+    if is_equivalent_cross_graph(
+        &source.schema,
+        &source.schema.root,
+        target_schema,
+        &target_schema.root,
+    ) {
+        return Ok(source.value);
+    }
+
+    if let SchemaType::Option { inner, .. } = &source.schema.root
+        && is_equivalent_cross_graph(&source.schema, inner, target_schema, &target_schema.root)
+    {
+        return match source.value {
+            SchemaValue::Option { inner: Some(value) } => Ok(*value),
+            SchemaValue::Option { inner: None } => Err(format!(
+                "canonical tool input field `{}` is absent but forwarded field `{target_name}` is required",
+                source.name
+            )),
+            _ => Err(format!(
+                "canonical tool input field `{}` has an invalid optional carrier",
+                source.name
+            )),
+        };
+    }
+
+    if let SchemaType::Option { inner, .. } = &target_schema.root
+        && is_equivalent_cross_graph(&source.schema, &source.schema.root, target_schema, inner)
+    {
+        return Ok(SchemaValue::Option {
+            inner: Some(Box::new(source.value)),
+        });
+    }
+
+    Err(format!(
+        "canonical tool input field `{}` has incompatible schema for forwarded field `{target_name}`",
+        source.name
+    ))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CanonicalInputDecodeError {
     Model(ToolBuildError),
@@ -1182,12 +1233,18 @@ impl ExtendedToolType {
     }
 
     pub fn command_index_by_path(&self, command_path: &[String]) -> Option<usize> {
+        let current = self.node_index_by_path(command_path)?;
+        self.commands[current].body.as_ref().map(|_| current)
+    }
+
+    /// Resolves a command or namespace node without requiring an invokable body.
+    pub fn node_index_by_path(&self, command_path: &[String]) -> Option<usize> {
         let mut current = 0usize;
         if self.commands.is_empty() {
             return None;
         }
         if command_path.is_empty() {
-            return self.commands[current].body.as_ref().map(|_| current);
+            return Some(current);
         }
         for segment in command_path {
             let next = self.commands[current].subcommands.iter().find_map(|idx| {
@@ -1198,7 +1255,7 @@ impl ExtendedToolType {
             })?;
             current = next;
         }
-        self.commands[current].body.as_ref().map(|_| current)
+        Some(current)
     }
 
     /// Projects the canonical-relevant subset of this descriptor onto the
@@ -1358,9 +1415,9 @@ impl ExtendedToolType {
     }
 
     /// The SDK-side field for one shared canonical surface reference: the
-    /// name/aliases from the descriptor plus the *original* embedded
-    /// self-contained graph of that surface (collected form for repeatable
-    /// options and the tail).
+    /// name/aliases from the descriptor plus the self-contained canonical
+    /// carrier graph for that surface (collected form for repeatable options
+    /// and the tail, optional form for absent scalar inputs).
     fn canonical_field_for_surface(
         &self,
         command_index: usize,
@@ -1379,7 +1436,7 @@ impl ExtendedToolType {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
                     short: option.short,
-                    schema: option_collected_graph(&option.shape),
+                    schema: canonical_option_graph(option),
                 })
             }
             CanonicalSurfaceRef::GlobalFlag { node, index } => {
@@ -1397,7 +1454,7 @@ impl ExtendedToolType {
                     name: positional.name.clone(),
                     aliases: Vec::new(),
                     short: None,
-                    schema: positional.type_.clone(),
+                    schema: canonical_positional_graph(positional),
                 })
             }
             CanonicalSurfaceRef::BodyTail => {
@@ -1415,7 +1472,7 @@ impl ExtendedToolType {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
                     short: option.short,
-                    schema: option_collected_graph(&option.shape),
+                    schema: canonical_option_graph(option),
                 })
             }
             CanonicalSurfaceRef::BodyFlag { index } => {
@@ -1543,7 +1600,12 @@ pub fn build_canonical_input(
             .zip(params.iter())
             .all(|(field, (name, _))| field.name.as_str() == *name)
     {
-        params.into_iter().map(|(_, value)| value).collect()
+        model
+            .fields
+            .iter()
+            .zip(params)
+            .map(|(field, (_, value))| canonical_input_carrier(field, value))
+            .collect()
     } else {
         let mut fields: Vec<SchemaValue> = Vec::with_capacity(model.fields.len());
         for field in &model.fields {
@@ -1551,7 +1613,7 @@ pub fn build_canonical_input(
                 .iter()
                 .rposition(|(name, _)| *name == field.name.as_str())
                 .ok_or_else(|| format!("missing canonical tool input field `{}`", field.name))?;
-            fields.push(params.remove(index).1);
+            fields.push(canonical_input_carrier(field, params.remove(index).1));
         }
         fields
     };
@@ -1589,31 +1651,49 @@ pub fn build_canonical_input_with_prefix(
             std::iter::once(value.name.as_str()).chain(value.aliases.iter().map(String::as_str))
         })
         .collect();
-    canonical_fields.extend(command_fields.into_iter().filter(|field| {
-        !inherited_names.contains(field.name.as_str())
-            && !field
-                .aliases
-                .iter()
-                .any(|alias| inherited_names.contains(alias.as_str()))
-    }));
+    canonical_fields.extend(
+        command_fields
+            .iter()
+            .filter(|field| {
+                !inherited_names.contains(field.name.as_str())
+                    && !field
+                        .aliases
+                        .iter()
+                        .any(|alias| inherited_names.contains(alias.as_str()))
+            })
+            .cloned(),
+    );
     let model =
         CanonicalInputModel::from_fields(canonical_fields).map_err(|error| error.to_string())?;
 
     let mut fields: Vec<SchemaValue> = inherited_prefix
         .iter()
-        .map(|value| value.value.clone())
+        .zip(model.fields.iter())
+        .map(|(value, field)| canonical_input_carrier(field, value.value.clone()))
         .collect();
     for field in model.fields.iter().skip(inherited_prefix.len()) {
         let index = params
             .iter()
             .rposition(|(name, _)| *name == field.name.as_str())
             .ok_or_else(|| format!("missing canonical tool input field `{}`", field.name))?;
-        fields.push(params.remove(index).1);
+        fields.push(canonical_input_carrier(field, params.remove(index).1));
     }
     Ok(crate::TypedSchemaValue::new(
         model.record_schema,
         SchemaValue::Record { fields },
     ))
+}
+
+fn canonical_input_carrier(field: &CanonicalInputField, value: SchemaValue) -> SchemaValue {
+    if matches!(field.schema.root, SchemaType::Option { .. })
+        && !matches!(value, SchemaValue::Option { .. })
+    {
+        SchemaValue::Option {
+            inner: Some(Box::new(value)),
+        }
+    } else {
+        value
+    }
 }
 
 /// Maps the shared canonical/validation error type onto the SDK's
@@ -1691,6 +1771,40 @@ pub fn option_collected_graph<S: ToolSchemaRepr>(s: &ExtendedOptionShape<S>) -> 
         ExtendedOptionShape::Scalar(g) | ExtendedOptionShape::OptionalScalar(g) => g.clone(),
         ExtendedOptionShape::RepeatableList(r) => r.item_type.list(),
         ExtendedOptionShape::RepeatableMap(r) => r.map_type.clone(),
+    }
+}
+
+fn canonical_option_graph(option: &ExtendedOptionSpec) -> SchemaGraph {
+    let collected = option_collected_graph(&option.shape);
+    if !option.required
+        && option.default.is_none()
+        && !matches!(
+            &option.shape,
+            ExtendedOptionShape::RepeatableList(_) | ExtendedOptionShape::RepeatableMap(_)
+        )
+        && !matches!(&collected.root, SchemaType::Option { .. })
+    {
+        option_wrapper_graph(&collected)
+    } else {
+        collected
+    }
+}
+
+fn canonical_positional_graph(positional: &ExtendedPositional) -> SchemaGraph {
+    if !positional.required
+        && positional.default.is_none()
+        && !matches!(&positional.type_.root, SchemaType::Option { .. })
+    {
+        option_wrapper_graph(&positional.type_)
+    } else {
+        positional.type_.clone()
+    }
+}
+
+fn option_wrapper_graph(inner: &SchemaGraph) -> SchemaGraph {
+    SchemaGraph {
+        defs: inner.defs.clone(),
+        root: SchemaType::option(inner.root.clone()),
     }
 }
 
@@ -4369,13 +4483,253 @@ mod tests {
     }
 
     #[test]
+    fn extended_and_native_canonical_input_schemas_match_optional_carriers() {
+        let mut tool = sample_tool();
+        let body = tool.commands[1].body.as_mut().unwrap();
+        body.positionals.fixed[0].required = false;
+        let extended = tool.canonical_input_model(1).unwrap();
+        let native = tool
+            .canonical_projection()
+            .canonical_input_model(1)
+            .unwrap();
+        assert_eq!(extended.record_schema, native.record_schema);
+
+        let SchemaType::Record { fields, .. } = &extended.record_schema.root else {
+            panic!("canonical input schema must be a record")
+        };
+        assert!(matches!(fields[0].body, SchemaType::Option { .. }));
+        assert!(matches!(fields[1].body, SchemaType::Option { .. }));
+        assert!(matches!(fields[2].body, SchemaType::Map { .. }));
+    }
+
+    #[test]
+    fn generated_client_input_model_encodes_absent_and_supplied_optional_values() {
+        let model = sample_tool().canonical_input_model(1).unwrap();
+        for (verbose, expected) in [
+            (
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                SchemaValue::U32(3),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U32(3))),
+                },
+            ),
+        ] {
+            let input = build_canonical_input(
+                &model,
+                vec![
+                    ("verbose", verbose),
+                    ("input", SchemaValue::String("in.txt".to_string())),
+                    (
+                        "config",
+                        SchemaValue::Map {
+                            entries: Vec::new(),
+                        },
+                    ),
+                    ("force", SchemaValue::Bool(false)),
+                ],
+            )
+            .unwrap();
+            assert_eq!(input.graph(), &model.record_schema);
+            let SchemaValue::Record { fields } = input.value() else {
+                panic!("canonical generated-client input must be a record")
+            };
+            assert_eq!(&fields[0], &expected);
+        }
+    }
+
+    #[test]
+    fn canonical_forwarding_adapts_present_optional_carriers() {
+        let bare = u32_graph();
+        let optional = option_wrapper_graph(&bare);
+        let source = CanonicalInputValue {
+            name: "count".to_string(),
+            aliases: vec!["format".to_string()],
+            short: None,
+            schema: optional.clone(),
+            value: SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(7))),
+            },
+        };
+        assert_eq!(
+            adapt_canonical_input_value(source, "format", &bare).unwrap(),
+            SchemaValue::U32(7)
+        );
+
+        let source = CanonicalInputValue {
+            name: "format".to_string(),
+            aliases: vec!["count".to_string()],
+            short: None,
+            schema: bare,
+            value: SchemaValue::U32(7),
+        };
+        assert_eq!(
+            adapt_canonical_input_value(source, "count", &optional).unwrap(),
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(7))),
+            }
+        );
+    }
+
+    #[test]
+    fn canonical_forwarding_rejects_absent_required_values() {
+        let bare = u32_graph();
+        let source = CanonicalInputValue {
+            name: "count".to_string(),
+            aliases: vec!["format".to_string()],
+            short: None,
+            schema: option_wrapper_graph(&bare),
+            value: SchemaValue::Option { inner: None },
+        };
+        assert_eq!(
+            adapt_canonical_input_value(source, "format", &bare).unwrap_err(),
+            "canonical tool input field `count` is absent but forwarded field `format` is required"
+        );
+    }
+
+    #[test]
+    fn inherited_prefix_keeps_parent_carrier_when_child_redeclares_field() {
+        let bare = u32_graph();
+        let optional = option_wrapper_graph(&bare);
+        for value in [
+            SchemaValue::Option { inner: None },
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(7))),
+            },
+        ] {
+            let input = build_canonical_input_with_prefix(
+                vec![CanonicalInputField {
+                    name: "count".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: bare.clone(),
+                }],
+                &[CanonicalInputValue {
+                    name: "count".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: optional.clone(),
+                    value: value.clone(),
+                }],
+                vec![],
+            )
+            .unwrap();
+            assert_eq!(
+                input.value(),
+                &SchemaValue::Record {
+                    fields: vec![value]
+                }
+            );
+            let expected = CanonicalInputModel::from_fields(vec![CanonicalInputField {
+                name: "count".to_string(),
+                aliases: vec![],
+                short: None,
+                schema: optional.clone(),
+            }])
+            .unwrap();
+            assert_eq!(input.graph(), &expected.record_schema);
+        }
+    }
+
+    #[test]
+    fn inherited_prefix_keeps_optional_parent_field_absent_from_child() {
+        let optional = option_wrapper_graph(&u32_graph());
+        for value in [
+            SchemaValue::Option { inner: None },
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(7))),
+            },
+        ] {
+            let input = build_canonical_input_with_prefix(
+                vec![CanonicalInputField {
+                    name: "query".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: str_graph(),
+                }],
+                &[CanonicalInputValue {
+                    name: "verbose".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: optional.clone(),
+                    value: value.clone(),
+                }],
+                vec![("query", SchemaValue::String("demo".to_string()))],
+            )
+            .unwrap();
+            let expected = CanonicalInputModel::from_fields(vec![
+                CanonicalInputField {
+                    name: "verbose".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: optional.clone(),
+                },
+                CanonicalInputField {
+                    name: "query".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: str_graph(),
+                },
+            ])
+            .unwrap();
+            assert_eq!(input.graph(), &expected.record_schema);
+            assert_eq!(
+                input.value(),
+                &SchemaValue::Record {
+                    fields: vec![value, SchemaValue::String("demo".to_string())]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_prefix_keeps_required_parent_carrier_when_child_is_optional() {
+        let required = str_graph();
+        let input = build_canonical_input_with_prefix(
+            vec![CanonicalInputField {
+                name: "format".to_string(),
+                aliases: vec![],
+                short: None,
+                schema: option_wrapper_graph(&required),
+            }],
+            &[CanonicalInputValue {
+                name: "format".to_string(),
+                aliases: vec![],
+                short: None,
+                schema: required.clone(),
+                value: SchemaValue::String("json".to_string()),
+            }],
+            vec![],
+        )
+        .unwrap();
+        let expected = CanonicalInputModel::from_fields(vec![CanonicalInputField {
+            name: "format".to_string(),
+            aliases: vec![],
+            short: None,
+            schema: required,
+        }])
+        .unwrap();
+        assert_eq!(input.graph(), &expected.record_schema);
+        assert_eq!(
+            input.value(),
+            &SchemaValue::Record {
+                fields: vec![SchemaValue::String("json".to_string())]
+            }
+        );
+    }
+
+    #[test]
     fn canonical_input_model_decodes_positional_record_by_index() {
         let tool = sample_tool();
         let model = tool.canonical_input_model(1).unwrap();
         let decoded = model
             .decode_record(SchemaValue::Record {
                 fields: vec![
-                    SchemaValue::U32(3),
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::U32(3))),
+                    },
                     SchemaValue::String("in.txt".to_string()),
                     SchemaValue::Map { entries: vec![] },
                     SchemaValue::Bool(true),
@@ -4390,7 +4744,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["verbose", "input", "config", "force"]
         );
-        assert_eq!(decoded[0].value, SchemaValue::U32(3));
+        assert_eq!(
+            decoded[0].value,
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(3))),
+            }
+        );
         assert_eq!(decoded[1].value, SchemaValue::String("in.txt".to_string()));
         assert_eq!(decoded[3].value, SchemaValue::Bool(true));
     }

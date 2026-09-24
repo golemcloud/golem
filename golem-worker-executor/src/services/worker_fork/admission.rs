@@ -6,14 +6,19 @@
 
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, StreamExportForkAdmittedRecord, StreamExportForkCandidate,
+    StreamSessionExpiryPolicy,
 };
 use golem_common::model::{AgentId, ExportForkAdmissions, OplogIndex};
+
+const MAX_TTL_SECONDS: u64 = 100 * 365 * 24 * 60 * 60;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Admission {
     Reserved,
     Existing { oplog_index: OplogIndex },
     Conflict,
+    Expired,
+    InvalidExpiry,
     LimitReached,
     RateLimited { retry_after_seconds: u64 },
 }
@@ -81,6 +86,37 @@ pub fn reserve(
         now,
     ) {
         return Err(rejection);
+    }
+    match candidate.expiry_policy {
+        StreamSessionExpiryPolicy::None => {}
+        StreamSessionExpiryPolicy::Sliding { ttl_seconds } => {
+            if ttl_seconds > MAX_TTL_SECONDS {
+                return Err(Admission::InvalidExpiry);
+            }
+            let deadline = ttl_seconds
+                .checked_mul(1_000)
+                .and_then(|ttl| now.checked_add(ttl))
+                .ok_or(Admission::InvalidExpiry)?;
+            if i64::try_from(deadline)
+                .ok()
+                .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+                .is_none()
+            {
+                return Err(Admission::InvalidExpiry);
+            }
+        }
+        StreamSessionExpiryPolicy::Absolute { expires_at_millis } => {
+            if expires_at_millis <= now {
+                return Err(Admission::Expired);
+            }
+            if i64::try_from(expires_at_millis)
+                .ok()
+                .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+                .is_none()
+            {
+                return Err(Admission::InvalidExpiry);
+            }
+        }
     }
     Ok(StreamExportForkAdmittedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,

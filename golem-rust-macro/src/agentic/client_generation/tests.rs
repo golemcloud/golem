@@ -48,14 +48,14 @@ fn durable_agents_generate_getters() {
 }
 
 #[test]
-fn ephemeral_agents_skip_non_phantom_getters() {
+fn ephemeral_agents_generate_known_and_fresh_phantom_getters() {
     let rendered = render_client(false);
 
     assert!(!rendered.contains("pub fn get ("));
     assert!(!rendered.contains("get_with_config"));
     assert!(rendered.contains("new_phantom"));
-    assert!(!rendered.contains("get_phantom"));
-    assert!(!rendered.contains("get_phantom_with_config"));
+    assert!(rendered.contains("get_phantom"));
+    assert!(rendered.contains("get_phantom_with_config"));
     assert!(!rendered.contains("Uuid :: new_v4"));
     assert!(!rendered.contains("make_agent_id"));
     assert!(rendered.contains("async_invoke_and_await"));

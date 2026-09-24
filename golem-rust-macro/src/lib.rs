@@ -104,6 +104,21 @@ pub fn agent_implementation(attr: TokenStream, item: TokenStream) -> TokenStream
     agentic::agent_implementation_impl(attr, item)
 }
 
+/// Registers an implementation of the SDK's `HttpRouter` trait.
+#[cfg(not(test))]
+#[proc_macro_attribute]
+pub fn http_router(attr: TokenStream, item: TokenStream) -> TokenStream {
+    agentic::http_router::expand(attr.into(), item.into())
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
+
+#[cfg(not(test))]
+#[proc_macro_attribute]
+pub fn agent_client(attr: TokenStream, item: TokenStream) -> TokenStream {
+    agentic::agent_client_impl(attr, item, &get_golem_rust_crate_ident())
+}
+
 #[cfg(not(test))]
 #[proc_macro_attribute]
 pub fn tool_definition(attr: TokenStream, item: TokenStream) -> TokenStream {

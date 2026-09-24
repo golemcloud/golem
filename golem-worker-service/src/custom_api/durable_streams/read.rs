@@ -17,7 +17,7 @@
 
 use super::super::error::RequestHandlerError;
 use super::super::route_resolver::ResolvedRouteEntry;
-use super::super::{ResponseBody, RichRequest, RouteExecutionResult};
+use super::super::{ResponseBody, RichRequest, RichRouteSecurity, RouteExecutionResult};
 use super::encoding::{
     content_type, data_response, etag, live_cursor, metadata_response, offset_text, sse_batch,
 };
@@ -27,12 +27,12 @@ use super::{
 };
 use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ReadStreamSlotRequest, ReadStreamSlotSuccess,
+    ReadStreamSlotRequest, ReadStreamSlotSuccess, StreamSlotReadAdmission,
 };
 use golem_common::model::durable_stream::StreamOffset;
 use golem_common::model::{AgentId, OplogIndex};
 use golem_service_base::model::auth::AuthCtx;
-use http::{HeaderName, Method, StatusCode};
+use http::{HeaderName, HeaderValue, Method, StatusCode};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -82,31 +82,6 @@ impl DurableStreamsHandler {
             None => None,
         };
         let offset = single_query_param(request, "offset").unwrap_or("-1");
-        let mut tail = None;
-        let from = match offset {
-            "-1" => Vec::new(),
-            "now" => {
-                let Some(mut head) = self
-                    .read_slot(route, agent_id, &session, &slot, Vec::new(), 0, 0)
-                    .await?
-                else {
-                    return Ok(response(StatusCode::NOT_FOUND));
-                };
-                if head.tombstoned {
-                    return Ok(response(StatusCode::GONE));
-                }
-                head.next_offset = head.head_offset.clone();
-                head.up_to_date = true;
-                let from = head.head_offset.clone();
-                tail = Some(head);
-                from
-            }
-            value => match StreamOffset::from_str(value) {
-                Ok(v) if v == StreamOffset::new(OplogIndex::NONE, 0) => Vec::new(),
-                Ok(v) => v.as_bytes().to_vec(),
-                Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
-            },
-        };
         let key = format!("{}:{agent_id}:{session}:{slot}", route.route.environment_id);
         let permit = if live.is_some() {
             match self.limiter.try_acquire_reader(&key) {
@@ -119,6 +94,43 @@ impl DurableStreamsHandler {
             }
             None
         };
+        let mut tail = None;
+        let mut pinned_invocation_key = None;
+        let from = match offset {
+            "-1" => Vec::new(),
+            "now" => {
+                let Some(mut head) = self
+                    .read_slot_admitted(
+                        route,
+                        agent_id,
+                        &session,
+                        &slot,
+                        Vec::new(),
+                        0,
+                        0,
+                        StreamSlotReadAdmission::TouchingOriginGet,
+                        None,
+                    )
+                    .await?
+                else {
+                    return Ok(response(StatusCode::NOT_FOUND));
+                };
+                if head.tombstoned {
+                    return Ok(response(StatusCode::GONE));
+                }
+                head.next_offset = head.head_offset.clone();
+                head.up_to_date = true;
+                let from = head.head_offset.clone();
+                pinned_invocation_key = head.invocation_key.clone();
+                tail = Some(head);
+                from
+            }
+            value => match StreamOffset::from_str(value) {
+                Ok(v) if v == StreamOffset::new(OplogIndex::NONE, 0) => Vec::new(),
+                Ok(v) => v.as_bytes().to_vec(),
+                Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
+            },
+        };
         let wait = live
             .map(|_| self.long_poll_timeout.as_millis() as u64)
             .unwrap_or(0);
@@ -126,7 +138,21 @@ impl DurableStreamsHandler {
         let read = match tail {
             Some(head) if live != Some(Live::LongPoll) || head.closed => head,
             _ => match self
-                .read_slot(route, agent_id, &session, &slot, from, MAX_ITEMS, wait)
+                .read_slot_admitted(
+                    route,
+                    agent_id,
+                    &session,
+                    &slot,
+                    from,
+                    MAX_ITEMS,
+                    wait,
+                    if pinned_invocation_key.is_some() {
+                        StreamSlotReadAdmission::Continuation
+                    } else {
+                        StreamSlotReadAdmission::TouchingOriginGet
+                    },
+                    pinned_invocation_key,
+                )
                 .await?
             {
                 Some(read) => read,
@@ -141,19 +167,20 @@ impl DurableStreamsHandler {
             r.status = StatusCode::NO_CONTENT;
             r.headers.insert(
                 HeaderName::from_static("stream-cursor"),
-                live_cursor(cursor)?.to_string(),
+                HeaderValue::from(live_cursor(cursor)?),
             );
             return Ok(r);
         }
         if live == Some(Live::Sse) {
             let mut result = metadata_response(&read, false)?;
-            result
-                .headers
-                .insert(http::header::CONTENT_TYPE, "text/event-stream".into());
+            result.headers.insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/event-stream"),
+            );
             if content_type(&read) == "application/octet-stream" {
                 result.headers.insert(
                     HeaderName::from_static("stream-sse-data-encoding"),
-                    "base64".into(),
+                    HeaderValue::from_static("base64"),
                 );
             }
             let read_request = ReadStreamSlotRequest {
@@ -167,6 +194,8 @@ impl DurableStreamsHandler {
                 max_bytes: MAX_BYTES,
                 wait_millis: wait,
                 expected_method: route_method(route).to_owned(),
+                admission: StreamSlotReadAdmission::Continuation as i32,
+                invocation_key: read.invocation_key.clone(),
             };
             result.body = ResponseBody::PoemBody {
                 body: sse_body(
@@ -181,16 +210,21 @@ impl DurableStreamsHandler {
             };
             return Ok(result);
         }
-        let mut result = data_response(&read)?;
+        let sensitive = !matches!(route.route.security, RichRouteSecurity::None);
+        let mut result = data_response(&read, sensitive)?;
         let etag = etag(&read, &start_offset, &read.next_offset)?;
-        result.headers.insert(http::header::ETAG, etag.clone());
+        result.headers.insert(
+            http::header::ETAG,
+            etag.parse().map_err(anyhow::Error::from)?,
+        );
         if live.is_some() {
-            result
-                .headers
-                .insert(http::header::CACHE_CONTROL, "no-store".into());
+            result.headers.insert(
+                http::header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
             result.headers.insert(
                 HeaderName::from_static("stream-cursor"),
-                live_cursor(cursor)?.to_string(),
+                HeaderValue::from(live_cursor(cursor)?),
             );
         } else if read.closed && if_none_match_hits(request, &etag) {
             result.status = StatusCode::NOT_MODIFIED;

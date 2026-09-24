@@ -23,7 +23,10 @@ use super::agent_webhooks::AgentWebhooksService;
 use super::environment_state::EnvironmentStateService;
 use super::external_durable_stream::ExternalDurableStreamService;
 use super::file_loader::FileLoader;
-use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasExternalDurableStreamService};
+use super::{
+    HasAgentWebhooksService, HasEnvironmentStateService, HasExternalDurableStreamService,
+    HasMcpTransport,
+};
 use crate::durable_host::durable_stream::{DurableStreamStore, StreamStoreError};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::metrics::workers::record_worker_call;
@@ -133,6 +136,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub shutdown_token: tokio_util::sync::CancellationToken,
     pub http_connection_pool: Option<HttpConnectionPool>,
     pub websocket_connection_pool: WebSocketConnectionPool,
+    pub mcp_transport: Arc<super::mcp::McpTransport>,
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
     pub native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     pub extra_deps: Ctx::ExtraDeps,
@@ -347,6 +351,12 @@ impl<Ctx: WorkerCtx> HasWebSocketConnectionPool for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasMcpTransport for DefaultWorkerFork<Ctx> {
+    fn mcp_transport(&self) -> Arc<super::mcp::McpTransport> {
+        self.mcp_transport.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasEnvironmentStateService for DefaultWorkerFork<Ctx> {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.environment_state_service.clone()
@@ -396,6 +406,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             websocket_connection_pool: self.websocket_connection_pool.clone(),
             environment_state_service: self.environment_state_service.clone(),
             native_tool_catalog: self.native_tool_catalog.clone(),
+            mcp_transport: self.mcp_transport.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -441,6 +452,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
+        mcp_transport: Arc<super::mcp::McpTransport>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -477,6 +489,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             environment_state_service,
             native_tool_catalog,
             extra_deps,
@@ -553,7 +566,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         )>,
         max_copied_bytes: Option<u64>,
         export: Option<&export::Candidate>,
-    ) -> Result<(Arc<dyn Oplog>, u64), WorkerExecutorError> {
+    ) -> Result<(Arc<dyn Oplog>, u64, AgentFingerprint), WorkerExecutorError> {
         record_worker_call("fork");
 
         tracing::debug!(
@@ -605,7 +618,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         .map_err(WorkerExecutorError::runtime)?
         .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id()))?;
 
-        let instance_id = Uuid::new_v4();
+        // The stage id also identifies the target incarnation while it is hidden. This lets
+        // scheduled work for that incarnation distinguish publication in progress from a target
+        // that genuinely does not exist.
+        let instance_id = stage_id;
         let source_oplog_metadata = initial_source_worker_metadata.clone();
 
         // Use the source worker's `created_by` (the component owner) rather
@@ -878,7 +894,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         for (idempotency_key, pending_index) in pending_invocation_keys {
             if let Some(candidate) = export {
-                if idempotency_key.value == candidate.export.session {
+                if idempotency_key == candidate.source_invocation.idempotency_key {
                     continue;
                 }
                 if let OplogEntry::PendingAgentInvocation { payload, .. } =
@@ -966,6 +982,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         Ok((
             new_oplog,
             copied_bytes.saturating_add(external_payload_bytes.load(Ordering::Relaxed)),
+            AgentFingerprint(instance_id),
         ))
     }
 
@@ -998,7 +1015,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         if !publication::existing_fork(self.oplog_service.as_ref(), &target, cut, hash).await? {
             let stage_id = Uuid::new_v4();
             let result = async {
-                let (oplog, _) = self
+                let (oplog, _, _) = self
                     .copy_source_oplog(
                         fork_account_id,
                         source,
@@ -1079,37 +1096,15 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         match entry {
             OplogEntry::Create {
                 timestamp,
-                owner_kind,
-                agent_mode,
-                component_revision,
-                env,
-                environment_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                local_agent_config,
-                agent_id: _,
-                original_phantom_id,
-                ..
-            } => Some(OplogEntry::Create {
-                timestamp,
-                agent_id: agent_id.clone(),
-                owner_kind,
-                agent_mode,
-                component_revision,
-                env,
-                environment_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                local_agent_config,
-                original_phantom_id,
-                instance_id,
-            }),
+                mut parameters,
+            } => {
+                parameters.agent_id = agent_id.clone();
+                parameters.instance_id = instance_id;
+                Some(OplogEntry::Create {
+                    timestamp,
+                    parameters,
+                })
+            }
             _ => None,
         }
     }
@@ -1133,29 +1128,27 @@ fn rewrite_forked_oplog_entry(
     target_agent_id: &AgentId,
 ) -> OplogEntry {
     match &mut entry {
-        OplogEntry::AgentInvocationStarted {
-            wallet_pin: Some(wallet_pin),
-            ..
-        } => {
+        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
             wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
                 agent_id: target_agent_id.clone(),
             })
             .wallet_id_hash();
         }
-        OplogEntry::CardEventQueued {
-            event: QueuedCardEvent::TransferStarted(event),
-            ..
-        } => {
-            rewrite_forked_agent_holder(&mut event.target_holder, source_agent_id, target_agent_id)
+        OplogEntry::CardEventQueued { event, .. } => {
+            if let QueuedCardEvent::TransferStarted(event) = event.as_mut() {
+                rewrite_forked_agent_holder(
+                    &mut event.target_holder,
+                    source_agent_id,
+                    target_agent_id,
+                );
+            }
         }
         OplogEntry::CardTransferStarted {
             source_holder,
             target_holder,
             ..
         } => {
-            if let Some(source_holder) = source_holder {
-                rewrite_forked_agent_holder(source_holder, source_agent_id, target_agent_id);
-            }
+            rewrite_forked_agent_holder(source_holder, source_agent_id, target_agent_id);
             rewrite_forked_agent_holder(target_holder, source_agent_id, target_agent_id);
         }
         OplogEntry::CardTransferred { target_holder, .. }
@@ -1256,7 +1249,7 @@ mod tests {
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
-            wallet_pin: Some(InvocationWalletPin {
+            wallet_pin: Box::new(InvocationWalletPin {
                 wallet_token: WalletVersionToken {
                     wallet_id_hash: CardHolder::Agent(AgentCardHolder {
                         agent_id: source.clone(),
@@ -1270,10 +1263,7 @@ mod tests {
         };
 
         match rewrite_forked_oplog_entry(entry, &source, &target) {
-            OplogEntry::AgentInvocationStarted {
-                wallet_pin: Some(wallet_pin),
-                ..
-            } => assert_eq!(
+            OplogEntry::AgentInvocationStarted { wallet_pin, .. } => assert_eq!(
                 wallet_pin.wallet_token.wallet_id_hash,
                 CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
             ),
@@ -1291,13 +1281,13 @@ mod tests {
             entity_parent_start_index: None,
             transfer_id: Uuid::new_v4(),
             card_id: CardId::new(),
-            source_holder: Some(CardHolder::Agent(AgentCardHolder {
+            source_holder: CardHolder::Agent(AgentCardHolder {
                 agent_id: source.clone(),
-            })),
+            }),
             target_holder: CardHolder::Agent(AgentCardHolder {
                 agent_id: remote.clone(),
             }),
-            source_wallet_generation: Some(8),
+            source_wallet_generation: 8,
         };
 
         match rewrite_forked_oplog_entry(entry, &source, &target) {
@@ -1308,7 +1298,7 @@ mod tests {
             } => {
                 assert_eq!(
                     source_holder,
-                    Some(CardHolder::Agent(AgentCardHolder { agent_id: target }))
+                    CardHolder::Agent(AgentCardHolder { agent_id: target })
                 );
                 assert_eq!(
                     target_holder,

@@ -18,6 +18,7 @@ interface common {
   /// semantic root of the agent type.
   record agent-type {
     type-name:       string,
+    kind:            agent-type-kind,
     description:     string,
     source-language: string,
     schema:          schema-graph,
@@ -28,6 +29,11 @@ interface common {
     http-mount:      option<http-mount-details>,
     snapshotting:    snapshotting,
     config:       list<agent-config-declaration>,
+  }
+
+  enum agent-type-kind {
+    regular,
+    http-router,
   }
 
   /// Associates an agent type with a component that implements it
@@ -102,6 +108,25 @@ interface common {
     phantom-agent:  bool,
     cors-options:   cors-options,
     webhook-suffix: list<path-segment>,
+    static-bindings: list<file-mapping>,
+    filesystem-bindings: list<file-mapping>,
+    /// The name of a parameterless router method that returns the OpenAPI document as a string.
+    openapi-provider-method: option<string>,
+  }
+
+  variant file-mapping {
+    exact(exact-file-mapping),
+    subtree(subtree-file-mapping),
+  }
+
+  record exact-file-mapping {
+    public-path: list<string>,
+    file-path: string,
+  }
+
+  record subtree-file-mapping {
+    public-prefix: list<string>,
+    filesystem-root: string,
   }
 
   record cors-options {
@@ -128,6 +153,7 @@ interface common {
     trace,
     patch,
     custom(string),
+    any,
   }
 
   variant path-segment {

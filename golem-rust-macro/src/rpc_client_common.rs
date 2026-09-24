@@ -15,7 +15,8 @@
 //! Generator-neutral primitives shared by the agent remote-client generator
 //! and the tool client generator.
 
-use proc_macro2::Span;
+use proc_macro2::{Span, TokenStream};
+use quote::quote;
 use syn::spanned::Spanned;
 use syn::{FnArg, ReturnType, Type};
 
@@ -192,4 +193,47 @@ pub fn collect_kept_args(
             FnArg::Typed(pat_type) => keep(pat_type),
         })
         .collect()
+}
+
+pub fn positional_record_schema_value(idents: &[syn::Ident], field_expect: &str) -> TokenStream {
+    quote! {
+        golem_rust::SchemaValue::Record {
+            fields: vec![
+                #(<_ as golem_rust::agentic::Schema>::to_schema_value(#idents)
+                    .expect(#field_expect)),*
+            ],
+        }
+    }
+}
+
+pub fn encode_value_only_carrier(record_expr: TokenStream) -> TokenStream {
+    quote! {
+        golem_rust::encode_schema_value(&#record_expr)
+            .expect("Failed to encode parameters")
+    }
+}
+
+pub fn memoized_graph_access(build_expr: TokenStream) -> TokenStream {
+    quote! {
+        {
+            static __GOLEM_RPC_GRAPH_CACHE: ::std::sync::OnceLock<golem_rust::SchemaGraph> =
+                ::std::sync::OnceLock::new();
+            __GOLEM_RPC_GRAPH_CACHE.get_or_init(|| { #build_expr })
+        }
+    }
+}
+
+pub fn decode_result_value(ty: &Type, value_expr: TokenStream) -> TokenStream {
+    let graph = memoized_graph_access(quote! {
+        <#ty as golem_rust::agentic::Schema>::get_type()
+            .get_schema_graph()
+            .expect("rpc result type must have a concrete schema graph")
+    });
+    quote! {
+        <#ty as golem_rust::agentic::Schema>::from_schema_value(
+            #value_expr,
+            golem_rust::agentic::StructuredSchema::Default((#graph).clone()),
+        )
+        .expect("Failed to deserialize rpc result to return type")
+    }
 }

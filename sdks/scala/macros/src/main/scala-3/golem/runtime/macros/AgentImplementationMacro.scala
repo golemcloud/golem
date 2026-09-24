@@ -121,6 +121,12 @@ object AgentImplementationMacro {
     val principalParams = paramInfos.filter(_.isPrincipal)
     val identityParams  = paramInfos.filter(pi => !pi.isConfig && !pi.isPrincipal)
 
+    if (HttpDeclarationMacro.isRouter(traitSymbol) && (identityParams.nonEmpty || principalParams.nonEmpty))
+      report.errorAndAbort("router-constructor: only configuration injection is allowed")
+
+    if (HttpDeclarationMacro.exposesFiles(traitSymbol) && principalParams.nonEmpty)
+      report.errorAndAbort("filesystem-constructor: caller-dependent constructors cannot expose files")
+
     if configParams.length > 1 then
       report.errorAndAbort(
         s"Impl type ${implSymbol.fullName} has ${configParams.length} Config[_] parameters, at most one is allowed"
@@ -753,7 +759,8 @@ object AgentImplementationMacro {
     }
 
     constructorClass match {
-      case None =>
+      case None if HttpDeclarationMacro.isRouter(traitSymbol) => Nil
+      case None                                               =>
         report.errorAndAbort(
           s"Agent trait ${traitSymbol.name} must define a `class Id(...)` to declare its constructor parameters. Use `class Id()` for agents with no constructor parameters."
         )

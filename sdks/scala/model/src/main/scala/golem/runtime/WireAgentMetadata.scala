@@ -45,6 +45,7 @@ final case class WireConfigDeclaration(source: AgentConfigSource, path: List[Str
  */
 final case class WireAgentMetadata(
   name: String,
+  kind: AgentTypeKind,
   description: Option[String],
   mode: Option[String],
   methods: List[WireMethodMetadata],
@@ -83,6 +84,7 @@ final case class WireAgentMetadata(
   def reflected: AgentMetadata =
     AgentMetadata(
       name,
+      kind,
       description,
       mode,
       methods.map(reflectedMethod),
@@ -126,6 +128,7 @@ object WireAgentMetadata {
     val config = metadata.config.map(c => WireConfigDeclaration(c.source, c.path, encoder.encodeType(c.valueType.root)))
     WireAgentMetadata(
       metadata.name,
+      metadata.kind,
       metadata.description,
       metadata.mode,
       methods,

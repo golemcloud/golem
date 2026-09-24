@@ -69,6 +69,7 @@ pub(all) struct AgentPrincipal {
 
 pub(all) struct AgentType {
   type_name : String
+  kind : AgentTypeKind
   description : String
   source_language : String
   schema : @types.SchemaGraph
@@ -80,6 +81,13 @@ pub(all) struct AgentType {
   snapshotting : Snapshotting
   config : Array[AgentConfigDeclaration]
 } derive(Eq, @debug.Debug)
+
+pub(all) enum AgentTypeKind {
+  REGULAR
+  HTTP_ROUTER
+} derive(Eq, @debug.Debug)
+pub fn AgentTypeKind::from(Int) -> Self
+pub fn AgentTypeKind::ordinal(Self) -> Int
 
 pub(all) struct AuthDetails {
   required : Bool
@@ -101,9 +109,19 @@ pub(all) struct CorsOptions {
   allowed_patterns : Array[String]
 } derive(Eq, @debug.Debug)
 
+pub(all) struct ExactFileMapping {
+  public_path : Array[String]
+  file_path : String
+} derive(Eq, @debug.Debug)
+
 pub(all) enum FieldSource {
   UserSupplied
   AutoInjected(AutoInjectedKind)
+} derive(Eq, @debug.Debug)
+
+pub(all) enum FileMapping {
+  Exact(ExactFileMapping)
+  Subtree(SubtreeFileMapping)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct GolemUserPrincipal {
@@ -135,6 +153,7 @@ pub(all) enum HttpMethod {
   Trace
   Patch
   Custom(String)
+  Any
 } derive(Eq, @debug.Debug)
 
 pub(all) struct HttpMountDetails {
@@ -143,6 +162,9 @@ pub(all) struct HttpMountDetails {
   phantom_agent : Bool
   cors_options : CorsOptions
   webhook_suffix : Array[PathSegment]
+  static_bindings : Array[FileMapping]
+  filesystem_bindings : Array[FileMapping]
+  openapi_provider_method : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum InputSchema {
@@ -216,6 +238,11 @@ pub(all) enum SnapshottingConfig {
   Default
   Periodic(UInt64)
   EveryNInvocation(UInt)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct SubtreeFileMapping {
+  public_prefix : Array[String]
+  filesystem_root : String
 } derive(Eq, @debug.Debug)
 
 pub(all) enum SystemVariable {

@@ -3151,7 +3151,7 @@ pub(super) fn parse_method_argument_schema_value(
 }
 
 fn scan_cursor_to_string(cursor: &ScanCursor) -> String {
-    format!("{}/{}", cursor.layer, cursor.cursor)
+    cursor.to_string()
 }
 
 fn secret_config_paths_for_agent_type(
@@ -3513,6 +3513,7 @@ mod tests {
 
     fn test_agent_type_schema(mode: AgentMode) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("repl-agent".to_string()),
             description: String::new(),
             source_language: String::new(),

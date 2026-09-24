@@ -41,6 +41,7 @@ pub use tool_impl::OutputStream;
 pub use tool_impl::install_tool_exports;
 pub use tool_literal::*;
 pub use tool_refinement::*;
+pub use tool_reflection::*;
 pub use tool_registry::{
     ToolInvokeFuture, ToolInvokeFutureFor, ToolInvoker, get_all_tools, get_extended_tool_by_name,
     get_tool_by_name, get_tool_invoker_by_name, register_prepared_tool_invoker, register_tool,
@@ -73,6 +74,7 @@ mod extended_tool_type;
 mod http;
 mod multimodal;
 mod principal_serde;
+pub mod reflection;
 mod resolved_agent;
 mod schema;
 pub mod snapshot_auto;
@@ -80,6 +82,7 @@ mod tool_client;
 mod tool_impl;
 mod tool_literal;
 mod tool_refinement;
+mod tool_reflection;
 mod tool_registry;
 mod unstructured_binary;
 mod unstructured_text;

@@ -595,6 +595,9 @@ mod tests {
                 allowed_patterns: vec![],
             },
             webhook_suffix: vec![],
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
         }
     }
 

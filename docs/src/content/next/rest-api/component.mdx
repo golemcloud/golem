@@ -1387,6 +1387,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
   "agentTypes": [
     {
       "type_name": "string",
+      "kind": "regular",
       "description": "string",
       "source_language": "string",
       "schema": {
@@ -1537,7 +1538,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "http_endpoint": [
             {
               "httpMethod": {
-                "type": "Patch"
+                "type": "Any"
               },
               "pathSuffix": [
                 {
@@ -1727,7 +1728,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "http_endpoint": [
                 {
                   "httpMethod": {
-                    "type": "Patch"
+                    "type": "Any"
                   },
                   "pathSuffix": [
                     {
@@ -1789,7 +1790,26 @@ The request body is encoded as multipart/form-data containing metadata and the W
             "type": "Literal",
             "value": "string"
           }
-        ]
+        ],
+        "staticBindings": [
+          {
+            "type": "Exact",
+            "publicPath": [
+              "string"
+            ],
+            "filePath": "string"
+          }
+        ],
+        "filesystemBindings": [
+          {
+            "type": "Exact",
+            "publicPath": [
+              "string"
+            ],
+            "filePath": "string"
+          }
+        ],
+        "openapiProviderMethod": "string"
       },
       "snapshotting": {
         "type": "Disabled"
@@ -2357,6 +2377,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
@@ -2384,6 +2410,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
@@ -2409,6 +2441,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
@@ -2436,6 +2474,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
@@ -2461,6 +2505,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
@@ -2502,6 +2552,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
@@ -2529,6 +2585,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
@@ -2554,6 +2616,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
@@ -2581,6 +2649,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
@@ -2606,6 +2680,12 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],

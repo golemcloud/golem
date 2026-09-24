@@ -4,7 +4,7 @@ import type {
   SchemaValueStream,
   SchemaValueTree,
 } from "golem:core/types@2.0.0"
-import { Context, Effect, Exit, Option, Schema, SchemaIssue } from "effect"
+import { Context, Effect, Exit, Schema, SchemaIssue } from "effect"
 import { directAgentStreamFromHandle, directAgentStreamToHandle } from "./agentStream.js"
 import { CapabilityTransaction } from "./schema-model/capabilityTransaction.js"
 import { PreparedStream } from "./schema-model/preparedStream.js"
@@ -268,7 +268,7 @@ const takeToWire = (tag: OwnedTag, handle: OwnedHandle, owner: object): object |
         )
 
 const schemaError = (error: unknown) =>
-  new Schema.SchemaError(new SchemaIssue.InvalidValue(Option.none(), { message: String(error) }))
+  new Schema.SchemaError(new SchemaIssue.InvalidValue({ message: String(error) }))
 
 export function writeConcrete(
   codec: ConcreteCodec,

@@ -17,6 +17,7 @@ use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::{
     OplogArchive, OplogArchiveService, transfer_between_lower_layers,
 };
+use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
@@ -41,7 +42,6 @@ use golem_common::model::{
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
-use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -57,25 +57,57 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant};
-use test_r::{test, test_dep};
+use test_r::test;
 use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-struct Tracing;
-
-impl Tracing {
-    pub fn init() -> Self {
-        init_tracing(&TracingConfig::test("op-log-tests"), |_output| {
-            golem_common::tracing::filter::boxed::debug_env_with_directives(Vec::new())
-        });
-        Self
-    }
+macro_rules! create_oplog_entry {
+    ($agent_id:expr, $agent_mode:expr, $component_revision:expr, $env:expr,
+     $environment_id:expr, $created_by:expr, $parent:expr, $component_size:expr,
+     $memory_size:expr, $plugins:expr, $config:expr, $phantom_id:expr, $instance_id:expr $(,)?) => {
+        OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            agent_id: $agent_id,
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_mode: $agent_mode,
+            component_revision: $component_revision,
+            env: $env,
+            environment_id: $environment_id,
+            created_by: $created_by,
+            parent: $parent,
+            component_size: $component_size,
+            initial_total_linear_memory_size: $memory_size,
+            initial_active_plugins: $plugins,
+            local_agent_config: $config,
+            original_phantom_id: $phantom_id,
+            instance_id: $instance_id,
+        }))
+    };
 }
 
-#[test_dep(scope = PerWorker)]
-fn tracing() -> Tracing {
-    Tracing::init()
+fn create_test_entry(
+    agent_id: AgentId,
+    agent_mode: AgentMode,
+    component_revision: ComponentRevision,
+    environment_id: EnvironmentId,
+    created_by: AccountId,
+    instance_id: Uuid,
+) -> OplogEntry {
+    create_oplog_entry!(
+        agent_id,
+        agent_mode,
+        component_revision,
+        Vec::new(),
+        environment_id,
+        created_by,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        instance_id,
+    )
 }
 
 async fn assert_panics<T>(future: impl Future<Output = T>) {
@@ -203,7 +235,7 @@ impl OplogArchive for RecordingArchive {
     }
 }
 
-fn make_agent_metadata(
+pub(super) fn make_agent_metadata(
     agent_id: AgentId,
     created_by: AccountId,
     environment_id: EnvironmentId,
@@ -236,13 +268,14 @@ fn invocation_wallet_pin() -> InvocationWalletPin {
     }
 }
 
-fn default_last_known_status() -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
+pub(super) fn default_last_known_status()
+-> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
     read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(arc_swap::ArcSwap::from_pointee(
         AgentStatusRecord::default(),
     )))
 }
 
-fn default_execution_status(
+pub(super) fn default_execution_status(
     agent_mode: AgentMode,
 ) -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
     read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(ExecutionStatus::Suspended {
@@ -641,21 +674,6 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         self.inner.exists(svc_name, api_name, namespace, key).await
     }
 
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: crate::storage::indexed::ScanCursor,
-        count: u64,
-    ) -> Result<(crate::storage::indexed::ScanCursor, Vec<String>), IndexedStorageError> {
-        self.count_read();
-        self.inner
-            .scan(svc_name, api_name, namespace, prefix, cursor, count)
-            .await
-    }
-
     async fn scan_stable(
         &self,
         svc_name: &'static str,
@@ -1010,6 +1028,21 @@ impl BlobStorage for ReadCountingBlobStorage {
             .await
     }
 
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<golem_service_base::storage::blob::BlobRangeStream>, anyhow::Error> {
+        self.count_read();
+        self.inner
+            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+            .await
+    }
+
     async fn get_metadata(
         &self,
         target_label: &'static str,
@@ -1163,20 +1196,12 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
         agent_id: "ephemeral-baseline".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -1264,20 +1289,12 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
         agent_id: "fresh-ephemeral".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -1381,20 +1398,12 @@ async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tr
         agent_id: "fresh-ephemeral-compressed-storage".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -1449,20 +1458,12 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
         agent_id: "fresh-ephemeral-primary-storage".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -1526,20 +1527,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     };
     let owned = OwnedAgentId::new(EnvironmentId::new(), &agent);
     let metadata = make_agent_metadata(agent.clone(), AccountId::new(), owned.environment_id);
-    let create = OplogEntry::create(
+    let create = create_test_entry(
         agent.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::INITIAL,
-        vec![],
         owned.environment_id,
         metadata.created_by,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        vec![],
-        None,
         metadata.fingerprint.0,
     )
     .rounded();
@@ -1560,6 +1553,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         .create_staged(&owned, AgentMode::Durable, stage_id, metadata.clone())
         .await
         .unwrap();
+    assert!(
+        !service
+            .staged_exists(&owned, AgentMode::Durable, stage_id)
+            .await
+            .unwrap()
+    );
     // A crashed attempt leaves its committed stage behind. A fresh attempt must neither
     // enumerate it as an agent nor reuse its contents when publishing the same target.
     let orphan_id = Uuid::new_v4();
@@ -1579,6 +1578,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     for entry in &entries {
         stage.add(entry.clone()).await;
         stage.commit(CommitLevel::Always).await;
+        assert!(
+            service
+                .staged_exists(&owned, AgentMode::Durable, stage_id)
+                .await
+                .unwrap()
+        );
         assert!(!service.exists(&owned, AgentMode::Durable).await);
         assert_eq!(
             service.get_last_index(&owned, AgentMode::Durable).await,
@@ -1624,6 +1629,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
                 stage_id,
                 OplogIndex::from_u64(3)
             )
+            .await
+            .unwrap()
+    );
+    assert!(
+        !service
+            .staged_exists(&owned, AgentMode::Durable, stage_id)
             .await
             .unwrap()
     );
@@ -1793,20 +1804,12 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
         agent_id: "fresh-ephemeral-blob-storage".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -2198,20 +2201,12 @@ async fn explicit_commit_reports_threshold_commits_once_and_preserves_add_receip
         agent_id: "threshold-commit-reporting".to_string(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -2853,7 +2848,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
             vec![
                 DurableStreamOplogRecord::Registered(
                     None,
-                    StreamRegisteredRecord {
+                    Box::new(StreamRegisteredRecord {
                         format_version: 1,
                         coordinate: StreamRegistrationRecordCoordinate::Root {
                             invocation: StreamRegistrationInvocation::Local(
@@ -2869,7 +2864,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                         element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
                         source_kind: StreamSourceKind::InvocationOutput,
                         session_role: None,
-                    },
+                    }),
                 ),
                 DurableStreamOplogRecord::Items(
                     None,
@@ -3014,20 +3009,12 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
-            OplogEntry::create(
+            create_test_entry(
                 agent_id.clone(),
-                OwnerKind::ComponentAgent,
                 AgentMode::Ephemeral,
                 ComponentRevision::INITIAL,
-                Vec::new(),
                 environment_id,
                 account_id,
-                None,
-                100,
-                100,
-                HashSet::new(),
-                Vec::new(),
-                None,
                 Uuid::new_v4(),
             )
             .rounded(),
@@ -3073,6 +3060,10 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     assert_eq!(added.len(), 2);
     assert_eq!(added[1].0, added[0].0.next());
     assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(3));
+    let resident = oplog.read_exact(added[0].0, 2).await;
+    assert_eq!(resident, added.iter().cloned().collect());
+    // Threshold handoff is asynchronous; protocol publication uses an explicit barrier.
+    oplog.commit(CommitLevel::Always).await;
     let persisted = service
         .read_exact(
             &owned_agent_id,
@@ -4185,8 +4176,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             ComponentRevision::INITIAL,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry3 = oplog.read(entry3).await.rounded();
 
     let desc = oplog
         .create_snapshot_based_update_description(
@@ -4534,8 +4525,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             ComponentRevision::INITIAL,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry3 = oplog.read(entry3).await.rounded();
 
     let desc = oplog
         .create_snapshot_based_update_description(
@@ -5099,23 +5090,25 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
         timestamp,
-        owner_kind: OwnerKind::ComponentAgent,
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "test".to_string(),
-        },
-        agent_mode: AgentMode::Durable,
-        component_revision: ComponentRevision::new(1).unwrap(),
-        env: vec![],
-        local_agent_config: Vec::new(),
-        environment_id,
-        created_by: account_id,
-        parent: None,
-        component_size: 0,
-        initial_total_linear_memory_size: 0,
-        initial_active_plugins: HashSet::new(),
-        original_phantom_id: None,
-        instance_id: Uuid::new_v4(),
+        parameters: Box::new(golem_common::model::oplog::CreateParameters {
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "test".to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+            component_revision: ComponentRevision::new(1).unwrap(),
+            env: vec![],
+            local_agent_config: Vec::new(),
+            environment_id,
+            created_by: account_id,
+            parent: None,
+            component_size: 0,
+            initial_total_linear_memory_size: 0,
+            initial_active_plugins: HashSet::new(),
+            original_phantom_id: None,
+            instance_id: Uuid::new_v4(),
+        }),
     }
     .rounded();
 
@@ -5240,23 +5233,25 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
         timestamp,
-        owner_kind: OwnerKind::ComponentAgent,
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "test".to_string(),
-        },
-        agent_mode: AgentMode::Ephemeral,
-        component_revision: ComponentRevision::new(1).unwrap(),
-        env: vec![],
-        local_agent_config: Vec::new(),
-        environment_id,
-        created_by: account_id,
-        parent: None,
-        component_size: 0,
-        initial_total_linear_memory_size: 0,
-        initial_active_plugins: HashSet::new(),
-        original_phantom_id: None,
-        instance_id: Uuid::new_v4(),
+        parameters: Box::new(golem_common::model::oplog::CreateParameters {
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "test".to_string(),
+            },
+            agent_mode: AgentMode::Ephemeral,
+            component_revision: ComponentRevision::new(1).unwrap(),
+            env: vec![],
+            local_agent_config: Vec::new(),
+            environment_id,
+            created_by: account_id,
+            parent: None,
+            component_size: 0,
+            initial_total_linear_memory_size: 0,
+            initial_active_plugins: HashSet::new(),
+            original_phantom_id: None,
+            instance_id: Uuid::new_v4(),
+        }),
     }
     .rounded();
 
@@ -6554,20 +6549,12 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             component_id,
             agent_id: format!("worker-{i}"),
         };
-        let create_entry = OplogEntry::create(
+        let create_entry = create_test_entry(
             agent_id.clone(),
-            OwnerKind::ComponentAgent,
             AgentMode::Durable,
             ComponentRevision::new(1).unwrap(),
-            Vec::new(),
             environment_id,
             account_id,
-            None,
-            100,
-            100,
-            HashSet::new(),
-            Vec::new(),
-            None,
             Uuid::new_v4(),
         );
 
@@ -6716,20 +6703,12 @@ async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
             agent_id: name,
         };
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-        let create_entry = OplogEntry::create(
+        let create_entry = create_test_entry(
             agent_id.clone(),
-            OwnerKind::ComponentAgent,
             mode,
             ComponentRevision::new(1).unwrap(),
-            Vec::new(),
             environment_id,
             account_id,
-            None,
-            100,
-            100,
-            HashSet::new(),
-            Vec::new(),
-            None,
             Uuid::now_v7(),
         );
         let oplog = oplog_service
@@ -6941,103 +6920,231 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
 }
 
 // ---------------------------------------------------------------------------
-// Step 8: Scan-cursor mode-bit encoding helpers
+// Scan cursor encoding and phase transitions
 // ---------------------------------------------------------------------------
 
 #[test]
-fn scan_cursor_helpers_initial_cursor_starts_in_durable_phase() {
-    // A freshly-constructed ScanCursor has cursor == 0 and the active
-    // phase must be `Durable` with `Ephemeral` queued as next.
-    let (active, next) = scan_modes(None, 0);
-    assert_eq!(active, AgentMode::Durable);
-    assert_eq!(next, Some(AgentMode::Ephemeral));
-    assert_eq!(cursor_value(0), 0);
+fn scan_cursor_initial_state_starts_in_durable_mode() {
+    let state = decode_scan_cursor(&ScanCursor::default(), None).unwrap();
+    assert_eq!(state.layer, 0);
+    assert_eq!(state.mode, AgentMode::Durable);
+    assert_eq!(state.resume, None);
 }
 
 #[test]
-fn scan_cursor_helpers_high_bit_marks_ephemeral_phase() {
-    let (active, next) = scan_modes(None, SCAN_CURSOR_EPHEMERAL_BIT);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
-    // The high bit must not leak into the storage cursor value.
-    assert_eq!(cursor_value(SCAN_CURSOR_EPHEMERAL_BIT), 0);
-}
+fn scan_cursor_round_trips_marker_resume() {
+    let cursor = next_scan_cursor(
+        OplogScanState {
+            layer: 2,
+            mode: AgentMode::Durable,
+            resume: None,
+        },
+        None,
+        Some(ScanResume::Marker("agent-key".to_string())),
+    )
+    .unwrap();
 
-#[test]
-fn scan_cursor_helpers_value_mask_strips_only_high_bit() {
-    let raw = SCAN_CURSOR_EPHEMERAL_BIT | 0x42;
-    let (active, next) = scan_modes(None, raw);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
-    assert_eq!(cursor_value(raw), 0x42);
-}
-
-#[test]
-fn scan_cursor_helpers_explicit_single_mode_does_not_phase_transition() {
-    let (active, next) = scan_modes(Some(AgentMode::Durable), 0);
-    assert_eq!(active, AgentMode::Durable);
-    assert_eq!(next, None);
-
-    let (active, next) = scan_modes(Some(AgentMode::Ephemeral), 0);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
-
-    // The high bit is only meaningful for `modes == None`; with an explicit
-    // mode the helper must ignore it.
-    let (active, next) = scan_modes(Some(AgentMode::Durable), SCAN_CURSOR_EPHEMERAL_BIT);
-    assert_eq!(active, AgentMode::Durable);
-    assert_eq!(next, None);
-}
-
-#[test]
-fn scan_cursor_helpers_durable_phase_in_progress_is_round_trip_stable() {
-    // While the durable phase is still in progress (cursor_val != 0) the
-    // returned cursor must keep the high bit clear and round-trip back to
-    // the same active mode.
-    let cur = next_scan_cursor(123, AgentMode::Durable, Some(AgentMode::Ephemeral), 2);
-    assert_eq!(cur.layer, 2);
-    assert_eq!(cur.cursor & SCAN_CURSOR_EPHEMERAL_BIT, 0);
-    assert_eq!(cursor_value(cur.cursor), 123);
-    let (active, next) = scan_modes(None, cur.cursor);
-    assert_eq!(active, AgentMode::Durable);
-    assert_eq!(next, Some(AgentMode::Ephemeral));
-}
-
-#[test]
-fn scan_cursor_helpers_durable_phase_finished_advances_to_ephemeral() {
-    // When the durable phase finishes (cursor_val == 0) and there is a next
-    // phase, the helper must hand control over to that phase by setting
-    // the high bit. The resulting cursor must NOT be `is_finished`.
-    let cur = next_scan_cursor(0, AgentMode::Durable, Some(AgentMode::Ephemeral), 0);
-    assert_eq!(cur.cursor, SCAN_CURSOR_EPHEMERAL_BIT);
-    assert_eq!(cur.layer, 0);
-    assert!(!cur.is_finished());
-    let (active, next) = scan_modes(None, cur.cursor);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
-}
-
-#[test]
-fn scan_cursor_helpers_ephemeral_phase_in_progress_keeps_high_bit_set() {
-    let cur = next_scan_cursor(7, AgentMode::Ephemeral, None, 0);
+    assert!(cursor.as_str().starts_with(SCAN_CURSOR_PREFIX));
     assert_eq!(
-        cur.cursor & SCAN_CURSOR_EPHEMERAL_BIT,
-        SCAN_CURSOR_EPHEMERAL_BIT
+        decode_scan_cursor(&cursor, None).unwrap(),
+        OplogScanState {
+            layer: 2,
+            mode: AgentMode::Durable,
+            resume: Some(ScanResume::Marker("agent-key".to_string())),
+        }
     );
-    assert_eq!(cursor_value(cur.cursor), 7);
-    assert!(!cur.is_finished());
-    let (active, next) = scan_modes(None, cur.cursor);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
 }
 
 #[test]
-fn scan_cursor_helpers_both_phases_finished_yields_terminal_cursor() {
-    // After the ephemeral phase (the last one) finishes, the returned
-    // cursor must compare equal to the default and be `is_finished`.
-    let cur = next_scan_cursor(0, AgentMode::Ephemeral, None, 0);
-    assert_eq!(cur, ScanCursor::default());
-    assert!(cur.is_finished());
+fn scan_cursor_decodes_fixed_wire_format_fixtures() {
+    let fixtures = [
+        (
+            "gsc1_eyJsYXllciI6MCwibW9kZSI6IkR1cmFibGUiLCJyZXN1bWUiOnsidHlwZSI6Im1hcmtlciIsInZhbHVlIjoiYWdlbnQta2V5In19",
+            OplogScanState {
+                layer: 0,
+                mode: AgentMode::Durable,
+                resume: Some(ScanResume::Marker("agent-key".to_string())),
+            },
+        ),
+        (
+            "gsc1_eyJsYXllciI6MiwibW9kZSI6IkVwaGVtZXJhbCIsInJlc3VtZSI6eyJ0eXBlIjoiY3Vyc29yIiwidmFsdWUiOjE3fX0",
+            OplogScanState {
+                layer: 2,
+                mode: AgentMode::Ephemeral,
+                resume: Some(ScanResume::Cursor(17)),
+            },
+        ),
+        (
+            "gsc1_eyJsYXllciI6MSwibW9kZSI6IkR1cmFibGUiLCJyZXN1bWUiOm51bGx9",
+            OplogScanState {
+                layer: 1,
+                mode: AgentMode::Durable,
+                resume: None,
+            },
+        ),
+    ];
+
+    for (token, expected) in fixtures {
+        assert_eq!(
+            encode_scan_cursor(expected.clone()).unwrap().as_str(),
+            token
+        );
+        assert_eq!(
+            decode_scan_cursor(&ScanCursor::new(token.to_string()), None).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn scan_cursor_durable_completion_advances_to_ephemeral() {
+    let cursor = next_scan_cursor(
+        OplogScanState {
+            layer: 1,
+            mode: AgentMode::Durable,
+            resume: Some(ScanResume::Cursor(17)),
+        },
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        decode_scan_cursor(&cursor, None).unwrap(),
+        OplogScanState {
+            layer: 1,
+            mode: AgentMode::Ephemeral,
+            resume: None,
+        }
+    );
+}
+
+#[test]
+fn scan_cursor_single_or_ephemeral_mode_completion_is_terminal() {
+    for (mode, modes) in [
+        (AgentMode::Durable, Some(AgentMode::Durable)),
+        (AgentMode::Ephemeral, Some(AgentMode::Ephemeral)),
+        (AgentMode::Ephemeral, None),
+    ] {
+        let cursor = next_scan_cursor(
+            OplogScanState {
+                layer: 0,
+                mode,
+                resume: None,
+            },
+            modes,
+            None,
+        )
+        .unwrap();
+        assert!(cursor.is_finished());
+    }
+}
+
+#[test]
+fn scan_cursor_rejects_malformed_and_mode_mismatched_tokens() {
+    for cursor in [
+        ScanCursor::new("0/123".to_string()),
+        ScanCursor::new("gsc1_%%%".to_string()),
+        ScanCursor::new("gsc1_e30".to_string()),
+    ] {
+        assert!(decode_scan_cursor(&cursor, None).is_err());
+    }
+
+    let cursor = first_scan_cursor(0, Some(AgentMode::Ephemeral)).unwrap();
+    assert!(decode_scan_cursor(&cursor, Some(AgentMode::Durable)).is_err());
+}
+
+#[test]
+async fn oplog_services_reject_invalid_cursor_layers_and_resumes(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let compressed: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage,
+        1,
+        RetryConfig::default(),
+    ));
+    let blob = Arc::new(BlobOplogArchiveService::new(blob_storage, 2));
+    let multilayer = MultiLayerOplogService::new(
+        primary.clone(),
+        nev![compressed, blob.clone() as Arc<dyn OplogArchiveService>],
+        1000,
+        10,
+    );
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+
+    let layer_one = first_scan_cursor(1, Some(AgentMode::Durable)).unwrap();
+    assert!(matches!(
+        primary
+            .scan_for_component(
+                &environment_id,
+                &component_id,
+                Some(AgentMode::Durable),
+                layer_one,
+                1,
+            )
+            .await,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+
+    let last_valid_layer = first_scan_cursor(2, Some(AgentMode::Durable)).unwrap();
+    multilayer
+        .scan_for_component(
+            &environment_id,
+            &component_id,
+            Some(AgentMode::Durable),
+            last_valid_layer,
+            1,
+        )
+        .await
+        .unwrap();
+    let invalid_layer = first_scan_cursor(3, Some(AgentMode::Durable)).unwrap();
+    assert!(matches!(
+        multilayer
+            .scan_for_component(
+                &environment_id,
+                &component_id,
+                Some(AgentMode::Durable),
+                invalid_layer,
+                1,
+            )
+            .await,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+
+    for resume in [
+        ScanResume::Marker("marker".to_string()),
+        ScanResume::Cursor(1),
+    ] {
+        let cursor = encode_scan_cursor(OplogScanState {
+            layer: 2,
+            mode: AgentMode::Durable,
+            resume: Some(resume),
+        })
+        .unwrap();
+        assert!(matches!(
+            blob.scan_for_component(
+                &environment_id,
+                &component_id,
+                Some(AgentMode::Durable),
+                cursor,
+                1,
+            )
+            .await,
+            Err(WorkerExecutorError::InvalidRequest { .. })
+        ));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -7066,37 +7173,21 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
-    let durable_create = OplogEntry::create(
+    let durable_create = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::now_v7(),
     )
     .rounded();
-    let ephemeral_create = OplogEntry::create(
+    let ephemeral_create = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(2).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::now_v7(),
     )
     .rounded();
@@ -7199,20 +7290,12 @@ async fn make_workers(
             component_id,
             agent_id: format!("{name_prefix}-{i}"),
         };
-        let create_entry = OplogEntry::create(
+        let create_entry = create_test_entry(
             agent_id.clone(),
-            OwnerKind::ComponentAgent,
             mode,
             ComponentRevision::new(1).unwrap(),
-            Vec::new(),
             environment_id,
             account_id,
-            None,
-            100,
-            100,
-            HashSet::new(),
-            Vec::new(),
-            None,
             Uuid::now_v7(),
         );
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
@@ -7352,8 +7435,7 @@ async fn scan_for_component_paginates_across_mode_boundary(_tracing: &Tracing) {
     loop {
         iterations += 1;
         // The cursor passed in must encode the active mode for the next page.
-        let (active_in, _) = scan_modes(None, cursor.cursor);
-        match active_in {
+        match decode_scan_cursor(&cursor, None).unwrap().mode {
             AgentMode::Durable => saw_durable_phase = true,
             AgentMode::Ephemeral => saw_ephemeral_phase = true,
         }
@@ -8006,20 +8088,12 @@ async fn ephemeral_reserved_start_uploads_payload_eagerly(_tracing: &Tracing) {
         agent_id: "ephemeral-reserved".to_string(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();

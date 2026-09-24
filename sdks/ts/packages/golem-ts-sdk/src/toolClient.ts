@@ -25,6 +25,7 @@ import {
   createToolClient,
   decodeDeclaredToolError,
   getExtendedToolDefinition,
+  registerToolClientFactory,
   type AnyToolDefinition,
   type ToolClient,
   type ToolClientFailureContext,
@@ -35,6 +36,33 @@ export interface ToolClientOptions {
   readonly transport?: ToolClientTransport;
   /** Stable leaf registration name when the definition describes an adapted presented surface. */
   readonly lookupName?: string;
+}
+
+/** A caller-owned typed command definition; its commands may be a subset of the deployed tool. */
+export interface ToolClientDefinition<Definition extends AnyToolDefinition> {
+  readonly name?: string;
+  readonly definition: Definition;
+  client(
+    targetName?: string,
+    options?: Omit<ToolClientOptions, 'lookupName'>,
+  ): ToolClient<Definition>;
+}
+
+/** Bind a partial typed tool definition without discovery or compatibility preflight. */
+export function toolClientDefinition<Definition extends AnyToolDefinition>(
+  definition: Definition,
+  name?: string,
+): ToolClientDefinition<Definition> {
+  return Object.freeze({
+    name,
+    definition,
+    client(targetName?: string, options: Omit<ToolClientOptions, 'lookupName'> = {}) {
+      const lookupName = name ?? targetName;
+      if (!lookupName)
+        throw new TypeError('A nameless tool client definition requires a target name');
+      return client(definition, { ...options, lookupName });
+    },
+  });
 }
 
 export type ToolCallErrorCause<Errors> =
@@ -67,6 +95,8 @@ export function client<Definition extends AnyToolDefinition>(
     options.transport ?? createToolClientTransport(options.lookupName ?? tool.toolName);
   return createToolClient(definition, transport, mapToolClientFailure);
 }
+
+registerToolClientFactory(client);
 
 /** @internal Compiler-emitted model-free typed tool client. */
 export function compiledToolClient(

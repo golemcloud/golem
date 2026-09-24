@@ -4,7 +4,7 @@ export { toolGuest } from "./internal/tool/runtime.js"
 
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
-import { Context, Effect, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "./internal/abortableStreamIterable.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
@@ -12,8 +12,11 @@ import {
   canonicalInputFields,
   type CommandModel,
   type ToolDefinition,
+  registerToolClientFactory,
 } from "./internal/tool/model.js"
 import { compile, type CompiledWitCodec } from "./WitCodec.js"
+
+export { ToolClient } from "./host/ToolClient.js"
 
 /** Convert a kebab-case protocol name to its TypeScript client spelling. @since 1.6.0 @category models */
 export type CamelCase<S extends string> = S extends `${infer H}-${infer T}`
@@ -115,10 +118,14 @@ export const liveToolStart = (
   input: Common.TypedSchemaValue,
   stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
   withStdout: boolean,
+  reflected = false,
 ) =>
   Effect.gen(function* () {
     const host = yield* ToolClient
-    const rpc = host.rpc(tool)
+    const rpc = yield* Effect.try({
+      try: () => (reflected ? host.createRpc(tool) : host.rpc(tool)),
+      catch: (cause) => new ToolClientError("invoke", cause),
+    })
     const inputEndpoints = stdin ? host.createStdin() : undefined
     const output = withStdout ? host.createStdout() : undefined
     const future = yield* Effect.try({
@@ -223,10 +230,10 @@ export function clientCompiled(
           Effect.mapError((cause) => new ToolClientError("input", cause)),
         )
         const canonicalInput = Object.fromEntries(
-          command.fields.map((name) => [
-            name,
-            input[name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase())],
-          ]),
+          command.fields.flatMap((name) => {
+            const inputName = name.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase())
+            return Object.hasOwn(input, inputName) ? [[name, input[inputName]]] : []
+          }),
         )
         const value = yield* codec
           .encodeAsync(canonicalInput)
@@ -243,10 +250,23 @@ export function clientCompiled(
           command.stdout,
         ).pipe(Effect.mapError((cause) => new ToolClientError("invoke", cause)))
         yield* Effect.addFinalizer(() => started.cancel)
-        const consume = started.stdout
+        const stdoutIterator = started.stdout?.[Symbol.asyncIterator]()
+        const stdout = stdoutIterator ? { [Symbol.asyncIterator]: () => stdoutIterator } : undefined
+        const consume = stdout
           ? streams?.stdout
-            ? streams.stdout(decodeByteStream(started.stdout))
-            : drainByteStream(started.stdout)
+            ? streams
+                .stdout(decodeByteStream(stdout))
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    cause.reasons.some(Cause.isInterruptReason)
+                      ? Effect.failCause(cause)
+                      : drainByteStream(stdout).pipe(
+                          Effect.ignore,
+                          Effect.andThen(Effect.failCause(cause)),
+                        ),
+                  ),
+                )
+            : drainByteStream(stdout)
           : Effect.void
         const invocationResult = started.result.pipe(
           Effect.catchIf(
@@ -293,27 +313,36 @@ export function clientCompiled(
             },
           ),
         )
-        const result = yield* Effect.all([consume, invocationResult] as const, {
-          concurrency: "unbounded",
-        }).pipe(
-          Effect.map(([, result]) => result),
+        const decodedResult = invocationResult.pipe(
+          Effect.flatMap((result) => {
+            if (!command.output)
+              return result.result === undefined
+                ? Effect.succeed(undefined)
+                : Effect.fail(new ToolClientError("result", "unexpected remote result"))
+            if (!result.result) return Effect.fail(new ToolClientError("result", "missing result"))
+            return command.output.pipe(
+              Effect.mapError((cause) => new ToolClientError("result", cause)),
+              Effect.flatMap((output) =>
+                (output.decodeTyped
+                  ? output.decodeTyped(result.result!)
+                  : output.decode(result.result!.value)
+                ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause))),
+              ),
+            )
+          }),
+        )
+        const normalizedConsume = consume.pipe(
           Effect.mapError((cause) =>
-            cause instanceof ToolClientError || isDeclaredFailure(cause)
-              ? cause
-              : new ToolClientError("invoke", cause),
+            cause instanceof ToolClientError ? cause : new ToolClientError("stream", cause),
           ),
         )
-        if (!command.output) return undefined
-        if (!result.result)
-          return yield* Effect.fail(new ToolClientError("result", "missing result"))
-        const output = yield* command.output.pipe(
-          Effect.mapError((cause) => new ToolClientError("result", cause)),
+        const [consumeExit, resultExit] = yield* Effect.all(
+          [Effect.exit(normalizedConsume), Effect.exit(decodedResult)] as const,
+          { concurrency: "unbounded" },
         )
-        return yield* (
-          output.decodeTyped
-            ? output.decodeTyped(result.result)
-            : output.decode(result.result.value)
-        ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
+        if (Exit.isFailure(resultExit)) return yield* Effect.failCause(resultExit.cause)
+        if (Exit.isFailure(consumeExit)) return yield* Effect.failCause(consumeExit.cause)
+        return resultExit.value
       }),
     )
 
@@ -335,6 +364,34 @@ export function clientCompiled(
   return nodes.get("")
 }
 
+registerToolClientFactory(client)
+
+/** A caller-owned typed subset of a remote tool's commands. @since 1.6.0 @category models */
+export interface ToolClientDefinition<D extends ToolDefinition<any, any>> {
+  readonly name?: string
+  readonly definition: D
+  readonly client: (
+    targetName?: string,
+    options?: Omit<ClientOptions, "lookupName">,
+  ) => Client<D, ToolClient>
+}
+
+/** Bind a typed command subset optimistically, without discovery. @since 1.6.0 @category constructors */
+export const toolClientDefinition = <D extends ToolDefinition<any, any>>(
+  definition: D,
+  name?: string,
+): ToolClientDefinition<D> =>
+  Object.freeze({
+    name,
+    definition,
+    client: (targetName?: string, options: Omit<ClientOptions, "lookupName"> = {}) => {
+      const lookupName = name ?? targetName
+      if (!lookupName)
+        throw new TypeError("a nameless tool client definition requires a target name")
+      return client(definition, { ...options, lookupName })
+    },
+  })
+
 const isToolError = (value: unknown): value is Common.ToolError =>
   typeof value === "object" && value !== null && "tag" in value
 const remoteToolError = (value: unknown): Common.ToolError | undefined => {
@@ -344,11 +401,6 @@ const remoteToolError = (value: unknown): Common.ToolError | undefined => {
   if (tagged.tag !== "remote-tool-error") return undefined
   return isToolError(tagged.val) ? tagged.val : undefined
 }
-const isDeclaredFailure = (value: unknown): value is { readonly _tag: "ToolFailure" } =>
-  typeof value === "object" &&
-  value !== null &&
-  (value as { _tag?: unknown })._tag === "ToolFailure"
-
 const sameWireGraph = (left: unknown, right: unknown): boolean =>
   JSON.stringify(left, (_key, value) => (typeof value === "bigint" ? `${value}n` : value)) ===
   JSON.stringify(right, (_key, value) => (typeof value === "bigint" ? `${value}n` : value))

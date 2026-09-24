@@ -412,7 +412,7 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
                         .await
                         .map(|(new_cursor, workers)| {
                             (
-                                new_cursor.map(|cursor| (cursor.cursor, cursor.layer as u64)),
+                                new_cursor,
                                 workers
                                     .into_iter()
                                     .map(AgentMetadataForGuests::from)
@@ -424,13 +424,7 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
                 })
                 .await?;
             let (new_cursor, workers) = match result.result {
-                Ok((cursor, workers)) => (
-                    cursor.map(|(cursor, layer)| ScanCursor {
-                        cursor,
-                        layer: layer as usize,
-                    }),
-                    workers,
-                ),
+                Ok((cursor, workers)) => (cursor, workers),
                 Err(error) => return Ok(Err(agent_operation_error(error))),
             };
 
@@ -665,9 +659,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // Use the index returned by `add` — a concurrently running host task (a durable
             // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
             // between this `add` and a subsequent `current_oplog_index` read, so re-reading the
-            // tip would nondeterministically point past the `NoOp` entry. Debugging sessions
-            // discard writes and return `NONE` from `add`; fall back to the session's replay
-            // target there so the guest never observes an invalid index.
+            // tip would nondeterministically point past the `NoOp` entry. Fall back to the current
+            // oplog index if the write returns `NONE` so the guest never observes an invalid index.
             let marker = match self
                 .state
                 .oplog
@@ -876,9 +869,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // between this `add` and a subsequent `current_oplog_index` read. Reading the tip
             // afterwards would record a begin index past the `BeginAtomicRegion` entry, making
             // `Error.retry_from` diverge from the persisted region marker and breaking the
-            // retry-budget grouping keyed on it. Debugging sessions discard writes and return
-            // `NONE` from `add`; fall back to the session's replay target there, matching the
-            // index the guest observed before.
+            // retry-budget grouping keyed on it. Fall back to the current oplog index if the write
+            // returns `NONE`, matching the index the guest observed before.
             let begin_index = match self
                 .state
                 .oplog

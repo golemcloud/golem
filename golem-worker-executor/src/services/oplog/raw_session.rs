@@ -58,9 +58,9 @@ impl RawSessionCache {
         }
         let service = service.ok_or_else(|| "stream session index is not installed".to_string())?;
         let fingerprint = match buffer.iter().find_map(|entry| match entry {
-            OplogEntry::Create { instance_id, .. } => {
-                Some(golem_common::model::AgentFingerprint(*instance_id))
-            }
+            OplogEntry::Create { parameters, .. } => Some(golem_common::model::AgentFingerprint(
+                parameters.instance_id,
+            )),
             _ => None,
         }) {
             Some(fingerprint) => fingerprint,

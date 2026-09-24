@@ -309,6 +309,9 @@ describe("Http compileMount / compileEndpoint", () => {
       { tag: "literal", val: "hooks" },
       { tag: "path-variable", val: { variableName: "tenant" } },
     ])
+    expect(w.staticBindings).toEqual([])
+    expect(w.filesystemBindings).toEqual([])
+    expect(w.openapiProviderMethod).toBeUndefined()
   })
 
   it("omits authDetails when auth is not requested", () => {

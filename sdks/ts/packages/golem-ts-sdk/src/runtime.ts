@@ -35,7 +35,9 @@ import {
   emptyMetadata,
   GraphEncoder,
   mergeGraphDefs,
+  resolveShapeType,
   SchemaGraph,
+  schemaShapesMatch,
   schemaValueFromWit,
   schemaValueToWitAsync,
 } from './internal/schema-model';
@@ -77,6 +79,12 @@ import {
   ConfigSpec,
 } from './config';
 import { compileEndpoint, compileMount, pathVariableNames } from './http';
+import { compileRouterMount } from './httpRouterContract';
+import {
+  httpRequestSchema,
+  httpResponseSchema,
+  httpStringSchema,
+} from './internal/http/routerSchema';
 import {
   HttpEndpointDetails,
   HttpMountDetails,
@@ -441,9 +449,104 @@ function assembleAgentType(
   // Compile the HTTP mount (if any), then validate mount + endpoint variable
   // consistency against the id record / method inputs (registry-free checks;
   // the decorator-era validators are param-registry coupled and unusable here).
-  const httpMount: HttpMountDetails | undefined = metadata.http
-    ? compileHttpMount(name, metadata.http)
-    : undefined;
+  const router = metadata.router ? compileRouterMount(metadata.router) : undefined;
+  const httpMount: HttpMountDetails | undefined =
+    router?.mount ?? (metadata.http ? compileHttpMount(name, metadata.http) : undefined);
+  if (router) {
+    if (
+      idCodecs.length ||
+      metadata.mode !== 'ephemeral' ||
+      (metadata.snapshotting !== undefined && metadata.snapshotting !== 'disabled') ||
+      metadata.http
+    ) {
+      throw new Error(
+        'HTTP routers require an empty constructor, ephemeral mode, and disabled snapshots',
+      );
+    }
+    for (const mc of methodCodecs.values()) {
+      if (
+        mc.httpEndpoints.length ||
+        mc.meta.readOnly ||
+        (mc.name !== metadata.router!.handlerMethod &&
+          mc.name !== metadata.router!.openapiProviderMethod)
+      ) {
+        throw new Error(
+          'HTTP router methods must be the handler or provider without endpoint overrides',
+        );
+      }
+      if (mc.name === metadata.router!.handlerMethod) {
+        if (
+          mc.inputCodecs.length !== 1 ||
+          mc.inputCodecs[0].name !== 'request' ||
+          mc.inputCodecs[0].codec.autoInjected !== undefined ||
+          mc.output.tag !== 'single' ||
+          !schemaShapesMatch(
+            mc.inputCodecs[0].codec.graph,
+            compileSchema(httpRequestSchema).graph,
+          ) ||
+          !schemaShapesMatch(mc.output.codec.graph, compileSchema(httpResponseSchema).graph)
+        ) {
+          throw new Error('HTTP router handler must use the canonical streaming envelope');
+        }
+        mc.httpEndpoints = [router.handlerBinding!];
+      } else if (
+        mc.inputCodecs.length ||
+        mc.output.tag !== 'single' ||
+        !schemaShapesMatch(mc.output.codec.graph, compileSchema(httpStringSchema).graph)
+      ) {
+        throw new Error('HTTP router provider must be parameterless and return a string');
+      }
+    }
+    for (const method of [metadata.router!.handlerMethod, metadata.router!.openapiProviderMethod]) {
+      if (method !== undefined && !methodCodecs.has(method))
+        throw new Error('HTTP router method is missing');
+    }
+  }
+  if (httpMount?.filesystemBindings.length) {
+    const captures = httpMount.pathPrefix.flatMap((segment) =>
+      segment.tag === 'path-variable' ? [segment.val.variableName] : [],
+    );
+    if (
+      router ||
+      metadata.mode === 'ephemeral' ||
+      httpMount.phantomAgent ||
+      httpMount.pathPrefix.some((segment) => segment.tag === 'remaining-path-variable') ||
+      httpMount.pathPrefix.some(
+        (segment) =>
+          segment.tag === 'literal' &&
+          (!segment.val ||
+            segment.val === '.' ||
+            segment.val === '..' ||
+            /[\x00-\x1f\x7f/\\]/.test(segment.val)),
+      ) ||
+      captures.length !== idCodecs.length ||
+      idCodecs.some(
+        (c) =>
+          c.codec.autoInjected !== undefined ||
+          captures.filter((v) => v === c.name).length !== 1 ||
+          ![
+            'string',
+            'char',
+            'bool',
+            'enum',
+            'u8',
+            'u16',
+            'u32',
+            'u64',
+            's8',
+            's16',
+            's32',
+            's64',
+            'f32',
+            'f64',
+          ].includes(resolveShapeType(c.codec.graph, c.codec.graph.root)?.tag ?? ''),
+      )
+    ) {
+      throw new Error(
+        'File exposure requires a durable non-phantom agent with every constructor parameter bound exactly once in the mount',
+      );
+    }
+  }
   validateHttpConsistency(name, httpMount, idCodecs, methodCodecs);
 
   const methods: AgentMethod[] = [];
@@ -481,6 +584,7 @@ function assembleAgentType(
 
   return {
     typeName: name,
+    kind: router ? 'http-router' : 'regular',
     description: metadata.description ?? ctorDescription,
     sourceLanguage: 'typescript',
     schema: encoder.finish(),
@@ -754,7 +858,7 @@ export function registerAgentInitiator(
     throw new Error(`Agent "${reg.name}" already has an implementation`);
   }
   const resolveContext = (
-    constructorInput: SchemaValueTree,
+    constructorInput: SchemaValueTree | { readonly tag: 'record'; readonly fields: readonly [] },
     principal: HostPrincipal,
   ):
     | { tag: 'err'; val: AgentError }
@@ -770,7 +874,11 @@ export function registerAgentInitiator(
       } => {
     let idRecord: Record<string, unknown>;
     try {
-      idRecord = reg.readId(constructorInput, principal);
+      const wireInput =
+        'valueNodes' in constructorInput
+          ? constructorInput
+          : { valueNodes: [{ tag: 'record-value' as const, val: [] }], root: 0 };
+      idRecord = reg.readId(wireInput, principal);
     } catch (e) {
       return {
         tag: 'err',

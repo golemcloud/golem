@@ -1,8 +1,8 @@
 use capable_streaming_tool_guest_client::CapableStreamingClient;
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
-    AgentStream, InputStream, Principal, ToolInvocation, ToolInvocationStdout, pump_tool_stdin,
-    spawn_local, tool_protocol_error,
+    AgentStream, Config, InputStream, Principal, Secret, ToolInvocation, ToolInvocationStdout,
+    pump_tool_stdin, spawn_local, tool_protocol_error,
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
@@ -13,6 +13,7 @@ use golem_rust::{
     SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
     decode_typed_schema_value_owned, read_only,
 };
+use secret_policy_probe_tool_guest_client::SecretPolicyProbeClient;
 use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
 use typed_output_stream_tool_guest_client::TypedOutputStreamClient;
@@ -117,6 +118,71 @@ struct RawTypedInput {
     input: AgentStream<TypedInputItem>,
 }
 
+#[derive(ConfigSchema)]
+pub struct ToolSecretCallerConfig {
+    #[config_schema(secret)]
+    pub tool_secret: Secret<String>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct SecretPolicyObservation {
+    pub label: String,
+    pub config_resolved: bool,
+    pub configured_secret_revealed: bool,
+    pub input_secret_revealed: bool,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct SecretPolicyEvidence {
+    pub middleware: Vec<SecretPolicyObservation>,
+    pub leaf_revealed: bool,
+}
+
+#[agent_definition]
+pub trait ToolSecretCaller {
+    fn new(name: String, #[agent_config] config: Config<ToolSecretCallerConfig>) -> Self;
+
+    async fn inspect_secret_policy(&self) -> SecretPolicyEvidence;
+}
+
+struct ToolSecretCallerImpl {
+    config: Config<ToolSecretCallerConfig>,
+}
+
+#[agent_implementation]
+impl ToolSecretCaller for ToolSecretCallerImpl {
+    fn new(_name: String, #[agent_config] config: Config<ToolSecretCallerConfig>) -> Self {
+        Self { config }
+    }
+
+    async fn inspect_secret_policy(&self) -> SecretPolicyEvidence {
+        let value = self
+            .config
+            .get()
+            .expect("secret handle resolution must be allowed for the calling agent")
+            .tool_secret
+            .handle()
+            .expect("secret handle resolution must be allowed for the calling agent");
+        let evidence = SecretPolicyProbeClient::new()
+            .inspect(value)
+            .await
+            .expect("invoke secret policy probe");
+        SecretPolicyEvidence {
+            middleware: evidence
+                .middleware
+                .into_iter()
+                .map(|observation| SecretPolicyObservation {
+                    label: observation.label,
+                    config_resolved: observation.config_resolved,
+                    configured_secret_revealed: observation.configured_secret_revealed,
+                    input_secret_revealed: observation.input_secret_revealed,
+                })
+                .collect(),
+            leaf_revealed: evidence.leaf_revealed,
+        }
+    }
+}
+
 #[derive(IntoSchema)]
 struct RawDirectTypedInput {
     input: AgentStream<TypedInputEvidence>,
@@ -139,6 +205,7 @@ pub trait ToolStreamingCaller {
     fn new(name: String) -> Self;
 
     fn record_native_order(&self, marker: String) -> String;
+    fn replay_probe(&self) -> String;
     #[read_only]
     fn read_owner_file(&self, path: String) -> String;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
@@ -343,6 +410,21 @@ fn decode_middleware_probe_result(result: tool_host::InvocationResult) -> String
         decode_typed_schema_value_owned(result.result.expect("middleware probe returns a result"))
             .expect("decode middleware probe result");
     String::from_value(value.value()).expect("middleware probe result is a string")
+}
+
+fn decode_dynamic_mcp_result(result: tool_host::InvocationResult) -> String {
+    let value = decode_typed_schema_value_owned(result.result.expect("MCP tool returns a result"))
+        .expect("decode MCP tool result");
+    let SchemaValue::Record { fields } = value.value() else {
+        panic!("MCP result is a record");
+    };
+    let SchemaValue::Record { fields } = &fields[0] else {
+        panic!("MCP structured result is a record");
+    };
+    let SchemaValue::String(evidence) = &fields[0] else {
+        panic!("MCP evidence is a string");
+    };
+    evidence.clone()
 }
 
 fn raw_typed_output_input(tag: String) -> golem_rust::schema::wit::wire::TypedSchemaValue {
@@ -582,6 +664,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         marker
     }
 
+    fn replay_probe(&self) -> String {
+        "replayed".to_string()
+    }
+
     fn read_owner_file(&self, path: String) -> String {
         let mut contents = String::new();
         std::fs::File::open(path)
@@ -591,7 +677,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let first = rpc.invoke_and_await(
             vec!["no-stream".to_string()],
             raw_no_stream_input("hold-attempt-identity"),
@@ -955,7 +1041,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("observe source failure");
         assert_eq!(failed_input.1, b"marker:");
 
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         rpc.invoke_and_await(
             vec!["no-stream".to_string()],
             raw_no_stream_input("ok"),
@@ -1027,7 +1113,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn raw_modes_and_handles(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
 
         let (sync_stdout_target, sync_stdout) = tool_host::create_stdout();
@@ -1313,7 +1399,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("native-streaming");
+        let rpc = ToolRpc::create("native-streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
 
         let (sync_target, sync_stdout) = tool_host::create_stdout();
@@ -1379,7 +1465,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         .expect("read native effect counter");
         let count = String::from_utf8(read_all(counter_stdout).await).unwrap();
 
-        ToolRpc::new("native-durable-helper")
+        ToolRpc::create("native-durable-helper")
+            .expect("tool RPC creation failed")
             .invoke_and_await(
                 vec!["touch".to_string()],
                 raw_optional_streams_input(),
@@ -1401,7 +1488,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn native_effect_count(&self) -> String {
-        let rpc = ToolRpc::new("native-streaming");
+        let rpc = ToolRpc::create("native-streaming").expect("tool RPC creation failed");
         let (target, stdout) = tool_host::create_stdout();
         rpc.invoke_and_await(
             vec!["run".to_string()],
@@ -1418,7 +1505,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         use std::future::{Future, poll_fn};
         use std::task::Poll;
 
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
 
         let (left_target, mut left_stdout) = tool_host::create_stdout();
@@ -1539,7 +1626,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             Stdout(InputStream),
         }
 
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
         let (mut fire_source, fire_stdin) =
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
@@ -1629,7 +1716,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_open_stdin(&self, calls: u32) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
         let mut sources = Vec::new();
         let mut outputs = Vec::new();
@@ -1673,7 +1760,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_capable_stdout_before_result(&self, path: String, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let (stdout_target, mut stdout) = tool_host::create_stdout();
         let _result = rpc.async_invoke_and_await(
             &["run-capable".to_string()],
@@ -1686,7 +1773,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_synchronous_capable_staging(&self, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let mut expected_output = b"body-checkpoint".to_vec();
         expected_output.extend_from_slice(&input);
         let (mut source, stdin) =
@@ -1710,7 +1797,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_fire_and_forget_capable_staging(&self, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let (mut source, stdin) =
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
         rpc.invoke(
@@ -1756,7 +1843,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn capable_modes_and_cohorts(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let path = ["run-capable".to_string()];
 
         let (sync_target, sync_stdout) = tool_host::create_stdout();
@@ -1912,7 +1999,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn clean_stdout_then_trap(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -1954,7 +2041,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn drop_trapping_result(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -1967,7 +2054,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn fire_and_forget_trap(&self) {
-        ToolRpc::new("streaming")
+        ToolRpc::create("streaming")
+            .expect("tool RPC creation failed")
             .invoke(
                 &["run".to_string()],
                 raw_input("trap"),
@@ -1977,7 +2065,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_incapable_checkpoint(&self, checkpoint: String) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let path = ["run".to_string()];
         match checkpoint.as_str() {
             "before-input" => {
@@ -2094,7 +2182,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_capable_staging_checkpoint(&self, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let command = ["run-capable".to_string()];
         let (mut source, stdin) =
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
@@ -2114,7 +2202,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_capable_checkpoint(&self, path: String, input: Vec<u8>) {
-        let rpc = ToolRpc::new("capable-streaming");
+        let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
         let command = ["run-capable".to_string()];
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
@@ -2181,7 +2269,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_completed_reconstruction_barrier(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -2216,7 +2304,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn reject_incomplete_attachment_upgrade_under_pressure(&self) -> Vec<String> {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, mut stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -2242,7 +2330,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_completed_reconstruction_before_exclusive_clock(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],
@@ -2293,7 +2381,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn hold_completed_reconstruction_before_incomplete_custom(&self) {
-        let rpc = ToolRpc::new("streaming");
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_stdout();
         let result = rpc.async_invoke_and_await(
             &["run".to_string()],

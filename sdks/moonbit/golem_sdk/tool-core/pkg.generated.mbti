@@ -98,6 +98,8 @@ pub fn render_help(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, Array
 
 pub fn resolve_command_path(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, Array[String]) -> Result[Int, ToolBuildError]
 
+pub fn schema_value_matches_graph(@schema_model.SchemaGraph, @schema_model.SchemaValue) -> Bool
+
 pub fn tool_name(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Result[String, ToolBuildError]
 
 pub fn value_is_literal_to_schema_value(@schema_model.SchemaGraph, ToolLiteral) -> @schema_model.SchemaValue raise ToolBuildError

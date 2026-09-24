@@ -17,8 +17,18 @@ name = "agent"
 harness = false
 
 [[test]]
+name = "http_router"
+harness = false
+required-features = ["export_golem_agentic"]
+
+[[test]]
 name = "tool"
 harness = false
+
+[[test]]
+name = "reflection_recipe_compile"
+harness = false
+required-features = ["export_golem_agentic"]
 
 [[test]]
 name = "tool_canonical"

@@ -38,6 +38,7 @@ extern crate self as golem_schema;
 #[cfg(test)]
 test_r::enable!();
 
+pub mod http;
 pub mod model;
 pub mod schema;
 

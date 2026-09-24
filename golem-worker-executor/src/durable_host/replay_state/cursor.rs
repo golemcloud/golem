@@ -686,12 +686,9 @@ impl CursorTx<'_> {
         // End (via `start_index`) we decode the response and emit `ForkReplayed`
         // if necessary.
         match oplog_entry {
-            OplogEntry::AgentInvocationStarted {
-                wallet_pin: Some(wallet_pin),
-                ..
-            } => {
+            OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
                 self.record_replay_event(ReplayEvent::InvocationWalletPinned {
-                    wallet_pin: wallet_pin.clone(),
+                    wallet_pin: wallet_pin.as_ref().clone(),
                 });
             }
             OplogEntry::CardInstalled {
@@ -700,7 +697,7 @@ impl CursorTx<'_> {
                 ..
             } => {
                 self.record_replay_event(ReplayEvent::CardInstalled {
-                    card: card.clone(),
+                    card: card.as_ref().clone(),
                     wallet_generation: *wallet_generation,
                 });
             }
@@ -710,7 +707,7 @@ impl CursorTx<'_> {
                 ..
             } => {
                 self.record_replay_event(ReplayEvent::CardDerived {
-                    card: card.clone(),
+                    card: card.as_ref().clone(),
                     wallet_generation: *wallet_generation,
                 });
             }
@@ -744,7 +741,7 @@ impl CursorTx<'_> {
                     source_card_id: *source_card_id,
                     installed_card_id: *installed_card_id,
                     target_holder: target_holder.clone(),
-                    card: card.clone(),
+                    card: card.as_ref().clone(),
                     target_wallet_generation: *target_wallet_generation,
                 });
             }
@@ -861,14 +858,6 @@ impl CursorTx<'_> {
         if was_replay && self.cursor.is_live() {
             self.record_replay_event(ReplayEvent::ReplayFinished);
         }
-        // Publish the committed cursor position to replay-progress observers (see
-        // `Oplog::on_replay_progress`). This chokepoint is only reached by committed advances —
-        // speculative reads return before calling it — so observers never see a position that is
-        // later rolled back.
-        self.cursor
-            .oplog
-            .on_replay_progress(self.cursor.last_replayed_index())
-            .await;
     }
 
     pub(super) async fn get_out_of_skipped_region(&mut self) {
@@ -934,7 +923,7 @@ impl CursorTx<'_> {
                         wallet_generation,
                         ..
                     } => self.record_replay_event(ReplayEvent::CardInstalled {
-                        card,
+                        card: *card,
                         wallet_generation,
                     }),
                     OplogEntry::CardDerived {
@@ -942,7 +931,7 @@ impl CursorTx<'_> {
                         wallet_generation,
                         ..
                     } => self.record_replay_event(ReplayEvent::CardDerived {
-                        card,
+                        card: *card,
                         wallet_generation,
                     }),
                     OplogEntry::CardTransferStarted {
@@ -972,7 +961,7 @@ impl CursorTx<'_> {
                         source_card_id,
                         installed_card_id,
                         target_holder,
-                        card,
+                        card: *card,
                         target_wallet_generation,
                     }),
                     OplogEntry::CardTransferConfirmed {
@@ -1971,13 +1960,6 @@ impl ReplayState {
                     Ok(replay_target)
                 })
                 .await?;
-            // `CursorTx::switch_to_live` publishes the cursor position directly (not via
-            // `move_replay_idx`), so replay-progress observers are notified here.
-            state
-                .cursor
-                .oplog
-                .on_replay_progress(state.cursor.last_replayed_index())
-                .await;
             Ok(replay_target)
         })
         .await
@@ -2617,8 +2599,8 @@ impl ReplayState {
     ///
     /// - Growing the target makes a previously invisible oplog range visible, so the newly
     ///   visible range `(old_target, new_target]` is scanned for completion-delivery markers
-    ///   *before* the new target is published — a debug session constructed with a target before
-    ///   a marker and later grown past it must park the marked `End` instead of delivering it.
+    ///   *before* the new target is published. A cursor whose target grows past a marker must park
+    ///   the marked `End` instead of delivering it.
     ///   The merged additions are validated (duplicate markers for the same `Start` are oplog
     ///   corruption) before anything is mutated.
     /// - Shrinking the target hides part of the oplog, so markers beyond the new target are
@@ -2744,10 +2726,7 @@ impl ReplayState {
         }
     }
 
-    pub async fn pending_card_derivation(
-        &self,
-        card_id: CardId,
-    ) -> Option<(StoredCard, Option<u64>)> {
+    pub async fn pending_card_derivation(&self, card_id: CardId) -> Option<(StoredCard, u64)> {
         self.cursor
             .pending_replay_events
             .lock()
@@ -3001,7 +2980,7 @@ impl ReplayState {
                             idempotency_key,
                             invocation_payload,
                             invocation_context,
-                            wallet_pin,
+                            wallet_pin: *wallet_pin,
                         }));
                     }
                     entry if entry.is_hint() => {}

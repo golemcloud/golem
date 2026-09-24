@@ -180,6 +180,13 @@ function mapRpcError<T>(context: string, operation: () => T): T {
   }
 }
 
+function snapshotInvocationMetadata(metadata: InvocationMetadata): InvocationMetadata {
+  return Object.freeze({
+    agentId: metadata.agentId,
+    idempotencyKey: metadata.idempotencyKey,
+  });
+}
+
 function disposeOwnedWitResources(tree: SchemaValueTree): void {
   for (const node of tree.valueNodes) {
     switch (node.tag) {
@@ -343,6 +350,7 @@ function remoteTransport<Value>(
       disposeOwnedWitResources(input);
       throw error;
     }
+    const metadata = snapshotInvocationMetadata(invocation.metadata);
     const future = invocation.future;
     let result;
     try {
@@ -353,7 +361,7 @@ function remoteTransport<Value>(
     }
     try {
       return {
-        metadata: invocation.metadata,
+        metadata,
         value: result === undefined ? undefined : decode(result),
       };
     } catch (error) {
@@ -374,9 +382,10 @@ function remoteTransport<Value>(
       );
     },
     invokeWithMetadata(method, params) {
-      return mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>
+      const metadata = mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>
         rpc.invoke(method, encode(params), undefined),
       );
+      return snapshotInvocationMetadata(metadata);
     },
     schedule(at, method, params) {
       mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
@@ -384,9 +393,10 @@ function remoteTransport<Value>(
       );
     },
     scheduleWithMetadata(at, method, params) {
-      return mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+      const receipt = mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
         rpc.scheduleInvocation(at, method, encode(params), undefined),
       );
+      return Object.freeze({ metadata: snapshotInvocationMetadata(receipt.metadata) });
     },
     scheduleCancelable(at, method, params) {
       return mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
@@ -394,9 +404,13 @@ function remoteTransport<Value>(
       ).cancellationToken;
     },
     scheduleCancelableWithMetadata(at, method, params) {
-      return mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+      const receipt = mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
         rpc.scheduleCancelableInvocation(at, method, encode(params), undefined),
       );
+      return Object.freeze({
+        metadata: snapshotInvocationMetadata(receipt.metadata),
+        cancellationToken: receipt.cancellationToken,
+      });
     },
   };
 }

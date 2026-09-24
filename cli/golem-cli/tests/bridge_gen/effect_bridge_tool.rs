@@ -45,7 +45,7 @@ fn effect_tool_advanced_schema_inherited_globals_repeatables_and_streams_compile
         "Effect.Effect<",
         "base.StartedToolInvocation<",
         "base.ToolInputStream<",
-        "() => (encodeColorMode(color))",
+        "tag: 'option', value: v === undefined ? undefined : encodeColorMode(v)",
         "() => ({ tag: 'bool', value: case_sensitive })",
     ] {
         assert!(
@@ -54,7 +54,8 @@ fn effect_tool_advanced_schema_inherited_globals_repeatables_and_streams_compile
         );
     }
     assert!(
-        source.contains("[...this.inherited, () => (encodeColorMode(color)), () => ({ tag: 'bool', value: case_sensitive })]"),
+        source.contains("[...this.inherited, () => (")
+            && source.contains("))(color)), () => ({ tag: 'bool', value: case_sensitive })]"),
         "inherited global encoder expressions were not preserved as complete array elements in {generated}"
     );
     assert!(!source.contains("Schema.Top"));

@@ -33,6 +33,7 @@ interface WireStreamState {
   readonly kind: 'wire';
   endpoint?: GuestSchemaValueStream;
   iterator?: AsyncIterator<SchemaValueTree>;
+  acquiring?: Promise<AsyncIterator<SchemaValueTree>>;
   readonly readItem: (tree: SchemaValueTree) => unknown;
   busy: boolean;
 }
@@ -94,19 +95,20 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
       if (state.kind === 'typed') {
         state.iterator ??= state.source[Symbol.asyncIterator]();
         const item = await state.iterator.next();
-        return item.done ? { done: true, value: undefined } : item;
+        return item.done || !states.has(this) ? { done: true, value: undefined } : item;
       }
 
       const iterator = await wireIterator(state);
+      if (!states.has(this)) return { done: true, value: undefined };
       const item = await iterator.next();
-      return item.done
+      return item.done || !states.has(this)
         ? { done: true, value: undefined }
         : {
             done: false,
             value: await withNativeStreamScope(() => state.readItem(item.value) as T),
           };
     } catch (error) {
-      if (state.kind === 'wire') {
+      if (state.kind === 'wire' && states.has(this)) {
         states.delete(this);
         try {
           await state.iterator?.return?.();
@@ -129,20 +131,7 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
     if (state.busy) {
       throw new Error('an AgentStream operation is already in progress');
     }
-    state.busy = true;
-    try {
-      states.delete(this);
-      const iterator =
-        state.kind === 'typed'
-          ? (state.iterator ??= state.source[Symbol.asyncIterator]())
-          : await wireIterator(state);
-      if (iterator.return) {
-        await iterator.return(value);
-      }
-      return { done: true, value: value as T };
-    } finally {
-      state.busy = false;
-    }
+    return disposeAgentStream(this, value);
   }
 
   /**
@@ -175,6 +164,26 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
       state.busy = false;
     }
   }
+}
+
+/**
+ * @internal Close an adapter-owned stream even during a pending read. Unlike the public
+ * iterator API, a Web consumer may cancel during pull. The source must cooperate with return().
+ * This disposes only the stream; it does not cancel an active agent invocation.
+ */
+export async function disposeAgentStream<T>(
+  stream: AgentStream<T>,
+  value?: unknown,
+): Promise<IteratorResult<T>> {
+  const state = states.get(stream) as AgentStreamState<T> | undefined;
+  if (!state) return { done: true, value: value as T };
+  states.delete(stream);
+  const iterator =
+    state.kind === 'typed'
+      ? (state.iterator ??= state.source[Symbol.asyncIterator]())
+      : await wireIterator(state);
+  await iterator.return?.(value);
+  return { done: true, value: value as T };
 }
 
 /** @internal Move an AgentStream into a recursive schema value. */
@@ -293,15 +302,19 @@ async function wireIterator(state: WireStreamState): Promise<AsyncIterator<Schem
   if (state.iterator !== undefined) {
     return state.iterator;
   }
+  if (state.acquiring !== undefined) return state.acquiring;
   const endpoint = state.endpoint;
   if (endpoint === undefined) {
     throw new Error('AgentStream was already transferred');
   }
   state.endpoint = undefined;
-  const source =
-    endpoint.kind === 'native' ? endpoint.value : await SchemaValueStream.unwrap(endpoint.value);
-  state.iterator = source[Symbol.asyncIterator]();
-  return state.iterator;
+  state.acquiring = (async () => {
+    const source =
+      endpoint.kind === 'native' ? endpoint.value : await SchemaValueStream.unwrap(endpoint.value);
+    state.iterator = source[Symbol.asyncIterator]();
+    return state.iterator;
+  })();
+  return state.acquiring;
 }
 
 function asAsyncIterable<T>(source: Iterable<T> | AsyncIterable<T>): AsyncIterable<T> {

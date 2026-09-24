@@ -22,6 +22,7 @@ impl Snapshottable for RestoreTestAgent with fn save_snapshot(self) {
 fn restore_test_agent_type() -> @common.AgentType raise {
   let def : AgentTypeDef = {
     type_name: "RestoreTestAgent",
+    kind: REGULAR,
     description: "",
     source_language: "moonbit",
     constructor_: { name: None, description: "", prompt_hint: None, input: [], },

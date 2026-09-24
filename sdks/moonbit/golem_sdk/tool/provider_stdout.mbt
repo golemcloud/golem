@@ -287,7 +287,7 @@ pub async fn invoke_with_stdout(
     }
   }
   let reason = match result {
-    Ok(_) => None
+    Ok(_) | Err(@types.ToolError::CustomError(_)) => None
     Err(_) => Some(ToolStreamError::Failed("tool invocation failed"))
   }
   @async-core.protect_from_cancel(() => stdout.complete(reason)) catch {
@@ -310,7 +310,7 @@ pub async fn invoke_with_stdout(
           raise error
         }
         Err(_) if error is @async-core.Cancelled::Cancelled => raise error
-        Err(_) => ()
+        _ => ()
       }
   }
   result

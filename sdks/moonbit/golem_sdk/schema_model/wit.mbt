@@ -321,6 +321,7 @@ pub struct GraphDecoder {
   // travels through `ref-type` (resolved without recursing here), so only a
   // structural back-edge in raw type-node indices is reported as a cycle.
   on_path : Array[Bool]
+  decoded : Array[SchemaType?]
 }
 
 ///|
@@ -340,6 +341,7 @@ pub fn GraphDecoder::new(
     nodes: wit.type_nodes,
     wit_defs: wit.defs,
     on_path: Array::make(wit.type_nodes.length(), false),
+    decoded: Array::make(wit.type_nodes.length(), None),
   }
 }
 
@@ -387,6 +389,9 @@ fn GraphDecoder::type_at(
       "type node index out of range: \{idx} (nodes: \{self.nodes.length()})",
     )
   }
+  if self.decoded[idx] is Some(value) {
+    return value
+  }
   if self.on_path[idx] {
     raise DecodeError("cyclic type node reference at index \{idx}")
   }
@@ -397,6 +402,7 @@ fn GraphDecoder::type_at(
     metadata: node.metadata,
   }
   self.on_path[idx] = false
+  self.decoded[idx] = Some(result)
   result
 }
 
@@ -499,6 +505,30 @@ pub fn schema_graph_from_wit(
   let defs = dec.decode_defs()
   let root = dec.decode_type_at(wit.root)
   { defs, root, }
+}
+
+///|
+/// Decode a descriptor's definitions and type nodes once so every selected root
+/// shares the same immutable schema snapshot.
+pub(all) struct DecodedSchemaGraph {
+  graph : SchemaGraph
+  roots : Array[SchemaType]
+} derive(Debug, Eq)
+
+///|
+pub fn schema_graph_roots_from_wit(
+  wit : @types.SchemaGraph,
+) -> DecodedSchemaGraph raise SchemaModelError {
+  let dec = GraphDecoder::new(wit)
+  let defs = dec.decode_defs()
+  let roots : Array[SchemaType] = []
+  for index in 0..<wit.type_nodes.length() {
+    roots.push(dec.decode_type_at(index))
+  }
+  guard roots.get(wit.root) is Some(root) else {
+    raise DecodeError("type node index out of range: \{wit.root} (nodes: \{roots.length()})")
+  }
+  { graph: { defs, root, }, roots, }
 }
 
 // ============================================================

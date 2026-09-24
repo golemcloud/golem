@@ -85,6 +85,34 @@ pub trait ConfigSchema: Sized {
     fn load(path: &[String]) -> Result<Self, ConfigValueError>;
 }
 
+impl ConfigSchema for () {
+    type RpcType = ();
+
+    fn describe_config(_path: &[String]) -> Vec<ExtendedAgentConfigDeclaration> {
+        Vec::new()
+    }
+
+    fn describe_wire_config(
+        _path: &[String],
+        _builder: &mut crate::schema::wit::direct::WireSchemaBuilder,
+    ) -> Vec<crate::golem_agentic::golem::agent::common::AgentConfigDeclaration> {
+        Vec::new()
+    }
+
+    fn load(_path: &[String]) -> Result<Self, ConfigValueError> {
+        Ok(())
+    }
+}
+
+impl IntoRpcConfigParam for () {
+    fn into_rpc_param(
+        self,
+        _path: &[String],
+    ) -> Vec<crate::golem_agentic::golem::agent::common::TypedAgentConfigValue> {
+        Vec::new()
+    }
+}
+
 #[doc(hidden)]
 pub trait IntoRpcConfigParam: Sized {
     fn into_rpc_param(

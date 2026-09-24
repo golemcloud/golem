@@ -326,7 +326,6 @@ pub mod golem_agentic {
 
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
-
 #[cfg(feature = "export_golem_agentic")]
 pub(crate) use golem_agentic::golem::tool::underlying as tool_underlying_bindings;
 
@@ -390,6 +389,9 @@ pub mod oplog_processor {
 
 #[cfg(feature = "export_golem_agentic")]
 pub mod agentic;
+
+#[cfg(feature = "export_golem_agentic")]
+pub use agentic::reflection::*;
 
 #[cfg(feature = "durability")]
 pub mod durability;

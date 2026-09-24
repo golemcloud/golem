@@ -23,7 +23,7 @@ function onwarn(warning, warn) {
   warn(warning);
 }
 
-function javascript(input, output) {
+function javascript(input, output, isExternal = external) {
   return {
     input,
     output: {
@@ -31,7 +31,7 @@ function javascript(input, output) {
       format: 'esm',
       sourcemap: true,
     },
-    external,
+    external: isExternal,
     onwarn,
     plugins: [
       resolve({
@@ -77,7 +77,7 @@ function declarations(input, output) {
   };
 }
 
-export default defineConfig([
+export default (args) => defineConfig([
   {
     ...javascript('src/index.ts', 'dist/index.mjs'),
     external: (id) => external(id) || id.startsWith('@noble/hashes'),
@@ -113,13 +113,15 @@ export default defineConfig([
       },
     ],
   },
+  javascript('src/httpRouterContract.ts', 'dist/http-router.mjs'),
   javascript('src/wrapper.ts', 'dist/wrapper.mjs'),
   javascript('src/schema/public.ts', 'dist/schema.mjs'),
   javascript('src/reflection.ts', 'dist/reflection.mjs'),
   javascript('src/middleware.ts', 'dist/middleware.mjs'),
   javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
   declarations('src/index.ts', 'dist/index.d.mts'),
+  declarations('src/httpRouterContract.ts', 'dist/http-router.d.mts'),
   declarations('src/schema/public.ts', 'dist/schema.d.mts'),
   declarations('src/reflection.ts', 'dist/reflection.d.mts'),
   declarations('src/middleware.ts', 'dist/middleware.d.mts'),
-]);
+].filter((config) => !args.configHttpRouter || config.input === 'src/httpRouterContract.ts'));

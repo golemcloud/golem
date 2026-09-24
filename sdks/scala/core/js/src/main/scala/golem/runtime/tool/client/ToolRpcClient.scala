@@ -98,6 +98,8 @@ private[golem] final class JsWireToolRpcTransport(
   }
 }
 
+final class ToolRpcConstructionException(val failure: ToolRpcFailure) extends RuntimeException(failure.toString)
+
 /**
  * The Scala.js implementation of [[ToolRpcTransport]] over the
  * `golem:tool/host@0.1.0` `tool-rpc` resource: model values are converted to
@@ -145,6 +147,24 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
         }
     }
   }
+
+  def trigger(
+    commandPath: List[String],
+    input: TypedSchemaValue,
+    stdin: Option[ToolInputStream]
+  ): Either[ToolRpcFailure, Unit] =
+    encodeInput(input).flatMap { encoded =>
+      try {
+        val endpoints = stdin.map(_ => ToolHostApi.createStdin())
+        endpoints.foreach { case (writer, _, closed) => pump(stdin.get, writer, closed) }
+        rpc.invoke(commandPath.toJSArray, encoded, endpoints.map(_._2).orUndefined)
+        Right(())
+      } catch {
+        case js.JavaScriptException(error)      => Left(ToolHostApi.decodeRpcFailure(error))
+        case scala.util.control.NonFatal(error) =>
+          Left(ToolRpcFailure.ProtocolError(String.valueOf(error.getMessage)))
+      }
+    }
 
   private def encodeInput(input: TypedSchemaValue): Either[ToolRpcFailure, JsTypedSchemaValue] =
     try Right(SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(input)))

@@ -149,6 +149,30 @@ final class AgentStream[+A] private[golem] (
     mapped
   }
 
+  /** Transfers this stream and runs cleanup after its producer is released. */
+  def ensuring(cleanup: () => Future[Unit])(implicit ec: ExecutionContext): AgentStream[A] = {
+    ensureTransferable()
+    val decorated = new AgentStream(
+      pullValue,
+      () => {
+        val released =
+          try finalizeValue()
+          catch { case NonFatal(error) => Future.failed(error) }
+        released.transformWith { result =>
+          val cleaned =
+            try cleanup()
+            catch { case NonFatal(error) => Future.failed(error) }
+          cleaned.flatMap(_ => Future.fromTry(result))
+        }
+      },
+      ownershipEntry = ownershipEntry
+    )
+    state = Transferred
+    directTransfer = None
+    ownershipEntry.foreach(_.replace(decorated))
+    decorated
+  }
+
   private[golem] def moveToSchemaValueStream(
     encode: A => SchemaValue
   )(implicit ec: ExecutionContext): GuestSchemaValueStreamHandle =

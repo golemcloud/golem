@@ -78,6 +78,7 @@ mod bench {
 
         let agent_type = ExtendedAgentType {
             type_name: name.to_string(),
+            kind: golem_rust::golem_agentic::golem::agent::common::AgentTypeKind::Regular,
             description: "Benchmark test agent".to_string(),
             source_language: "rust".to_string(),
             constructor: ExtendedAgentConstructor {
