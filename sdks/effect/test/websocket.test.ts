@@ -74,9 +74,7 @@ describe("Websocket — runString receives inbound text frames", () => {
           WsMock.__deliverInbound(conn, { tag: "text", val: "three" })
           WsMock.__signalClosed(conn, { code: 1000, reason: "" })
 
-          yield* sock.runString((line) => {
-            seen.push(line)
-          })
+          yield* sock.runString((line) => Effect.sync(() => seen.push(line)))
         }),
       ).pipe(Effect.provide(fake.layer))
       expect(seen).toEqual(["one", "two", "three"])
@@ -100,9 +98,7 @@ describe("Websocket — runString receives inbound text frames", () => {
             val: new TextEncoder().encode("bin-payload"),
           })
           WsMock.__signalClosed(conn, { code: 1000, reason: "" })
-          yield* sock.runString((s) => {
-            seen.push(s)
-          })
+          yield* sock.runString((s) => Effect.sync(() => seen.push(s)))
         }),
       ).pipe(Effect.provide(fake.layer))
       expect(seen).toEqual(["bin-payload"])
@@ -122,7 +118,7 @@ describe("Websocket — runString receives inbound text frames", () => {
             // Code 1006 (abnormal closure) — the default closeCodeIsError
             // (every code is an error) keeps this in the failure channel.
             WsMock.__signalClosed(conn, { code: 1006, reason: "abnormal" })
-            yield* sock.runString(() => {})
+            yield* sock.runString(() => Effect.void)
           }),
         ),
       ).pipe(Effect.provide(fake.layer))
@@ -149,7 +145,7 @@ describe("Websocket — runString receives inbound text frames", () => {
               closeCodeIsError: (code) => code !== 1000,
             })
             WsMock.__signalClosed(conn, { code: 1000, reason: "bye" })
-            yield* sock.runString(() => {})
+            yield* sock.runString(() => Effect.void)
           }),
         ),
       ).pipe(Effect.provide(fake.layer))
@@ -170,7 +166,7 @@ describe("Websocket — writer sends text/binary/close", () => {
         Effect.gen(function* () {
           const sock = yield* Websocket.connect("wss://test.example/echo")
           // Drive the read loop in the background until close.
-          const fiber = yield* Effect.forkChild(sock.runString(() => {}))
+          const fiber = yield* Effect.forkChild(sock.runString(() => Effect.void))
           // Acquire the writer Effect inside its own scope so the
           // outer scope still owns the connection.
           yield* Effect.scoped(
@@ -200,7 +196,7 @@ describe("Websocket — writer sends text/binary/close", () => {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const sock = yield* Websocket.connect("wss://test.example/echo")
-          const fiber = yield* Effect.forkChild(sock.runString(() => {}))
+          const fiber = yield* Effect.forkChild(sock.runString(() => Effect.void))
           yield* Effect.scoped(
             Effect.gen(function* () {
               const write = yield* sock.writer
@@ -230,7 +226,7 @@ describe("Websocket — writer sends text/binary/close", () => {
             const sock = yield* Websocket.connect("wss://test.example/echo", {
               closeCodeIsError: (c) => c !== 1000,
             })
-            const fiber = yield* Effect.forkChild(sock.runString(() => {}))
+            const fiber = yield* Effect.forkChild(sock.runString(() => Effect.void))
             yield* Effect.scoped(
               Effect.gen(function* () {
                 const write = yield* sock.writer
@@ -263,7 +259,7 @@ describe("Websocket — writer sends text/binary/close", () => {
         Effect.gen(function* () {
           const sock = yield* Websocket.connect("wss://test.example/echo")
           // Run the read loop; it stays blocked on subscribe() until close.
-          const fiber = yield* Effect.forkChild(sock.runString(() => {}))
+          const fiber = yield* Effect.forkChild(sock.runString(() => Effect.void))
           const writeExit = yield* Effect.exit(
             Effect.scoped(
               Effect.gen(function* () {
@@ -299,9 +295,8 @@ describe("Websocket — Layer integration", () => {
       const seen: string[] = []
       yield* Effect.gen(function* () {
         const sock = yield* Socket.Socket
-        yield* sock.runString((s) => {
-          seen.push(s)
-        })
+        const pull = yield* Socket.readerString(sock)
+        seen.push(...(yield* pull))
       }).pipe(
         Effect.provide(
           Websocket.layer("wss://test.example/echo", {
@@ -386,7 +381,7 @@ describe("Websocket — call-site sensitive error classification", () => {
       const writeExit = yield* Effect.scoped(
         Effect.gen(function* () {
           const sock = yield* Websocket.connect("wss://test.example/echo")
-          const fiber = yield* Effect.forkChild(sock.runString(() => {}))
+          const fiber = yield* Effect.forkChild(sock.runString(() => Effect.void))
           const writeExit = yield* Effect.exit(
             Effect.scoped(
               Effect.gen(function* () {
@@ -421,7 +416,7 @@ describe("Websocket — call-site sensitive error classification", () => {
           Effect.gen(function* () {
             const sock = yield* Websocket.connect("wss://test.example/echo")
             WsMock.__deliverError(conn, { tag: "other", val: "weird-recv-state" })
-            yield* sock.runString(() => {})
+            yield* sock.runString(() => Effect.void)
           }),
         ),
       ).pipe(Effect.provide(fake.layer))
@@ -452,7 +447,7 @@ describe("Websocket — read loop is interruption-safe", () => {
           // SDK still used the non-abortable `pollable.promise()` the
           // promise would resolve only once a frame arrived, leaking
           // the host pollable indefinitely.
-          const fiber = yield* Effect.forkChild(sock.runString(() => {}))
+          const fiber = yield* Effect.forkChild(sock.runString(() => Effect.void))
           // Yield once to make sure the read loop has actually entered
           // its `await pollable.abortablePromise(...)` call before we
           // interrupt.
@@ -499,7 +494,7 @@ describe("Websocket — local CloseEvent signals local termination", () => {
           const sock = yield* Websocket.connect("wss://test.example/echo", {
             closeCodeIsError: (c) => c !== 1000,
           })
-          const fiber = yield* Effect.forkChild(sock.runString(() => {}))
+          const fiber = yield* Effect.forkChild(sock.runString(() => Effect.void))
           yield* Effect.scoped(
             Effect.gen(function* () {
               const write = yield* sock.writer
@@ -554,7 +549,7 @@ describe("Websocket — writer-before-runRaw contract", () => {
           expect(WsMock.__outbound(conn).length).toBe(0)
           // Now fork the read loop; latch opens and the suspended
           // writer should make progress.
-          const reader = yield* Effect.forkChild(sock.runString(() => {}))
+          const reader = yield* Effect.forkChild(sock.runString(() => Effect.void))
           yield* Fiber.join(writeFiber)
           expect(WsMock.__outbound(conn).length).toBe(1)
           expect(WsMock.__outbound(conn)[0]).toEqual({ tag: "text", val: "buffered" })

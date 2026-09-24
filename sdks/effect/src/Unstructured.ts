@@ -1,7 +1,7 @@
 /**
  * @since 1.5.0
  */
-import { Effect, Option, Schema, SchemaGetter, SchemaIssue } from "effect"
+import { Effect, Schema, SchemaGetter, SchemaIssue } from "effect"
 import type { Role } from "golem:core/types@2.0.0"
 import {
   emptyMetadata,
@@ -205,7 +205,7 @@ export const makeElementWitCodec = <T>(
 }
 
 /**
- * A `SchemaGetter.transformOrFail` that catches any error the pure transform
+ * A `SchemaGetter.transformEffect` that catches any error the pure transform
  * throws and surfaces it as a `SchemaIssue.InvalidValue` (so it lands on the
  * schema-error channel rather than escaping as an uncaught defect).
  *
@@ -213,14 +213,18 @@ export const makeElementWitCodec = <T>(
  * @category codecs
  */
 export const tryGetter = <I, O>(f: (input: I) => O) =>
-  SchemaGetter.transformOrFail((input: I) => {
+  SchemaGetter.transformEffect((input: I, options) => {
     try {
       return Effect.succeed(f(input))
     } catch (e) {
       return Effect.fail(
-        new SchemaIssue.InvalidValue(Option.some(input), {
-          message: e instanceof Error ? e.message : String(e),
-        }),
+        new SchemaIssue.InvalidValue(
+          {
+            message: e instanceof Error ? e.message : String(e),
+          },
+          input,
+          options,
+        ),
       )
     }
   })

@@ -29,7 +29,7 @@ use golem_service_base::mcp::{CompiledMcp, CompiledMcpToolExport};
 use golem_service_base::model::auth::AuthCtx;
 use rmcp::{
     ErrorData,
-    model::{CallToolResult, Content, Tool, ToolAnnotations},
+    model::{CallToolResult, ContentBlock, Tool, ToolAnnotations},
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -42,23 +42,24 @@ const INPUT_CHUNK: usize = 64 * 1024;
 
 pub fn tool_metadata(export: &CompiledMcpToolExport) -> Result<Tool, ErrorData> {
     let (_, body) = export.command().map_err(invalid)?;
-    Ok(Tool {
-        name: export.mcp_name.clone().into(),
-        title: None,
-        description: Some(export.description.clone().into()),
-        input_schema: Arc::new(export.input_json_schema().map_err(invalid)?),
-        output_schema: export.output_json_schema().map_err(invalid)?.map(Arc::new),
-        annotations: body.annotations.map(|hints| ToolAnnotations {
-            title: None,
-            read_only_hint: Some(hints.read_only),
-            destructive_hint: Some(hints.destructive),
-            idempotent_hint: Some(hints.idempotent),
-            open_world_hint: Some(hints.open_world),
-        }),
-        execution: None,
-        icons: None,
-        meta: None,
-    })
+    let mut tool = Tool::new(
+        export.mcp_name.clone(),
+        export.description.clone(),
+        export.input_json_schema().map_err(invalid)?,
+    );
+    if let Some(output_schema) = export.output_json_schema().map_err(invalid)? {
+        tool = tool.with_raw_output_schema(Arc::new(output_schema));
+    }
+    if let Some(hints) = body.annotations {
+        tool = tool.with_annotations(
+            ToolAnnotations::new()
+                .read_only(hints.read_only)
+                .destructive(hints.destructive)
+                .idempotent(hints.idempotent)
+                .open_world(hints.open_world),
+        );
+    }
+    Ok(tool)
 }
 
 fn invocation_auth(
@@ -317,7 +318,7 @@ fn project_result(
                         value.payload.value(),
                     )
                     .map_err(|e| invalid(e.to_string()))?;
-                    Ok(CallToolResult::error(vec![Content::text(
+                    Ok(CallToolResult::error(vec![ContentBlock::text(
                         serde_json::json!({"name": value.name, "payload": payload}).to_string(),
                     )]))
                 }
@@ -325,7 +326,7 @@ fn project_result(
             };
         }
         PublicExternalToolResult::Failure(error) => {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "{error:?}"
             ))]));
         }
@@ -355,7 +356,7 @@ fn project_result(
     };
     let mut content = Vec::new();
     if let Some(value) = &structured_content {
-        content.push(Content::text(value.to_string()));
+        content.push(ContentBlock::text(value.to_string()));
     }
     if let Some(spec) = &body.stdout {
         let mime = spec
@@ -372,12 +373,9 @@ fn project_result(
         };
         content.push(serde_json::from_value(projected).map_err(|e| invalid(e.to_string()))?);
     }
-    Ok(CallToolResult {
-        content,
-        structured_content,
-        is_error: Some(false),
-        meta: None,
-    })
+    let mut result = CallToolResult::success(content);
+    result.structured_content = structured_content;
+    Ok(result)
 }
 
 fn invalid(message: impl Into<String>) -> ErrorData {

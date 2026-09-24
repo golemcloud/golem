@@ -36,8 +36,8 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateStreamSessionSuccess, CreateWorkerRequest, DeactivatePluginRequest,
-    DeliverCardTransferRequest, DurableStreamAttachmentControlRequest,
+    CreateStreamSessionRequest, CreateStreamSessionSuccess, CreateWorkerRequest,
+    DeactivatePluginRequest, DeliverCardTransferRequest, DurableStreamAttachmentControlRequest,
     DurableStreamSegmentReadRequest, ExportStreamControlResult, ForkWorkerRequest,
     InterruptWorkerRequest, ProcessOplogEntriesRequest, ReadStreamSlotRequest,
     ReadStreamSlotSuccess, ResolveRevertLastInvocationsRequest, ResumeWorkerRequest,
@@ -562,7 +562,7 @@ pub trait WorkerClient: Send + Sync {
     async fn create_stream_session(
         &self,
         _agent_id: &AgentId,
-        _request: InvocationStart,
+        _request: CreateStreamSessionRequest,
     ) -> WorkerResult<CreateStreamSessionSuccess> {
         Err(WorkerServiceError::Internal(
             "durable stream sessions are not supported by this worker client".to_string(),
@@ -593,7 +593,7 @@ pub trait WorkerClient: Send + Sync {
         &self,
         _agent_id: &AgentId,
         _request: workerexecutor::v1::AppendToStreamSlotRequest,
-    ) -> WorkerResult<workerexecutor::v1::append_to_stream_slot_response::Result> {
+    ) -> WorkerResult<workerexecutor::v1::AppendToStreamSlotResponse> {
         Err(WorkerServiceError::Internal(
             "durable stream appends are not supported by this worker client".to_string(),
         ))
@@ -1884,7 +1884,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn create_stream_session(
         &self,
         agent_id: &AgentId,
-        request: InvocationStart,
+        request: CreateStreamSessionRequest,
     ) -> WorkerResult<CreateStreamSessionSuccess> {
         self.call_worker_executor(
             agent_id.clone(),
@@ -1919,6 +1919,68 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         request: ReadStreamSlotRequest,
     ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        if request.admission
+            == workerexecutor::v1::StreamSlotReadAdmission::TouchingOriginGet as i32
+        {
+            let routing_table = self
+                .routing_table_service
+                .get_routing_table()
+                .await
+                .map_err(|error| {
+                    WorkerServiceError::InternalCallError(
+                        CallWorkerExecutorError::FailedToGetRoutingTable(error),
+                    )
+                })?;
+            let pod = routing_table.lookup(agent_id).ok_or_else(|| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToConnectToPod(Status::unavailable(format!(
+                        "no active shard for agent {agent_id}"
+                    ))),
+                )
+            })?;
+            let response = self
+                .worker_executor_clients
+                .call_without_retry(
+                    "read_stream_slot",
+                    pod.uri(self.worker_executor_clients.uses_tls()),
+                    move |client| {
+                        let request = request.clone();
+                        Box::pin(async move {
+                            client
+                                .read_stream_slot(request)
+                                .await?
+                                .into_inner()
+                                .message()
+                                .await?
+                                .ok_or_else(|| {
+                                    Status::internal("Empty read stream slot response stream")
+                                })
+                        })
+                    },
+                )
+                .await
+                .map_err(|status| {
+                    WorkerServiceError::InternalCallError(
+                        CallWorkerExecutorError::FailedToConnectToPod(status),
+                    )
+                })?;
+            return match response.result {
+                Some(workerexecutor::v1::read_stream_slot_response::Result::Success(success)) => {
+                    Ok(Some(success))
+                }
+                Some(workerexecutor::v1::read_stream_slot_response::Result::Failure(error)) => {
+                    let error: WorkerExecutorError =
+                        error.try_into().map_err(WorkerServiceError::Internal)?;
+                    Err(WorkerServiceError::GolemError(error))
+                }
+                Some(workerexecutor::v1::read_stream_slot_response::Result::NotFound(_)) => {
+                    Ok(None)
+                }
+                None => Err(WorkerServiceError::Internal(
+                    "Empty read stream slot response".into(),
+                )),
+            };
+        }
         self.call_worker_executor(
             agent_id.clone(),
             "read_stream_slot",
@@ -2178,7 +2240,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         request: workerexecutor::v1::AppendToStreamSlotRequest,
-    ) -> WorkerResult<workerexecutor::v1::append_to_stream_slot_response::Result> {
+    ) -> WorkerResult<workerexecutor::v1::AppendToStreamSlotResponse> {
         let routing_table = self
             .routing_table_service
             .get_routing_table()
@@ -2208,13 +2270,16 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     CallWorkerExecutorError::FailedToConnectToPod(status),
                 )
             })?;
-        match response.into_inner().result {
+        let response = response.into_inner();
+        match response.result.as_ref() {
             Some(workerexecutor::v1::append_to_stream_slot_response::Result::Failure(error)) => {
-                let error: WorkerExecutorError =
-                    error.try_into().map_err(WorkerServiceError::Internal)?;
+                let error: WorkerExecutorError = error
+                    .clone()
+                    .try_into()
+                    .map_err(WorkerServiceError::Internal)?;
                 Err(WorkerServiceError::GolemError(error))
             }
-            Some(result) => Ok(result),
+            Some(_) => Ok(response),
             None => Err(WorkerServiceError::Internal(
                 "Empty append stream response".into(),
             )),
@@ -3147,7 +3212,7 @@ mod rejection_mapping_tests {
         );
         unimplemented_unary!(
             create_stream_session,
-            golem_api_grpc::proto::golem::worker::InvocationStart,
+            golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionRequest,
             golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionResponse
         );
 

@@ -179,6 +179,18 @@ impl AccountUsageService {
         Ok(())
     }
 
+    /// Admit a registry-dispatched HTTP attempt against the owner's monthly budget.
+    /// Like connection admission, the limit check is approximate under concurrency;
+    /// the repository atomically adds the charge without losing concurrent deltas.
+    pub async fn record_http_call(&self, account_id: AccountId) -> Result<(), AccountUsageError> {
+        let mut usage = self
+            .get_account_usage(account_id, Some(UsageType::MonthlyHttpCalls))
+            .await?;
+        self.add_checked(&mut usage, UsageType::MonthlyHttpCalls, 1)?;
+        self.account_usage_repo.add(&usage).await?;
+        Ok(())
+    }
+
     pub async fn update_resource_usage(
         &self,
         updates: HashMap<AccountId, ResourceUsageUpdate>,

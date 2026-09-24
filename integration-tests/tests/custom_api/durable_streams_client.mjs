@@ -472,10 +472,15 @@ async function tombstoneAndExclusions() {
   const next = session();
   await create(next.slot("input"));
   await handle(next.slot("input")).close();
-  await request(session().slot("input"), 400, {
+  const expiring = session();
+  await request(expiring.slot("input"), 201, {
     method: "PUT",
     headers: { "content-type": json, "stream-ttl": "60" },
   });
+  const expiringHead = await fetch(expiring.slot("input"), { method: "HEAD" });
+  assert.equal(expiringHead.status, 200);
+  assert.equal(expiringHead.headers.get("stream-ttl"), "60");
+  assert.equal(expiringHead.headers.get("cache-control"), "no-store");
   for (const method of ["GET", "PUT"]) {
     await request(s.slot("__ds"), 404, { method });
   }

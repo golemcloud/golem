@@ -15,7 +15,7 @@
 use crate::app::build::check::{
     create_claude_symlink_if_needed, plan_dependency_fixes, resolve_claude_skills_context,
 };
-use crate::app::context::BuildContext;
+use crate::app::context::{BuildContext, ResolvedEnvironmentTools, ResolvedMcpDiagnostic};
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
 use crate::app::template::TemplateDescription;
@@ -51,7 +51,7 @@ use crate::model::agent::AgentTypeView;
 use crate::model::agent::AgentUpdateMode;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
-    WithSource,
+    EnvironmentToolBridgeRequests, WithSource,
 };
 use crate::model::component::{
     PendingRemoteInitialFile, RemoteToolMiddlewareDeploymentPlan,
@@ -102,6 +102,9 @@ use golem_common::model::environment_tool_middleware_grant::{
     EnvironmentToolMiddlewareGrantCreation, EnvironmentToolMiddlewareGrantDeletion,
     EnvironmentToolMiddlewareGrantReconciliation, EnvironmentToolMiddlewareValidation,
 };
+use golem_common::model::mcp_import::{
+    McpImportAuthInput, McpImportBasicAuth, McpImportDeployment,
+};
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::model::tool_middleware_release::{
@@ -121,6 +124,137 @@ mod deploy_diff;
 mod template;
 mod tool_middleware;
 mod version_strategy;
+
+pub(crate) fn resolve_mcp_import_env_vars(
+    import: McpImportDeployment,
+    index: usize,
+) -> anyhow::Result<McpImportDeployment> {
+    let renderer = crate::command_handler::template::EnvVarRenderer::new();
+    let render = |field: &str, value: String| {
+        renderer.render_str(&value).map_err(|err| {
+            let missing = renderer.missing_env_vars(&value, &err);
+            if missing.is_empty() {
+                anyhow::anyhow!("Failed to resolve MCP import {index} field {field}")
+            } else {
+                anyhow::anyhow!(
+                    "Failed to resolve MCP import {index} field {field}; missing environment variables: {}",
+                    missing.join(", ")
+                )
+            }
+        })
+    };
+    let render_list = |field: &str, values: Option<Vec<String>>| {
+        values
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|value| render(field, value))
+                    .collect()
+            })
+            .transpose()
+    };
+
+    Ok(McpImportDeployment {
+        url: render("url", import.url)?,
+        auth: import
+            .auth
+            .map(|auth| {
+                Ok::<_, anyhow::Error>(McpImportAuthInput {
+                    bearer: auth.bearer.map(|v| render("auth.bearer", v)).transpose()?,
+                    basic: auth
+                        .basic
+                        .map(|basic| {
+                            Ok::<_, anyhow::Error>(McpImportBasicAuth {
+                                user: render("auth.basic.user", basic.user)?,
+                                password: render("auth.basic.password", basic.password)?,
+                            })
+                        })
+                        .transpose()?,
+                })
+            })
+            .transpose()?,
+        security_scheme: import
+            .security_scheme
+            .map(|name| {
+                render("securityScheme", name.0)
+                    .map(golem_common::model::security_scheme::SecuritySchemeName)
+            })
+            .transpose()?,
+        prefix: import.prefix.map(|v| render("prefix", v)).transpose()?,
+        include: render_list("include", import.include)?,
+        exclude: render_list("exclude", import.exclude)?,
+        version: import.version.map(|v| render("version", v)).transpose()?,
+    })
+}
+
+fn should_resolve_mcp_imports(
+    has_imports: bool,
+    requests: &EnvironmentToolBridgeRequests,
+    ambient_names: &BTreeSet<String>,
+) -> bool {
+    has_imports
+        && (requests.wildcard
+            || requests
+                .names
+                .iter()
+                .any(|name| !ambient_names.contains(name)))
+}
+
+fn register_ambient_tool_name(
+    name: &ToolName,
+    definition_name: Option<&str>,
+    application_tool_names: &BTreeSet<String>,
+    ambient_names: &mut BTreeSet<String>,
+) -> anyhow::Result<()> {
+    let definition_name = definition_name
+        .ok_or_else(|| anyhow!("Ambient tool '{name}' has a definition without a name"))?;
+    if definition_name != name.as_str() {
+        bail!("Ambient tool '{name}' has mismatched definition name '{definition_name}'");
+    }
+    if application_tool_names.contains(definition_name) {
+        bail!("Ambient tool '{name}' conflicts with an application tool implementation");
+    }
+    if !ambient_names.insert(definition_name.to_string()) {
+        bail!("Selected environment contains multiple ambient tools named '{name}'");
+    }
+    Ok(())
+}
+
+fn canonical_mcp_diagnostic_name(prefix: Option<&str>, upstream_name: &str) -> String {
+    let sanitized = golem_mcp_import::tool::sanitize_name(upstream_name);
+    prefix
+        .map(|prefix| format!("{prefix}-{sanitized}"))
+        .unwrap_or(sanitized)
+}
+
+fn resolved_mcp_diagnostics(
+    import_prefixes: &[Option<String>],
+    diagnostics: Vec<golem_client::model::McpResolvedDiagnostic>,
+    requests: &EnvironmentToolBridgeRequests,
+) -> Vec<ResolvedMcpDiagnostic> {
+    diagnostics
+        .into_iter()
+        .filter_map(|diagnostic| {
+            let canonical_name = canonical_mcp_diagnostic_name(
+                import_prefixes
+                    .get(diagnostic.import_index as usize)
+                    .and_then(Option::as_deref),
+                &diagnostic.upstream_name,
+            );
+            if golem_mcp_import::tool::is_filter_rejection(&diagnostic.reason)
+                && !requests.names.contains(&canonical_name)
+            {
+                return None;
+            }
+            Some(ResolvedMcpDiagnostic {
+                canonical_name,
+                import_index: diagnostic.import_index,
+                upstream_name: diagnostic.upstream_name,
+                reason: diagnostic.reason,
+            })
+        })
+        .collect()
+}
 
 pub struct AppCommandHandler {
     ctx: Arc<Context>,
@@ -1327,6 +1461,8 @@ impl AppCommandHandler {
             components,
             remote_tools,
             tools_to_publish,
+            environment_tool_middleware_bindings: dynamic_environment_bindings,
+            agent_tool_middleware_bindings: dynamic_agent_bindings,
         } = self
             .ctx
             .component_handler()
@@ -1409,6 +1545,16 @@ impl AppCommandHandler {
             .deployable_manifest_mcp_deployments(&environment.environment_name)
             .await?;
 
+        let deployable_manifest_mcp_imports = self
+            .ctx
+            .api_deployment_handler()
+            .deployable_manifest_mcp_imports(&environment.environment_name)
+            .await?
+            .into_iter()
+            .enumerate()
+            .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
         let diffable_local_components = {
             let mut diffable_components = BTreeMap::<String, diff::HashOf<diff::Component>>::new();
             for (component_name, component_deploy_properties) in &components {
@@ -1471,24 +1617,34 @@ impl AppCommandHandler {
             diffable_local_mcp_deployments
         };
 
-        let mut environment_tool_middleware_bindings = BTreeMap::new();
-        let mut agent_tool_middleware_bindings = BTreeMap::new();
+        let diffable_local_mcp_imports = deployable_manifest_mcp_imports
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, import)| {
+                import
+                    .into_parts(environment.environment_id)
+                    .map(|(descriptor, _)| (index.to_string(), descriptor.into()))
+                    .map_err(|err| anyhow::anyhow!("Invalid MCP import at index {index}: {err}"))
+            })
+            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+
+        let (mut environment_tool_middleware_bindings, mut agent_tool_middleware_bindings) =
+            diff::tool_middleware_binding_inputs(
+                &dynamic_environment_bindings,
+                &dynamic_agent_bindings,
+            );
         for (tool_name, config) in components
             .values()
             .flat_map(|component| component.tool_deployment_configs.iter())
         {
-            if let Some(binding) = &config.environment_binding
-                && diff::has_tool_middleware_binding_input(binding)
-            {
+            if let Some(binding) = &config.environment_binding {
                 environment_tool_middleware_bindings.insert(
                     tool_name.to_string(),
                     diff::ToolMiddlewareBindingInput::from(binding),
                 );
             }
             for (agent, binding) in &config.agent_bindings {
-                if !diff::has_tool_middleware_binding_input(binding) {
-                    continue;
-                }
                 agent_tool_middleware_bindings
                     .entry(agent.to_string())
                     .or_insert_with(BTreeMap::new)
@@ -1499,18 +1655,13 @@ impl AppCommandHandler {
             }
         }
         for (tool_name, deployment) in &remote_tools.deployments {
-            if let Some(binding) = &deployment.environment_binding
-                && diff::has_tool_middleware_binding_input(binding)
-            {
+            if let Some(binding) = &deployment.environment_binding {
                 environment_tool_middleware_bindings.insert(
                     tool_name.to_string(),
                     diff::ToolMiddlewareBindingInput::from(binding),
                 );
             }
             for (agent, binding) in &deployment.agent_bindings {
-                if !diff::has_tool_middleware_binding_input(binding) {
-                    continue;
-                }
                 agent_tool_middleware_bindings
                     .entry(agent.to_string())
                     .or_insert_with(BTreeMap::new)
@@ -1525,6 +1676,7 @@ impl AppCommandHandler {
             components: diffable_local_components,
             http_api_deployments: diffable_local_http_api_deployments,
             mcp_deployments: diffable_local_mcp_deployments,
+            mcp_imports: diffable_local_mcp_imports,
             remote_tools: remote_tools.diffable_deployments.clone(),
             published_tools: tools_to_publish.iter().map(ToString::to_string).collect(),
             remote_tool_middleware_deployments: remote_tool_middlewares
@@ -1553,6 +1705,9 @@ impl AppCommandHandler {
                 remote_tool_middlewares,
                 http_api_deployments: deployable_manifest_http_api_deployments,
                 mcp_deployments: deployable_manifest_mcp_deployments,
+                mcp_imports: deployable_manifest_mcp_imports,
+                environment_tool_middleware_bindings: dynamic_environment_bindings,
+                agent_tool_middleware_bindings: dynamic_agent_bindings,
             },
             diffable_local_deployment,
             local_deployment_hash,
@@ -2987,6 +3142,14 @@ impl AppCommandHandler {
                             .diffable_local_deployment
                             .universal_tool_middlewares
                             .clone(),
+                        environment_tool_middleware_bindings: deploy_diff
+                            .deployable_manifest
+                            .environment_tool_middleware_bindings
+                            .clone(),
+                        agent_tool_middleware_bindings: deploy_diff
+                            .deployable_manifest
+                            .agent_tool_middleware_bindings
+                            .clone(),
                         agent_secret_defaults: if replace_incompatible_agent_secrets {
                             let mut defaults = environment_setup.agent_secret_defaults.clone();
                             defaults.extend(
@@ -3000,6 +3163,7 @@ impl AppCommandHandler {
                         },
                         quota_resource_defaults: environment_setup.resource_defaults.clone(),
                         retry_policy_defaults: environment_setup.retry_policy_defaults.clone(),
+                        mcp_imports: deploy_diff.deployable_manifest.mcp_imports.clone(),
                         replace_incompatible_agent_secrets,
                     },
                 )
@@ -3340,6 +3504,7 @@ impl AppCommandHandler {
         build_config: &BuildConfig,
         resolved_tool_grants: &ResolvedToolGrants,
     ) -> anyhow::Result<()> {
+        let environment_tools = self.resolve_build_environment_tools(build_config).await?;
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -3349,7 +3514,115 @@ impl AppCommandHandler {
             self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config))?;
         }
 
-        app_ctx.build(build_config, resolved_tool_grants).await
+        app_ctx
+            .build(
+                build_config,
+                resolved_tool_grants,
+                environment_tools.as_ref(),
+            )
+            .await
+    }
+
+    async fn resolve_build_environment_tools(
+        &self,
+        build_config: &BuildConfig,
+    ) -> anyhow::Result<Option<ResolvedEnvironmentTools>> {
+        if !build_config.should_run_step(AppBuildStep::GenBridge) {
+            return Ok(None);
+        }
+        let (imports, application_tool_names, requests) = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+            let app = app_ctx.application();
+            let requests = app.environment_tool_bridge_requests(
+                app_ctx.selected_component_names(),
+                build_config.custom_bridge_sdk_target.is_none(),
+            );
+            if !requests.wildcard && requests.names.is_empty() {
+                return Ok(None);
+            }
+            (
+                app.mcp_imports(app.environment_name())
+                    .cloned()
+                    .unwrap_or_default(),
+                app.known_application_tool_names(),
+                requests,
+            )
+        };
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+            .await?;
+        let clients = self.ctx.golem_clients().await?;
+        let plan = clients
+            .environment
+            .get_environment_deployment_plan(&environment.environment_id.0)
+            .await
+            .map_service_error()?;
+        let mut ambient_names = BTreeSet::new();
+        for ambient in &plan.ambient_tools {
+            register_ambient_tool_name(
+                &ambient.name,
+                ambient.definition.name(),
+                &application_tool_names,
+                &mut ambient_names,
+            )?;
+        }
+
+        let should_resolve_mcp =
+            should_resolve_mcp_imports(!imports.is_empty(), &requests, &ambient_names);
+        if !should_resolve_mcp {
+            return Ok(Some(ResolvedEnvironmentTools {
+                environment_id: environment.environment_id,
+                ambient_tools: plan.ambient_tools,
+                mcp_tools: Vec::new(),
+                mcp_diagnostics: Vec::new(),
+            }));
+        }
+
+        let imports = imports
+            .into_iter()
+            .enumerate()
+            .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let import_prefixes = imports
+            .iter()
+            .map(|import| import.prefix.clone())
+            .collect::<Vec<_>>();
+        let native_names = application_tool_names
+            .into_iter()
+            .chain(ambient_names)
+            .collect::<Vec<_>>();
+        log_action(
+            "Resolving",
+            "MCP import metadata for generated tool clients",
+        );
+        let resolution = clients
+            .environment
+            .resolve_mcp_imports(
+                &environment.environment_id.0,
+                &golem_client::model::McpImportResolutionRequest {
+                    imports,
+                    native_tool_names: native_names,
+                },
+            )
+            .await
+            .map_service_error()?;
+        let diagnostics =
+            resolved_mcp_diagnostics(&import_prefixes, resolution.diagnostics, &requests);
+        for diagnostic in &diagnostics {
+            log_warn(format!(
+                "MCP import {} tool '{}': {}",
+                diagnostic.import_index, diagnostic.upstream_name, diagnostic.reason
+            ));
+        }
+        Ok(Some(ResolvedEnvironmentTools {
+            environment_id: environment.environment_id,
+            ambient_tools: plan.ambient_tools,
+            mcp_tools: resolution.tools,
+            mcp_diagnostics: diagnostics,
+        }))
     }
 
     fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
@@ -3864,10 +4137,13 @@ fn render_tool_middleware_publication_plan_entry(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_tool_grant_reconciliation_plan, duplicate_component_matches,
-        render_tool_middleware_publication_plan_entry,
+        build_tool_grant_reconciliation_plan, canonical_mcp_diagnostic_name,
+        duplicate_component_matches, register_ambient_tool_name,
+        render_tool_middleware_publication_plan_entry, resolve_mcp_import_env_vars,
+        resolved_mcp_diagnostics, should_resolve_mcp_imports,
     };
     use crate::fuzzy::Match;
+    use crate::model::app::EnvironmentToolBridgeRequests;
     use crate::model::deploy::EnvironmentToolGrantPlanAction;
     use chrono::Utc;
     use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
@@ -3887,7 +4163,146 @@ mod tests {
     };
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use std::collections::BTreeSet;
     use test_r::test;
+
+    #[test]
+    fn mcp_resolution_is_skipped_when_ambient_tools_satisfy_explicit_requests() {
+        let ambient_names = BTreeSet::from(["native-search".to_string()]);
+        let ambient_only = EnvironmentToolBridgeRequests {
+            wildcard: false,
+            names: BTreeSet::from(["native-search".to_string()]),
+        };
+        assert!(!should_resolve_mcp_imports(
+            true,
+            &ambient_only,
+            &ambient_names
+        ));
+
+        let mixed = EnvironmentToolBridgeRequests {
+            wildcard: false,
+            names: BTreeSet::from(["native-search".to_string(), "mcp-search".to_string()]),
+        };
+        assert!(should_resolve_mcp_imports(true, &mixed, &ambient_names));
+        assert!(!should_resolve_mcp_imports(false, &mixed, &ambient_names));
+
+        let wildcard = EnvironmentToolBridgeRequests {
+            wildcard: true,
+            names: BTreeSet::new(),
+        };
+        assert!(should_resolve_mcp_imports(true, &wildcard, &ambient_names));
+    }
+
+    #[test]
+    fn ambient_tool_names_must_be_canonical_unique_and_not_declared() {
+        let native = ToolName::try_from("native-search").unwrap();
+        let declared = BTreeSet::from(["declared-tool".to_string()]);
+        let mut ambient = BTreeSet::new();
+
+        register_ambient_tool_name(&native, Some("native-search"), &declared, &mut ambient)
+            .unwrap();
+        assert_eq!(ambient, BTreeSet::from(["native-search".to_string()]));
+
+        assert!(
+            register_ambient_tool_name(&native, Some("other"), &declared, &mut BTreeSet::new())
+                .unwrap_err()
+                .to_string()
+                .contains("mismatched definition name")
+        );
+        assert!(
+            register_ambient_tool_name(&native, None, &declared, &mut BTreeSet::new())
+                .unwrap_err()
+                .to_string()
+                .contains("without a name")
+        );
+
+        let declared_tool = ToolName::try_from("declared-tool").unwrap();
+        assert!(
+            register_ambient_tool_name(
+                &declared_tool,
+                Some("declared-tool"),
+                &declared,
+                &mut BTreeSet::new(),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("conflicts")
+        );
+        assert!(
+            register_ambient_tool_name(&native, Some("native-search"), &declared, &mut ambient)
+                .unwrap_err()
+                .to_string()
+                .contains("multiple ambient tools")
+        );
+    }
+
+    #[test]
+    fn mcp_diagnostic_names_use_rendered_prefix_and_projection_sanitization() {
+        assert_eq!(
+            canonical_mcp_diagnostic_name(Some("acme"), "Search Files"),
+            "acme-search-files"
+        );
+        assert_eq!(
+            canonical_mcp_diagnostic_name(None, "__Slack:Post--Message!"),
+            "slack-post-message"
+        );
+    }
+
+    #[test]
+    fn explicit_mcp_requests_keep_only_advertised_filter_rejections() {
+        let requests = EnvironmentToolBridgeRequests {
+            wildcard: false,
+            names: BTreeSet::from(["catalog-private-search".into()]),
+        };
+        let diagnostic =
+            |upstream_name: &str, reason: &str| golem_client::model::McpResolvedDiagnostic {
+                import_index: 0,
+                upstream_name: upstream_name.into(),
+                reason: reason.into(),
+            };
+        let diagnostics = resolved_mcp_diagnostics(
+            &[Some("catalog".into())],
+            vec![
+                diagnostic(
+                    "private_search",
+                    "not selected by the import's include filter",
+                ),
+                diagnostic("broken", "unsupported schema"),
+                diagnostic("other_filtered", "excluded by the import's exclude filter"),
+            ],
+            &requests,
+        );
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].canonical_name, "catalog-private-search");
+        assert!(diagnostics[0].reason.contains("include filter"));
+        assert_eq!(diagnostics[1].canonical_name, "catalog-broken");
+        assert_eq!(diagnostics[1].reason, "unsupported schema");
+    }
+
+    #[test]
+    fn mcp_import_render_error_does_not_expose_secret_template() {
+        let secret_template = "{{ definitely_missing_gol36_secret }}";
+        let import = golem_common::model::mcp_import::McpImportDeployment {
+            url: "https://example.com/mcp".into(),
+            auth: Some(golem_common::model::mcp_import::McpImportAuthInput {
+                bearer: Some(secret_template.into()),
+                basic: None,
+            }),
+            security_scheme: None,
+            prefix: None,
+            include: None,
+            exclude: None,
+            version: None,
+        };
+
+        let error = resolve_mcp_import_env_vars(import, 4)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("auth.bearer"));
+        assert!(error.contains("definitely_missing_gol36_secret"));
+        assert!(!error.contains(secret_template));
+    }
 
     fn matched(option: &str, pattern: &str) -> Match {
         Match {

@@ -16,14 +16,16 @@ use crate::error::worker_executor::WorkerExecutorError;
 use crate::metrics::storage::{
     record_compilation_cache_bytes_written, record_compilation_cache_objects_written,
 };
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace, join_blob_path};
+use crate::storage::blob::{
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, join_blob_path,
+};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::wasmtime_config::wasmtime_artifact_fingerprint;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::Instant;
 use tracing::{debug, info_span};
@@ -134,9 +136,8 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         let artifact_fingerprint = wasmtime_artifact_fingerprint(engine);
         match self
             .blob_storage
+            .with("compiled_component", "get")
             .get_raw(
-                "compiled_component",
-                "get",
                 BlobStorageNamespace::CompilationCache { environment_id },
                 &Self::key(component_id, component_revision, &artifact_fingerprint),
             )
@@ -193,9 +194,8 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         let byte_count = bytes.len() as u64;
         let result = self
             .blob_storage
+            .with("compiled_component", "put")
             .put_raw(
-                "compiled_component",
-                "put",
                 BlobStorageNamespace::CompilationCache { environment_id },
                 &Self::key(component_id, component_revision, &artifact_fingerprint),
                 &bytes,
