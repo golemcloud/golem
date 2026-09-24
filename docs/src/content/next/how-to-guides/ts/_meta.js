@@ -43,5 +43,5 @@ export default {
   "golem-add-mysql-ts": "Using MySQL from a TypeScript Agent",
   "golem-add-postgres-ts": "Using PostgreSQL from a TypeScript Agent",
   "golem-add-webhook-ts": "Using Webhooks in a TypeScript Golem Agent",
-  "golem-wait-for-external-input-ts": "Waiting for External Input with Golem Promises (TypeScript)"
-};
+  "golem-wait-for-external-input-ts": "Waiting for External Input with Golem Promises (TypeScript)",
+}

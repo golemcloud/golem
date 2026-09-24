@@ -43,5 +43,5 @@ export default {
   "golem-add-mysql-rust": "Using MySQL from a Rust Agent",
   "golem-add-postgres-rust": "Using PostgreSQL from a Rust Agent",
   "golem-add-webhook-rust": "Using Webhooks in a Rust Golem Agent",
-  "golem-wait-for-external-input-rust": "Waiting for External Input with Golem Promises (Rust)"
-};
+  "golem-wait-for-external-input-rust": "Waiting for External Input with Golem Promises (Rust)",
+}

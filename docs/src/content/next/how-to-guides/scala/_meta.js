@@ -43,5 +43,5 @@ export default {
   "golem-add-mysql-scala": "Using MySQL from a Scala Agent",
   "golem-add-postgres-scala": "Using PostgreSQL from a Scala Agent",
   "golem-add-webhook-scala": "Using Webhooks in a Scala Golem Agent",
-  "golem-wait-for-external-input-scala": "Waiting for External Input with Golem Promises (Scala)"
-};
+  "golem-wait-for-external-input-scala": "Waiting for External Input with Golem Promises (Scala)",
+}

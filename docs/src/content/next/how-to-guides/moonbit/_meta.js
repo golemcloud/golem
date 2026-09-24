@@ -43,5 +43,6 @@ export default {
   "golem-add-mysql-moonbit": "Using MySQL from a MoonBit Agent",
   "golem-add-postgres-moonbit": "Using PostgreSQL from a MoonBit Agent",
   "golem-add-webhook-moonbit": "Using Webhooks in a MoonBit Golem Agent",
-  "golem-wait-for-external-input-moonbit": "Waiting for External Input with Golem Promises (MoonBit)"
-};
+  "golem-wait-for-external-input-moonbit":
+    "Waiting for External Input with Golem Promises (MoonBit)",
+}
