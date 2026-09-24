@@ -126,7 +126,11 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         () => Future.successful(Some("still-owned")),
         () => { closed += 1; Future.successful(()) }
       )
-      val encoded = AgentClientRuntime.TestHooks.encodeImmediate(ConcreteCodec.derived[AgentStream[String]], stream)
+      val encoded = AgentClientRuntime.TestHooks.encodeImmediate(
+        ConcreteCodec.derived[AgentStream[String]],
+        containsStream = true,
+        stream
+      )
 
       ZIO.fromFuture(_ => stream.pull()).map { remaining =>
         assertTrue(

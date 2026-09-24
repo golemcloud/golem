@@ -15,6 +15,7 @@ import golem.schema.wire.ConcreteCodec
 final case class WireAgentClientType[Trait, Ctor](
   metadata: WireAgentMetadata,
   ctorCodec: ConcreteCodec[Ctor],
+  ctorContainsStream: Boolean,
   methods: List[WireClientMethod[Trait]]
 )
 
@@ -23,6 +24,7 @@ trait WireClientMethod[Trait] {
   type Output
   def name: String
   def input: ConcreteCodec[Input]
+  def inputContainsStream: Boolean
   def output: Option[ConcreteCodec[Output]]
 }
 
@@ -30,6 +32,7 @@ object WireClientMethod {
   def apply[Trait, In, Out](
     methodName: String,
     inputCodec: ConcreteCodec[In],
+    containsStream: Boolean,
     outputCodec: Option[ConcreteCodec[Out]]
   ): WireClientMethod[Trait] { type Input = In; type Output = Out } =
     new WireClientMethod[Trait] {
@@ -37,6 +40,7 @@ object WireClientMethod {
       type Output = Out
       val name                               = methodName
       val input: ConcreteCodec[Input]        = inputCodec
+      val inputContainsStream: Boolean       = containsStream
       val output: Option[ConcreteCodec[Out]] = outputCodec
     }
 }

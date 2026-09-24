@@ -21,7 +21,7 @@ import golem.host.js.schema.JsSchemaValueTree
 import golem.host.SchemaWireInterop
 import golem.runtime.{AgentMethod, AgentType, OutputCodec, OutputMetadata}
 import golem.runtime.{WireAgentClientType, WireClientMethod}
-import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody, WitSchemaValueTree}
+import golem.schema.wire.{ConcreteCodec, WitSchemaValueTree}
 import golem.FutureInterop
 import golem.Uuid
 import golem.Datetime
@@ -46,13 +46,17 @@ object AgentClientRuntime {
     phantom: Option[Uuid] = None,
     configOverrides: List[ConfigOverride] = Nil
   ): Either[String, WireResolvedAgent[Trait]] =
-    encodeWireSync(agentType.ctorCodec, constructorArgs).flatMap { payload =>
+    encodeWireSync(agentType.ctorCodec, agentType.ctorContainsStream, constructorArgs).flatMap { payload =>
       resolveRemote(agentType.metadata.name, payload, phantom, configOverrides)
         .map(remote => WireResolvedAgent(agentType, remote))
     }
 
-  private def encodeWireSync[A](codec: ConcreteCodec[A], value: A): Either[String, JsSchemaValueTree] =
-    if (codec.graph.typeNodes.exists(_.body.isInstanceOf[WitSchemaTypeBody.StreamType]))
+  private def encodeWireSync[A](
+    codec: ConcreteCodec[A],
+    containsStream: Boolean,
+    value: A
+  ): Either[String, JsSchemaValueTree] =
+    if (containsStream)
       Left("live streams cannot cross fire-and-forget or scheduled agent invocation boundaries")
     else
       try Right(SchemaWireInterop.valueTreeToJs(codec.encodeValue(value)))
@@ -344,7 +348,8 @@ object AgentClientRuntime {
 
     private def immediate[In, A](method: WireClientMethod[Trait] { type Input = In }, input: In)(
       invoke: JsSchemaValueTree => Either[String, A]
-    ): Future[A] = FutureInterop.fromEither(encodeWireSync(method.input, input).flatMap(invoke))
+    ): Future[A] =
+      FutureInterop.fromEither(encodeWireSync(method.input, method.inputContainsStream, input).flatMap(invoke))
 
     def trigger[In](method: WireClientMethod[Trait] { type Input = In }, input: In): Future[Unit] =
       immediate(method, input)(client.rpc.invoke(method.name, _))
@@ -401,8 +406,12 @@ object AgentClientRuntime {
   }
 
   private[rpc] object TestHooks {
-    def encodeImmediate[A](codec: ConcreteCodec[A], value: A): Either[String, JsSchemaValueTree] =
-      encodeWireSync(codec, value)
+    def encodeImmediate[A](
+      codec: ConcreteCodec[A],
+      containsStream: Boolean,
+      value: A
+    ): Either[String, JsSchemaValueTree] =
+      encodeWireSync(codec, containsStream, value)
 
     def withRemoteResolver[T](
       resolver: (String, JsSchemaValueTree) => Either[String, RemoteAgentClient]
