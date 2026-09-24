@@ -1232,6 +1232,7 @@ impl DurableStreamStore {
             .lookup_durable_stream_producer_metadata(
                 &owner,
                 mode,
+                producer_fingerprint,
                 vec![ProducerMetadataKey::Global, ProducerMetadataKey::Lineage],
             )
             .await
@@ -1263,7 +1264,7 @@ impl DurableStreamStore {
             commit,
             index,
         )?;
-        producer.set_control_metadata_provider(service, mode);
+        producer.set_control_metadata_provider(service, mode, producer_fingerprint);
         Ok(producer)
     }
 
@@ -1542,7 +1543,7 @@ impl DurableStreamStore {
         index: &mut ProducerStreamIndex,
         keys: impl IntoIterator<Item = ProducerMetadataKey> + Send,
     ) -> Result<(), StreamStoreError> {
-        let Some((service, mode)) = self.control_metadata_provider.get() else {
+        let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(());
         };
         let owner = OwnedAgentId::new(self.environment_id, &self.producer);
@@ -1606,7 +1607,7 @@ impl DurableStreamStore {
                 continue;
             }
             let (_, rows) = service
-                .lookup_durable_stream_producer_metadata(&owner, *mode, batch.clone())
+                .lookup_durable_stream_producer_metadata(&owner, *mode, *fingerprint, batch.clone())
                 .await
                 .map_err(StreamStoreError::Oplog)?;
             if rows.len() != batch.len() {
@@ -1668,7 +1669,7 @@ impl DurableStreamStore {
         &self,
         batch_size: usize,
     ) -> Result<Option<IndexedAttachmentCandidateBatch>, StreamStoreError> {
-        let Some((service, mode)) = self.control_metadata_provider.get() else {
+        let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(None);
         };
         let _guard = self.index.lock().await;
@@ -1677,6 +1678,7 @@ impl DurableStreamStore {
             .lookup_durable_stream_producer_metadata(
                 &owner,
                 *mode,
+                *fingerprint,
                 vec![ProducerMetadataKey::Global],
             )
             .await
@@ -1713,6 +1715,7 @@ impl DurableStreamStore {
             .lookup_durable_stream_producer_metadata(
                 &owner,
                 *mode,
+                *fingerprint,
                 pages
                     .iter()
                     .map(|n| ProducerMetadataKey::AttachmentPage(*n))
@@ -1748,7 +1751,7 @@ impl DurableStreamStore {
             keys.push(ProducerMetadataKey::Stream(*stream));
         }
         let (_, rows) = service
-            .lookup_durable_stream_producer_metadata(&owner, *mode, keys)
+            .lookup_durable_stream_producer_metadata(&owner, *mode, *fingerprint, keys)
             .await
             .map_err(StreamStoreError::Oplog)?;
         let mut candidates = Vec::new();
@@ -1809,17 +1812,26 @@ impl DurableStreamStore {
             });
             (stream, self.generation(), position)
         } else {
-            let (service, _) = self.control_metadata_provider.get().ok_or_else(|| {
+            let (service, _, _) = self.control_metadata_provider.get().ok_or_else(|| {
                 StreamStoreError::Oplog("producer metadata service is unavailable".into())
             })?;
             let owner = OwnedAgentId::new(handle.producer_environment_id, &handle.producer);
-            let mode = service
-                .get_agent_mode(&owner)
+            let identity = service
+                .resolve_agent_identity(&owner)
                 .await
                 .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
                 .ok_or(StreamStoreError::InvalidHandle)?;
+            if identity.fingerprint != handle.expected_producer_fingerprint {
+                crate::metrics::workers::record_foreign_stream_fingerprint_mismatch();
+                return Err(StreamStoreError::InvalidHandle);
+            }
             let (_, rows) = service
-                .lookup_durable_stream_producer_metadata(&owner, mode, keys)
+                .lookup_durable_stream_producer_metadata(
+                    &owner,
+                    identity.agent_mode,
+                    handle.expected_producer_fingerprint,
+                    keys,
+                )
                 .await
                 .map_err(StreamStoreError::Oplog)?;
             let mut rows = rows.into_iter();
@@ -2197,6 +2209,7 @@ mod tests {
                 .lookup_durable_stream_producer_metadata(
                     &owner,
                     AgentMode::Durable,
+                    self.identity.fingerprint,
                     vec![ProducerMetadataKey::Global],
                 )
                 .await
@@ -3397,6 +3410,7 @@ mod tests {
             .lookup_durable_stream_producer_metadata(
                 &owner,
                 AgentMode::Durable,
+                fixture.identity.fingerprint,
                 vec![
                     ProducerMetadataKey::Stream(old.stream_id),
                     ProducerMetadataKey::Stream(next.stream_id),
@@ -3483,6 +3497,7 @@ mod tests {
             .lookup_durable_stream_producer_metadata(
                 &owner,
                 AgentMode::Durable,
+                fixture.identity.fingerprint,
                 vec![
                     ProducerMetadataKey::AttachmentPage(0),
                     ProducerMetadataKey::AttachmentPosition(
@@ -3524,6 +3539,7 @@ mod tests {
             .lookup_durable_stream_producer_metadata(
                 &owner,
                 AgentMode::Durable,
+                fixture.identity.fingerprint,
                 vec![
                     ProducerMetadataKey::AttachmentPage(0),
                     ProducerMetadataKey::Global,
@@ -3781,7 +3797,12 @@ mod tests {
         let raw = raw.current_control_metadata().await.unwrap();
         let mut indexed = fixture
             .service
-            .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &target.invocation)
+            .lookup_durable_stream_control_metadata(
+                &owner,
+                AgentMode::Durable,
+                target.fingerprint,
+                &target.invocation,
+            )
             .await
             .unwrap();
         indexed.assign_recovery_slot(None);
@@ -3959,7 +3980,12 @@ mod tests {
                 .oplog_service()
                 .stream_session_index()
                 .unwrap()
-                .lookup_latest(&owner, AgentMode::Durable, &target.idempotency_key)
+                .lookup_latest(
+                    &owner,
+                    AgentMode::Durable,
+                    fixture.identity.fingerprint,
+                    &target.idempotency_key,
+                )
                 .await
                 .unwrap();
             assert_eq!(persisted, Some(buffered.clone()));
@@ -3979,6 +4005,7 @@ mod tests {
                 .lookup_durable_stream_producer_metadata(
                     &owner,
                     AgentMode::Durable,
+                    fixture.identity.fingerprint,
                     vec![
                         ProducerMetadataKey::ConsumerHead(source.clone(), reader),
                         ProducerMetadataKey::ConsumerHead(middle.clone(), reader),
@@ -3994,7 +4021,12 @@ mod tests {
             );
             let control = fixture
                 .service
-                .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &target)
+                .lookup_durable_stream_control_metadata(
+                    &owner,
+                    AgentMode::Durable,
+                    fixture.identity.fingerprint,
+                    &target,
+                )
                 .await
                 .unwrap();
             assert_eq!(control.prepared_position(), Some(OplogIndex::from_u64(2)));
@@ -4024,7 +4056,13 @@ mod tests {
             assert_eq!(
                 fixture
                     .service
-                    .read_durable_stream_consumer_page(&owner, &target, reader, 0)
+                    .read_durable_stream_consumer_page(
+                        &owner,
+                        fixture.identity.fingerprint,
+                        &target,
+                        reader,
+                        0,
+                    )
                     .await
                     .unwrap(),
                 vec![OplogIndex::from_u64(3), OplogIndex::from_u64(4)]
@@ -4041,7 +4079,12 @@ mod tests {
                 assert!(raw_control.consumer_record_counts().is_empty());
                 let control = fixture
                     .service
-                    .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, retired)
+                    .lookup_durable_stream_control_metadata(
+                        &owner,
+                        AgentMode::Durable,
+                        fixture.identity.fingerprint,
+                        retired,
+                    )
                     .await
                     .unwrap();
                 assert!(control.prepared_position().is_none());
@@ -4049,7 +4092,11 @@ mod tests {
             }
             let recovery = fixture
                 .service
-                .lookup_durable_stream_recovery_metadata(&owner, AgentMode::Durable)
+                .lookup_durable_stream_recovery_metadata(
+                    &owner,
+                    AgentMode::Durable,
+                    fixture.identity.fingerprint,
+                )
                 .await
                 .unwrap();
             assert_eq!(
@@ -4086,7 +4133,13 @@ mod tests {
                 assert_eq!(
                     fixture
                         .service
-                        .read_durable_stream_consumer_page(&owner, &target, reader, 0)
+                        .read_durable_stream_consumer_page(
+                            &owner,
+                            fixture.identity.fingerprint,
+                            &target,
+                            reader,
+                            0,
+                        )
                         .await
                         .unwrap(),
                     vec![
@@ -4097,7 +4150,12 @@ mod tests {
                 );
                 let control = fixture
                     .service
-                    .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &target)
+                    .lookup_durable_stream_control_metadata(
+                        &owner,
+                        AgentMode::Durable,
+                        fixture.identity.fingerprint,
+                        &target,
+                    )
                     .await
                     .unwrap();
                 assert_eq!(
@@ -4150,6 +4208,7 @@ mod tests {
                 .lookup_durable_stream_producer_metadata(
                     &owner,
                     AgentMode::Durable,
+                    fixture.identity.fingerprint,
                     vec![
                         ProducerMetadataKey::Global,
                         ProducerMetadataKey::SessionPage(0),
@@ -4236,6 +4295,7 @@ mod tests {
             .lookup_durable_stream_producer_metadata(
                 &owner,
                 AgentMode::Durable,
+                fixture.identity.fingerprint,
                 vec![ProducerMetadataKey::ConsumerHead(session_key, reader_id)],
             )
             .await
@@ -4299,7 +4359,12 @@ mod tests {
         let owner = OwnedAgentId::new(fixture.identity.environment_id, &fixture.identity.agent_id);
         let metadata = fixture
             .service
-            .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &session)
+            .lookup_durable_stream_control_metadata(
+                &owner,
+                AgentMode::Durable,
+                fixture.identity.fingerprint,
+                &session,
+            )
             .await
             .unwrap();
         assert_eq!(metadata.covered_through(), horizon);

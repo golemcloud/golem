@@ -879,6 +879,7 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     let b_stream = register_stream(&b).await?;
     let (a_attachment, a_mapping) =
         prepare_foreign_topology(&a, &b_stream, a_stream.source_invocation.clone(), 11).await?;
+    let a_fingerprint = a.get_initial_worker_metadata().fingerprint;
     let (b_attachment, _) =
         prepare_foreign_topology(&b, &a_stream, b_stream.source_invocation.clone(), 29).await?;
     let completed_session = prepare_session(&a, true).await?;
@@ -889,7 +890,7 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     assert!(!executor.worker_is_cached(&b_id).await);
 
     seed.worker_service()
-        .lookup_durable_stream_recovery_metadata(&a_id, AgentMode::Durable)
+        .lookup_durable_stream_recovery_metadata(&a_id, AgentMode::Durable, a_fingerprint)
         .await
         .map_err(anyhow::Error::msg)?;
     // Hold A's recovery after publication. B may acquire A while recovering its own attachment,

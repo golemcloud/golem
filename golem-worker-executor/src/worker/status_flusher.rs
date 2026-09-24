@@ -47,7 +47,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info_span};
 
-use golem_common::model::{AgentStatusRecord, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, AgentStatusRecord, OwnedAgentId};
 
 use crate::services::worker::{DefaultWorkerService, WorkerService};
 
@@ -93,6 +93,7 @@ pub struct AgentStatusFlusher {
     /// Unique id of this flusher instance, used as the dirty-queue key.
     queue_id: u64,
     owned_agent_id: OwnedAgentId,
+    fingerprint: AgentFingerprint,
     /// Ephemeral workers never persist a cached status; every operation is a no-op for them.
     is_ephemeral: bool,
     /// When `false`, blob writes happen synchronously on the hot path (historical behaviour); when
@@ -123,6 +124,7 @@ pub struct AgentStatusFlusher {
 impl AgentStatusFlusher {
     pub fn new(
         owned_agent_id: OwnedAgentId,
+        fingerprint: AgentFingerprint,
         is_ephemeral: bool,
         background_enabled: bool,
         worker_service: Arc<dyn WorkerService>,
@@ -136,6 +138,7 @@ impl AgentStatusFlusher {
         Arc::new_cyclic(|self_weak| Self {
             queue_id: NEXT_QUEUE_ID.fetch_add(1, Ordering::Relaxed),
             owned_agent_id,
+            fingerprint,
             is_ephemeral,
             background_enabled,
             worker_service,
@@ -174,7 +177,7 @@ impl AgentStatusFlusher {
         if track_now != track_before
             && let Err(err) = self
                 .worker_service
-                .set_assignment_tracking(&self.owned_agent_id, new_status)
+                .set_assignment_tracking(&self.owned_agent_id, self.fingerprint, new_status)
                 .await
         {
             // Fatal, deliberately. This index is what a reshard or a crash consults to decide which
@@ -272,7 +275,7 @@ impl AgentStatusFlusher {
 
         match self
             .worker_service
-            .write_cached_status(&self.owned_agent_id, previous, snapshot)
+            .write_cached_status(&self.owned_agent_id, self.fingerprint, previous, snapshot)
             .await
         {
             Ok(flushed) => {
@@ -477,6 +480,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _public_session_id: &str,
         ) -> Result<Option<golem_common::model::DurableStreamPublicBinding>, String> {
             unimplemented!()
@@ -492,6 +496,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _status: &AgentStatusRecord,
             _key: &golem_common::model::IdempotencyKey,
         ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, String> {
@@ -506,24 +511,29 @@ mod tests {
             &self,
             _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: AgentFingerprint,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
         async fn remove_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
-        async fn get_agent_mode(
+        async fn resolve_agent_identity(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Option<AgentMode>, WorkerExecutorError> {
+        ) -> Result<Option<crate::services::worker::ResolvedAgentIdentity>, WorkerExecutorError>
+        {
             Ok(None)
         }
         async fn write_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             previous_status: Option<&AgentStatusRecord>,
             status_value: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -540,6 +550,7 @@ mod tests {
         async fn read_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _agent_mode: AgentMode,
         ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
             Ok(None)
@@ -547,6 +558,7 @@ mod tests {
         async fn write_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _previous_checkpoint: Option<&AgentStatusRecord>,
             checkpoint: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -555,6 +567,7 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             status_value: &AgentStatusRecord,
         ) -> Result<(), String> {
             let mut state = self.state.lock().unwrap();
@@ -562,6 +575,14 @@ mod tests {
             if state.fail_tracking {
                 return Err("injected tracking failure".to_string());
             }
+            Ok(())
+        }
+
+        async fn remove_assignment_tracking(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
+        ) -> Result<(), String> {
             Ok(())
         }
     }
@@ -598,6 +619,7 @@ mod tests {
         let detached = Arc::new(AtomicBool::new(false));
         let flusher = AgentStatusFlusher::new(
             agent_id(),
+            AgentFingerprint(uuid::Uuid::nil()),
             is_ephemeral,
             background_enabled,
             worker_service,
@@ -679,6 +701,7 @@ mod tests {
         let detached = Arc::new(AtomicBool::new(false));
         let flusher = AgentStatusFlusher::new(
             agent_id(),
+            AgentFingerprint(uuid::Uuid::nil()),
             false,
             true,
             ws.clone(),
@@ -909,7 +932,12 @@ mod tests {
         service.set_fail_tracking(true);
 
         let result = service
-            .update_cached_status(&agent_id(), None, status(AgentStatus::Running, 1))
+            .update_cached_status(
+                &agent_id(),
+                AgentFingerprint(uuid::Uuid::nil()),
+                None,
+                status(AgentStatus::Running, 1),
+            )
             .await;
 
         assert_eq!(result, Err("injected tracking failure".to_string()));
@@ -925,7 +953,12 @@ mod tests {
         service.set_fail(true);
 
         let result = service
-            .update_cached_status(&agent_id(), None, status(AgentStatus::Running, 1))
+            .update_cached_status(
+                &agent_id(),
+                AgentFingerprint(uuid::Uuid::nil()),
+                None,
+                status(AgentStatus::Running, 1),
+            )
             .await;
 
         assert!(result.is_err());
