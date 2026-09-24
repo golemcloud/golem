@@ -382,6 +382,20 @@ pub struct SemanticTrapRetryOverrideMarker {
     pub inner: anyhow::Error,
 }
 
+pub fn semantic_trap_retry_override_error(
+    payload: SemanticTrapRetryOverride,
+    kind: HostFailureKind,
+    message: impl Into<String>,
+) -> anyhow::Error {
+    anyhow::Error::new(SemanticTrapRetryOverrideMarker {
+        payload,
+        inner: anyhow::Error::new(ClassifiedHostError {
+            kind,
+            message: message.into(),
+        }),
+    })
+}
+
 impl std::fmt::Display for SemanticTrapRetryOverrideMarker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.payload.verdict {
