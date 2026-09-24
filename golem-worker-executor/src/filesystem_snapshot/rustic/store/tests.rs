@@ -1339,6 +1339,58 @@ async fn a_save_without_a_parent_or_with_a_parent_that_the_scope_does_not_hold_r
 }
 
 #[test]
+async fn a_save_whose_read_of_the_snapshot_files_fails_while_it_finds_the_parent_gives_storage_and_publishes_nothing()
+ {
+    let refuse = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let refuse = refuse.clone();
+        move |op_label, path| {
+            if refuse.load(Ordering::SeqCst) && op_label == "read" && path.starts_with("snapshots")
+            {
+                Script::Refuse
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = one_file_tree("parent");
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+    refuse.store(true, Ordering::SeqCst);
+    let before = storage.calls().len();
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-2"),
+            tree.path(),
+            Some((&name("p-1"), ChangeDetection::SizeMtime)),
+        )
+        .await;
+    let publishes = storage.calls()[before..]
+        .iter()
+        .filter(|(op_label, _)| *op_label == "publish")
+        .count();
+    refuse.store(false, Ordering::SeqCst);
+
+    assert!(
+        saved.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{saved:?}"
+    );
+    assert_eq!(
+        (publishes, listed_names(&store, &scope).await),
+        (0, vec!["p-1".to_string()])
+    );
+}
+
+#[test]
 async fn a_failed_read_of_a_snapshot_file_fails_stat_and_list_with_a_retryable_storage_error() {
     let refuse = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
