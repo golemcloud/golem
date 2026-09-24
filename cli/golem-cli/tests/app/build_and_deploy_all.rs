@@ -64,6 +64,16 @@ async fn build_and_deploy_all_templates_for_moonbit() {
 }
 
 #[test]
+async fn rust_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Rust).await;
+}
+
+#[test]
+async fn typescript_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::TypeScript).await;
+}
+
+#[test]
 async fn scala_streaming_template_builds() {
     streaming_template_builds_for_lang(GuestLanguage::Scala).await;
 }
@@ -92,6 +102,7 @@ async fn streaming_template_builds_for_lang(language: GuestLanguage) {
 
 async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
+    ctx.add_env_var("DURABLE_STREAM_TOKEN", "integration-test-capability");
 
     let app_name = format!("all-templates-app-{}", language.id());
 

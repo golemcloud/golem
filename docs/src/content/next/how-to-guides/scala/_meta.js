@@ -17,6 +17,7 @@ export default {
   "golem-create-agent-instance-scala": "Creating a Golem Agent Instance with `golem agent new`",
   "golem-stateless-agent-scala": "Creating Ephemeral (Stateless) Agents (Scala)",
   "golem-custom-snapshot-scala": "Custom Snapshots in Scala",
+  "golem-durable-streams-scala": "Durable Streams in Scala",
   "golem-add-http-auth-scala": "Enabling Authentication on Scala HTTP Endpoints",
   "golem-enable-otlp-scala": "Enabling OpenTelemetry for a Scala Agent",
   "golem-file-io-scala": "File I/O in Scala Golem Agents",

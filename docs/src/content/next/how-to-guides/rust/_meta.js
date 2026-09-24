@@ -17,6 +17,7 @@ export default {
   "golem-create-agent-instance-rust": "Creating a Golem Agent Instance with `golem agent new`",
   "golem-stateless-agent-rust": "Creating Ephemeral (Stateless) Agents (Rust)",
   "golem-custom-snapshot-rust": "Custom Snapshots in Rust",
+  "golem-durable-streams-rust": "Durable Streams in Rust",
   "golem-add-http-auth-rust": "Enabling Authentication on Rust HTTP Endpoints",
   "golem-enable-otlp-rust": "Enabling OpenTelemetry for a Rust Agent",
   "golem-file-io-rust": "File I/O in Rust Golem Agents",

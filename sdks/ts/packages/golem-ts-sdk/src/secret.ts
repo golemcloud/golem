@@ -20,9 +20,13 @@
 
 import { getConfigValue } from 'golem:agent/host@2.0.0';
 import { reveal } from 'golem:secrets/reveal@0.1.0';
+import type { Secret as RawSecret } from 'golem:core/types@2.0.0';
 import { SchemaValue, schemaGraphToWit, schemaValueFromWit } from './internal/schema-model';
 import { SECRET_INTERNAL } from './internal/schema-model/secretInternal';
-import { peekGuestSecretHandle } from './internal/schema-model/secretHandle';
+import {
+  peekGuestSecretHandle,
+  releaseGuestSecretHandle,
+} from './internal/schema-model/secretHandle';
 import type { ConfigDeclaration } from './config';
 
 /**
@@ -38,6 +42,24 @@ import type { ConfigDeclaration } from './config';
  */
 export class Secret<T> {
   constructor(private readonly declaration: ConfigDeclaration) {}
+
+  [SECRET_INTERNAL]<R>(use: (handle: RawSecret) => R): R {
+    const d = this.declaration;
+    const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
+    const sv = schemaValueFromWit(tree);
+    if (sv.tag !== 'secret') {
+      throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
+    }
+    const raw = releaseGuestSecretHandle(SECRET_INTERNAL, sv.handle);
+    if (raw === undefined) {
+      throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
+    }
+    try {
+      return use(raw);
+    } finally {
+      (raw as unknown as { [Symbol.dispose](): void })[Symbol.dispose]();
+    }
+  }
 
   /**
    * Reveal and decode the current plaintext value.

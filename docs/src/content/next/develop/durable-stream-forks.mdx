@@ -1,0 +1,87 @@
+import { Callout, Steps } from "nextra/components"
+
+# Forking Durable Streams
+
+A Durable Streams fork is an **agent fork at an exact stream prefix**. Golem copies the source agent oplog through the cut, appends a fork boundary, and continues as an independently addressable agent. The source is unchanged.
+
+Shared prefix offsets remain valid on both branches. Reads from `-1` return the shared prefix followed by that branch's continuation in one JSON array or byte sequence. New source writes never wake or appear on the fork, and fork writes never appear on the source.
+
+## What the fork inherits
+
+The target inherits agent state and stream history through the selected cut, stream schemas and content types, and—unless creation headers override it—the source session's expiry policy. The selected stream's terminal is reset at the cut, so a closed input can reopen unless fork initialization closes it again; other slots retain their cut-time state. Open output code continues on the forked agent, and open input slots receive writable fork URLs.
+
+The target does **not** inherit the source's live attachment, external HTTP producer deduplication table, post-cut tombstones, or post-cut items. Its producer table starts fresh, so the same producer tuple can be accepted independently on source and fork. Long-poll and SSE readers attach to one branch only.
+
+External Durable Streams consumed by agent code are different: copied agent state retains the same remote URL and reader checkpoint, and copied writers retain the same producer identity and pending request. That does not fork the external service. See [Consuming External Durable Streams](/next/develop/external-durable-streams#pending-writes-and-exactly-once-effects).
+
+## Create and navigate a fork
+
+Given this source stream:
+
+```text
+/echo/invocations/order-7/streams/input
+```
+
+the fork target is:
+
+```text
+/echo/forks/retry-a/invocations/order-7/streams/input
+```
+
+<Steps>
+
+### Read the desired prefix
+
+Read the source and retain the opaque `Stream-Next-Offset` returned immediately after the prefix you want to share.
+
+```shell
+curl -i \
+  'https://api.example.com/echo/invocations/order-7/streams/input?offset=-1'
+```
+
+### Create the fork
+
+`Stream-Forked-From` is the same-server path of the corresponding source slot. `Stream-Fork-Offset` is optional; omitting it selects the current head. The optional initial body and `Stream-Closed` apply only to writable slots.
+
+```shell
+curl -i -X PUT \
+  https://api.example.com/echo/forks/retry-a/invocations/order-7/streams/input \
+  -H 'Stream-Forked-From: /echo/invocations/order-7/streams/input' \
+  -H 'Stream-Fork-Offset: 000000000000000000000000000000000000000000000000' \
+  -H 'Content-Type: application/json' \
+  --data '["fork-only"]'
+```
+
+A new fork returns `201` and `Location`; an exact retry of a still-live target returns `200` from its immutable creation receipt, even if the source has since advanced, expired, or been deleted. A retry that changes the source, cut, initial content, terminal, or expiry policy returns `409`. An expired fork target returns `404` and cannot be recreated under the same fork ID.
+
+### Continue each branch
+
+Append to the source and fork URLs independently, then read each from `-1`. Both contain the selected prefix; each contains only its own later items.
+
+### Inspect provenance
+
+`GET /echo/forks/retry-a/invocations/order-7` returns a manifest with every slot and a `fork` object containing `sourcePath`, `forkOffset`, and `subOffset`. Fork provenance is intentionally not repeated as response headers.
+
+</Steps>
+
+The example offset is only a shape placeholder—always use the exact offset returned by the source.
+
+## Cuts and sub-offsets
+
+`Stream-Fork-Offset` retains the prefix through that cursor. `Stream-Fork-Sub-Offset` adds that many subsequent JSON messages or bytes. JSON sub-offsets can cross internal storage batches; byte sub-offsets must remain within the next protocol data boundary. A byte fork may therefore preserve a partial packed byte batch. Invalid or beyond-head cuts return `400`.
+
+## Statuses and limits
+
+- `403` — initial content or closure was supplied for a read-only output slot.
+- `409` — conflicting retry, soft-deleted source/target, or `max_forks_per_session` reached.
+- `413` — copied oplog prefix or initial body exceeds its limit.
+- `429` — per-agent fork rate exceeded; honor `Retry-After` when present.
+
+The worker-service settings and defaults are documented in [Operating Durable Streams](/next/operate/durable_streams#gateway-configuration). A deleted fork slot remains tombstoned and cannot be recreated.
+
+<Callout type="info">
+  Fork support is part of every Durable Streams route. Route customization can
+  disable external writes and deletion, but it cannot disable fork creation.
+  On a read-only slot, forking the existing prefix is still allowed; supplying
+  initial content or closure is not.
+</Callout>

@@ -11,13 +11,20 @@ import {
   type DurableStreamErrorKind,
   type DurableStreamReadRequest,
 } from 'golem:agent/durable-streams@2.0.0';
-import type { Secret } from 'golem:core/types@2.0.0';
+import type { Secret as SecretHandle } from 'golem:core/types@2.0.0';
+import { getConfigValue } from 'golem:agent/host@2.0.0';
+import { reveal } from 'golem:secrets/reveal@0.1.0';
 import {
   createDurableByteWriter,
   createDurableJsonWriter,
   readDurableByteStream,
   readDurableJsonStream,
 } from '../src/durableStreams';
+import { Secret } from '../src/secret';
+import { SECRET_INTERNAL } from '../src/internal/schema-model/secretInternal';
+import { secretHandleToSchemaValue } from '../src/bridge/schema';
+import { schemaValueToWit } from '../src/internal/schema-model';
+import { compileConfig } from '../src/config';
 import { s } from '../src/schema/markers';
 import { agentStreamToHandle, agentStreamFromHandle } from '../src/schema/agentStream';
 import { compileSchema } from '../src/schema/adapter';
@@ -32,6 +39,10 @@ const readerHandles: (DurableStreamReader & { [Symbol.dispose]: ReturnType<typeo
 const writerHandles: (DurableStreamWriter & { [Symbol.dispose]: ReturnType<typeof vi.fn> })[] = [];
 const url = 'https://streams.example/events';
 const encoder = new TextEncoder();
+const auth = (handle: SecretHandle) =>
+  ({
+    [SECRET_INTERNAL]: <R>(use: (borrowed: SecretHandle) => R) => use(handle),
+  }) as Secret<string>;
 const batch = (
   payload: string | number[],
   patch: Partial<DurableStreamBatch> = {},
@@ -79,16 +90,35 @@ afterEach(() => {
 });
 
 describe('external Durable Stream readers', () => {
+  it('borrows auth from config without revealing plaintext and releases the owned capability', async () => {
+    const dispose = vi.fn();
+    const handle = { [Symbol.dispose]: dispose } as unknown as SecretHandle;
+    vi.mocked(getConfigValue).mockReturnValueOnce(
+      schemaValueToWit(secretHandleToSchemaValue(handle)),
+    );
+    const [declaration] = compileConfig({ auth: s.secret(z.string()) });
+
+    const stream = readDurableByteStream({ url, auth: new Secret(declaration) });
+
+    expect(readers).toHaveBeenCalledExactlyOnceWith(
+      { url, mode: 'bytes', timeoutMs: 30000n },
+      handle,
+    );
+    expect(reveal).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    await stream.return();
+  });
+
   it('captures descriptors once, isolates handles and releases unused or failed readers', async () => {
-    const auth = {} as Secret;
-    const options = { url, auth, timeoutMs: 1739 };
+    const handle = {} as SecretHandle;
+    const options = { url, auth: auth(handle), timeoutMs: 1739 };
     const first = readDurableByteStream(options);
     options.url = 'https://other.example/bytes';
     options.timeoutMs = 23;
     const second = readDurableByteStream(options);
     expect(readers.mock.calls).toEqual([
-      [{ url, mode: 'bytes', timeoutMs: 1739n }, auth],
-      [{ url: options.url, mode: 'bytes', timeoutMs: 23n }, auth],
+      [{ url, mode: 'bytes', timeoutMs: 1739n }, handle],
+      [{ url: options.url, mode: 'bytes', timeoutMs: 23n }, handle],
     ]);
     expect(readerHandles[0]).not.toBe(readerHandles[1]);
     expect(read).not.toHaveBeenCalled();
@@ -310,8 +340,8 @@ describe('external Durable Stream writers', () => {
     append
       .mockRejectedValueOnce(failure('rate-limited', 730n))
       .mockResolvedValueOnce(receipt({ nextOffset: undefined, closed: true }));
-    const auth = {} as Secret;
-    const options = { url, producerId: 'stable', auth };
+    const handle = {} as SecretHandle;
+    const options = { url, producerId: 'stable', auth: auth(handle) };
     const writer = createDurableByteWriter(options);
     const data = new Uint8Array([3, 241, 27]);
     const operation = writer.append(data, { close: true });
@@ -342,7 +372,7 @@ describe('external Durable Stream writers', () => {
         contentType: 'application/octet-stream',
         timeoutMs: 30000n,
       },
-      auth,
+      handle,
     );
     expect(append.mock.contexts).toEqual([writerHandles[0], writerHandles[0]]);
     expect(writerHandles[0][Symbol.dispose]).toHaveBeenCalledTimes(1);

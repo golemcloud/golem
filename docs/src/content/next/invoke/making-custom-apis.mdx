@@ -466,7 +466,7 @@ pub(all) struct Gateway {
 
 ## Customizing Durable Stream Routes
 
-An endpoint with stream inputs or outputs is exposed as a [Durable Streams](https://github.com/durable-streams/durable-streams) URL family. By default, each URL uses the canonical method parameter name (and `$result` for a direct stream result), JSON streams use `application/json`, byte streams use `application/octet-stream`, external writes and both deletion operations are enabled, and the worker-service defaults control admission.
+An endpoint with stream inputs or outputs is exposed as a [Durable Streams](/next/invoke/durable-streams) URL family. By default, each URL uses the canonical method parameter name (and `$result` for a direct stream result), JSON streams use `application/json`, byte streams use `application/octet-stream`, external writes and both deletion operations are enabled, and the worker-service defaults control admission.
 
 Route metadata can customize that HTTP surface without changing the agent method or the durable stream itself:
 

@@ -17,6 +17,7 @@ export default {
   "golem-create-agent-instance-ts": "Creating a Golem Agent Instance with `golem agent new`",
   "golem-stateless-agent-ts": "Creating Ephemeral (Stateless) Agents (TypeScript)",
   "golem-custom-snapshot-ts": "Custom Snapshots in TypeScript",
+  "golem-durable-streams-ts": "Durable Streams in TypeScript",
   "golem-add-http-auth-ts": "Enabling Authentication on TypeScript HTTP Endpoints",
   "golem-enable-otlp-ts": "Enabling OpenTelemetry for a TypeScript Agent",
   "golem-file-io-ts": "File I/O in TypeScript Golem Agents",

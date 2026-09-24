@@ -22,6 +22,8 @@ export default {
   updating: "Updating Agents",
   additional: "Additional runtime APIs",
   rpc: "Agent to Agent Communication",
+  "external-durable-streams": "External Durable Streams",
+  "durable-stream-forks": "Durable Stream Forks",
   "agent-filesystem": "Agent Filesystem",
   ai: "Using AI Providers",
   rdbms: "Using Relational Databases",
