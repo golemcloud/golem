@@ -165,6 +165,36 @@ impl StreamSessionIndexService {
         id: &OwnedAgentId,
         mode: AgentMode,
     ) -> Result<ProducerIdentityLookup, String> {
+        let metadata = self.lookup_metadata(id, mode).await?;
+        Ok(ProducerIdentityLookup {
+            covered_through: metadata.covered_through,
+            producer_fingerprint: metadata
+                .producer_fingerprint
+                .ok_or("producer identity is missing from covered metadata")?,
+        })
+    }
+
+    /// Identifies retained history independently of ordinary append progress. Historical acceptance
+    /// checks retry on an incarnation change, fork or revert, but must not starve on a busy producer.
+    pub(crate) async fn lookup_retained_history(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<(AgentFingerprint, StreamForkLineage), String> {
+        let metadata = self.lookup_metadata(id, mode).await?;
+        Ok((
+            metadata
+                .producer_fingerprint
+                .ok_or("producer identity is missing from covered metadata")?,
+            metadata.stream_fork_lineage,
+        ))
+    }
+
+    async fn lookup_metadata(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<Metadata, String> {
         let oplog = self.oplog.upgrade().ok_or("oplog service is unavailable")?;
         let horizon = oplog.get_last_index(id, mode).await;
         self.catch_up(id, mode, horizon).await?;
@@ -177,12 +207,7 @@ impl StreamSessionIndexService {
         if metadata.covered_through < horizon {
             return Err("producer identity coverage is unavailable".into());
         }
-        Ok(ProducerIdentityLookup {
-            covered_through: metadata.covered_through,
-            producer_fingerprint: metadata
-                .producer_fingerprint
-                .ok_or("producer identity is missing from covered metadata")?,
-        })
+        Ok(metadata)
     }
 
     #[tracing::instrument(
