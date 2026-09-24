@@ -294,18 +294,19 @@ pub async fn invoke_with_stdout(
     error =>
       match result {
         Ok(value) => {
-          match @toolCore.decode_invocation_result(value) {
-            Ok(decoded) => @toolCore.drop_invocation_result(decoded)
-            Err(_) => ()
+          match value.result {
+            Some(payload) => @model.drop_wit_capabilities(payload.value)
+            None => ()
+          }
+          match value.stdout {
+            Some(stream) => stream.drop_sync()
+            None => ()
           }
           raise error
         }
         Err(@types.ToolError::CustomError(payload)) if error
           is @async-core.Cancelled::Cancelled => {
-          match @toolCore.decode_typed_value(payload.payload, "tool error") {
-            Ok(decoded) => @model.drop_owned_capabilities(decoded.value)
-            Err(_) => ()
-          }
+          @model.drop_wit_capabilities(payload.payload.value)
           raise error
         }
         Err(_) if error is @async-core.Cancelled::Cancelled => raise error
