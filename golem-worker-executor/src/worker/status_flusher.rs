@@ -841,6 +841,57 @@ mod tests {
         assert!(!flusher.dirty.load(Ordering::Acquire));
     }
 
+    // The blob is the shard's new owner's once this generation is given up: neither a forced flush
+    // nor a background sweep of a flush queued before the give-up may write it.
+    #[test]
+    async fn a_given_up_flusher_never_writes_the_status_blob() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
+        flusher.mark_dirty();
+
+        flusher.stop_for_give_up();
+        let _ = flusher.flush(FlushReason::Forced).await;
+        current.store(Arc::new(status(AgentStatus::Idle, 2)));
+        flusher.mark_dirty();
+        queue.sweep().await;
+
+        assert_eq!(
+            ws.write_count(),
+            0,
+            "a given-up generation wrote its status blob"
+        );
+        assert!(!flusher.dirty.load(Ordering::Acquire));
+    }
+
+    // Nor the recovery-index row: a stale generation dropping it would hide the agent from the new
+    // owner's crash recovery. Inline flushing is exercised too, as background flushing is off.
+    #[test]
+    async fn a_given_up_flusher_leaves_the_recovery_index_alone() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (flusher, _current, _) = make_flusher(false, false, ws.clone(), queue.clone());
+
+        flusher.stop_for_give_up();
+        flusher
+            .on_status_changed(
+                &status(AgentStatus::Idle, 0),
+                &status(AgentStatus::Running, 1),
+            )
+            .await;
+        flusher
+            .on_status_changed(
+                &status(AgentStatus::Running, 1),
+                &status(AgentStatus::Idle, 2),
+            )
+            .await;
+
+        assert_eq!(ws.tracking_count(), 0);
+        assert_eq!(ws.write_count(), 0);
+    }
+
     #[test]
     async fn detached_skips_flush() {
         let ws = MockWorkerService::arc();

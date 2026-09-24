@@ -559,6 +559,27 @@ mod tests {
         assert!(service.writes.lock().unwrap().is_empty());
     }
 
+    // A given-up generation's checkpoint belongs to the shard's new owner: no reason, not even a
+    // snapshot, may write one after the give-up.
+    #[test]
+    async fn a_given_up_checkpointer_writes_no_checkpoint() {
+        let service = Arc::new(RecordingWorkerService::default());
+        let cp = checkpointer(service.clone(), 0);
+
+        cp.stop_for_give_up();
+        cp.maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
+            .await;
+        cp.maybe_checkpoint(&status_at(20), CheckpointReason::Idle)
+            .await;
+        cp.maybe_checkpoint(&status_at(30), CheckpointReason::MidInvocation)
+            .await;
+
+        assert!(
+            service.writes.lock().unwrap().is_empty(),
+            "a given-up generation wrote a status checkpoint"
+        );
+    }
+
     #[test]
     async fn disabled_and_ephemeral_never_write() {
         let service = Arc::new(RecordingWorkerService::default());

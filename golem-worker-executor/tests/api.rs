@@ -8582,3 +8582,138 @@ impl ParkedCaller {
             .ok_or_else(|| anyhow!("expected return value"))
     }
 }
+
+/// Recovery enumerates the running workers of the delivered shards, and only then activates each
+/// one. When the shard is revoked in between, the activation is refused (`ShardingNotReady`: the
+/// shard is no longer held), and that agent belongs to whoever holds the shard next. It has to be
+/// skipped: failing the whole assignment for it would stop every other agent from being resumed,
+/// and, at executor startup, fail the start.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_scan(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
+    };
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "recovery-revoked-mid-scan");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // A long invocation keeps the worker Running, which is what puts it in the recovery index.
+    executor
+        .invoke_agent(&component, &agent_id, "sleep_for", data_value!(60.0f64))
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let shard = ShardId { value: 0 };
+    let mut client = executor.client.clone();
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+            revision: 1,
+            incarnation_id: String::new(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
+    executor.retire_unloaded_worker(&owned_agent_id).await?;
+
+    // Pause recovery at its first read, during enumeration, and revoke the shard again while it
+    // waits: enumeration has already listed the agent, activation will find the shard gone.
+    let gate = faults.pause_next("read_cached_agent_mode");
+    let assigning = {
+        let mut client = client.clone();
+        tokio::spawn(
+            async move {
+                client
+                    .assign_shards(AssignShardsRequest {
+                        shard_epochs: vec![ShardEpochEntry {
+                            shard_id: Some(shard),
+                            epoch: 0,
+                        }],
+                        number_of_shards: 1,
+                        revision: 2,
+                        incarnation_id: String::new(),
+                    })
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(10), gate.entered())
+        .await
+        .map_err(|_| anyhow!("recovery never reached its enumeration read"))?;
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![shard],
+            revision: 3,
+            incarnation_id: String::new(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    gate.release();
+
+    let assigned = tokio::time::timeout(Duration::from_secs(30), assigning)
+        .await
+        .map_err(|_| anyhow!("the assignment never answered"))???
+        .into_inner();
+    assert!(
+        matches!(
+            assigned.result,
+            Some(assign_shards_response::Result::Success(_))
+        ),
+        "an agent whose shard left mid-recovery failed the whole assignment: {:?}",
+        assigned.result
+    );
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+    drop(client);
+    drop(executor);
+    Ok(())
+}

@@ -9267,6 +9267,57 @@ async fn wait_for_replicas_does_not_report_a_fenced_flush_as_durable(_tracing: &
     );
 }
 
+// A fork stage is hidden and has one writer, so it asserts no epoch and its commit can never be
+// refused - even while the target agent's oplog is held at a newer epoch by another executor. The
+// fork's stream-store load commits through the stage and expects that commit to succeed.
+#[test]
+async fn a_staged_oplog_asserts_no_epoch_and_its_commit_is_never_fenced(_tracing: &Tracing) {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "staged-fence".into(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let forking_executor = fencing_oplog_service(&tempdir, "staged-fence").await;
+    let owning_executor = fencing_oplog_service(&tempdir, "staged-fence").await;
+
+    let owner = owning_executor
+        .open(
+            &mut owning_executor
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(golem_common::model::ShardEpoch(9)),
+        )
+        .await;
+    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
+    owner.commit(CommitLevel::Always).await.unwrap();
+
+    let stage = forking_executor
+        .create_staged(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Uuid::new_v4(),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stage.shard_epoch(), None, "a stage must assert no epoch");
+    stage.add(OplogEntry::suspend().rounded()).await.unwrap();
+    stage
+        .commit(CommitLevel::Always)
+        .await
+        .expect("a stage's commit must never be fenced");
+    assert!(stage.fence().is_none(), "a stage must never latch a fence");
+}
+
 #[test]
 async fn a_fenced_oplog_refuses_new_adds_and_keeps_the_indices_it_handed_out_readable(
     _tracing: &Tracing,
