@@ -863,6 +863,7 @@ impl EntityInvocationDurability {
         D,
         Ctx,
         OnCompletedStarted,
+        OnCompletedCancelled,
         OnCompletedFailure,
         CompletedFailureFuture,
     >(
@@ -872,6 +873,7 @@ impl EntityInvocationDurability {
         body: EntityInvocationHandle<HostResponseEntityInvocation>,
         cancellation: Option<tokio_util::sync::CancellationToken>,
         on_completed_started: OnCompletedStarted,
+        on_completed_cancelled: OnCompletedCancelled,
         on_completed_failure: OnCompletedFailure,
     ) -> Result<EntityInvocationDurabilityOutcome, EntityInvocationDurabilityFailure>
     where
@@ -879,6 +881,7 @@ impl EntityInvocationDurability {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
         OnCompletedStarted: FnOnce() + Send,
+        OnCompletedCancelled: FnOnce() + Send + 'static,
         OnCompletedFailure: FnOnce(WorkerExecutorError) -> CompletedFailureFuture + Send + 'static,
         CompletedFailureFuture: Future<Output = ()> + Send + 'static,
     {
@@ -936,6 +939,9 @@ impl EntityInvocationDurability {
                 let cancelled = terminal.cancelled();
                 *replay_terminal.lock().unwrap() = Some(terminal);
                 Ok(if cancelled {
+                    // Select attachment cancellation before the coordinator
+                    // aborts the body and drops its producer resources.
+                    on_completed_cancelled();
                     EntityReconstructionResolution::<
                         _,
                         DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
@@ -1816,6 +1822,7 @@ mod tests {
             EntityActivationPolicy::Tool {
                 provision: ToolProvisionConfig::default(),
                 binding: Box::new(binding),
+                mcp_import: None,
             },
             FilesystemCapability::Incapable,
         )

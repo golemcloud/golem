@@ -889,6 +889,7 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     let b_stream = register_stream(&b).await?;
     let (a_attachment, a_mapping) =
         prepare_foreign_topology(&a, &b_stream, a_stream.source_invocation.clone(), 11).await?;
+    let a_fingerprint = a.get_initial_worker_metadata().fingerprint;
     let (b_attachment, _) =
         prepare_foreign_topology(&b, &a_stream, b_stream.source_invocation.clone(), 29).await?;
     let completed_session = prepare_session(&a, true).await?;
@@ -899,7 +900,7 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     assert!(!executor.worker_is_cached(&b_id).await);
 
     seed.worker_service()
-        .lookup_durable_stream_recovery_metadata(&a_id, AgentMode::Durable)
+        .lookup_durable_stream_recovery_metadata(&a_id, AgentMode::Durable, a_fingerprint)
         .await
         .map_err(anyhow::Error::msg)?;
     // Hold A's recovery after publication. B may acquire A while recovering its own attachment,
@@ -961,5 +962,23 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
         b.get_initial_worker_metadata().fingerprint,
         b_stream.expected_producer_fingerprint
     );
+
+    // The reciprocal recovery topology keeps periodic stream reconciliation active on both
+    // agents. Stop the in-process executor before returning so this test-owned workload cannot
+    // continue consuming the shared test runner's CPU and storage bandwidth beside later tests.
+    drop(executor);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            a.wait_for_durable_stream_attachment_reconciler(),
+            b.wait_for_durable_stream_attachment_reconciler()
+        );
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("durable stream reconcilers did not stop within 10s"))?;
+    let a_stopped_at = a.oplog().current_oplog_index().await;
+    let b_stopped_at = b.oplog().current_oplog_index().await;
+    tokio::time::sleep(CACHE_TTL * 3).await;
+    assert_eq!(a.oplog().current_oplog_index().await, a_stopped_at);
+    assert_eq!(b.oplog().current_oplog_index().await, b_stopped_at);
     Ok(())
 }

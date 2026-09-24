@@ -16,7 +16,7 @@ pub mod default;
 
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
-use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
@@ -164,17 +164,6 @@ pub trait WorkerCtx:
 
     /// Static log event behaviour configuration for workers
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour;
-
-    /// Whether an incomplete durable call encountered during replay (a committed `Start` whose
-    /// terminal `End`/`Cancelled` entry is missing before the replay target) may be repaired by
-    /// switching to live re-execution of the side effect.
-    ///
-    /// Regular workers allow this for re-executable function types. Debug sessions disable it:
-    /// a debugging session must never perform real side effects, and its oplog silently discards
-    /// writes, so the repaired call's `End` could never be persisted anyway. When disabled, such
-    /// a call fails with an explicit "replay target inside an in-flight durable call" error
-    /// instead of re-executing.
-    const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
 
     /// Wraps per-agent oplog handles used by worker internals, their context, and fork source reads.
     fn wrap_oplog(
@@ -612,10 +601,6 @@ pub trait FileSystemReading {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError>;
 }
 
 /// Functions to manipulate and query the current invocation context

@@ -1322,11 +1322,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             }
             outcome @ (ReplayStartClaimOutcome::ReplayEnded
             | ReplayStartClaimOutcome::DeletedRegion) => {
-                if !prepared.replaying_incomplete_entity {
+                let primary_replay_tail = prepared.primary_runtime
+                    && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
+                if !prepared.replaying_incomplete_entity && !primary_replay_tail {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
                         format!(
-                            "replay continuation at {} is valid only for an incomplete entity",
+                            "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
                             prepared.replay_state.last_replayed_index()
                         ),
                     ));
@@ -3584,7 +3586,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     return Err(error);
                 }
                 self.prepare_incomplete_live_repair(
-                    Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     |initiation_region, repairable_when_incomplete| {
                         let lease = register_live_repair_atomic_lease(
                             &mut ctx.state.active_atomic_regions,
@@ -3689,7 +3690,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     return Err(error);
                 }
                 self.prepare_incomplete_live_repair(
-                    Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     |initiation_region, repairable_when_incomplete| {
                         store.with(|mut access| {
                             let state = &mut get_ctx(access.data_mut()).state;
@@ -3799,7 +3799,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     }
                 };
                 self.prepare_incomplete_live_repair(
-                    Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     |initiation_region, repairable_when_incomplete| {
                         store.with(|mut access| {
                             let state = &mut get_ctx(access.data_mut()).state;
@@ -3976,7 +3975,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     return Err(error);
                 }
                 self.prepare_incomplete_live_repair(
-                    Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
                     |initiation_region, repairable_when_incomplete| {
                         store.with(|mut access| {
                             let state = &mut get_ctx(access.data_mut()).state;
@@ -4268,9 +4266,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
     /// Handles a [`ResolutionOutcome::Incomplete`] resolution, shared by every replay variant.
     ///
-    /// Either refuses — debug sessions (`allow_live_repair == false`) must never re-execute side
-    /// effects, and non-re-executable function types (non-idempotent / batched / transaction
-    /// writes) could duplicate an external side effect — or switches this handle to live
+    /// Refuses non-re-executable function types (non-idempotent / batched / transaction writes),
+    /// which could duplicate an external side effect. Otherwise, switches this handle to live
     /// completion of the existing, committed `Start`: the caller re-runs the side effect and
     /// `complete`s, appending the missing `End`. A failure during re-execution stays grouped at
     /// this call's own retry point via the call-owned `execution_scope` (and the semantic-trap
@@ -4281,19 +4278,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// accessor callers can bound their `store.with` window to the refusal-free path).
     fn prepare_incomplete_live_repair(
         &mut self,
-        allow_live_repair: bool,
         get_live_membership: impl FnOnce(
             Option<OplogIndex>,
             bool,
         ) -> (Arc<AtomicUsize>, Option<Arc<AtomicRegionLease>>),
     ) -> Result<(), WorkerExecutorError> {
-        if !allow_live_repair {
-            self.finished = true;
-            return Err(WorkerExecutorError::invalid_request(format!(
-                "the replay target lies inside an in-flight durable call (Start at {} has no End/Cancelled before the replay target); live re-execution of incomplete durable calls is disabled in debug sessions",
-                self.start_idx
-            )));
-        }
         if !self.retry.can_reexecute_on_incomplete_replay() {
             // Reaching here means the surrounding scope recovery did not already resolve the
             // incomplete call; fail hard, as before.

@@ -225,3 +225,181 @@ async fn test_open_api_custom_prefix_json_generation(
 
     Ok(())
 }
+
+#[test]
+#[test_r::timeout("180s")]
+async fn openapi_provider_context_cache_and_failure_corpus(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    use crate::custom_api::http_test_context::make_test_context_with_files;
+    use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+    use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+    use golem_test_framework::model::IFSEntry;
+    use serde_json::{Value, json};
+    use std::time::Duration;
+
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+    ))?;
+    let case = |id: &str| {
+        corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap()
+    };
+    let fixed = case("cache-fixed-provider-context");
+    let isolated = case("cache-provider-failure-isolated");
+    let component = "golem_it_agent_rpc_rust_release";
+    let context = make_test_context_with_files(
+        deps,
+        vec![(
+            AgentTypeName("StaticHttpRouter".into()),
+            HttpApiDeploymentAgentOptions::default(),
+        )],
+        component,
+        "golem-it:agent-rpc-rust",
+        String::new(),
+        &[(
+            "StaticHttpRouter",
+            vec![IFSEntry {
+                source_path: "initial-file-system/files/foo.txt".into(),
+                target_path: CanonicalFilePath::from_abs_str("/assets/asset.txt")
+                    .map_err(anyhow::Error::msg)?,
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )],
+    )
+    .await?;
+    let selected = fixed["input"]["component_revision"].as_u64().unwrap();
+    let mut current = context
+        .user
+        .get_latest_component_revision(&context.component_id)
+        .await?;
+    while current.revision.get() < selected {
+        // Distinct provision configuration makes each upload a deployable change.
+        current = context
+            .user
+            .update_component_with_env(
+                &context.component_id,
+                "StaticHttpRouter",
+                component,
+                &[(
+                    "TEST_OPENAPI_REVISION".into(),
+                    current.revision.next()?.to_string(),
+                )],
+            )
+            .await?;
+    }
+    assert_eq!(current.revision.get(), selected);
+    context.user.deploy_environment(context.env_id).await?;
+    let latest = context
+        .user
+        .update_component_with_env(
+            &context.component_id,
+            "StaticHttpRouter",
+            component,
+            &[("TEST_OPENAPI_INVALID".into(), "true".into())],
+        )
+        .await?;
+    assert_eq!(
+        json!(latest.revision),
+        fixed["input"]["latest_component_revision"]
+    );
+
+    // The uploaded revision deliberately has a broken provider. The provider
+    // must still run on the deployed revision.
+    for path in ["/raw/empty", "/raw/favicon"] {
+        let response = context
+            .client
+            .get(context.base_url.join(path)?)
+            .send()
+            .await?;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+    let json_response = context
+        .client
+        .get(context.base_url.join("/openapi.json")?)
+        .header("x-end-user", "alice")
+        .header("cookie", "untrusted=alice")
+        .send()
+        .await?;
+    let status = json_response.status();
+    let body = json_response.text().await?;
+    assert_eq!(status, reqwest::StatusCode::OK, "{}: {body}", fixed["id"]);
+    let json: Value = serde_json::from_str(&body)?;
+    assert_eq!(
+        json["x-provider-revision"],
+        fixed["expect"]["component_revision"]
+    );
+    assert!(
+        json["x-provider-agent"]
+            .as_str()
+            .unwrap()
+            .starts_with("StaticHttpRouter()[")
+    );
+    assert_eq!(
+        json["paths"]["/raw/echo/"]["post"]["operationId"],
+        "rawEcho"
+    );
+    assert!(json["paths"]["/raw"]["get"].is_object());
+    let yaml_response = context
+        .client
+        .get(context.base_url.join("/openapi.yaml")?)
+        .header("x-end-user", "bob")
+        .header("cookie", "untrusted=bob")
+        .send()
+        .await?;
+    assert_eq!(yaml_response.status(), reqwest::StatusCode::OK);
+    let yaml: Value = serde_yaml::from_slice(&yaml_response.bytes().await?)?;
+    assert_eq!(
+        json, yaml,
+        "{}: cached provider identity must be shared",
+        fixed["id"]
+    );
+
+    context.user.deploy_environment(context.env_id).await?;
+    let response = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let response = context
+                .client
+                .get(context.base_url.join("/openapi.json")?)
+                .send()
+                .await?;
+            if response.status() == reqwest::StatusCode::BAD_GATEWAY {
+                return anyhow::Ok(response);
+            }
+            anyhow::ensure!(
+                response.status().is_success()
+                    || response.status() == reqwest::StatusCode::GATEWAY_TIMEOUT,
+                "unexpected OpenAPI status: {}",
+                response.status()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    let mut statuses = vec![response.status().as_u16()];
+    let error = response.text().await?;
+    assert!(error.contains("provider-json"));
+    assert!(!error.contains("invalid-provider-document"));
+    for path in ["/raw/empty", "/raw/favicon"] {
+        statuses.push(
+            context
+                .client
+                .get(context.base_url.join(path)?)
+                .send()
+                .await?
+                .status()
+                .as_u16(),
+        );
+    }
+    assert_eq!(
+        json!(statuses),
+        isolated["expect"]["statuses"],
+        "{}",
+        isolated["id"]
+    );
+    Ok(())
+}

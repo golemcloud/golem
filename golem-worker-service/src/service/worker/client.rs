@@ -20,7 +20,6 @@ use super::{
 use crate::service::auth::AuthServiceError;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::TryStreamExt;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::invocation_request;
@@ -51,6 +50,10 @@ use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::filesystem::{
+    FILE_READ_CHUNK_SIZE, FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
+    validate_file_read_path,
+};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -64,7 +67,7 @@ use golem_common::model::{AgentInvocationOutput, AgentInvocationResult, Invocati
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -86,6 +89,80 @@ fn freshness_disposition_for_dispatch(
     } else {
         InvocationFreshnessDisposition::MayExist
     }
+}
+
+fn decode_file_read_error(value: i32) -> FileReadError {
+    FileReadError::try_from(value).unwrap_or(FileReadError::InvalidResponse)
+}
+
+async fn decode_file_read_response(
+    stream: impl Stream<Item = Result<workerexecutor::v1::GetFileContentsResponse, Status>>
+    + Send
+    + Unpin
+    + 'static,
+    selection: FileByteSelection,
+) -> WorkerResult<FileReadResponse> {
+    use workerexecutor::v1::get_file_contents_response::Result as Frame;
+    let (first, stream) = stream.into_future().await;
+    let first = first
+        .ok_or(WorkerServiceError::FileRead(FileReadError::InvalidResponse))?
+        .map_err(|_| WorkerServiceError::FileRead(FileReadError::Lifecycle))?;
+    let head = match first.result {
+        Some(Frame::Failure(error)) => {
+            return Err(WorkerExecutorError::try_from(error)
+                .map_err(|_| WorkerServiceError::FileRead(FileReadError::InvalidResponse))?
+                .into());
+        }
+        Some(Frame::ReadFailure(error)) => {
+            return Err(WorkerServiceError::FileRead(decode_file_read_error(error)));
+        }
+        Some(Frame::Header(head)) => {
+            FileReadHead::try_from(head).map_err(WorkerServiceError::FileRead)?
+        }
+        _ => return Err(WorkerServiceError::FileRead(FileReadError::InvalidResponse)),
+    };
+    if let FileReadHead::File(metadata) = &head {
+        metadata
+            .validate_for(selection)
+            .map_err(WorkerServiceError::FileRead)?;
+    }
+    let expected = match &head {
+        FileReadHead::File(metadata) => match metadata.selection {
+            FileReadExtent::Selected { length, .. } => length,
+            FileReadExtent::Unsatisfiable => 0,
+        },
+        _ => 0,
+    };
+    let body = futures::stream::unfold(Some((stream, 0u64)), move |state| async move {
+        let (mut stream, read) = state?;
+        let terminal = |error| Some((Err(error), None));
+        match stream.next().await {
+            None if read == expected => None,
+            None => terminal(FileReadError::InvalidResponse),
+            Some(Err(_)) => terminal(FileReadError::Lifecycle),
+            Some(Ok(response)) => match response.result {
+                Some(Frame::Success(bytes)) => {
+                    let length = bytes.len() as u64;
+                    if length == 0
+                        || bytes.len() > FILE_READ_CHUNK_SIZE
+                        || read
+                            .checked_add(length)
+                            .is_none_or(|total| total > expected)
+                    {
+                        terminal(FileReadError::InvalidResponse)
+                    } else {
+                        Some((Ok(Bytes::from(bytes)), Some((stream, read + length))))
+                    }
+                }
+                Some(Frame::ReadFailure(error)) => terminal(decode_file_read_error(error)),
+                _ => terminal(FileReadError::InvalidResponse),
+            },
+        }
+    });
+    Ok(FileReadResponse {
+        head,
+        body: Box::pin(body),
+    })
 }
 
 fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
@@ -512,10 +589,11 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         path: CanonicalFilePath,
+        selection: FileByteSelection,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
+    ) -> WorkerResult<FileReadResponse>;
 
     async fn activate_plugin(
         &self,
@@ -1580,95 +1658,52 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         path: CanonicalFilePath,
+        selection: FileByteSelection,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
+    ) -> WorkerResult<FileReadResponse> {
+        validate_file_read_path(path.as_abs_str()).map_err(WorkerServiceError::FileRead)?;
+        selection.validate().map_err(WorkerServiceError::FileRead)?;
         let agent_id = agent_id.clone();
         let path_clone = path.clone();
-        let stream = self
+        let (first, stream) = self
             .call_worker_executor(
                 agent_id.clone(),
                 "read_file",
                 move |worker_executor_client| {
-                    Box::pin(worker_executor_client.get_file_contents(
-                        workerexecutor::v1::GetFileContentsRequest {
+                    let request = workerexecutor::v1::GetFileContentsRequest {
                             agent_id: Some(agent_id.clone().into()),
                             component_owner_account_id: Some(account_id.into()),
                             file_path: path_clone.to_string(),
                             environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
                             principal: None,
-                        },
-                    ))
+                            selection: Some(selection.into()),
+                        };
+                    Box::pin(async move {
+                        let mut stream = worker_executor_client.get_file_contents(request).await?.into_inner();
+                        let first = stream.message().await?;
+                        Ok((first, stream))
+                    })
                 },
-                |response| Ok(WorkerStream::new(response.into_inner())),
+                |(first, stream)| {
+                    if let Some(workerexecutor::v1::GetFileContentsResponse {
+                        result: Some(workerexecutor::v1::get_file_contents_response::Result::Failure(error)),
+                    }) = &first {
+                        return Err(error.clone().into());
+                    }
+                    Ok((first, stream))
+                },
                 WorkerServiceError::InternalCallError,
             )
             .await?;
 
-        let (header, stream) = stream.into_future().await;
-
-        let header = header.ok_or(WorkerServiceError::Internal("Empty stream".to_string()))?;
-
-        match header
-            .map_err(|_| WorkerServiceError::Internal("Stream error".to_string()))?
-            .result
-        {
-            Some(workerexecutor::v1::get_file_contents_response::Result::Success(_)) => Err(
-                WorkerServiceError::Internal("Protocal violation".to_string()),
-            ),
-            Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
-                let converted = WorkerExecutorError::try_from(err).map_err(|err| {
-                    WorkerServiceError::Internal(format!("Failed converting errors {err}"))
-                })?;
-                Err(converted.into())
-            }
-            Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
-                match header.result {
-                    Some(
-                        workerexecutor::v1::get_file_contents_response_header::Result::Success(_),
-                    ) => Ok(()),
-                    Some(
-                        workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(_),
-                    ) => Err(WorkerServiceError::BadFileType(path)),
-                    Some(
-                        workerexecutor::v1::get_file_contents_response_header::Result::NotFound(_),
-                    ) => Err(WorkerServiceError::FileNotFound(path)),
-                    None => Err(WorkerServiceError::Internal("Empty response".to_string())),
-                }
-            }
-            None => Err(WorkerServiceError::Internal("Empty response".to_string())),
-        }?;
-
-        let stream = stream
-            .map_err(|_| WorkerServiceError::Internal("Stream error".to_string()))
-            .map(|item| {
-                item.and_then(|response| {
-                    response
-                        .result
-                        .ok_or(WorkerServiceError::Internal("Malformed chunk".to_string()))
-                })
-            })
-            .map_ok(|chunk| match chunk {
-                workerexecutor::v1::get_file_contents_response::Result::Success(bytes) => {
-                    Ok(Bytes::from(bytes))
-                }
-                workerexecutor::v1::get_file_contents_response::Result::Failure(err) => {
-                    let converted = WorkerExecutorError::try_from(err)
-                        .map_err(|err| {
-                            WorkerServiceError::Internal(format!("Failed converting errors {err}"))
-                        })?
-                        .into();
-                    Err(converted)
-                }
-                workerexecutor::v1::get_file_contents_response::Result::Header(_) => Err(
-                    WorkerServiceError::Internal("Unexpected header".to_string()),
-                ),
-            })
-            .map(|item| item.and_then(|inner| inner));
-
-        Ok(Box::pin(stream))
+        decode_file_read_response(
+            futures::stream::iter(first.map(Ok)).chain(stream),
+            selection,
+        )
+        .await
     }
 
     async fn activate_plugin(
@@ -2887,6 +2922,117 @@ mod one_shot_session_tests {
         })
     }
 
+    fn string_result(value: String) -> invocation_response::Response {
+        invocation_response::Response::Result(InvocationSessionResult {
+            result: Some(invocation_session_result::Result::MethodResult(
+                SchemaValue {
+                    value: Some(schema_value::Value::StringValue(value)),
+                },
+            )),
+            component_revision: Some(3),
+            agent_id: agent_id(),
+            idempotency_key: key(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    async fn scalar_string_result_preserves_utf8_without_a_provider_specific_limit() {
+        for extra in [0, 1] {
+            let document = format!("{}{}", "é".repeat(524_288), "x".repeat(extra));
+            assert_eq!(document.len(), 1_048_576 + extra);
+            let responses = stream::iter([
+                frame(accepted()),
+                frame(string_result(document.clone())),
+                frame(finished(invocation_session_completion::Outcome::Success(
+                    Empty {},
+                ))),
+            ]);
+            let result = collect_one_shot_invocation_session(responses, state_after_start())
+                .await
+                .unwrap();
+            let OneShotInvocationSessionResult::Success(output) = result else {
+                panic!("expected an ordinary scalar invocation result");
+            };
+            let golem_common::model::AgentInvocationResult::AgentMethod { output } = output.result
+            else {
+                panic!("expected a method result");
+            };
+            assert_eq!(output, golem_common::schema::SchemaValue::String(document));
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn scalar_result_does_not_complete_before_session_success_and_transport_eof() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        sender.send(frame(accepted())).await.unwrap();
+        sender
+            .send(frame(string_result("{\"paths\":{}}".into())))
+            .await
+            .unwrap();
+        let result = collect_one_shot_invocation_session(
+            tokio_stream::wrappers::ReceiverStream::new(receiver),
+            state_after_start(),
+        );
+        tokio::pin!(result);
+        assert!(futures::poll!(&mut result).is_pending());
+        sender
+            .send(frame(finished(
+                invocation_session_completion::Outcome::Success(Empty {}),
+            )))
+            .await
+            .unwrap();
+        assert!(futures::poll!(&mut result).is_pending());
+        drop(sender);
+        assert!(matches!(
+            result.await.unwrap(),
+            OneShotInvocationSessionResult::Success(_)
+        ));
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn dropping_scalar_waiter_closes_response_consumer() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        sender.send(frame(accepted())).await.unwrap();
+        {
+            let result = collect_one_shot_invocation_session(
+                tokio_stream::wrappers::ReceiverStream::new(receiver),
+                state_after_start(),
+            );
+            tokio::pin!(result);
+            assert!(futures::poll!(&mut result).is_pending());
+            assert!(!sender.is_closed());
+        }
+        sender.closed().await;
+        assert!(sender.is_closed());
+    }
+
+    #[test]
+    async fn scalar_result_is_not_returned_after_session_failure() {
+        let responses = stream::iter([
+            frame(accepted()),
+            frame(string_result("{\"paths\":{}}".into())),
+            frame(finished(invocation_session_completion::Outcome::Failure(
+                InvocationFailure {
+                    kind: InvocationFailureKind::Execution as i32,
+                    code: "execution".into(),
+                    message: "failed after result".into(),
+                    worker_error: None,
+                },
+            ))),
+        ]);
+        let result = collect_one_shot_invocation_session(responses, state_after_start())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            OneShotInvocationSessionResult::Failure(failure)
+                if failure.message == "failed after result"
+        ));
+    }
+
     #[test]
     async fn successful_session_preserves_unary_result_metadata() {
         let responses = stream::iter([
@@ -3947,6 +4093,193 @@ mod delete_reply_tests {
             let reply = map_delete_worker_response(success(), dispatches);
             assert!(!reply.touched_nothing);
             assert!(reply.result.is_ok());
+        }
+    }
+}
+
+#[cfg(test)]
+mod file_read_tests {
+    use super::*;
+    use golem_common::model::filesystem::FileReadMetadata;
+    use test_r::test;
+    use workerexecutor::v1::GetFileContentsResponse as Response;
+    use workerexecutor::v1::get_file_contents_response::Result as Frame;
+
+    fn frame(result: Frame) -> Result<Response, Status> {
+        Ok(Response {
+            result: Some(result),
+        })
+    }
+
+    fn head(total_size: u64, offset: u64, length: u64) -> Result<Response, Status> {
+        frame(Frame::Header(
+            FileReadHead::File(FileReadMetadata {
+                total_size,
+                selection: FileReadExtent::Selected { offset, length },
+                modified_at: None,
+            })
+            .into(),
+        ))
+    }
+
+    #[test]
+    async fn selected_bytes_and_metadata_are_validated_independently() {
+        let response = decode_file_read_response(
+            futures::stream::iter([
+                head(9, 2, 5),
+                frame(Frame::Success(b"cd".to_vec())),
+                frame(Frame::Success(b"efg".to_vec())),
+            ]),
+            FileByteSelection::Bounded {
+                start: 2,
+                end_inclusive: 6,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.body.collect::<Vec<_>>().await,
+            vec![
+                Ok(Bytes::from_static(b"cd")),
+                Ok(Bytes::from_static(b"efg"))
+            ]
+        );
+        for selection in [
+            FileByteSelection::Full,
+            FileByteSelection::MetadataOnly,
+            FileByteSelection::Suffix { length: 5 },
+        ] {
+            let response =
+                decode_file_read_response(futures::stream::iter([head(9, 2, 5)]), selection).await;
+            assert!(matches!(
+                response,
+                Err(WorkerServiceError::FileRead(FileReadError::InvalidResponse))
+            ));
+        }
+    }
+
+    #[test]
+    async fn missing_metadata_and_prehead_errors_are_not_file_misses() {
+        for frames in [
+            vec![],
+            vec![frame(Frame::Success(vec![1]))],
+            vec![Ok(Response { result: None })],
+        ] {
+            assert!(matches!(
+                decode_file_read_response(futures::stream::iter(frames), FileByteSelection::Full)
+                    .await,
+                Err(WorkerServiceError::FileRead(FileReadError::InvalidResponse))
+            ));
+        }
+        for error in [FileReadError::Storage, FileReadError::Lifecycle] {
+            let response = decode_file_read_response(
+                futures::stream::iter([frame(Frame::ReadFailure(
+                    golem_api_grpc::proto::golem::worker::FileReadError::from(error) as i32,
+                ))]),
+                FileByteSelection::Full,
+            )
+            .await;
+            assert!(
+                matches!(response, Err(WorkerServiceError::FileRead(actual)) if actual == error)
+            );
+        }
+    }
+
+    #[test]
+    async fn malformed_or_failed_body_has_one_terminal_and_never_continues() {
+        let cases = [
+            (vec![], FileReadError::InvalidResponse),
+            (
+                vec![frame(Frame::Success(vec![]))],
+                FileReadError::InvalidResponse,
+            ),
+            (
+                vec![frame(Frame::Success(vec![1, 2, 3]))],
+                FileReadError::InvalidResponse,
+            ),
+            (vec![head(2, 0, 2)], FileReadError::InvalidResponse),
+            (
+                vec![Err(Status::unavailable("connection lost"))],
+                FileReadError::Lifecycle,
+            ),
+            (
+                vec![frame(Frame::ReadFailure(
+                    golem_api_grpc::proto::golem::worker::FileReadError::Storage as i32,
+                ))],
+                FileReadError::Storage,
+            ),
+        ];
+        for (mut body, expected) in cases {
+            if !body.is_empty() {
+                body.push(frame(Frame::Success(vec![8, 9])));
+            }
+            let response = decode_file_read_response(
+                futures::stream::iter(std::iter::once(head(2, 0, 2)).chain(body)),
+                FileByteSelection::Full,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.body.collect::<Vec<_>>().await, vec![Err(expected)]);
+        }
+        let response = decode_file_read_response(
+            futures::stream::iter([head(2, 0, 2), frame(Frame::Success(vec![1]))]),
+            FileByteSelection::Full,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.body.collect::<Vec<_>>().await,
+            vec![
+                Ok(Bytes::from_static(&[1])),
+                Err(FileReadError::InvalidResponse)
+            ]
+        );
+        let response = decode_file_read_response(
+            futures::stream::iter([
+                head(2, 0, 2),
+                frame(Frame::Success(vec![1, 2])),
+                frame(Frame::Success(vec![3])),
+            ]),
+            FileByteSelection::Full,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.body.collect::<Vec<_>>().await,
+            vec![
+                Ok(Bytes::from_static(&[1, 2])),
+                Err(FileReadError::InvalidResponse)
+            ]
+        );
+    }
+
+    #[test]
+    async fn zero_byte_responses_and_chunk_bounds_do_not_allocate_file_length() {
+        for selection in [FileByteSelection::Full, FileByteSelection::MetadataOnly] {
+            let response =
+                decode_file_read_response(futures::stream::iter([head(0, 0, 0)]), selection)
+                    .await
+                    .unwrap();
+            assert!(response.body.collect::<Vec<_>>().await.is_empty());
+        }
+        for (length, valid) in [(65536, true), (65537, false)] {
+            let response = decode_file_read_response(
+                futures::stream::iter([
+                    head(u64::MAX, 0, u64::MAX),
+                    frame(Frame::Success(vec![7; length])),
+                ]),
+                FileByteSelection::Full,
+            )
+            .await
+            .unwrap();
+            let mut body = response.body;
+            let first = body.next().await.unwrap();
+            assert_eq!(first.is_ok(), valid);
+            if valid {
+                assert_eq!(first.unwrap().len(), 65536);
+                assert_eq!(body.next().await, Some(Err(FileReadError::InvalidResponse)));
+            }
+            assert!(body.next().await.is_none());
         }
     }
 }

@@ -55,8 +55,8 @@ pub trait ShardService: OplogFenceObserver + Send + Sync {
     fn check_admission(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError>;
     /// Installs the first assignment, from a registration's grant. Creates the
     /// assignment if none exists yet. The set gates on `revision` like every
-    /// delivery; the lease clock always moves. `None` never expires, which only
-    /// the single-shard executor and the debugging service declare.
+    /// delivery; the lease clock always moves. `None` never expires, which the
+    /// single-shard executor declares.
     fn register(
         &self,
         number_of_shards: usize,
@@ -710,8 +710,7 @@ mod tests {
         );
     }
 
-    /// `None` means "never expires": the single binary and the debugging
-    /// service must not fence themselves at boot.
+    /// `None` means "never expires": the single binary must not fence itself at boot.
     #[test]
     fn a_lease_without_an_expiry_never_fences() {
         let agent = agent_on_shard(0);

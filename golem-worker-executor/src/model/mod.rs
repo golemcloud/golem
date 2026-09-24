@@ -13,8 +13,6 @@
 // limitations under the License.
 
 use crate::workerctx::WorkerCtx;
-use bytes::Bytes;
-use futures::Stream;
 use futures::future::ready;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName};
@@ -627,12 +625,6 @@ pub enum LookupResult {
     Pending,
     Interrupted,
     Complete(Result<AgentInvocationOutput, WorkerExecutorError>),
-}
-
-pub enum ReadFileResult {
-    Ok(Pin<Box<dyn Stream<Item = Result<Bytes, WorkerExecutorError>> + Send + 'static>>),
-    NotFound,
-    NotAFile,
 }
 
 pub struct InvocationContext {

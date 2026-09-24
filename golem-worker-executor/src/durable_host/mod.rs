@@ -69,8 +69,7 @@ use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, SnapshotSource,
-    TrapType,
+    AgentConfig, ExecutionStatus, InvocationContext, LastError, SnapshotSource, TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, update_initial_files};
@@ -108,9 +107,9 @@ use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, GuestCallSettlementError, InvocationMode, InvokeResult,
-    invocation_uses_streams, invoke_observed_and_traced, load_load_snapshot_guest,
-    lower_invocation, run_guest_call_settled,
+    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
+    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
@@ -3963,6 +3962,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             InvocationMode::Replay,
                         )
                         .await;
+                        store.as_context_mut().data().set_suspended();
 
                         store
                             .as_context_mut()
@@ -4224,6 +4224,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let load_result =
             invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        store.as_context_mut().data().set_suspended();
 
         store
             .as_context_mut()
@@ -6138,76 +6139,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
 
+                        let invoke_result = if uses_streams {
+                            materialize_streaming_result(store, invoke_result, &full_function_name, &idempotency_key).await
+                        } else {
+                            invoke_result
+                        };
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                result: mut invocation_result,
+                                result: invocation_result,
                                 consumed_fuel,
                             }) => {
-                                if uses_streams
-                                    && let AgentInvocationResult::AgentMethod { output } =
-                                        &mut *invocation_result
-                                {
-                                    let (graph, root, component_revision) = {
-                                        let component = store.data().component_metadata();
-                                        let agent_id = store.data().parsed_agent_id();
-                                        let agent_type = agent_id
-                                            .as_ref()
-                                            .and_then(|agent_id| {
-                                                component
-                                                    .metadata
-                                                    .find_agent_type_by_name_ref(
-                                                        &agent_id.agent_type,
-                                                    )
-                                            })
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result schema is unavailable",
-                                                )
-                                            })?;
-                                        let method = agent_type
-                                            .methods
-                                            .iter()
-                                            .find(|method| method.name == full_function_name)
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result method schema is unavailable",
-                                                )
-                                            })?;
-                                        (
-                                            agent_type.schema.clone(),
-                                            method.output_schema.schema().cloned().unwrap_or_else(
-                                                || {
-                                                    golem_common::schema::SchemaType::tuple(
-                                                        Vec::new(),
-                                                    )
-                                                },
-                                            ),
-                                            component.revision,
-                                        )
-                                    };
-                                    let worker = worker.clone();
-                                    let result_value = output.clone();
-                                    let replay_idempotency_key = idempotency_key.clone();
-                                    *output = store.run_concurrent(async move |_accessor| {
-                                            worker
-                                                .materialize_durable_streaming_result(
-                                                    &replay_idempotency_key,
-                                                    result_value,
-                                                    &graph,
-                                                    &root,
-                                                    component_revision,
-                                                )
-                                                .await
-                                        })
-                                        .await
-                                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
-                                    run_guest_call_settled(&mut store.as_context_mut(), async |_accessor| ())
-                                        .await
-                                        .map_err(|error| match error {
-                                            GuestCallSettlementError::Infrastructure(error) => error,
-                                            GuestCallSettlementError::Trap(error) | GuestCallSettlementError::Interrupted(error) => WorkerExecutorError::runtime(error.to_string()),
-                                        })?;
-                                }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
                                 let mut output = AgentInvocationOutput {
@@ -6341,12 +6282,21 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                         if decision == RetryDecision::None {
                                             // Like the invocation loop, permanently fail the
                                             // durable Stream Session of an invocation that was
-                                            // interrupted by a crash and cannot be retried. Not
-                                            // for an agent given up here: the shard's new owner
-                                            // resumes that invocation.
+                                            // interrupted by a crash and cannot be retried.
+                                            // A fresh interrupt is authoritative even before live
+                                            // publication; already-finished sessions stay unchanged.
+                                            // Not for an agent given up here, however the loss
+                                            // reached the trap: the shard's new owner resumes that
+                                            // invocation.
+                                            let shard_lost = worker.is_given_up()
+                                                || matches!(
+                                                    trap_type,
+                                                    TrapType::Interrupt(InterruptKind::ShardLost)
+                                                );
                                             if uses_streams
-                                                && store.as_context().data().durable_ctx().is_live()
-                                                && !worker.is_given_up()
+                                                && !shard_lost
+                                                && (matches!(trap_type, TrapType::Interrupt(_))
+                                                    || store.as_context().data().durable_ctx().is_live())
                                             {
                                                 let _ = worker
                                                     .fail_durable_streaming_session(
@@ -6417,6 +6367,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
         resume_result
         }.await;
+        store.data().set_suspended();
         // Result validation can consume the final recorded entry before detecting a mismatch.
         // Its typed replay error, rather than the resulting live cursor, identifies divergence.
         if let Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) = &result
@@ -6667,6 +6618,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 calculate_last_known_status_with_checkpoint(
                     this,
                     &owned_agent_id,
+                    worker.initial_worker_metadata.fingerprint,
                     agent_mode,
                     worker.last_known_status,
                 )
@@ -6678,20 +6630,44 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
             if should_restart_after_shard_assignment_change(&latest_worker_status) {
-                recovered_restart(
+                let expected_fingerprint = worker.initial_worker_metadata.fingerprint;
+                let activation = Worker::get_existing_running_with_fingerprint(
+                    this,
                     &owned_agent_id,
-                    Worker::get_or_create_running(
-                        this,
-                        &owned_agent_id,
-                        None,
-                        Vec::new(),
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                        Principal::anonymous(),
-                    )
-                    .await,
-                )?;
+                    expected_fingerprint,
+                )
+                .await;
+                match activation {
+                    Ok(_) => {}
+                    Err(error @ WorkerExecutorError::AgentNotFound { .. }) => {
+                        let current = this
+                            .worker_service()
+                            .resolve_agent_identity(&owned_agent_id)
+                            .await?;
+                        if current
+                            .as_ref()
+                            .is_none_or(|identity| identity.fingerprint != expected_fingerprint)
+                        {
+                            this.worker_service()
+                                .remove_assignment_tracking(&owned_agent_id, expected_fingerprint)
+                                .await
+                                .map_err(anyhow::Error::msg)?;
+                            crate::metrics::workers::record_stale_running_worker(
+                                if current.is_none() {
+                                    "absent"
+                                } else {
+                                    "fingerprint_mismatch"
+                                },
+                            );
+                            continue;
+                        }
+                        return Err(anyhow!(
+                            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+                        ));
+                    }
+                    // A shard that left the assignment mid-recovery is skipped, not fatal.
+                    Err(error) => recovered_restart(&owned_agent_id, Err::<(), _>(error))?,
+                }
             }
         }
 
@@ -9550,64 +9526,6 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
             )?);
         }
         Ok(GetFileSystemNodeResult::Ok(result))
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        use crate::services::agent_filesystem as agent_fs;
-
-        let generation_handle = self.filesystem_generation_handle();
-        let relative = PathBuf::from(path.to_rel_string());
-        let target = agent_fs::PathTarget::at_root(&generation_handle, relative)
-            .map_err(|error| filesystem_read_error(path, error))?;
-        let attributes = match agent_fs::attributes(
-            &generation_handle,
-            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        {
-            Ok(attributes) => attributes,
-            Err(error) if filesystem_error_is_not_found(&error) => {
-                return Ok(ReadFileResult::NotFound);
-            }
-            Err(error) => return Err(filesystem_read_error(path, error)),
-        };
-        if attributes.kind != agent_fs::ObjectKind::File {
-            return Ok(ReadFileResult::NotAFile);
-        }
-        let opened = agent_fs::open(
-            &generation_handle,
-            target,
-            agent_fs::OpenOptions::Existing {
-                expected: agent_fs::ObjectKind::File,
-                access: agent_fs::AccessMode::Read,
-                follow: agent_fs::Follow::Yes,
-            },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let agent_fs::OpenNode::File(file) = opened.node else {
-            unreachable!("file open returned a non-file node")
-        };
-        let length =
-            usize::try_from(attributes.size).map_err(|_| WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: "File is too large to read on this executor".to_string(),
-            })?;
-        let bytes = agent_fs::read_file(
-            &generation_handle,
-            &file,
-            agent_fs::ReadRange { offset: 0, length },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let stream = futures::stream::once(async move { Ok::<Bytes, WorkerExecutorError>(bytes) });
-        Ok(ReadFileResult::Ok(Box::pin(stream)))
     }
 }
 

@@ -433,6 +433,31 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_resource_update_result
     ),
     registry_entry!(
+        "McpImportAuthorizeView",
+        "api.mcp-import.authorize",
+        arb_mcp_import_authorize_result
+    ),
+    registry_entry!(
+        "McpImportCompleteView",
+        "api.mcp-import.complete",
+        arb_mcp_import_complete_result
+    ),
+    registry_entry!(
+        "McpImportDisconnectView",
+        "api.mcp-import.disconnect",
+        arb_mcp_import_disconnect_result
+    ),
+    registry_entry!(
+        "McpImportStatusView",
+        "api.mcp-import.status",
+        arb_mcp_import_status_result
+    ),
+    registry_entry!(
+        "McpImportToolsView",
+        "api.mcp-import.tools",
+        arb_mcp_import_tools_result
+    ),
+    registry_entry!(
         "RetryPolicyCreateView",
         "retry-policy.create",
         arb_retry_policy_create_result
@@ -1024,6 +1049,7 @@ fn sample_agent_type_schema(
     agent_type_name: golem_common::model::agent::AgentTypeName,
 ) -> golem_common::schema::agent::AgentTypeSchema {
     golem_common::schema::agent::AgentTypeSchema {
+        kind: golem_common::schema::agent::AgentTypeKind::Regular,
         type_name: agent_type_name,
         description: String::new(),
         source_language: String::new(),
@@ -1881,6 +1907,7 @@ fn empty_deployment_diff() -> golem_common::model::diff::DeploymentDiff {
         components: BTreeMap::new(),
         http_api_deployments: BTreeMap::new(),
         mcp_deployments: BTreeMap::new(),
+        mcp_imports: BTreeMap::new(),
         remote_tools: BTreeMap::new(),
         published_tools: Default::default(),
         remote_tool_middleware_deployments: BTreeMap::new(),
@@ -2489,6 +2516,10 @@ fn arb_deployed_registered_agent_type()
 fn arb_agent_type() -> BoxedStrategy<golem_common::schema::agent::AgentTypeSchema> {
     (
         arb_agent_type_name(),
+        prop_oneof![
+            Just(golem_common::schema::agent::AgentTypeKind::Regular),
+            Just(golem_common::schema::agent::AgentTypeKind::HttpRouter),
+        ],
         arb_small_string(),
         arb_small_string(),
         arb_agent_constructor(),
@@ -2502,6 +2533,7 @@ fn arb_agent_type() -> BoxedStrategy<golem_common::schema::agent::AgentTypeSchem
         .prop_map(
             |(
                 type_name,
+                kind,
                 description,
                 source_language,
                 constructor,
@@ -2525,6 +2557,7 @@ fn arb_agent_type() -> BoxedStrategy<golem_common::schema::agent::AgentTypeSchem
                 };
 
                 golem_common::schema::agent::AgentTypeSchema {
+                    kind,
                     type_name,
                     description,
                     source_language,
@@ -2784,19 +2817,64 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
         any::<bool>(),
         proptest::collection::vec(arb_small_string(), 0..2),
         proptest::collection::vec(arb_path_segment(), 0..2),
+        proptest::collection::vec(arb_file_mapping(), 1..3),
+        proptest::collection::vec(arb_file_mapping(), 1..3),
+        proptest::option::of(arb_small_string()),
     )
         .prop_map(
-            |(path_prefix, auth_details, phantom_agent, allowed_patterns, webhook_suffix)| {
+            |(
+                path_prefix,
+                auth_details,
+                phantom_agent,
+                allowed_patterns,
+                webhook_suffix,
+                static_bindings,
+                filesystem_bindings,
+                openapi_provider_method,
+            )| {
                 golem_common::model::agent::HttpMountDetails {
                     path_prefix,
                     auth_details,
                     phantom_agent,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
                     webhook_suffix,
+                    static_bindings,
+                    filesystem_bindings,
+                    openapi_provider_method,
                 }
             },
         )
         .boxed()
+}
+
+fn arb_file_mapping() -> BoxedStrategy<golem_common::model::agent::FileMapping> {
+    prop_oneof![
+        (
+            proptest::collection::vec(arb_small_string(), 1..3),
+            arb_small_string(),
+        )
+            .prop_map(|(public_path, file_path)| {
+                golem_common::model::agent::FileMapping::Exact(
+                    golem_common::model::agent::ExactFileMapping {
+                        public_path,
+                        file_path,
+                    },
+                )
+            }),
+        (
+            proptest::collection::vec(arb_small_string(), 1..3),
+            arb_small_string(),
+        )
+            .prop_map(|(public_prefix, filesystem_root)| {
+                golem_common::model::agent::FileMapping::Subtree(
+                    golem_common::model::agent::SubtreeFileMapping {
+                        public_prefix,
+                        filesystem_root,
+                    },
+                )
+            }),
+    ]
+    .boxed()
 }
 
 fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::HttpEndpointDetails> {
@@ -2826,6 +2904,59 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                 .prop_map(|required| golem_common::model::agent::AgentHttpAuthDetails { required }),
         ),
         proptest::collection::vec(arb_small_string(), 0..2),
+        prop_oneof![
+            Just(None),
+            (
+                arb_small_string(),
+                arb_small_string(),
+                proptest::option::of(any::<bool>()),
+                proptest::option::of(any::<bool>()),
+                proptest::option::of(any::<bool>()),
+                proptest::option::of(1u32..=16),
+                proptest::option::of(1u32..=1000),
+            )
+                .prop_map(
+                    |(
+                        input_slot,
+                        output_slot,
+                        allow_external_writes,
+                        allow_stream_delete,
+                        allow_invocation_delete,
+                        max_concurrent_readers_per_stream,
+                        max_append_requests_per_second_per_stream,
+                    )| Some(
+                        golem_common::model::agent::DurableStreamRouteOptions {
+                            slots: vec![
+                            golem_common::model::agent::DurableStreamSlotOptions {
+                                source: golem_common::model::agent::DurableStreamSlotSource::Input(
+                                    golem_common::model::agent::DurableStreamInputSlotSource {
+                                        name: input_slot,
+                                    },
+                                ),
+                                name: Some("messages".to_string()),
+                                content_type: None,
+                            },
+                            golem_common::model::agent::DurableStreamSlotOptions {
+                                source: golem_common::model::agent::DurableStreamSlotSource::Output(
+                                    golem_common::model::agent::DurableStreamOutputSlotSource {
+                                        name: output_slot,
+                                    },
+                                ),
+                                name: None,
+                                content_type: Some("application/octet-stream".to_string()),
+                            },
+                        ],
+                            allow_external_writes,
+                            allow_stream_delete,
+                            allow_invocation_delete,
+                            load: Some(golem_common::model::agent::DurableStreamRouteLoadOptions {
+                                max_concurrent_readers_per_stream,
+                                max_append_requests_per_second_per_stream,
+                            }),
+                        }
+                    ),
+                ),
+        ],
     )
         .prop_map(
             |(
@@ -2835,6 +2966,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                 query_vars,
                 auth_details,
                 allowed_patterns,
+                durable_streams,
             )| {
                 golem_common::model::agent::HttpEndpointDetails {
                     http_method,
@@ -2843,6 +2975,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     query_vars,
                     auth_details,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
+                    durable_streams,
                 }
             },
         )
@@ -2883,6 +3016,9 @@ fn arb_http_method() -> BoxedStrategy<golem_common::model::agent::HttpMethod> {
                 golem_common::model::agent::CustomHttpMethod { value },
             )
         }),
+        Just(golem_common::model::agent::HttpMethod::Any(
+            golem_common::model::Empty {}
+        )),
     ]
     .boxed()
 }
@@ -4206,6 +4342,7 @@ fn arb_http_api_deployment() -> BoxedStrategy<golem_client::model::HttpApiDeploy
         arb_small_u64(),
         arb_uuid(),
         arb_small_string(),
+        proptest::bool::ANY,
         proptest::collection::btree_map(
             arb_agent_type_name(),
             arb_http_api_deployment_agent_options(),
@@ -4221,12 +4358,18 @@ fn arb_http_api_deployment() -> BoxedStrategy<golem_client::model::HttpApiDeploy
                 revision,
                 environment_id,
                 domain,
+                use_http,
                 agents,
                 webhooks_prefix,
                 openapi_endpoint_prefix,
                 created_at,
             )| {
                 golem_client::model::HttpApiDeployment {
+                    scheme: if use_http {
+                        golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http
+                    } else {
+                        golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https
+                    },
                     id: golem_common::model::http_api_deployment::HttpApiDeploymentId(id),
                     revision:
                         golem_common::model::http_api_deployment::HttpApiDeploymentRevision::new(
@@ -4657,6 +4800,14 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                                 json!({"enabled": true}),
                             ),
                             account: None,
+                            secret_keys_readable: Some(
+                                crate::model::app_raw::ManifestSecretKeyScope::Keys(vec![
+                                    "credentials.audit".to_string(),
+                                ]),
+                            ),
+                            secret_keys_revealable: Some(
+                                crate::model::app_raw::ManifestSecretKeyScope::All("*".to_string()),
+                            ),
                             filesystem_access: Default::default(),
                         },
                     ),
@@ -5189,6 +5340,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     http_key.clone(),
                     golem_common::model::diff::HashOf::form_value(
                         golem_common::model::diff::HttpApiDeployment {
+                            scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https,
                             webhooks_prefix: "new-webhooks".to_string(),
                             openapi_endpoint_prefix: "new-openapi".to_string(),
                             agents: BTreeMap::from_iter([(
@@ -5205,6 +5357,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     http_key,
                     golem_common::model::diff::HashOf::form_value(
                         golem_common::model::diff::HttpApiDeployment {
+                            scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http,
                             webhooks_prefix: "old-webhooks".to_string(),
                             openapi_endpoint_prefix: "old-openapi".to_string(),
                             agents: BTreeMap::from_iter([(
@@ -5906,9 +6059,33 @@ fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::Cu
         arb_small_string(),
         arb_hash(),
         arb_small_u64(),
+        proptest::collection::vec(
+            (
+                proptest::option::of(any::<u32>()),
+                proptest::option::of(arb_small_string()),
+                arb_small_string(),
+            )
+                .prop_map(|(import_index, upstream_tool_name, reason)| {
+                    golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
+                        golem_common::model::deployment::McpImportDiscovery {
+                            import_index,
+                            upstream_tool_name,
+                            reason,
+                        },
+                    )
+                }),
+            0..4,
+        ),
     )
         .prop_map(
-            |(environment_id, revision, version, deployment_hash, current_revision)| {
+            |(
+                environment_id,
+                revision,
+                version,
+                deployment_hash,
+                current_revision,
+                validation_warnings,
+            )| {
                 golem_common::model::deployment::CurrentDeployment {
                     environment_id: golem_common::model::environment::EnvironmentId(environment_id),
                     revision: golem_common::model::deployment::DeploymentRevision::new(revision)
@@ -5920,7 +6097,7 @@ fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::Cu
                             current_revision,
                         )
                         .expect("generated revision should be valid"),
-                    validation_warnings: Vec::new(),
+                    validation_warnings,
                 }
             },
         )
@@ -6483,6 +6660,108 @@ fn arb_api_retry_policy_with_depth(
         }),
     ]
     .boxed()
+}
+
+fn arb_mcp_import_authorize_result() -> OutputDocumentStrategy {
+    serialized_output((any::<u64>(), any::<Option<u64>>(), any::<u32>()).prop_map(
+        |(authorization_id, deployment_revision, import_index)| {
+            crate::model::mcp::McpImportAuthorizeView(crate::model::mcp::McpImportAuthorization {
+                authorization_url: format!(
+                    "https://provider.example/authorize?id={authorization_id}"
+                ),
+                deployment_revision,
+                import_index,
+            })
+        },
+    ))
+}
+
+fn arb_mcp_import_oauth_status() -> impl Strategy<Value = crate::model::mcp::McpImportOAuthStatus> {
+    (
+        any::<u128>(),
+        any::<Option<u64>>(),
+        any::<u32>(),
+        any::<String>(),
+        any::<String>(),
+    )
+        .prop_map(
+            |(environment_id, deployment_revision, import_index, security_scheme, status)| {
+                crate::model::mcp::McpImportOAuthStatus {
+                    environment_id: uuid::Uuid::from_u128(environment_id),
+                    deployment_revision,
+                    import_index,
+                    security_scheme,
+                    status,
+                }
+            },
+        )
+}
+
+fn arb_mcp_import_complete_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_mcp_import_oauth_status().prop_map(crate::model::mcp::McpImportCompleteView),
+    )
+}
+
+fn arb_mcp_import_disconnect_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_mcp_import_oauth_status().prop_map(crate::model::mcp::McpImportDisconnectView),
+    )
+}
+
+fn arb_mcp_import_status_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_mcp_import_oauth_status().prop_map(crate::model::mcp::McpImportStatusView),
+    )
+}
+
+fn arb_mcp_import_tools_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            any::<u128>(),
+            any::<u64>(),
+            any::<u32>(),
+            any::<String>(),
+            prop::collection::vec((any::<String>(), any::<String>()), 0..3),
+            prop::collection::vec((any::<String>(), any::<String>()), 0..3),
+        )
+            .prop_map(
+                |(
+                    environment_id,
+                    deployment_revision,
+                    import_index,
+                    protocol_version,
+                    tools,
+                    diagnostics,
+                )| {
+                    crate::model::mcp::McpImportToolsView(golem_client::model::McpImportTools {
+                        environment_id: uuid::Uuid::from_u128(environment_id),
+                        deployment_revision,
+                        import_index,
+                        protocol_version,
+                        tools: tools
+                            .into_iter()
+                            .map(
+                                |(upstream_name, digest)| golem_client::model::McpImportedTool {
+                                    upstream_name,
+                                    digest,
+                                    definition: sample_tool_release().definition,
+                                },
+                            )
+                            .collect(),
+                        diagnostics: diagnostics
+                            .into_iter()
+                            .map(|(upstream_name, reason)| {
+                                golem_client::model::McpImportDiagnostic {
+                                    upstream_name,
+                                    reason,
+                                }
+                            })
+                            .collect(),
+                    })
+                },
+            ),
+    )
 }
 
 fn arb_retry_policy_create_result() -> OutputDocumentStrategy {

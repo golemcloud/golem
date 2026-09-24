@@ -29,7 +29,7 @@ fn SubTaskState::from(int : Int) -> SubTaskState {
 
 ///|
 fn SubTask::from(code : Int) -> SubTask {
-  { handle: code >> 4, state: SubTaskState::from(code & 0xf), }
+  { handle: code >> 4, state: SubTaskState::from(code & 0xf) }
 }
 
 ///|
@@ -171,7 +171,7 @@ priv struct StreamResult {
 fn StreamResult::from(int : Int) -> StreamResult {
   let progress = int >> 4
   let copy_result = CopyResult::from(int & 0xf)
-  { progress, copy_result, }
+  { progress, copy_result }
 }
 
 ///|

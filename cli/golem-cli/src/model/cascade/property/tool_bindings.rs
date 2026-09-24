@@ -451,9 +451,31 @@ mod tests {
                 version: None,
                 parameters: golem_common::model::json::NormalizedJsonValue::new(json!({})),
                 account: None,
+                secret_keys_readable: None,
+                secret_keys_revealable: None,
                 filesystem_access: Default::default(),
             },
         )
+    }
+
+    fn middleware_with_secret_scopes(
+        readable: &str,
+        revealable: &str,
+    ) -> crate::model::app_raw::ToolMiddlewareInstallation {
+        use crate::model::app_raw::ManifestSecretKeyScope;
+
+        match middleware("audit") {
+            crate::model::app_raw::ToolMiddlewareInstallation::Structured(mut installation) => {
+                installation.version = Some("1.0.0".to_string());
+                installation.account = Some("audit@example.com".to_string());
+                installation.secret_keys_readable =
+                    Some(ManifestSecretKeyScope::Keys(vec![readable.to_string()]));
+                installation.secret_keys_revealable =
+                    Some(ManifestSecretKeyScope::Keys(vec![revealable.to_string()]));
+                crate::model::app_raw::ToolMiddlewareInstallation::Structured(installation)
+            }
+            crate::model::app_raw::ToolMiddlewareInstallation::Shortcut(_) => unreachable!(),
+        }
     }
 
     #[test]
@@ -515,6 +537,77 @@ mod tests {
         omitted.apply(ToolBinding::default());
         assert_eq!(omitted.middleware, None);
         assert_eq!(omitted.middleware_merge_mode, None);
+    }
+
+    #[test]
+    fn middleware_merge_modes_keep_selectors_on_duplicate_occurrences() {
+        use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+        use golem_common::model::tool::SecretKeyScope;
+        use std::collections::BTreeSet;
+
+        for (mode, expected) in [
+            (
+                ToolMiddlewareMergeMode::Prepend,
+                vec![
+                    ("agentReadable", "agentRevealable"),
+                    ("environmentReadable", "environmentRevealable"),
+                ],
+            ),
+            (
+                ToolMiddlewareMergeMode::Append,
+                vec![
+                    ("environmentReadable", "environmentRevealable"),
+                    ("agentReadable", "agentRevealable"),
+                ],
+            ),
+            (
+                ToolMiddlewareMergeMode::Replace,
+                vec![("agentReadable", "agentRevealable")],
+            ),
+        ] {
+            let mut state = super::ToolBindingState::default();
+            state.apply(ToolBinding {
+                middleware: Some(vec![middleware_with_secret_scopes(
+                    "environment-readable",
+                    "environment-revealable",
+                )]),
+                ..Default::default()
+            });
+            state.apply(ToolBinding {
+                middleware: Some(vec![middleware_with_secret_scopes(
+                    "agent-readable",
+                    "agent-revealable",
+                )]),
+                middleware_merge_mode: Some(mode),
+                ..Default::default()
+            });
+
+            let actual = state.middleware_installations().unwrap().unwrap();
+            assert_eq!(actual.len(), expected.len());
+            for (installation, (readable, revealable)) in actual.iter().zip(expected) {
+                assert_eq!(installation.name.as_str(), "audit");
+                assert_eq!(installation.version.as_deref(), Some("1.0.0"));
+                assert_eq!(
+                    installation
+                        .account
+                        .as_ref()
+                        .map(|account| account.as_str()),
+                    Some("audit@example.com")
+                );
+                assert_eq!(
+                    installation.secret_keys_readable,
+                    Some(SecretKeyScope::Keys(BTreeSet::from([
+                        CanonicalAgentSecretPath(vec![readable.to_string()])
+                    ])))
+                );
+                assert_eq!(
+                    installation.secret_keys_revealable,
+                    Some(SecretKeyScope::Keys(BTreeSet::from([
+                        CanonicalAgentSecretPath(vec![revealable.to_string()])
+                    ])))
+                );
+            }
+        }
     }
 
     #[test]

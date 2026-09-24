@@ -1657,20 +1657,6 @@ fn render_method_implementation(method: &Method, error_kind: &ErrorKind) -> Rust
     let body_param = method.params.iter().find(|p| p.kind == ParamKind::Body);
     let is_multipart = method.params.iter().any(|p| p.kind == ParamKind::Multipart);
 
-    let body_log = if let Some(body_param) = body_param {
-        if body_param.tpe == DataType::Binary {
-            unit() + r#", body="<binary>""#
-        } else if let DataType::Model(_) = &body_param.tpe {
-            unit() + ", body=serde_json::to_string(" + &body_param.name + ")?"
-        } else {
-            unit() + ", body=?" + &body_param.name
-        }
-    } else if is_multipart {
-        unit() + r#", body="<multipart>""#
-    } else {
-        unit()
-    };
-
     let endpoint_log = unit() + r#", endpoint=""# + &method.original_path + r#"""#;
 
     let logs = headers_vec
@@ -1681,7 +1667,6 @@ fn render_method_implementation(method: &Method, error_kind: &ErrorKind) -> Rust
                 + endpoint_log
                 + ", url=url.to_string()"
                 + headers_log
-                + body_log
                 + r#", ""#
                 + &method.name
                 + r#"");"#,
@@ -1950,4 +1935,58 @@ pub fn client_gen(
         },
         code,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn request_bodies_are_sent_but_never_logged() {
+        let api: OpenAPI = serde_yaml::from_str(
+            r#"
+openapi: 3.0.0
+info:
+  title: Consent
+  version: '1'
+components:
+  schemas:
+    Callback:
+      type: object
+      required: [state, code]
+      properties:
+        state: {type: string}
+        code: {type: string}
+paths:
+  /consent:
+    post:
+      operationId: complete_consent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Callback'
+      responses:
+        '204':
+          description: Complete
+"#,
+        )
+        .unwrap();
+        let generated = client_gen(&api, None, &mut RefCache::new(), &[])
+            .unwrap()
+            .code;
+        assert!(generated.contains("request = request.json("), "{generated}");
+        let logs: Vec<_> = generated
+            .lines()
+            .filter(|line| line.contains("tracing::"))
+            .collect();
+        assert!(!logs.is_empty());
+        assert!(
+            logs.iter()
+                .all(|line| !line.contains("body") && !line.contains("value")),
+            "{logs:?}"
+        );
+    }
 }

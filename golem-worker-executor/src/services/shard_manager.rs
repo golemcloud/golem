@@ -837,9 +837,8 @@ impl ShardManagerService for GrpcShardManagerService {
     }
 }
 
-/// Single-shard implementation for local development and the debugging
-/// service.  Returns a single shard assignment without contacting a real
-/// shard manager.
+/// Single-shard implementation for local development. Returns a single shard
+/// assignment without contacting a real shard manager.
 pub struct ShardManagerServiceSingleShard;
 
 #[async_trait]
@@ -849,8 +848,8 @@ impl ShardManagerService for ShardManagerServiceSingleShard {
         _port: u16,
         _pod_name: Option<String>,
     ) -> Result<ShardAssignment, ShardManagerError> {
-        // `expires_at: None` — the single binary and the debugging service have
-        // no shard manager to renew against and must never fence themselves.
+        // `expires_at: None` — the single binary has no shard manager to renew
+        // against and must never fence itself.
         Ok(ShardAssignment::unexpiring(1, [ShardId::new(0)]))
     }
 

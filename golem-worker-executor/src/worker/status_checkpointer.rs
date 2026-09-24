@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tracing::debug;
 
-use golem_common::model::{AgentStatusRecord, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, AgentStatusRecord, OwnedAgentId};
 
 use crate::services::worker::WorkerService;
 
@@ -74,6 +74,7 @@ struct CheckpointState {
 /// Per-worker coordinator that writes the clean status checkpoint at clean boundaries.
 pub struct StatusCheckpointer {
     owned_agent_id: OwnedAgentId,
+    fingerprint: AgentFingerprint,
     /// Ephemeral workers never persist any cached status; every operation is a no-op for them.
     is_ephemeral: bool,
     /// When `false`, no checkpoint is ever written (recompute falls back to a full from-scratch
@@ -98,6 +99,7 @@ pub struct StatusCheckpointer {
 impl StatusCheckpointer {
     pub fn new(
         owned_agent_id: OwnedAgentId,
+        fingerprint: AgentFingerprint,
         is_ephemeral: bool,
         enabled: bool,
         min_oplog_delta: u64,
@@ -105,6 +107,7 @@ impl StatusCheckpointer {
     ) -> Self {
         Self {
             owned_agent_id,
+            fingerprint,
             is_ephemeral,
             enabled,
             min_oplog_delta,
@@ -205,6 +208,7 @@ impl StatusCheckpointer {
             .worker_service
             .write_status_checkpoint(
                 &self.owned_agent_id,
+                self.fingerprint,
                 state.last_written.as_ref(),
                 status.clone(),
             )
@@ -263,6 +267,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _public_session_id: &str,
         ) -> Result<Option<golem_common::model::DurableStreamPublicBinding>, String> {
             unimplemented!()
@@ -279,6 +284,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _status: &AgentStatusRecord,
             _key: &golem_common::model::IdempotencyKey,
         ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, String> {
@@ -295,6 +301,8 @@ mod tests {
             &self,
             _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: AgentFingerprint,
             _expected_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
@@ -303,20 +311,23 @@ mod tests {
         async fn remove_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
 
-        async fn get_agent_mode(
+        async fn resolve_agent_identity(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Option<AgentMode>, WorkerExecutorError> {
-            Ok(Some(AgentMode::Durable))
+        ) -> Result<Option<crate::services::worker::ResolvedAgentIdentity>, WorkerExecutorError>
+        {
+            Ok(None)
         }
 
         async fn write_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _previous_status: Option<&AgentStatusRecord>,
             status_value: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -326,6 +337,7 @@ mod tests {
         async fn read_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _agent_mode: AgentMode,
         ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
             Ok(None)
@@ -334,6 +346,7 @@ mod tests {
         async fn write_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _previous_checkpoint: Option<&AgentStatusRecord>,
             checkpoint: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -344,7 +357,16 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
             _status_value: &AgentStatusRecord,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn remove_assignment_tracking(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _fingerprint: AgentFingerprint,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -369,7 +391,14 @@ mod tests {
     }
 
     fn checkpointer(service: Arc<RecordingWorkerService>, min_delta: u64) -> StatusCheckpointer {
-        StatusCheckpointer::new(owned_agent_id(), false, true, min_delta, service)
+        StatusCheckpointer::new(
+            owned_agent_id(),
+            AgentFingerprint(Uuid::nil()),
+            false,
+            true,
+            min_delta,
+            service,
+        )
     }
 
     #[test]
@@ -534,12 +563,26 @@ mod tests {
     async fn disabled_and_ephemeral_never_write() {
         let service = Arc::new(RecordingWorkerService::default());
 
-        let disabled = StatusCheckpointer::new(owned_agent_id(), false, false, 0, service.clone());
+        let disabled = StatusCheckpointer::new(
+            owned_agent_id(),
+            AgentFingerprint(Uuid::nil()),
+            false,
+            false,
+            0,
+            service.clone(),
+        );
         disabled
             .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
             .await;
 
-        let ephemeral = StatusCheckpointer::new(owned_agent_id(), true, true, 0, service.clone());
+        let ephemeral = StatusCheckpointer::new(
+            owned_agent_id(),
+            AgentFingerprint(Uuid::nil()),
+            true,
+            true,
+            0,
+            service.clone(),
+        );
         ephemeral
             .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
             .await;

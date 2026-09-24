@@ -95,6 +95,8 @@ message ToolMiddlewareInstallation {
   string parameters_json = 3;
   optional string account = 4;
   ToolFilesystemAccess filesystem_access = 5;
+  SecretKeyScope secret_keys_readable = 6;
+  SecretKeyScope secret_keys_revealable = 7;
 }
 
 enum ToolFilesystemAccess {

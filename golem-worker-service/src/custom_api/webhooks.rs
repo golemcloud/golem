@@ -25,7 +25,6 @@ use golem_service_base::custom_api::{
 };
 use golem_service_base::model::auth::AuthCtx;
 use http::StatusCode;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct WebhookCallbackHandler {
@@ -66,7 +65,7 @@ impl WebhookCallbackHandler {
             tracing::warn!("Received webhook callback with incorrect checksum");
             return Ok(RouteExecutionResult {
                 status: StatusCode::NOT_FOUND,
-                headers: HashMap::new(),
+                headers: http::HeaderMap::new(),
                 body: ResponseBody::NoBody,
             });
         }
@@ -105,7 +104,7 @@ impl WebhookCallbackHandler {
 
         Ok(RouteExecutionResult {
             status: StatusCode::NO_CONTENT,
-            headers: HashMap::new(),
+            headers: http::HeaderMap::new(),
             body: ResponseBody::NoBody,
         })
     }

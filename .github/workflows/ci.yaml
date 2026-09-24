@@ -61,7 +61,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 20
+        timeout-minutes: 30
       - name: Packaging all binaries with cargo-nextest
         run: |
           mkdir -pv tmp
@@ -801,7 +801,7 @@ jobs:
       matrix:
         part:
           - name: check
-            test-args: --lib --bins --test agent --test tool_canonical --test schema_reexport --test reflection_recipe_compile
+            test-args: --lib --bins --test agent --test http_router --test tool_canonical --test schema_reexport --test reflection_recipe_compile
           - name: tool
             test-args: --test tool
           - name: tool-middleware-component
@@ -831,6 +831,7 @@ jobs:
         working-directory: sdks/rust
         run: |
           expected='agent
+          http_router
           reflection_recipe_compile
           schema_reexport
           tool
@@ -1340,11 +1341,6 @@ jobs:
         with:
           image-name: golemservices/golem-worker-executor
           dockerfile: ./golem-worker-executor/docker/Dockerfile
-          platforms: ${{ env.PLATFORMS }}
-      - uses: ./.github/actions/docker-build-push-service
-        with:
-          image-name: golemservices/golem-debugging-service
-          dockerfile: ./golem-debugging-service/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}
       - uses: ./.github/actions/docker-build-push-service
         with:

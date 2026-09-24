@@ -33,6 +33,7 @@ export default {
   "golem-add-transactions-ts": "Saga-Pattern Transactions (TypeScript)",
   "golem-schedule-agent-ts": "Scheduling a Future Agent Invocation",
   "golem-schedule-future-call-ts": "Scheduling a Future Agent Invocation (TypeScript)",
+  "golem-streaming-agent-ts": "Streaming Agent Methods in TypeScript",
   "golem-trigger-agent-ts": "Triggering a Fire-and-Forget Agent Invocation",
   "golem-add-ignite-ts": "Using Apache Ignite from a TypeScript Agent",
   "golem-add-mysql-ts": "Using MySQL from a TypeScript Agent",

@@ -1,0 +1,4 @@
+{
+  "type": "agent",
+  "description": "An agent demonstrating input, output, nested or sibling, and fallible streams"
+}

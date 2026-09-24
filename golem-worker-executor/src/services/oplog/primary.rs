@@ -45,13 +45,16 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::{
-    AgentId, AgentMetadata, AgentStatusRecord, DurableStreamSessionStatus, OwnedAgentId, ScanCursor,
+    AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, DurableStreamSessionStatus,
+    OwnedAgentId, ScanCursor,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use golem_service_base::storage::blob::{
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace,
+};
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -600,6 +603,7 @@ impl PrimaryOplogService {
                     owned_agent_id.clone(),
                     agent_mode,
                     initial_worker_metadata.created_by,
+                    initial_worker_metadata.fingerprint,
                     self.stream_session_index(),
                     self.fence_observer.clone(),
                 ),
@@ -659,9 +663,8 @@ impl PrimaryOplogService {
             let md5_hash = md5::compute(&data).to_vec();
 
             blob_storage
+                .with("oplog", "upload_payload")
                 .put_raw(
-                    "oplog",
-                    "upload_payload",
                     BlobStorageNamespace::OplogPayload {
                         environment_id: owned_agent_id.environment_id(),
                         agent_id: owned_agent_id.agent_id(),
@@ -690,9 +693,8 @@ impl PrimaryOplogService {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         blob_storage
+                    .with("oplog", "download_payload")
                     .get_raw(
-                        "oplog",
-                        "download_payload",
                         BlobStorageNamespace::OplogPayload {
                             environment_id: owned_agent_id.environment_id(),
                             agent_id: owned_agent_id.agent_id(),
@@ -753,6 +755,7 @@ impl OplogService for PrimaryOplogService {
             owned_agent_id.clone(),
             agent_mode,
             initial_worker_metadata.created_by,
+            initial_worker_metadata.fingerprint,
             None,
             None,
             Box::new(|| {}),
@@ -1246,6 +1249,7 @@ struct CreateOplogConstructor {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     account_id: AccountId,
+    fingerprint: AgentFingerprint,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     shard_epoch: Option<ShardEpoch>,
     epoch_record: EpochRecord,
@@ -1269,6 +1273,7 @@ impl CreateOplogConstructor {
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         account_id: AccountId,
+        fingerprint: AgentFingerprint,
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
         fence_observer: Option<Arc<dyn OplogFenceObserver>>,
     ) -> Self {
@@ -1287,6 +1292,7 @@ impl CreateOplogConstructor {
             owned_agent_id,
             agent_mode,
             account_id,
+            fingerprint,
             stream_session_index,
             fence_observer,
         }
@@ -1362,6 +1368,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.owned_agent_id,
             self.agent_mode,
             self.account_id,
+            self.fingerprint,
             self.stream_session_index,
             self.fence_observer,
             close,
@@ -1408,6 +1415,7 @@ struct PrimaryOplog {
     key: String,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
+    fingerprint: AgentFingerprint,
     /// The epoch the actor's state asserts on every append, copied here so that reading it does
     /// not have to go through the actor. Fixed for the oplog's lifetime.
     shard_epoch: Option<ShardEpoch>,
@@ -1526,6 +1534,7 @@ impl PrimaryOplog {
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         account_id: AccountId,
+        fingerprint: AgentFingerprint,
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
         fence_observer: Option<Arc<dyn OplogFenceObserver>>,
         close: Box<dyn FnOnce() + Send + Sync>,
@@ -1555,6 +1564,7 @@ impl PrimaryOplog {
             owned_agent_id,
             agent_mode,
             account_id,
+            fingerprint,
             account_id_label,
             environment_id_label,
             last_added_non_hint_entry: None,
@@ -1563,6 +1573,7 @@ impl PrimaryOplog {
         };
         let owned_agent_id = state.owned_agent_id.clone();
         let agent_mode = state.agent_mode;
+        let fingerprint = state.fingerprint;
 
         let (jobs, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<OplogJob>();
         let actor = tokio::spawn(async move {
@@ -1848,6 +1859,7 @@ impl PrimaryOplog {
             key,
             owned_agent_id,
             agent_mode,
+            fingerprint,
             shard_epoch,
             fence,
             stream_session_index,
@@ -2022,6 +2034,7 @@ struct PrimaryOplogState {
     last_reported_commit_idx: OplogIndex,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
+    fingerprint: AgentFingerprint,
     account_id: AccountId,
     account_id_label: String,
     environment_id_label: String,
@@ -2073,9 +2086,8 @@ impl PrimaryOplogState {
 
             let upload = async move {
                 blob_storage
+                    .with("oplog", "upload_payload")
                     .put_raw(
-                        "oplog",
-                        "upload_payload",
                         BlobStorageNamespace::OplogPayload {
                             environment_id,
                             agent_id,
@@ -2481,6 +2493,7 @@ impl Oplog for PrimaryOplog {
                 self.stream_session_index.as_ref(),
                 &self.owned_agent_id,
                 self.agent_mode,
+                self.fingerprint,
                 snapshot.committed,
                 &snapshot.buffer,
                 session_key,

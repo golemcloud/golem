@@ -136,6 +136,21 @@
       "$ref": "#/definitions/api.domain.register"
     },
     {
+      "$ref": "#/definitions/api.mcp-import.authorize"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.complete"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.disconnect"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.status"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.tools"
+    },
+    {
       "$ref": "#/definitions/api.security-scheme.create"
     },
     {
@@ -2124,6 +2139,101 @@
       },
       "additionalProperties": false
     },
+    "api.mcp-import.authorize": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem api mcp-import authorize`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import authorize",
+      "required": ["$type", "authorizationUrl", "deploymentRevision", "importIndex"],
+      "properties": {
+        "$type": { "const": "api.mcp-import.authorize" },
+        "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when authorizing the selected manifest declaration before deployment." },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "authorizationUrl": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    },
+    "api.mcp-import.complete": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.complete" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import complete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import complete"
+    },
+    "api.mcp-import.disconnect": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.disconnect" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import disconnect`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import disconnect"
+    },
+    "api.mcp-import.status": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.status" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import status`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import status"
+    },
+    "api.mcp-import.tools": {
+      "type": "object",
+      "description": "Projected metadata for an individual import before native and earlier-import precedence.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import tools",
+      "x-golem-commands": ["api mcp-import tools", "api mcp-import refresh"],
+      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "protocolVersion", "tools", "diagnostics"],
+      "properties": {
+        "$type": { "const": "api.mcp-import.tools" },
+        "environmentId": { "type": "string", "format": "uuid" },
+        "deploymentRevision": { "type": "integer", "minimum": 0 },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "protocolVersion": { "type": "string" },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["upstreamName", "digest", "definition"],
+            "properties": {
+              "upstreamName": { "type": "string" },
+              "digest": { "type": "string" },
+              "definition": { "$ref": "#/definitions/Tool" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["upstreamName", "reason"],
+            "properties": {
+              "upstreamName": { "type": "string" },
+              "reason": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpImportOAuthStatusOutput": {
+      "type": "object",
+      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "securityScheme", "status"],
+      "properties": {
+        "$type": { "enum": ["api.mcp-import.complete", "api.mcp-import.disconnect", "api.mcp-import.status"] },
+        "environmentId": { "type": "string", "format": "uuid" },
+        "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when inspecting or managing the selected manifest declaration before deployment." },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "securityScheme": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "api.deployment.get": {
       "type": "object",
       "description": "Single structured output document emitted by `golem api deployment get`.",
@@ -2139,6 +2249,7 @@
         "agents",
         "webhooksPrefix",
         "openapiEndpointPrefix",
+        "scheme",
         "createdAt"
       ],
       "properties": {
@@ -2172,6 +2283,9 @@
         },
         "openapiEndpointPrefix": {
           "type": "string"
+        },
+        "scheme": {
+          "enum": ["http", "https"]
         },
         "createdAt": {
           "type": "string"
@@ -2312,6 +2426,7 @@
         "agents",
         "webhooksPrefix",
         "openapiEndpointPrefix",
+        "scheme",
         "createdAt"
       ],
       "properties": {
@@ -2342,6 +2457,9 @@
         },
         "openapiEndpointPrefix": {
           "type": "string"
+        },
+        "scheme": {
+          "enum": ["http", "https"]
         },
         "createdAt": {
           "type": "string"
@@ -3690,6 +3808,8 @@
             "version": { "type": "string" },
             "parameters": { "$ref": "#/definitions/JsonValue" },
             "account": { "type": "string" },
+            "secretKeysReadable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+            "secretKeysRevealable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
             "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
           },
           "additionalProperties": false
@@ -4431,12 +4551,32 @@
     },
     "ToolMiddlewareInstallation": {
       "type": "object",
-      "required": ["name", "version", "parameters", "account", "filesystemAccess"],
+      "required": [
+        "name",
+        "version",
+        "parameters",
+        "account",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "filesystemAccess"
+      ],
       "properties": {
         "name": { "type": "string" },
         "version": { "type": ["string", "null"] },
         "parameters": {},
         "account": { "type": ["string", "null"] },
+        "secretKeysReadable": {
+          "oneOf": [
+            { "$ref": "#/definitions/SecretKeyScope" },
+            { "type": "null" }
+          ]
+        },
+        "secretKeysRevealable": {
+          "oneOf": [
+            { "$ref": "#/definitions/SecretKeyScope" },
+            { "type": "null" }
+          ]
+        },
         "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
       },
       "additionalProperties": false
@@ -4729,6 +4869,17 @@
             "agentType": { "type": "string" },
             "methodName": { "type": "string" },
             "ttlNanos": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "importIndex", "upstreamToolName", "reason"],
+          "properties": {
+            "type": { "const": "McpImportDiscovery" },
+            "importIndex": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 },
+            "upstreamToolName": { "type": ["string", "null"] },
+            "reason": { "type": "string" }
           },
           "additionalProperties": false
         }
@@ -5633,6 +5784,7 @@
         "components": { "$ref": "#/definitions/DeploymentDiffSection" },
         "httpApiDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
         "mcpDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "mcpImports": { "$ref": "#/definitions/DeploymentDiffSection" },
         "remoteTools": { "$ref": "#/definitions/DeploymentDiffSection" },
         "publishedTools": { "$ref": "#/definitions/DeploymentSetDiffSection" },
         "remoteToolMiddlewareDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
@@ -5849,8 +6001,9 @@
     },
     "HttpApiDeploymentDiffPayload": {
       "type": "object",
-      "required": ["webhooksUrlChanged", "openapiEndpointChanged"],
+      "required": ["schemeChanged", "webhooksUrlChanged", "openapiEndpointChanged"],
       "properties": {
+        "schemeChanged": { "type": "boolean" },
         "webhooksUrlChanged": { "type": "boolean" },
         "openapiEndpointChanged": { "type": "boolean" },
         "agentsChanges": {
@@ -6083,9 +6236,10 @@
     },
     "AgentType": {
       "type": "object",
-      "required": ["type_name", "description", "source_language", "schema", "constructor", "methods", "dependencies", "mode", "snapshotting", "config"],
+      "required": ["type_name", "kind", "description", "source_language", "schema", "constructor", "methods", "dependencies", "mode", "snapshotting", "config"],
       "properties": {
         "type_name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["regular", "http-router"] },
         "description": { "type": "string" },
         "source_language": { "type": "string" },
         "schema": { "$ref": "#/definitions/SchemaGraph" },
@@ -6233,26 +6387,91 @@
     },
     "HttpMountDetails": {
       "type": "object",
-      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix"],
+      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "openapiProviderMethod"],
       "properties": {
         "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "phantomAgent": { "type": "boolean" },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
-        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } }
+        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "staticBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
+        "filesystemBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
+        "openapiProviderMethod": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },
+    "FileMapping": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "publicPath", "filePath"],
+          "properties": {
+            "type": { "const": "Exact" },
+            "publicPath": { "type": "array", "items": { "type": "string" } },
+            "filePath": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "publicPrefix", "filesystemRoot"],
+          "properties": {
+            "type": { "const": "Subtree" },
+            "publicPrefix": { "type": "array", "items": { "type": "string" } },
+            "filesystemRoot": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "HttpEndpointDetails": {
       "type": "object",
-      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions"],
+      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "durableStreams"],
       "properties": {
         "httpMethod": { "$ref": "#/definitions/HttpMethod" },
         "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "headerVars": { "type": "array", "items": { "$ref": "#/definitions/HeaderVariable" } },
         "queryVars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
-        "corsOptions": { "$ref": "#/definitions/CorsOptions" }
+        "corsOptions": { "$ref": "#/definitions/CorsOptions" },
+        "durableStreams": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteOptions" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamRouteOptions": {
+      "type": "object",
+      "required": ["slots", "allowExternalWrites", "allowStreamDelete", "allowInvocationDelete", "load"],
+      "properties": {
+        "slots": { "type": "array", "items": { "$ref": "#/definitions/DurableStreamSlotOptions" } },
+        "allowExternalWrites": { "type": ["boolean", "null"] },
+        "allowStreamDelete": { "type": ["boolean", "null"] },
+        "allowInvocationDelete": { "type": ["boolean", "null"] },
+        "load": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteLoadOptions" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamSlotOptions": {
+      "type": "object",
+      "required": ["source", "name", "contentType"],
+      "properties": {
+        "source": { "$ref": "#/definitions/DurableStreamSlotSource" },
+        "name": { "type": ["string", "null"] },
+        "contentType": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamSlotSource": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "name"], "properties": { "type": { "const": "input" }, "name": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "name"], "properties": { "type": { "const": "output" }, "name": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "DurableStreamRouteLoadOptions": {
+      "type": "object",
+      "required": ["maxConcurrentReadersPerStream", "maxAppendRequestsPerSecondPerStream"],
+      "properties": {
+        "maxConcurrentReadersPerStream": { "type": ["integer", "null"], "minimum": 0 },
+        "maxAppendRequestsPerSecondPerStream": { "type": ["integer", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6292,7 +6511,8 @@
     "HttpMethod": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["Get", "Head", "Post", "Put", "Delete", "Connect", "Options", "Trace", "Patch"] } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Any" } }, "additionalProperties": false }
       ]
     },
     "ApiPredicateValue": {
@@ -6386,6 +6606,9 @@
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "mcpDeployments": {
+          "$ref": "#/definitions/DeploymentDiffSection"
+        },
+        "mcpImports": {
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "remoteTools": {
@@ -8855,6 +9078,26 @@
     {
       "type": "api.domain.register",
       "rustType": "DomainRegistrationNewView"
+    },
+    {
+      "type": "api.mcp-import.authorize",
+      "rustType": "McpImportAuthorizeView"
+    },
+    {
+      "type": "api.mcp-import.complete",
+      "rustType": "McpImportCompleteView"
+    },
+    {
+      "type": "api.mcp-import.disconnect",
+      "rustType": "McpImportDisconnectView"
+    },
+    {
+      "type": "api.mcp-import.status",
+      "rustType": "McpImportStatusView"
+    },
+    {
+      "type": "api.mcp-import.tools",
+      "rustType": "McpImportToolsView"
     },
     {
       "type": "api.security-scheme.create",

@@ -13,7 +13,8 @@ and guide disagree, the code wins and the guide needs a fix. The scoped `AGENTS.
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong
 model), `streams.md` (durable streams and streaming invocations), `tools.md` (tool invocations
-and entity bodies) and `retries.md` (in-function versus trap-based retries).
+and entity bodies), `retries.md` (in-function versus trap-based retries), and
+`filesystem-inspection.md` (exact-path live reads, shared scheduling and generation-pinned production).
 
 ## Three axioms
 
@@ -90,6 +91,15 @@ wakeup as a persisted scheduler action first (`durable_host/suspendable_wait.rs`
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
 synchronously so a crash/reshard can enumerate workers with pending work
 (`worker/status_flusher.rs`). The status blob cache is an asynchronously flushed baseline only.
+Status, clean-checkpoint, invocation-result-index, and durable-stream-index cache namespaces include
+the current `Create.instance_id` (`AgentFingerprint`). Readers select them only after resolving the
+authoritative `Create` entry, while resident workers carry that fingerprint directly. A delayed
+writer from a deleted incarnation therefore cannot mix fields into its replacement's derived state.
+These namespaces have a renewable expiry and are rebuilt from the oplog after expiry or cache loss;
+metadata compare-and-mutate operations make each multi-field publication atomic. The flat cached
+agent mode only chooses which oplog namespace to probe first and never proves existence or identity.
+`RunningWorkers` entries also include the fingerprint, so shard recovery admits only the recorded
+incarnation and removes only an exact stale member.
 
 Two persistence steps matter for every crash window: **append** puts an entry in the oplog
 buffer; **commit** makes it recoverable (`commit_oplog_and_update_state(CommitLevel)`). The
@@ -253,9 +263,12 @@ would create a cycle. Local readiness does not authorize a merely prepared strea
 reconciler folds only through the committed `last_known_status.oplog_idx`. Once its topology cache
 has no dirty sessions and the producer has no active attachments, it parks on committed stream-state
 notifications instead of polling the oplog; active attachments retain the configured renewal
-deadline, and failed recovery retains periodic retry.
+deadline, and failed recovery retains periodic retry. Each reconciler uses a child of the executor
+shutdown token, so graph shutdown stops new periodic passes. Explicit owner retirement, revert, and
+deletion cancel and join the reconciler's in-flight pass; TTL cache retirement does not itself cancel
+or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
-existing-only acquisition, and reciprocal cold topologies.
+existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, and plugin changes never create an absent agent. Delete
@@ -688,6 +701,13 @@ are built in hidden staged oplogs and published atomically; matching retries tru
 target receipt while that target remains live. Do not model staging by adding provenance to stream
 records.
 
+The primary remains `ExecutionStatus::Running` after the guest returns while owned output
+streams drain and invocation/session completion runs. `materialize_streaming_result`
+(`worker/invocation.rs`) publishes the early result and preserves typed traps during production
+and settlement. Suspension belongs to the outer live invocation or replay boundary, not the
+guest-result boundary; interruption must still reach a producer that no longer writes to its
+stream. Snapshot calls retain their own settled suspension boundary.
+
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.
 
@@ -722,6 +742,35 @@ are *entity bodies*: guest code in its own Wasmtime `Store` with **no oplog or c
 (`durable_host/entity.rs`). They record into the owner's oplog and share its `ReplayState`
 cursor (`OwnerExecution`, `worker/instance.rs`).
 
+- `get_all_tools_model` and `get_tool_model` durably record a
+  `SerializableToolDiscoverySnapshot`: the optional selected deployment revision plus ordered,
+  per-import projected MCP observations, including empty tool lists and exclusions. Live selection
+  chooses the latest deployment containing the running owner's component ID/revision, not the
+  environment current deployment and not a permanent worker pin. Replay exact-rehydrates fixed
+  definitions at the recorded revision (missing is terminal; transient registry failure retries
+  the same revision) and reuses dynamic observations without MCP/OAuth. `None` and a selected
+  revision with no dynamic observations are distinct. Native names, including unbound ones, are
+  reserved before dynamic names; earlier imports win dynamic collisions.
+- Dynamic MCP invocation is wired through a synthetic, filesystem-incapable native activation.
+  Admission freezes the complete projected tool, protocol version, exact deployment/import source,
+  binding and digest in the entity activation. The native body validates that projection, uses the
+  executor's shared MCP transport, and records `tools/call` as `WriteRemote` with the ordinary key
+  derived from its `Start`. Its encoded remote response is committed before result projection,
+  stdout publication, or best-effort 401 feedback; completed replay is therefore offline.
+- Dynamic discovery and admission use the shared middleware compiler with installations,
+  environment/agent bindings and compatibility mode from the exact deployment snapshot.
+  Discovery presents effective metadata without changing the lookup name. Admission pins the
+  chain and unchanged MCP leaf projection in the ordinary entity plan. Incompatible refreshed
+  definitions fail closed without selecting a later colliding import. Authority scopes intersect
+  across environment and agent, then revealable secrets narrow to readable secrets. Explicit
+  bindings, including all-keys bindings, are persisted and hashed; absent dynamic bindings deny
+  config/secret access. Missing required middleware records fail rather than produce an empty chain.
+- A remote `-32602` triggers a separate durable `ReadRemote` presence observation with a forced
+  exact-source refresh. Quota suspension or a crash can repair that read while preserving the
+  committed call (ordinary atomic-region rollback can still roll both back). Present or
+  observation-missing is `InvalidInput`; observed absence is `InvalidToolName`; MCP `isError`
+  becomes a custom tool error. Fixed discovery exact-rehydrates its recorded deployment revision,
+  while dynamic execution uses the source and full projection frozen at admission.
 - `dispatch_tool_call` claims (replay) or creates (live) an `EntityInvocationDurability`, a
   `DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>` in the owner's oplog. Its
   `Start` index is the entity invocation id; body host calls carry `parent_start_index`.

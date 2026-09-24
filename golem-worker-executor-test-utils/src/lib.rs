@@ -99,9 +99,7 @@ use golem_worker_executor::durable_host::{
     DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
     SnapshotBoundaryBlocker,
 };
-use golem_worker_executor::model::{
-    AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
-};
+use golem_worker_executor::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use golem_worker_executor::native_tool::{
     NativeToolAdapter, NativeToolCatalog, NativeToolRegistration,
 };
@@ -680,14 +678,25 @@ impl TestWorkerExecutor {
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        use golem_worker_executor::services::HasOplogService;
+
         let services = self
             .services
             .as_ref()
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let create = services
+            .oplog_service()
+            .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
+            .await
+            .remove(&OplogIndex::INITIAL)
+            .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
+        let OplogEntry::Create { parameters, .. } = create else {
+            return Err(anyhow!("first oplog entry is not create: {owned_agent_id}"));
+        };
         services
             .worker_service()
-            .remove_cached_status(&owned_agent_id)
+            .remove_cached_status(&owned_agent_id, AgentFingerprint(parameters.instance_id))
             .await?;
         Ok(())
     }
@@ -1062,6 +1071,22 @@ impl TestWorkerExecutor {
         self.additional_test_deps
             .active_agents
             .get()?
+            .try_get_active_agent(owned_agent_id)
+            .await
+    }
+
+    pub async fn production_active_agent(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<
+        Arc<
+            golem_worker_executor::services::active_agents::ActiveAgent<
+                golem_worker_executor::workerctx::default::Context,
+            >,
+        >,
+    > {
+        self.production_active_agents
+            .as_ref()?
             .try_get_active_agent(owned_agent_id)
             .await
     }
@@ -1853,6 +1878,8 @@ pub struct TestExecutorOverrides {
     pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     pub environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
+    /// Replaces configured account limits for the `TestWorkerCtx` bootstrap.
+    pub resource_limits: Option<Arc<dyn ResourceLimits>>,
     pub native_tool_metadata: Option<golem_common::schema::tool::Tool>,
     /// Named retry policies that the executor's `EnvironmentStateService`
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
@@ -2273,7 +2300,7 @@ pub fn native_streaming_tool_metadata() -> golem_common::schema::tool::Tool {
         .metadata()
 }
 
-fn native_test_helper_definition(
+pub fn native_test_helper_definition(
     effects: Arc<AtomicUsize>,
 ) -> golem_native_tool::NativeToolDefinition {
     use golem_native_tool::NativeToolInvoker;
@@ -2344,11 +2371,11 @@ impl CallCountManagement for TestWorkerCtx {
     }
 
     fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
-        Ok(()) // test context: monthly limits are always unlimited
+        self.durable_ctx.record_monthly_http_call()
     }
 
     fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
-        Ok(()) // test context: monthly limits are always unlimited
+        self.durable_ctx.record_monthly_rpc_call()
     }
 }
 
@@ -2697,7 +2724,7 @@ impl WorkerCtx for TestWorkerCtx {
             card_service,
             card_interest_index,
             component_service,
-            account_resource_limits,
+            account_resource_limits.clone(),
             config,
             filesystem,
             linear_memory,
@@ -2713,8 +2740,8 @@ impl WorkerCtx for TestWorkerCtx {
             websocket_connection_pool,
             pending_update,
             original_phantom_id,
-            u64::MAX,
-            u64::MAX,
+            account_resource_limits.per_invocation_http_call_limit(),
+            account_resource_limits.per_invocation_rpc_call_limit(),
             runtime,
             entity_execution_mode,
             owner_execution,
@@ -2915,13 +2942,6 @@ impl FileSystemReading for TestWorkerCtx {
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        self.durable_ctx.read_file(path).await
     }
 }
 
@@ -3191,6 +3211,22 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         } else {
             Arc::new(DisabledEnvironmentStateService)
         }
+    }
+
+    fn create_resource_limits(
+        &self,
+        golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> Arc<dyn ResourceLimits> {
+        self.overrides.resource_limits.clone().unwrap_or_else(|| {
+            golem_worker_executor::services::resource_limits::configured(
+                &golem_config.resource_limits,
+                golem_config.resource_usage_metering,
+                registry_service,
+                shutdown_token,
+            )
+        })
     }
 
     fn create_component_service(

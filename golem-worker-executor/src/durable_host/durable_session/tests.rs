@@ -9469,6 +9469,26 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
             .unwrap();
     }
 
+    let drain = StreamSession::new(
+        resumed.producer.clone(),
+        consumer_oplog.clone(),
+        StreamRegistrationInvocation::Local(consumer.invocation.idempotency_key.clone()),
+        [],
+    );
+    let stale_transport = drain.clone().with_attachment(1, start_attempt_id);
+    drain.recover_session_mappings().await.unwrap();
+    assert_eq!(drain.mapping(17), Some(root_mapping.clone()));
+    assert_eq!(drain.mapping(18), Some(nested_mapping.clone()));
+    for mapping in [&root_mapping, &nested_mapping] {
+        assert!(
+            stale_transport
+                .validate_recovered_mapping(mapping)
+                .await
+                .is_err()
+        );
+        drain.validate_recovered_mapping(mapping).await.unwrap();
+    }
+
     let cursors = HashMap::from([
         (root.stream_id, Some(root_written.value[0])),
         (nested.stream_id, Some(nested_written.value[0])),

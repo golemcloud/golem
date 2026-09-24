@@ -32,6 +32,23 @@ pub mod memory;
 pub mod s3;
 pub mod sqlite;
 
+pub const BLOB_STREAM_CHUNK_SIZE: usize = 64 * 1024;
+
+pub struct BlobRangeStream {
+    pub total_size: u64,
+    pub stream: BoxStream<'static, Result<Bytes, Error>>,
+}
+
+fn validate_range(offset: u64, length: u64, total_size: u64) -> Result<(), Error> {
+    if offset
+        .checked_add(length)
+        .is_none_or(|end| end > total_size)
+    {
+        return Err(anyhow!("Blob range outside object"));
+    }
+    Ok(())
+}
+
 #[async_trait]
 pub trait BlobStorage: Debug + Send + Sync {
     async fn get_raw(
@@ -49,6 +66,20 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error>;
+
+    /// Opens a bounded selection without collecting the object. Missing objects return
+    /// None; out-of-bounds selections are errors. Empty selections are allowed, including
+    /// at EOF. Chunks are at most BLOB_STREAM_CHUNK_SIZE bytes; dropping the stream releases
+    /// the reader. The total size describes the opened object, not the selection.
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error>;
 
     async fn get_raw_slice(
         &self,
@@ -185,6 +216,7 @@ pub trait BlobStorage: Debug + Send + Sync {
     }
 }
 
+/// Creates a blob-storage facade that binds the service and API labels once for multiple calls.
 pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized> {
     fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledBlobStorage<'_, S>;
 }
@@ -199,6 +231,7 @@ impl<S: BlobStorage + ?Sized> BlobStorageLabelledApi<S> for S {
     }
 }
 
+/// A blob-storage facade with service and API labels bound to every operation.
 pub struct LabelledBlobStorage<'a, S: BlobStorage + ?Sized> {
     svc_name: &'static str,
     api_name: &'static str,
@@ -221,6 +254,16 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
     ) -> Result<Option<Vec<u8>>, Error> {
         self.storage
             .get_raw(self.svc_name, self.api_name, namespace, path)
+            .await
+    }
+
+    pub async fn get_stream(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        self.storage
+            .get_stream(self.svc_name, self.api_name, namespace, path)
             .await
     }
 
@@ -254,6 +297,17 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
     ) -> Result<(), Error> {
         self.storage
             .put_raw(self.svc_name, self.api_name, namespace, path, data)
+            .await
+    }
+
+    pub async fn put_stream(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<(), Error> {
+        self.storage
+            .put_stream(self.svc_name, self.api_name, namespace, path, stream)
             .await
     }
 

@@ -19,7 +19,7 @@ use super::external_durable_stream::ExternalDurableStreamService;
 use super::file_loader::FileLoader;
 use super::{
     HasAgentWebhooksService, HasEnvironmentStateService, HasExternalDurableStreamService,
-    HasWebSocketConnectionPool,
+    HasMcpTransport, HasWebSocketConnectionPool,
 };
 use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
 use crate::durable_host::websocket::WebSocketConnectionPool;
@@ -961,6 +961,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     external_durable_streams: Arc<dyn ExternalDurableStreamService>,
     http_connection_pool: Option<HttpConnectionPool>,
     websocket_connection_pool: WebSocketConnectionPool,
+    mcp_transport: Arc<super::mcp::McpTransport>,
     extra_deps: Ctx::ExtraDeps,
     leak_sentinel: Arc<()>,
 }
@@ -1003,6 +1004,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             external_durable_streams: self.external_durable_streams.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
+            mcp_transport: self.mcp_transport.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -1217,6 +1219,12 @@ impl<Ctx: WorkerCtx> HasWebSocketConnectionPool for DirectWorkerInvocationRpc<Ct
     }
 }
 
+impl<Ctx: WorkerCtx> HasMcpTransport for DirectWorkerInvocationRpc<Ctx> {
+    fn mcp_transport(&self) -> Arc<super::mcp::McpTransport> {
+        self.mcp_transport.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasEnvironmentStateService for DirectWorkerInvocationRpc<Ctx> {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.environment_state_service.clone()
@@ -1270,6 +1278,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         external_durable_streams: Arc<dyn ExternalDurableStreamService>,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
+        mcp_transport: Arc<super::mcp::McpTransport>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -1309,6 +1318,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             external_durable_streams,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             extra_deps,
             leak_sentinel,
         }

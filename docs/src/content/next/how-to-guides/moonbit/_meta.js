@@ -33,6 +33,7 @@ export default {
   "golem-add-transactions-moonbit": "Saga-Pattern Transactions (MoonBit)",
   "golem-schedule-agent-moonbit": "Scheduling a Future Agent Invocation",
   "golem-schedule-future-call-moonbit": "Scheduling a Future Agent Invocation (MoonBit)",
+  "golem-streaming-agent-moonbit": "Streaming Agent Methods in MoonBit",
   "golem-trigger-agent-moonbit": "Triggering a Fire-and-Forget Agent Invocation",
   "golem-add-ignite-moonbit": "Using Apache Ignite from a MoonBit Agent",
   "golem-add-mysql-moonbit": "Using MySQL from a MoonBit Agent",

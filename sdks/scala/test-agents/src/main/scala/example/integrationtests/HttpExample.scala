@@ -16,7 +16,7 @@
 
 package example.integrationtests
 
-import golem.runtime.annotations.{agentDefinition, id, description, endpoint, header}
+import golem.runtime.annotations.{agentDefinition, id, description, durableStreams, durableStreamSlot, endpoint, header}
 import golem.BaseAgent
 
 import scala.concurrent.Future
@@ -44,6 +44,21 @@ trait WeatherAgent extends BaseAgent {
   @endpoint(method = "POST", path = "/report")
   @description("Submit a weather report with tenant header")
   def submitReport(@header("X-Tenant") tenantId: String, data: String): Future[String]
+
+  @endpoint(method = "POST", path = "/report-stream")
+  @durableStreamSlot(
+    source = "output",
+    slot = "$result",
+    name = "report-events",
+    contentType = "application/vnd.golem.events"
+  )
+  @durableStreams(
+    allowStreamDelete = false,
+    allowInvocationDelete = false,
+    maxConcurrentReadersPerStream = 8
+  )
+  @description("Returns a byte stream using customized durable stream routing")
+  def reportStream(): Future[golem.schema.AgentStream[golem.UByte]]
 
   @endpoint(method = "GET", path = "/greet/{name}/{*filePath}")
   @description("Catch-all path example")

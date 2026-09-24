@@ -70,7 +70,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
+    AgentFingerprint, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    ScheduledAction, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::any::Any;
@@ -253,6 +254,7 @@ enum LifecycleJob<Ctx: WorkerCtx> {
 struct StatusState<Ctx: WorkerCtx> {
     deps: All<Ctx>,
     owned_agent_id: OwnedAgentId,
+    fingerprint: AgentFingerprint,
     agent_mode: AgentMode,
     created_by: AccountId,
     oplog: Arc<dyn Oplog>,
@@ -291,6 +293,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub fn new(
         deps: All<Ctx>,
         owned_agent_id: OwnedAgentId,
+        fingerprint: AgentFingerprint,
         agent_mode: AgentMode,
         created_by: AccountId,
         oplog: Arc<dyn Oplog>,
@@ -305,6 +308,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let state = StatusState {
             deps,
             owned_agent_id: owned_agent_id.clone(),
+            fingerprint,
             agent_mode,
             created_by,
             oplog,
@@ -1014,6 +1018,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             let worker_status = calculate_last_known_status_with_checkpoint(
                 &self.deps,
                 &self.owned_agent_id,
+                self.fingerprint,
                 self.agent_mode,
                 None,
             )

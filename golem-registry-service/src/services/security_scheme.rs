@@ -62,7 +62,7 @@ pub enum SecuritySchemeError {
     InternalError(#[from] anyhow::Error),
 }
 
-fn authorize_security_scheme_permission(
+pub(super) fn authorize_security_scheme_permission(
     auth: &AuthCtx,
     environment: &Environment,
     name: Option<&SecuritySchemeName>,

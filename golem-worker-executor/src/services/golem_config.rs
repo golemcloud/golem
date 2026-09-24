@@ -105,6 +105,7 @@ pub struct GolemConfig {
     pub engine: EngineConfig,
     pub grpc: GrpcApiConfig,
     pub http_client: HttpClientConfig,
+    pub mcp_transport: golem_mcp_import::transport::Limits,
     pub max_websocket_connections: usize,
     pub http_address: String,
     pub http_port: u16,
@@ -348,6 +349,7 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.http_client.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "MCP transport: {:?}", self.mcp_transport);
 
         let _ = writeln!(
             &mut result,
@@ -412,11 +414,21 @@ impl Default for GolemConfig {
             engine: EngineConfig::default(),
             grpc: GrpcApiConfig::default(),
             http_client: HttpClientConfig::default(),
+            mcp_transport: golem_mcp_import::transport::Limits::default(),
             max_websocket_connections: 100,
             http_address: "0.0.0.0".to_string(),
             http_port: 8082,
             runtime_metrics_sampling_interval: Duration::from_secs(5),
         }
+    }
+}
+
+impl GolemConfig {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.mcp_transport.validate().map_err(anyhow::Error::msg)?;
+        self.durable_stream.validate()?;
+        self.invocation_results.validate()?;
+        Ok(())
     }
 }
 
@@ -2681,10 +2693,26 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DurableStreamConfig, InvocationResultsConfig, Limits};
+    use super::{DurableStreamConfig, GolemConfig, InvocationResultsConfig, Limits};
     use golem_common::SafeDisplay;
     use serde_json::Value;
+    use std::time::Duration;
     use test_r::test;
+
+    #[test]
+    fn mcp_transport_config_roundtrips_and_validates() {
+        let mut config = GolemConfig::default();
+        config.mcp_transport.request_bytes = 1234;
+        config.mcp_transport.concurrency = 3;
+        let serialized = serde_json::to_value(&config).unwrap();
+        let decoded: GolemConfig = serde_json::from_value(serialized).unwrap();
+        assert_eq!(decoded.mcp_transport.request_bytes, 1234);
+        assert_eq!(decoded.mcp_transport.concurrency, 3);
+        assert!(decoded.validate().is_ok());
+
+        config.mcp_transport.concurrency = 0;
+        assert!(config.validate().is_err());
+    }
 
     #[test]
     fn durable_stream_config_uses_byte_size() {
@@ -2730,6 +2758,18 @@ mod tests {
         config.bloom_hashes = 1;
         config.physical_index_catch_up_chunk_size = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn mcp_oauth_deadline_leaves_time_for_registry_response() {
+        let timeout = GolemConfig::default()
+            .registry_service
+            .client_config
+            .request_timeout
+            .unwrap();
+        assert!(
+            golem_mcp_import::oauth::Limits::default().timeout + Duration::from_secs(5) < timeout
+        );
     }
 
     #[test]

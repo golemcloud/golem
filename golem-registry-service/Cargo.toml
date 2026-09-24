@@ -22,6 +22,7 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-mcp-import = { workspace = true }
 golem-native-tool = { workspace = true }
 golem-schema = { workspace = true }
 golem-service-base = { workspace = true }
@@ -48,7 +49,9 @@ hyper = { workspace = true }
 indoc = { workspace = true }
 jsonwebtoken = { workspace = true }
 lazy_static = { workspace = true }
+mime = { workspace = true }
 num-traits = { workspace = true }
+oauth2 = { workspace = true }
 openidconnect.workspace = true
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
@@ -104,6 +107,9 @@ uuid = { workspace = true }
 [dev-dependencies]
 assert2 = { workspace = true }
 futures = { workspace = true }
+golem-worker-executor-test-utils = { workspace = true }
+http-body-util = { workspace = true }
+poem = { workspace = true, features = ["rustls"] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }

@@ -887,6 +887,7 @@ mod tests {
     };
     use crate::services::shard::{ShardService, ShardServiceDefault};
     use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
+    use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::scheduler::memory::InMemorySchedulerStorage;
     use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
@@ -1557,6 +1558,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _public_session_id: &str,
         ) -> Result<Option<golem_common::model::DurableStreamPublicBinding>, String> {
             unimplemented!()
@@ -1573,6 +1575,7 @@ mod tests {
             &self,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _status: &AgentStatusRecord,
             _key: &golem_common::model::IdempotencyKey,
         ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, String> {
@@ -1589,6 +1592,8 @@ mod tests {
             &self,
             _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _expected_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
@@ -1597,20 +1602,23 @@ mod tests {
         async fn remove_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
 
-        async fn get_agent_mode(
+        async fn resolve_agent_identity(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Option<AgentMode>, WorkerExecutorError> {
+        ) -> Result<Option<crate::services::worker::ResolvedAgentIdentity>, WorkerExecutorError>
+        {
             Ok(None)
         }
 
         async fn write_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _previous_status: Option<&AgentStatusRecord>,
             status_value: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -1620,6 +1628,7 @@ mod tests {
         async fn read_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _agent_mode: AgentMode,
         ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
             Ok(None)
@@ -1628,6 +1637,7 @@ mod tests {
         async fn write_status_checkpoint(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _previous_checkpoint: Option<&AgentStatusRecord>,
             checkpoint: AgentStatusRecord,
         ) -> Result<AgentStatusRecord, String> {
@@ -1637,7 +1647,16 @@ mod tests {
         async fn set_assignment_tracking(
             &self,
             _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
             _status_value: &AgentStatusRecord,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn remove_assignment_tracking(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _fingerprint: golem_common::model::AgentFingerprint,
         ) -> Result<(), String> {
             Ok(())
         }
@@ -2133,12 +2152,12 @@ mod tests {
     /// loop-lifetime span never closes, so it is never exported and it retains
     /// every event recorded inside it for as long as the process runs.
     #[test]
-    async fn process_records_one_closed_span_per_tick() {
+    async fn process_records_one_closed_span_per_tick(tracing: &Tracing) {
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let promise_service = create_promise_service_mock();
         let svc = create_scheduler(storage, promise_service).await;
 
-        let recorder = crate::span_test_support::record_spans();
+        let recorder = crate::span_test_support::record_spans(tracing);
         svc.process(Utc::now()).await.unwrap();
 
         recorder.assert_closed_span("scheduler_tick");

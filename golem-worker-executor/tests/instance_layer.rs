@@ -28,6 +28,7 @@ use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
+use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::{
     AgentFilePath, AgentFilePermissions, ComponentId, ComponentName, ComponentRevision,
     InitialAgentFile,
@@ -39,6 +40,7 @@ use golem_common::model::entity::{
     OwnedAgentEntityId, ToolMiddlewareName,
 };
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -47,11 +49,11 @@ use golem_common::model::tool::{
     ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId};
-use golem_common::schema::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
+use golem_common::schema::{SchemaGraph, SecretValuePayload};
 use golem_common::{agent_id, data_value, widen_infallible};
-use golem_schema::schema::wit::{decode_value, encode_graph};
+use golem_schema::schema::wit::{SecretResolver, decode_value, decode_value_with, encode_graph};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -59,9 +61,11 @@ use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::DurableWorkerCtxView;
 use golem_worker_executor::preview2::golem::agent::host::Host as AgentHost;
+use golem_worker_executor::preview2::golem::secrets::reveal::Host as SecretRevealHost;
 use golem_worker_executor::preview2::golem_api_1_x::host::Host as GolemApiHost;
 use golem_worker_executor::services::HasComponentService;
 use golem_worker_executor::services::active_agents::ActiveAgent;
+use golem_worker_executor::services::card::{CardService, CardState};
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::worker::EvictionClass;
@@ -73,8 +77,8 @@ use golem_worker_executor::workerctx::{
     EntityInvocationManagement, InvocationManagement, WorkerCtx,
 };
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerCtx,
-    WorkerExecutorTestDependencies, start, start_with_overrides,
+    LastUniqueId, PrecompiledComponent, TestCardService, TestContext, TestExecutorOverrides,
+    TestWorkerCtx, WorkerExecutorTestDependencies, registry_test_card, start, start_with_overrides,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
@@ -142,6 +146,38 @@ impl EnvironmentStateService for FixedSecretsEnvironmentStateService {
         _environment: golem_common::model::environment::EnvironmentId,
     ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError> {
         Ok(Vec::new())
+    }
+}
+
+struct FailingCheckCardService {
+    fail_checks: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl CardService for FailingCheckCardService {
+    async fn record_revoked_cards(&self, card_ids: &[CardId]) {
+        TestCardService.record_revoked_cards(card_ids).await;
+    }
+
+    async fn create_runtime_card(
+        &self,
+        card: StoredCard,
+        provenance: CardManagedByRuntimeDerived,
+    ) -> Result<StoredCard, WorkerExecutorError> {
+        TestCardService.create_runtime_card(card, provenance).await
+    }
+
+    async fn check_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+        if self.fail_checks.load(Ordering::SeqCst) {
+            Err(WorkerExecutorError::runtime(
+                "synthetic card authority failure",
+            ))
+        } else {
+            TestCardService.check_cards(card_ids).await
+        }
     }
 }
 
@@ -386,6 +422,7 @@ fn activation_with_policy(
         EntityActivationPolicy::Tool {
             provision,
             binding: Box::new(binding),
+            mcp_import: None,
         },
         filesystem,
     )
@@ -724,9 +761,43 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let secret_id = AgentSecretId::new();
+    let secret_path = CanonicalAgentSecretPath(vec!["walletSecret".to_string()]);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(Arc::new(FixedSecretsEnvironmentStateService {
+                secrets: HashMap::from([(
+                    secret_path.clone(),
+                    AgentSecret {
+                        id: secret_id,
+                        environment_id: context.default_environment_id,
+                        path: secret_path.clone(),
+                        revision: AgentSecretRevision::INITIAL,
+                        secret_type: SchemaGraph::anonymous(SchemaType::string()),
+                        secret_value: Some(SchemaValue::String("not-observed".to_string())),
+                    },
+                )]),
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .update_agent_provision_config("RpcCounter", |config| {
+            config.initial_permissions.lower_bound.negative.extend([
+                golem_common::model::card::parse_polymorphic_permission(
+                    "config(?agent) @ * : read : foo",
+                )
+                .unwrap(),
+                golem_common::model::card::parse_polymorphic_permission(
+                    "secret(?env) @ * : reveal : walletSecret",
+                )
+                .unwrap(),
+            ]);
+        })
         .store()
         .await?;
     let agent_id = agent_id!("RpcCounter", "config-tail-authorization");
@@ -753,6 +824,14 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
     let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::option(
         SchemaType::s32(),
     )))?;
+    let expected_plaintext = encode_graph(&SchemaGraph::anonymous(SchemaType::string()))?;
+    let secret_snapshot = SecretValuePayload {
+        secret_id: secret_id.0,
+        config_key: Some(vec!["walletSecret".to_string()]),
+        version: AgentSecretRevision::INITIAL.get(),
+        resolved_at: chrono::Utc::now(),
+        category: None,
+    };
     let lane = active_agent.execution().lane();
     let parent_start = active_agent.execution().oplog().current_oplog_index().await;
     let entity_start = parent_start.next();
@@ -773,18 +852,31 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         EntityCallMode::Synchronous,
         {
             let expected = expected.clone();
+            let expected_plaintext = expected_plaintext.clone();
+            let secret_snapshot = secret_snapshot.clone();
             move |_instance, store| {
                 Box::pin(async move {
+                    let ctx = store.data_mut().durable_ctx_mut();
                     let result = AgentHost::get_config_value(
-                        store.data_mut().durable_ctx_mut(),
-                        vec!["unconfigured".to_string()],
+                        ctx,
+                        vec!["foo".to_string()],
                         expected,
                     )
                     .await?;
                     assert!(
-                        result.is_ok(),
-                        "live config read must initially be permitted"
+                        matches!(
+                            result,
+                            Err(golem_worker_executor::preview2::golem::agent::host::ConfigValueError::PermissionDenied)
+                        ),
+                        "the wallet-negative config read must be durably denied"
                     );
+                    let handle = ctx.secret_handle_from_snapshot(&secret_snapshot)?;
+                    let reveal = SecretRevealHost::reveal(ctx, handle, expected_plaintext).await?;
+                    assert!(
+                        reveal.is_err(),
+                        "the wallet-negative secret reveal must be durably denied"
+                    );
+                    GolemApiHost::get_oplog_index(ctx).await?;
                     Ok(())
                 })
             }
@@ -799,12 +891,42 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .await
         .unwrap();
 
+    let live_tip = active_agent.execution().oplog().current_oplog_index().await;
+    let live_entries = active_agent
+        .execution()
+        .oplog()
+        .read_exact(
+            parent_start.next(),
+            u64::from(live_tip) - u64::from(parent_start),
+        )
+        .await;
+    let config_start = live_entries
+        .iter()
+        .find_map(|(index, entry)| match entry {
+            OplogEntry::Start { function_name, .. }
+                if *function_name == HostFunctionName::GolemAgentGetConfigValue =>
+            {
+                Some(*index)
+            }
+            _ => None,
+        })
+        .expect("live config denial must have a Start");
+    let config_end = live_entries
+        .iter()
+        .find_map(|(index, entry)| match entry {
+            OplogEntry::End { start_index, .. } if *start_index == config_start => Some(*index),
+            _ => None,
+        })
+        .expect("live config denial must have an End");
+    let config_repair_expected = expected.clone();
+
     active_agent
         .execution()
         .install_replay_generation(
-            DeletedRegions::from_regions([OplogRegion::from_index_range(
-                OplogIndex::INITIAL.next()..=parent_start,
-            )]),
+            DeletedRegions::from_regions([
+                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start),
+                OplogRegion::from_index_range(config_end..=live_tip),
+            ]),
             None,
         )
         .await?;
@@ -813,15 +935,15 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
     let replay_scope = EntityInvocationScope::new(
         EntityInvocationId::new(
             OwnedAgentEntityId {
-                owner: owner_id,
-                entity,
+                owner: owner_id.clone(),
+                entity: entity.clone(),
             },
             entity_start,
         )
         .unwrap(),
         parent_start,
-        activation,
-        principal,
+        activation.clone(),
+        principal.clone(),
         InvocationExecutionMode::ReplayingIncomplete,
         IdempotencyKey::new("instance-layer-incomplete-replay-scope".to_string()),
         true,
@@ -833,7 +955,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
     let replay = active_agent.start_entity_invocation(
         parent_id.clone(),
         replay_scope,
-        owner_metadata,
+        owner_metadata.clone(),
         EntityCallMode::Synchronous,
         move |_instance, store| {
             Box::pin(async move {
@@ -844,26 +966,279 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
                 )?;
                 let recorded = AgentHost::get_config_value(
                     ctx,
-                    vec!["unconfigured".to_string()],
-                    expected.clone(),
+                    vec!["foo".to_string()],
+                    config_repair_expected,
                 )
                 .await?;
-                let fresh = AgentHost::get_config_value(ctx, vec![], expected).await?;
-                Ok((recorded, fresh))
+                GolemApiHost::get_oplog_index(ctx).await?;
+                Ok(recorded)
             })
         },
         std::future::ready,
     )?;
-    let (recorded, fresh) = replay.await_result(&parent_id).await?;
+    let recorded = replay.await_result(&parent_id).await?;
     drop(replay_primary);
-    assert!(recorded.is_ok(), "the recorded config read must replay");
     assert!(
         matches!(
-            fresh,
+            recorded,
             Err(golem_worker_executor::preview2::golem::agent::host::ConfigValueError::PermissionDenied)
         ),
-        "a fresh config read at the replay tail must reject an invalid permission target: {fresh:?}"
+        "a Start-only repair must rerun authorization instead of defaulting to allowed: {recorded:?}"
     );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn incomplete_tool_reveal_tail_reauthorizes_wallet(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    run_incomplete_tool_reveal_tail_reauthorization(last_unique_id, deps, agent_rpc_rust, false)
+        .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn incomplete_tool_reveal_authority_error_preserves_durable_call_trap(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    run_incomplete_tool_reveal_tail_reauthorization(last_unique_id, deps, agent_rpc_rust, true)
+        .await
+}
+
+async fn run_incomplete_tool_reveal_tail_reauthorization(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_rpc_rust: &PrecompiledComponent,
+    fail_authority_check: bool,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let secret_id = AgentSecretId::new();
+    let secret_path = CanonicalAgentSecretPath(vec!["walletSecret".to_string()]);
+    let fail_checks = Arc::new(AtomicBool::new(false));
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            create_card_service: Some(Arc::new({
+                let fail_checks = fail_checks.clone();
+                move || {
+                    Arc::new(FailingCheckCardService {
+                        fail_checks: fail_checks.clone(),
+                    })
+                }
+            })),
+            environment_state_service: Some(Arc::new(FixedSecretsEnvironmentStateService {
+                secrets: HashMap::from([(
+                    secret_path.clone(),
+                    AgentSecret {
+                        id: secret_id,
+                        environment_id: context.default_environment_id,
+                        path: secret_path,
+                        revision: AgentSecretRevision::INITIAL,
+                        secret_type: SchemaGraph::anonymous(SchemaType::string()),
+                        secret_value: Some(SchemaValue::String("not-observed".to_string())),
+                    },
+                )]),
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .update_agent_provision_config("RpcCounter", |config| {
+            config.initial_permissions.lower_bound.negative.push(
+                golem_common::model::card::parse_polymorphic_permission(
+                    "secret(?env) @ * : reveal : walletSecret",
+                )
+                .unwrap(),
+            );
+        })
+        .store()
+        .await?;
+    let agent_id = agent_id!("RpcCounter", "reveal-tail-authorization");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?;
+
+    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let active_agent = executor.active_agent(&owner_id).await.unwrap();
+    let owner_metadata =
+        owner_component_metadata(&active_agent, component.id, component.revision).await?;
+    let middleware_name = ToolMiddlewareName::try_from("reveal-tail-authorization").unwrap();
+    let entity = AgentEntity::ToolMiddleware(middleware_name.clone());
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: owner_id.agent_id.clone(),
+    });
+    let activation = Arc::new(middleware_activation(
+        ExecutableTarget::new(component.id, component.revision),
+        middleware_name,
+    ));
+    let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::string()))?;
+    let snapshot = SecretValuePayload {
+        secret_id: secret_id.0,
+        config_key: Some(vec!["walletSecret".to_string()]),
+        version: AgentSecretRevision::INITIAL.get(),
+        resolved_at: chrono::Utc::now(),
+        category: None,
+    };
+    let lane = active_agent.execution().lane();
+    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let entity_start = parent_start.next();
+    let parent_id = OwnerInvocationId::Agent(parent_start);
+
+    let primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let live = active_agent.start_entity_invocation(
+        parent_id.clone(),
+        invocation_scope(
+            &owner_id,
+            &entity,
+            entity_start,
+            parent_start,
+            activation.clone(),
+            principal.clone(),
+        ),
+        owner_metadata.clone(),
+        EntityCallMode::Synchronous,
+        {
+            let expected = expected.clone();
+            let snapshot = snapshot.clone();
+            move |_instance, store| {
+                Box::pin(async move {
+                    let ctx = store.data_mut().durable_ctx_mut();
+                    let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
+                    let denied = SecretRevealHost::reveal(ctx, handle, expected).await?;
+                    assert!(denied.is_err(), "wallet-negative reveal must be denied");
+                    GolemApiHost::get_oplog_index(ctx).await?;
+                    Ok(())
+                })
+            }
+        },
+        std::future::ready,
+    )?;
+    live.await_result(&parent_id).await?;
+    drop(primary);
+    active_agent
+        .execution()
+        .commit(CommitLevel::Always)
+        .await
+        .unwrap();
+    let live_tip = active_agent.execution().oplog().current_oplog_index().await;
+    let entries = active_agent
+        .execution()
+        .oplog()
+        .read_exact(
+            parent_start.next(),
+            u64::from(live_tip) - u64::from(parent_start),
+        )
+        .await;
+    let reveal_start = entries
+        .iter()
+        .find_map(|(index, entry)| match entry {
+            OplogEntry::Start { function_name, .. }
+                if *function_name == HostFunctionName::GolemSecretsReveal =>
+            {
+                Some(*index)
+            }
+            _ => None,
+        })
+        .expect("live reveal denial must have a Start");
+    let reveal_end = entries
+        .iter()
+        .find_map(|(index, entry)| match entry {
+            OplogEntry::End { start_index, .. } if *start_index == reveal_start => Some(*index),
+            _ => None,
+        })
+        .expect("live reveal denial must have an End");
+
+    active_agent
+        .execution()
+        .install_replay_generation(
+            DeletedRegions::from_regions([
+                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start),
+                OplogRegion::from_index_range(reveal_end..=live_tip),
+            ]),
+            None,
+        )
+        .await?;
+    if fail_authority_check {
+        executor
+            .queue_card_install(&worker_id, registry_test_card())
+            .await?;
+    }
+    let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let replay_parent_id = parent_id.clone();
+    let replay = active_agent.start_entity_invocation(
+        parent_id.clone(),
+        EntityInvocationScope::new(
+            EntityInvocationId::new(
+                OwnedAgentEntityId {
+                    owner: owner_id,
+                    entity,
+                },
+                entity_start,
+            )
+            .unwrap(),
+            parent_start,
+            activation,
+            principal,
+            InvocationExecutionMode::ReplayingIncomplete,
+            IdempotencyKey::new("instance-layer-incomplete-wallet-reveal".to_string()),
+            true,
+            false,
+            IdempotencyKey::new("instance-layer-incomplete-wallet-reveal-streams".to_string()),
+        )
+        .unwrap(),
+        owner_metadata,
+        EntityCallMode::Synchronous,
+        {
+            let fail_checks = fail_checks.clone();
+            move |_instance, store| {
+                Box::pin(async move {
+                    let ctx = store.data_mut().durable_ctx_mut();
+                    ctx.test_install_entity_tool_operation(
+                        replay_parent_id,
+                        EntityCallMode::Synchronous,
+                    )?;
+                    let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
+                    fail_checks.store(fail_authority_check, Ordering::SeqCst);
+                    let repaired = SecretRevealHost::reveal(ctx, handle, expected).await?;
+                    GolemApiHost::get_oplog_index(ctx).await?;
+                    Ok(repaired)
+                })
+            }
+        },
+        std::future::ready,
+    )?;
+    let replay_result = replay.await_result(&parent_id).await;
+    drop(replay_primary);
+    if fail_authority_check {
+        let error = replay_result.expect_err("authority synchronization failure must escape");
+        let error = format!("{error:?}");
+        assert!(
+            error.contains("synthetic card authority failure"),
+            "the authority failure must remain the recoverable error: {error}"
+        );
+        assert!(
+            !error.contains("unfinished NotCancellable durable call"),
+            "the live durable-call handle must be abandoned through its trap boundary: {error}"
+        );
+    } else {
+        let repaired = replay_result?;
+        assert!(
+            repaired.is_err(),
+            "a Start-only reveal repair must rerun current wallet authorization"
+        );
+    }
     Ok(())
 }
 
@@ -2491,8 +2866,6 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    // A normal owner invocation has no tool restriction and proves that the component's complete
-    // config, including both secrets, is otherwise valid before exercising entity policy.
     executor
         .invoke_and_await_agent(&component, &agent_id, "echo_local_config", data_value!())
         .await?;
@@ -2518,35 +2891,136 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
         SecretKeyScope::Keys(BTreeSet::new()),
         SecretKeyScope::Keys(BTreeSet::new()),
     ));
-    let result = run_synchronous_entity_invocation(
+    let expected_secret = encode_graph(&SchemaGraph::anonymous(SchemaType::secret(
+        Default::default(),
+    )))?;
+    let replay_expected_secret = expected_secret.clone();
+    let before_denial = active_agent.execution().oplog().current_oplog_index().await;
+    run_synchronous_entity_invocation(
         &active_agent,
         owner_metadata.clone(),
         &owner_id,
         &entity,
-        activation,
-        move |instance, store, principal| {
+        activation.clone(),
+        move |_instance, store, _principal| {
             Box::pin(async move {
-                let parsed_agent_id = store
-                    .data()
-                    .parsed_agent_id()
-                    .expect("entity context keeps the owner routing identity");
-                initialize_entity(instance, store, &parsed_agent_id, principal.clone()).await?;
-                invoke_entity_method(
-                    instance,
-                    store,
-                    &parsed_agent_id,
-                    principal,
-                    "echo_local_config",
-                    data_value!().value().clone(),
+                let ctx = store.data_mut().durable_ctx_mut();
+                let denied = AgentHost::get_config_value(
+                    ctx,
+                    vec!["secret".to_string()],
+                    expected_secret,
                 )
-                .await
+                .await?;
+                assert!(matches!(
+                    denied,
+                    Err(golem_worker_executor::preview2::golem::agent::host::ConfigValueError::PermissionDenied)
+                ));
+                GolemApiHost::get_oplog_index(ctx).await?;
+                Ok(())
             })
         },
     )
-    .await;
+    .await?;
+    let after_denial = active_agent.execution().oplog().current_oplog_index().await;
+    let denial_entries = active_agent
+        .execution()
+        .oplog()
+        .read_exact(
+            before_denial.next(),
+            u64::from(after_denial) - u64::from(before_denial),
+        )
+        .await;
+    let config_start = denial_entries
+        .iter()
+        .find_map(|(index, entry)| match entry {
+            OplogEntry::Start { function_name, .. }
+                if *function_name == HostFunctionName::GolemAgentGetConfigValue =>
+            {
+                Some(*index)
+            }
+            _ => None,
+        })
+        .expect("an unreadable secret config denial must have a durable Start");
     assert!(
-        result.is_err(),
-        "an entity with an empty readable-secret scope must not receive the owner's secret handles"
+        denial_entries.values().any(
+            |entry| matches!(entry, OplogEntry::End { start_index, .. } if *start_index == config_start)
+        ),
+        "an unreadable secret config denial must be a completed durable call"
+    );
+    let config_entity_start = denial_entries
+        .values()
+        .find_map(|entry| match entry {
+            OplogEntry::Start {
+                function_name,
+                parent_start_index,
+                ..
+            } if *function_name == HostFunctionName::GolemAgentGetConfigValue => {
+                *parent_start_index
+            }
+            _ => None,
+        })
+        .expect("the config denial must belong to the entity invocation");
+
+    // A completed denial remains authoritative even when the occurrence now permits the key.
+    // Completed replay must not consult current occurrence or wallet authority.
+    let permissive_activation = Arc::new(activation_with_secret_policy(
+        ExecutableTarget::new(component.id, component.revision),
+        "test:restricted-secret-tool",
+        agent_id.agent_type.clone(),
+        tool_name.clone(),
+        context.account_id,
+        SecretKeyScope::All,
+        SecretKeyScope::All,
+    ));
+    active_agent
+        .execution()
+        .install_replay_generation(
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=before_denial,
+            )]),
+            None,
+        )
+        .await?;
+    let config_parent_id = OwnerInvocationId::Agent(before_denial);
+    let lane = active_agent.execution().lane();
+    let replay_primary = lane.enter_primary(before_denial)?.acquire().await?;
+    let replay = active_agent.start_entity_invocation(
+        config_parent_id.clone(),
+        replay_invocation_scope(
+            &owner_id,
+            &entity,
+            config_entity_start,
+            before_denial,
+            permissive_activation,
+            Principal::Agent(AgentPrincipal {
+                agent_id: owner_id.agent_id.clone(),
+            }),
+        ),
+        owner_metadata.clone(),
+        EntityCallMode::Synchronous,
+        move |_instance, store| {
+            Box::pin(async move {
+                let ctx = store.data_mut().durable_ctx_mut();
+                let recorded = AgentHost::get_config_value(
+                    ctx,
+                    vec!["secret".to_string()],
+                    replay_expected_secret,
+                )
+                .await?;
+                GolemApiHost::get_oplog_index(ctx).await?;
+                Ok(recorded)
+            })
+        },
+        std::future::ready,
+    )?;
+    let recorded = replay.await_result(&config_parent_id).await?;
+    drop(replay_primary);
+    assert!(
+        matches!(
+            recorded,
+            Err(golem_worker_executor::preview2::golem::agent::host::ConfigValueError::PermissionDenied)
+        ),
+        "completed config denial must replay without consulting a newly permissive policy: {recorded:?}"
     );
 
     // Reading and revealing are separate permissions. This activation may resolve both owner
@@ -2566,39 +3040,234 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
     ));
     let config_loaded = Arc::new(AtomicBool::new(false));
     let config_loaded_in_call = config_loaded.clone();
+    let expected_secret = encode_graph(&SchemaGraph::anonymous(SchemaType::secret(
+        Default::default(),
+    )))?;
+    let expected_plaintext = encode_graph(&SchemaGraph::anonymous(SchemaType::string()))?;
+    let replay_expected_secret = expected_secret.clone();
+    let replay_expected_plaintext = expected_plaintext.clone();
+    let completed_replay_expected_secret = expected_secret.clone();
+    let completed_replay_expected_plaintext = expected_plaintext.clone();
+    let before_reveal_denial = active_agent.execution().oplog().current_oplog_index().await;
     let reveal_result = run_synchronous_entity_invocation(
         &active_agent,
         owner_metadata.clone(),
         &owner_id,
         &entity,
-        reveal_activation,
-        move |instance, store, principal| {
+        reveal_activation.clone(),
+        move |_instance, store, _principal| {
             Box::pin(async move {
-                let parsed_agent_id = store
-                    .data()
-                    .parsed_agent_id()
-                    .expect("entity context keeps the owner routing identity");
-                initialize_entity(instance, store, &parsed_agent_id, principal.clone()).await?;
+                let ctx = store.data_mut().durable_ctx_mut();
+                let encoded =
+                    AgentHost::get_config_value(ctx, vec!["secret".to_string()], expected_secret)
+                        .await?
+                        .map_err(|error| WorkerExecutorError::runtime(format!("{error:?}")))?;
+                let decoded = decode_value_with(encoded, ctx)
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                let SchemaValue::Secret(snapshot) = decoded else {
+                    return Err(WorkerExecutorError::runtime(
+                        "secret config did not produce an opaque handle",
+                    ));
+                };
+                let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
                 config_loaded_in_call.store(true, Ordering::SeqCst);
-                invoke_entity_method(
-                    instance,
-                    store,
-                    &parsed_agent_id,
-                    principal,
-                    "echo_local_config",
-                    data_value!().value().clone(),
-                )
-                .await
+                let denied = SecretRevealHost::reveal(ctx, handle, expected_plaintext).await?;
+                assert!(denied.is_err(), "empty reveal scope must deny plaintext");
+                GolemApiHost::get_oplog_index(ctx).await?;
+                Ok(())
             })
         },
     )
     .await;
-    let reveal_error =
-        reveal_result.expect_err("an empty revealable-secret scope must reject secret reveal");
+    reveal_result?;
     assert!(
         config_loaded.load(Ordering::SeqCst),
-        "readable secret handles must load successfully before reveal policy rejects them: {reveal_error}"
+        "readable secret handles must load successfully before reveal policy rejects them"
     );
+    let after_reveal_denial = active_agent.execution().oplog().current_oplog_index().await;
+    let reveal_entries = active_agent
+        .execution()
+        .oplog()
+        .read_exact(
+            before_reveal_denial.next(),
+            u64::from(after_reveal_denial) - u64::from(before_reveal_denial),
+        )
+        .await;
+    let reveal_start = reveal_entries
+        .iter()
+        .find_map(|(index, entry)| match entry {
+            OplogEntry::Start { function_name, .. }
+                if *function_name == HostFunctionName::GolemSecretsReveal =>
+            {
+                Some(*index)
+            }
+            _ => None,
+        })
+        .expect("a secret reveal policy denial must have a durable Start");
+    let entity_start = reveal_entries
+        .iter()
+        .find_map(|(_index, entry)| match entry {
+            OplogEntry::Start {
+                function_name,
+                parent_start_index,
+                ..
+            } if *function_name == HostFunctionName::GolemAgentGetConfigValue => {
+                *parent_start_index
+            }
+            _ => None,
+        })
+        .expect("the secret config call must belong to the entity invocation");
+    let reveal_end = reveal_entries
+        .iter()
+        .find_map(|(index, entry)| match entry {
+            OplogEntry::End { start_index, .. } if *start_index == reveal_start => Some(*index),
+            _ => None,
+        })
+        .expect("a secret reveal policy denial must have a durable End");
+
+    // The recorded denial also remains authoritative when this occurrence is changed to permit
+    // reveal. Replaying the completed result must not ask current policy or wallet authority.
+    let permissive_activation = Arc::new(activation_with_secret_policy(
+        ExecutableTarget::new(component.id, component.revision),
+        "test:restricted-secret-tool",
+        agent_id.agent_type.clone(),
+        ToolName::try_from("restricted-secret-tool").unwrap(),
+        context.account_id,
+        SecretKeyScope::All,
+        SecretKeyScope::All,
+    ));
+    active_agent
+        .execution()
+        .install_replay_generation(
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=before_reveal_denial,
+            )]),
+            None,
+        )
+        .await?;
+    let parent_id = OwnerInvocationId::Agent(before_reveal_denial);
+    let lane = active_agent.execution().lane();
+    let replay_primary = lane.enter_primary(before_reveal_denial)?.acquire().await?;
+    let replay = active_agent.start_entity_invocation(
+        parent_id.clone(),
+        replay_invocation_scope(
+            &owner_id,
+            &entity,
+            entity_start,
+            before_reveal_denial,
+            permissive_activation.clone(),
+            Principal::Agent(AgentPrincipal {
+                agent_id: owner_id.agent_id.clone(),
+            }),
+        ),
+        owner_metadata.clone(),
+        EntityCallMode::Synchronous,
+        move |_instance, store| {
+            Box::pin(async move {
+                let ctx = store.data_mut().durable_ctx_mut();
+                let encoded = AgentHost::get_config_value(
+                    ctx,
+                    vec!["secret".to_string()],
+                    completed_replay_expected_secret,
+                )
+                .await?
+                .map_err(|error| WorkerExecutorError::runtime(format!("{error:?}")))?;
+                let decoded = decode_value_with(encoded, ctx)
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                let SchemaValue::Secret(snapshot) = decoded else {
+                    return Err(WorkerExecutorError::runtime(
+                        "replayed secret config did not produce an opaque handle",
+                    ));
+                };
+                let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
+                let recorded =
+                    SecretRevealHost::reveal(ctx, handle, completed_replay_expected_plaintext)
+                        .await?;
+                GolemApiHost::get_oplog_index(ctx).await?;
+                Ok(recorded)
+            })
+        },
+        std::future::ready,
+    )?;
+    let recorded = replay.await_result(&parent_id).await?;
+    drop(replay_primary);
+    assert!(
+        recorded.is_err(),
+        "completed reveal denial must replay without consulting a newly permissive policy"
+    );
+    active_agent
+        .execution()
+        .install_replay_generation(
+            DeletedRegions::from_regions([
+                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=before_reveal_denial),
+                OplogRegion::from_index_range(reveal_end..=after_reveal_denial),
+            ]),
+            None,
+        )
+        .await?;
+    let replay_primary = lane.enter_primary(before_reveal_denial)?.acquire().await?;
+    let replay_scope = EntityInvocationScope::new(
+        EntityInvocationId::new(
+            OwnedAgentEntityId {
+                owner: owner_id.clone(),
+                entity: entity.clone(),
+            },
+            entity_start,
+        )
+        .unwrap(),
+        before_reveal_denial,
+        reveal_activation,
+        Principal::Agent(AgentPrincipal {
+            agent_id: owner_id.agent_id.clone(),
+        }),
+        InvocationExecutionMode::ReplayingIncomplete,
+        IdempotencyKey::new("instance-layer-secret-reveal-repair".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-secret-reveal-repair-streams".to_string()),
+    )
+    .unwrap();
+    let replay_parent_id = parent_id.clone();
+    let replay = active_agent.start_entity_invocation(
+        parent_id.clone(),
+        replay_scope,
+        owner_metadata,
+        EntityCallMode::Synchronous,
+        move |_instance, store| {
+            Box::pin(async move {
+                let ctx = store.data_mut().durable_ctx_mut();
+                ctx.test_install_entity_tool_operation(
+                    replay_parent_id,
+                    EntityCallMode::Synchronous,
+                )?;
+                let encoded = AgentHost::get_config_value(
+                    ctx,
+                    vec!["secret".to_string()],
+                    replay_expected_secret,
+                )
+                .await?
+                .map_err(|error| WorkerExecutorError::runtime(format!("{error:?}")))?;
+                let decoded = decode_value_with(encoded, ctx)
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                let SchemaValue::Secret(snapshot) = decoded else {
+                    return Err(WorkerExecutorError::runtime(
+                        "replayed secret config did not produce an opaque handle",
+                    ));
+                };
+                let handle = ctx.secret_handle_from_snapshot(&snapshot)?;
+                let repaired =
+                    SecretRevealHost::reveal(ctx, handle, replay_expected_plaintext).await?;
+                GolemApiHost::get_oplog_index(ctx).await?;
+                Ok(repaired.is_err())
+            })
+        },
+        std::future::ready,
+    )?;
+    assert!(
+        replay.await_result(&parent_id).await?,
+        "a Start-only reveal repair must rerun occurrence and wallet authorization"
+    );
+    drop(replay_primary);
     Ok(())
 }
 

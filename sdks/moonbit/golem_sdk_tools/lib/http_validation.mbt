@@ -32,6 +32,7 @@ pub fn validate_http_routes(
   for agent in agents {
     let mount_segments = match agent.http_mount {
       Some(mount) => {
+        validate_http_router(agent, mount)
         let segments = parse_path_only(mount.path) catch {
           HttpPathParseError(msg) =>
             raise AgentParseError(
@@ -94,6 +95,9 @@ pub fn validate_http_routes(
       // Rule 5: Methods with endpoint require agent mount
       match meth.http_endpoint {
         Some(endpoint) => {
+          if endpoint.http_method is Any && !agent.is_http_router() {
+            http_fail("M01: HTTP handlers require #derive.http_router")
+          }
           if mount_segments is None {
             raise AgentParseError(
               "Method '\{meth.name}' has #derive.endpoint but agent '\{agent.name}' has no #derive.mount",
