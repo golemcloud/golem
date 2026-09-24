@@ -278,14 +278,11 @@ jobs:
           cp target/dev-release-ci/golem target/dev-release-ci/golem-cli tmp/golem-cli-test-binaries/
           find tmp/golem-cli-test-binaries -type f | sort
         timeout-minutes: 2
-      - name: Upload CLI test binaries
-        uses: actions/upload-artifact@v6
+      - name: Save CLI test binaries to cache
+        uses: actions/cache/save@v5
         with:
           path: tmp/golem-cli-test-binaries
-          name: golem-cli-test-binaries
-          if-no-files-found: error
-          overwrite: true
-          retention-days: 1
+          key: golem-cli-test-binaries-${{ github.run_id }}
 
   it:
     env:
@@ -491,11 +488,12 @@ jobs:
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
 
-      - name: Download CLI test binaries
-        uses: actions/download-artifact@v8
+      - name: Restore CLI test binaries
+        uses: actions/cache/restore@v5
         with:
           path: tmp/golem-cli-test-binaries
-          name: golem-cli-test-binaries
+          key: golem-cli-test-binaries-${{ github.run_id }}
+          fail-on-cache-miss: true
       - name: Install CLI test binaries
         run: |
           mkdir -pv target/dev-release-ci
@@ -1077,11 +1075,12 @@ jobs:
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-make: 'false'
           install-cargo-binstall: 'true'
-      - name: Download CLI test binaries
-        uses: actions/download-artifact@v8
+      - name: Restore CLI test binaries
+        uses: actions/cache/restore@v5
         with:
           path: tmp/golem-cli-test-binaries
-          name: golem-cli-test-binaries
+          key: golem-cli-test-binaries-${{ github.run_id }}
+          fail-on-cache-miss: true
       - name: Install golem-cli
         run: chmod +x tmp/golem-cli-test-binaries/golem-cli
 
