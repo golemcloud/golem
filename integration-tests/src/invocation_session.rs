@@ -190,6 +190,20 @@ impl SessionCheckpoint {
                             && accepted.idempotency_key == previous.idempotency_key,
                         "reattachment changed session identity"
                     );
+                    ensure!(
+                        accepted
+                            .terminal_cursor_stream_ids
+                            .iter()
+                            .copied()
+                            .map(stream_id)
+                            .collect::<BTreeSet<_>>()
+                            == self
+                                .outputs
+                                .iter()
+                                .filter_map(|(id, output)| output.terminal.is_some().then_some(*id))
+                                .collect(),
+                        "acceptance terminal cursors differ from observed terminals"
+                    );
                 }
                 self.remember_mappings(&accepted.stream_mappings)?;
                 self.acceptance = Some(accepted.clone());
@@ -351,13 +365,6 @@ impl InvocationSession {
         state
             .validate_trusted_request(&request)
             .map_err(anyhow::Error::msg)?;
-        for (id, output) in &checkpoint.outputs {
-            if output.terminal.is_some() {
-                state
-                    .mark_terminal_resume_cursor(*id)
-                    .map_err(anyhow::Error::msg)?;
-            }
-        }
         let worker_service = deps.worker_service();
         let mut client = tokio::time::timeout_at(
             deadline,

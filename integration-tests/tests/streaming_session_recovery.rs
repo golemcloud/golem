@@ -176,9 +176,10 @@ mod tests {
             let report = session.checkpoint();
             let ready = report.result.is_some()
                 && (topology != Topology::Nested
-                    || roots(report)?
-                        .iter()
-                        .all(|root| !report.outputs[root].items.is_empty()));
+                    || roots(report)?.iter().all(|root| {
+                        !report.outputs[root].items.is_empty()
+                            && report.outputs[root].terminal.is_some()
+                    }));
             if ready {
                 let ids = leaves(report, topology)?;
                 ensure!(ids.len() == expected.len(), "unexpected output topology");
