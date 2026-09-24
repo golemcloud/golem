@@ -59,6 +59,29 @@ pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Outp
     ENTITY_CANCELLATION_MASKED.scope((), future).await
 }
 
+/// Appends one `Jump` per `deleted_region` while a durable context recovers from an incomplete
+/// recorded attempt (batched-write scope, remote transaction or atomic region) by re-executing it
+/// live, and makes the Jumps effective in the shared replay cursor before the caller finishes the
+/// replay-to-live switch. Future replays skip the abandoned attempt, and any `Start` of that
+/// attempt the cursor still retains is dropped so the live re-execution neither claims it nor is
+/// blamed for leaving it unconsumed. Worker status is recomputed because the folded deleted
+/// regions changed.
+pub(crate) async fn commit_replay_jumps<Ctx: WorkerCtx>(
+    worker: &Worker<Ctx>,
+    replay_state: &ReplayState,
+    entity_parent_start_index: Option<OplogIndex>,
+    deleted_regions: Vec<OplogRegion>,
+) -> Result<(), WorkerExecutorError> {
+    for region in &deleted_regions {
+        worker
+            .add_and_commit_oplog(OplogEntry::jump(entity_parent_start_index, region.clone()))
+            .await;
+    }
+    replay_state.register_replay_jump(deleted_regions).await?;
+    worker.reattach_worker_status().await;
+    Ok(())
+}
+
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
@@ -3178,17 +3201,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
                                 end: pending.replay_target().next(), // skipping the Jump entry too
                             };
-
-                            self.public_state
-                                .worker()
-                                .add_and_commit_oplog(OplogEntry::jump(
-                                    self.entity_parent_start_index(),
-                                    deleted_region,
-                                ))
-                                .await;
-
-                            // TODO: this recomputation should not be necessary.
-                            self.public_state.worker().reattach_worker_status().await;
+                            commit_replay_jumps(
+                                &self.public_state.worker(),
+                                &self.state.replay_state,
+                                self.entity_parent_start_index(),
+                                vec![deleted_region],
+                            )
+                            .await?;
 
                             self.finish_switch_to_live(pending).await?.require_live()?;
                             // Switched to live and re-running the body: the scope `End` will be
@@ -3649,17 +3668,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         start: begin_index,
                         end: pending.replay_target().next(), // skipping the Jump entry too
                     };
-
-                    self.public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(
-                            self.entity_parent_start_index(),
-                            deleted_region,
-                        ))
-                        .await;
-
-                    // TODO: this recomputation should not be necessary.
-                    self.public_state.worker().reattach_worker_status().await;
+                    commit_replay_jumps(
+                        &self.public_state.worker(),
+                        &self.state.replay_state,
+                        self.entity_parent_start_index(),
+                        vec![deleted_region],
+                    )
+                    .await?;
 
                     self.finish_switch_to_live(pending).await?.require_live()?;
 

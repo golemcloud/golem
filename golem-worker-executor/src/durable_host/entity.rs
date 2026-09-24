@@ -18,13 +18,13 @@
 //! an entity record here, launch the returned invocation scope through `ActiveAgent`, then hand the
 //! body handle back to [`EntityInvocationDurability::drive_access`].
 
-use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DurableCallSession, HistoricalReconstruction, LeaveIncompleteOnDrop,
     ReconstructionReplayOutcome, ReplayAccessStartOutcome,
 };
 use crate::durable_host::durable_session::strip_typed_streams;
 use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::{DurableWorkerCtx, commit_replay_jumps};
 use crate::services::HasWorker;
 use crate::services::oplog::OplogOps;
 use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationResources};
@@ -516,16 +516,8 @@ impl EntityInvocationDurability {
                 if !regions.is_empty() {
                     let worker =
                         store.with(|mut access| get_ctx(access.data_mut()).public_state.worker());
-                    for region in &regions {
-                        worker
-                            .add_and_commit_oplog(OplogEntry::jump(
-                                Some(handle.start_index()),
-                                region.clone(),
-                            ))
-                            .await;
-                    }
-                    replay.register_entity_atomic_rollback(regions).await?;
-                    worker.reattach_worker_status().await;
+                    commit_replay_jumps(&worker, &replay, Some(handle.start_index()), regions)
+                        .await?;
                 }
                 InvocationExecutionMode::ReplayingIncomplete
             }

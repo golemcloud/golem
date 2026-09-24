@@ -4522,6 +4522,200 @@ async fn shrinking_replay_target_prunes_hidden_retained_starts() {
 }
 
 #[test]
+async fn retained_start_publishes_the_non_hint_position_only_when_claimed() {
+    // [NoOp, Start(E=2), Start(B=3 ← 2), End(B=3→4)] — after E is claimed the drain retains the
+    // body's unscoped call B together with its End. Physically the cursor is at 4, but the body
+    // has not consumed B yet: its `begin_function` must still observe 2, the oplog tip the live
+    // run saw before appending Start(B), so that a key derived from that position is stable
+    // across the restart. Claiming B publishes the withheld position.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        owned_start_now(2),
+        end_for(3, 43),
+    ])
+    .await;
+    let entity = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(entity.start_idx(), OplogIndex::from_u64(2));
+    assert_eq!(rs.last_replayed_non_hint_index(), OplogIndex::from_u64(2));
+
+    rs.drain_awaited_terminals().await.unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        let retained = internal
+            .retained_starts
+            .get(&OplogIndex::from_u64(3))
+            .expect("Start(B) retained");
+        assert_eq!(
+            retained.terminal.as_ref().map(|(idx, _)| *idx),
+            Some(OplogIndex::from_u64(4))
+        );
+    }
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+    assert_eq!(
+        rs.last_replayed_non_hint_index(),
+        OplogIndex::from_u64(2),
+        "a retained Start and its attached End must not publish the non-hint position"
+    );
+
+    let body_call = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_call.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(
+        rs.last_replayed_non_hint_index(),
+        OplogIndex::from_u64(4),
+        "claiming the retained Start publishes it together with its attached End"
+    );
+    match rs.await_resolution(body_call).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected B to complete, got {other:?}"),
+    }
+    let _ = entity;
+}
+
+#[test]
+async fn retained_incomplete_start_publishes_its_own_index_when_claimed() {
+    // [NoOp, Start(E=2), Start(B=3 ← 2)] — the incomplete tail variant: retaining B keeps the
+    // position at 2; the owner's claim publishes 3 and then finds the call incomplete.
+    let rs = replay_state_over(vec![noop(), start_now(), owned_start_now(2)]).await;
+    let entity = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.drain_awaited_terminals().await.unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+    assert_eq!(rs.last_replayed_non_hint_index(), OplogIndex::from_u64(2));
+
+    let body_call = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_call.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(rs.last_replayed_non_hint_index(), OplogIndex::from_u64(3));
+    assert!(matches!(
+        rs.await_resolution_outcome(body_call).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+    let _ = entity;
+}
+
+#[test]
+async fn replay_jump_prunes_retained_starts_of_the_abandoned_attempt() {
+    // [NoOp, Start(E=2), Start(A=3 ← 2), End(A=3→4), Start(scope=5 ← 2), Start(C=6 ← 5)] — the
+    // entity body E replays its direct call A, and the drain after End(A) retains the incomplete
+    // batched scope 5 and its child 6. The body then re-issues the scope, adopts retained 5,
+    // finds it incomplete and recovers by switching live and appending a Jump over 6..=7 (the
+    // Jump's own index). Registering that Jump must drop retained 6: it belongs to the abandoned
+    // first attempt and no live re-execution may claim it or be blamed for leaving it behind.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        owned_start_now(2),
+        end_for(3, 42),
+        nested_batched_scope_start(2),
+        batched_child_start(5),
+    ])
+    .await;
+    let entity = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(entity.start_idx(), OplogIndex::from_u64(2));
+    let direct = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(direct.start_idx(), OplogIndex::from_u64(3));
+    match rs.await_resolution(direct).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    rs.drain_awaited_terminals().await.unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        assert!(
+            internal
+                .retained_starts
+                .contains_key(&OplogIndex::from_u64(5))
+        );
+        assert!(
+            internal
+                .retained_starts
+                .contains_key(&OplogIndex::from_u64(6))
+        );
+    }
+
+    let scope_name = HostFunctionName::Custom("<scope:batched-write:req>".to_string());
+    let (scope_idx, scope_handle) = rs
+        .claim_scope_start(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            Some(OplogIndex::from_u64(2)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scope_idx, OplogIndex::from_u64(5));
+    assert!(matches!(
+        rs.await_resolution_outcome(scope_handle).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+
+    rs.switch_cursor_to_live().await.unwrap();
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "switching live alone keeps the abandoned child retained"
+    );
+    rs.register_replay_jump(vec![OplogRegion::from_range(6..=7)])
+        .await
+        .unwrap();
+
+    assert!(
+        rs.is_in_skipped_region(OplogIndex::from_u64(6))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !rs.has_unclaimed_retained_starts(),
+        "the child of the abandoned attempt must not force later calls onto the claim path"
+    );
+    assert_eq!(
+        rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None,
+        "the body must not be blamed for a descendant hidden by its own recovery Jump"
+    );
+    let _ = entity;
+}
+
+#[test]
 async fn drain_parks_on_positional_marker() {
     // [NoOp, Start(A=2), BeginAtomicRegion(3), End(A=2→4)] — draining parks on the scope marker a
     // positional reader owns; A resolves once that marker has been consumed.
@@ -5470,7 +5664,7 @@ async fn entity_atomic_rollback_skips_newly_deleted_cursor_head() {
                 OplogIndex::from_u64(2)
             );
         }
-        rs.register_entity_atomic_rollback(vec![OplogRegion::from_range(2..=3)])
+        rs.register_replay_jump(vec![OplogRegion::from_range(2..=3)])
             .await
             .unwrap();
         assert_eq!(
@@ -5531,7 +5725,7 @@ async fn entity_atomic_rollback_recovers_descendants_after_partial_jump_commit()
             .all(|region| !region.contains(OplogIndex::from_u64(9)))
     );
     assert_eq!(regions, vec![OplogRegion::from_range(6..=8)]);
-    rs.register_entity_atomic_rollback(regions).await.unwrap();
+    rs.register_replay_jump(regions).await.unwrap();
     assert!(
         rs.entity_atomic_rollback_regions(OplogIndex::from_u64(2))
             .await
@@ -5567,7 +5761,7 @@ async fn entity_atomic_rollback_masks_pre_begin_completions_before_claiming() {
                 5..=6
             })]
         );
-        rs.register_entity_atomic_rollback(regions).await.unwrap();
+        rs.register_replay_jump(regions).await.unwrap();
         let _entity = rs
             .claim_start_or_replay_end(StartClaim::unowned(
                 &HostFunctionName::MonotonicClockNow,
@@ -5634,7 +5828,7 @@ async fn entity_atomic_rollback_deleted_claim_waits_for_retained_begin() {
     let regions = rs
         .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
         .await;
-    rs.register_entity_atomic_rollback(regions).await.unwrap();
+    rs.register_replay_jump(regions).await.unwrap();
     let _entity = rs
         .claim_start_or_replay_end(StartClaim::unowned(
             &HostFunctionName::MonotonicClockNow,
@@ -5685,7 +5879,7 @@ async fn entity_atomic_rollback_deleted_claim_uses_latest_matching_start() {
         noop(),
     ])
     .await;
-    rs.register_entity_atomic_rollback(vec![
+    rs.register_replay_jump(vec![
         OplogRegion::from_range(3..=3),
         OplogRegion::from_range(5..=5),
     ])
@@ -6679,6 +6873,22 @@ fn batched_scope_start() -> OplogEntry {
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
     }
+}
+
+/// A discriminated batched-write scope `Start` recorded by an entity body at `parent`.
+fn nested_batched_scope_start(parent: u64) -> OplogEntry {
+    let mut entry = batched_scope_start();
+    let OplogEntry::Start {
+        parent_start_index,
+        function_name,
+        ..
+    } = &mut entry
+    else {
+        unreachable!();
+    };
+    *parent_start_index = Some(OplogIndex::from_u64(parent));
+    *function_name = HostFunctionName::Custom("<scope:batched-write:req>".to_string());
+    entry
 }
 
 /// A batched-write scope `End` exactly as `end_function` records it: response-less,

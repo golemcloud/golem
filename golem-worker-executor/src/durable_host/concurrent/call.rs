@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
-use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
+use crate::durable_host::{ActiveAtomicRegion, commit_replay_jumps, register_atomic_region_call};
 use crate::workerctx::ReplayAdmissionStage;
 use golem_common::model::entity::{
     AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
@@ -2466,19 +2466,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             start: begin_index.next(),
                             end: pending.replay_target().next(),
                         };
-                        prepared
-                            .public_state
-                            .worker()
-                            .add_and_commit_oplog(OplogEntry::jump(
-                                prepared.entity_parent_start_index,
-                                deleted_region,
-                            ))
-                            .await;
-                        prepared
-                            .public_state
-                            .worker()
-                            .reattach_worker_status()
-                            .await;
+                        commit_replay_jumps(
+                            &prepared.public_state.worker(),
+                            &prepared.replay_state,
+                            prepared.entity_parent_start_index,
+                            vec![deleted_region],
+                        )
+                        .await
+                        .map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                         finish_prepared_access_to_live(
                             pending,
                             prepared.primary_runtime,

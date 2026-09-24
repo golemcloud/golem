@@ -23,6 +23,7 @@ use crate::durable_host::suspendable_wait::{
 };
 use crate::durable_host::{
     ActiveAtomicRegion, BeginReplayToLive, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
+    commit_replay_jumps,
 };
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
@@ -844,14 +845,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             start: begin_index.next(), // need to keep the BeginAtomicRegion entry
                             end: pending.replay_target().next(), // skipping the Jump entry too
                         };
-
-                        self.public_state
-                            .worker()
-                            .add_and_commit_oplog(OplogEntry::jump(None, deleted_region))
-                            .await;
-
-                        // TODO: this recomputation should not be necessary.
-                        self.public_state.worker().reattach_worker_status().await;
+                        commit_replay_jumps(
+                            &self.public_state.worker(),
+                            &self.state.replay_state,
+                            None,
+                            vec![deleted_region],
+                        )
+                        .await?;
 
                         self.finish_switch_to_live(pending).await?.require_live()?;
                     }

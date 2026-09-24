@@ -225,7 +225,17 @@ impl CursorTx<'_> {
             })
             .collect();
         for idx in adopted {
-            self.st.retained_starts.remove(&idx);
+            let retained = self
+                .st
+                .retained_starts
+                .remove(&idx)
+                .expect("adopted retained Starts are taken from the retained map");
+            // Adoption consumes the record on the root's behalf, so it publishes the position the
+            // cursor withheld while the Start was retained, like an in-position consumption would.
+            self.publish_claimed_position(
+                idx,
+                retained.terminal.map(|(terminal_idx, _)| terminal_idx),
+            );
         }
         self.publish_retained_count();
         self.st.custom_subtrees.insert(root, members);
@@ -369,6 +379,13 @@ impl CursorTx<'_> {
                 .remove(&idx)
                 .expect("retained Start candidates are taken from the retained map");
             self.publish_retained_count();
+            self.publish_claimed_position(
+                idx,
+                retained
+                    .terminal
+                    .as_ref()
+                    .map(|(terminal_idx, _)| *terminal_idx),
+            );
             let handle = match retained.terminal {
                 Some((terminal_idx, terminal)) => {
                     let receiver = self.st.concurrent_resolver.register(idx);
@@ -699,8 +716,9 @@ impl CursorTx<'_> {
             if self.attach_retained_terminal(read_idx, &entry)? {
                 // The `End`/`Cancelled` of a retained, still-unclaimed `Start`: keep it with the
                 // `Start` for the owner's later claim and keep draining. Like an awaited terminal
-                // it is never handed to a positional reader.
-                self.commit_consumed_entry(read_idx, &entry).await?;
+                // it is never handed to a positional reader; like the retained `Start` it does
+                // not publish the non-hint position before the claim.
+                self.commit_retained_entry(read_idx, &entry).await?;
                 continue;
             }
 
@@ -735,9 +753,10 @@ impl CursorTx<'_> {
                 // A durable-call `Start` this reader is not entitled to: neither its own entry
                 // (ownership is validated at claim time) nor something to park on (its owner may
                 // still need the Store this reader holds). Commit past it and retain it for the
-                // owner's claim; the terminal that closes it is attached above when reached.
+                // owner's claim; the terminal that closes it is attached above when reached. The
+                // non-hint position stays where the owner will observe it at its `begin_function`.
                 self.retain_start(read_idx, entry.clone());
-                self.commit_consumed_entry(read_idx, &entry).await?;
+                self.commit_retained_entry(read_idx, &entry).await?;
                 continue;
             } else {
                 // Predicate failed: the speculative read published nothing, so the cursor,
@@ -845,6 +864,39 @@ impl CursorTx<'_> {
         read_idx: OplogIndex,
         entry: &OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
+        self.commit_entry(read_idx, entry, true).await
+    }
+
+    /// Commits a retained `Start` the reader is not entitled to, or the terminal attached to
+    /// such a `Start`. The cursor moves past it physically, but the non-hint position is not
+    /// published: the owner has not consumed it yet, and publishing it here would let the owner's
+    /// `begin_function` observe a position the live run never saw before its own `Start`. The
+    /// position is published when the owner claims the `Start` (`publish_claimed_position`).
+    async fn commit_retained_entry(
+        &mut self,
+        read_idx: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
+        self.commit_entry(read_idx, entry, false).await
+    }
+
+    /// Publishes the non-hint position of a retained `Start` (and its attached terminal, if any)
+    /// on claim. The position is monotonic: a claim never moves it backwards past entries that
+    /// were consumed in position since the `Start` was retained.
+    fn publish_claimed_position(&self, start_idx: OplogIndex, terminal_idx: Option<OplogIndex>) {
+        let claimed = terminal_idx.map_or(start_idx, |terminal_idx| terminal_idx.max(start_idx));
+        let position = &self.cursor.position.last_replayed_non_hint_index;
+        if claimed > position.get() {
+            position.set(claimed);
+        }
+    }
+
+    async fn commit_entry(
+        &mut self,
+        read_idx: OplogIndex,
+        entry: &OplogEntry,
+        publish_non_hint_position: bool,
+    ) -> Result<(), WorkerExecutorError> {
         // Apply the fallible commit-only side effects *before* publishing the cursor advance, so a
         // failure (e.g. a corrupt `GolemApiFork` payload) cannot leave the cursor advanced while
         // resolver routing / progress signalling below never run — a partial-publish on the error
@@ -860,7 +912,7 @@ impl CursorTx<'_> {
         } else {
             self.skip_forward().await?;
         }
-        if !entry.is_hint() {
+        if publish_non_hint_position && !entry.is_hint() {
             self.cursor
                 .position
                 .last_replayed_non_hint_index
@@ -2675,9 +2727,12 @@ impl ReplayState {
         regions
     }
 
-    /// Makes entity-local rollback Jumps effective, skipping a deleted cursor head while retaining
-    /// surviving sibling history and its resolver awaiters.
-    pub(crate) async fn register_entity_atomic_rollback(
+    /// Makes Jumps appended during replay effective in the shared cursor. Positional readers skip
+    /// the deleted regions (a deleted cursor head is skipped immediately), retained `Start`s
+    /// inside them are dropped because they belong to the abandoned attempt the Jump hides, and
+    /// surviving sibling history keeps its resolver awaiters. Callers append the Jump entry and
+    /// then register its regions here; the cursor may already be live.
+    pub(crate) async fn register_replay_jump(
         &self,
         regions: Vec<OplogRegion>,
     ) -> Result<(), WorkerExecutorError> {

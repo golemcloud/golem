@@ -364,7 +364,11 @@ impl CompletionMarker {
 struct PublishedPosition {
     /// The oplog index of the last replayed entry.
     last_replayed_index: AtomicOplogIndex,
-    /// The oplog index of the last non-hint entry read.
+    /// The oplog index of the last non-hint entry the replaying guest has logically consumed. A
+    /// retained, still-unclaimed `Start` (and the terminal attached to it) is physically behind
+    /// the cursor but not published here until its owner claims it: a durable call that derives
+    /// its position from this index (`begin_function` without a scope) must observe the same value
+    /// the live run observed as the oplog tip before its own `Start` was appended.
     last_replayed_non_hint_index: AtomicOplogIndex,
     /// Fast-path flag for [`ReplayState::seen_log`]: whether any log hint was recorded since the
     /// last non-hint entry, so the common "no logs" case avoids locking.
