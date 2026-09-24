@@ -105,10 +105,16 @@ impl DurableStreamsHandler {
             suffix.slot = Some(slot.canonical_name.clone());
         }
         let allow = allowed_methods(&suffix, policy);
-        if !allow
+        let method_allowed = allow
             .iter()
-            .any(|method| request.underlying.method().as_str() == *method)
-        {
+            .any(|method| request.underlying.method().as_str() == *method);
+        let inspect_tombstone = request.underlying.method() == Method::POST
+            && suffix
+                .slot
+                .as_deref()
+                .and_then(|slot| policy.slot_by_canonical_name(slot))
+                .is_some_and(|slot| !slot.writable());
+        if !method_allowed && !inspect_tombstone {
             return Ok(method_not_allowed(&allow));
         }
         let expiry_policy = if matches!(request.underlying.method(), &Method::PUT | &Method::POST) {
