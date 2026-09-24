@@ -18,16 +18,16 @@ export interface ConcreteCodec {
   write(value: unknown, writer: WireWriter): number;
 }
 
-interface TypedCodec {
+export interface TypedCodec {
   codec: ConcreteCodec;
   graph: TypedSchemaValue['graph'];
 }
 
-interface CompiledCommand {
+export interface CompiledCommand {
   path: string[];
   aliases: string[][];
   nested: boolean;
-  input: ConcreteCodec;
+  input: TypedCodec;
   result?: TypedCodec;
   errors: Record<string, TypedCodec | undefined>;
   stdin?: { required: boolean };
@@ -376,7 +376,7 @@ export const ToolRegistry = {
         },
       },
       prepareWire(input: TypedSchemaValue) {
-        const args = readConcrete(command.input, input.value);
+        const args = readConcrete(command.input.codec, input.value);
         return {
           invoke: (context: unknown) => command.handler.call(command.receiver, args, context),
         };

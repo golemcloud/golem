@@ -95,6 +95,36 @@ function instantiate(code, overrides = {}) {
 }
 
 describe('static component exports', () => {
+  it('executes compiler-emitted ordinary tool clients without retaining model validation', async () => {
+    const output = await build('compiled-tool-client');
+    const retained = Object.entries(output.modules)
+      .filter(([, info]) => info.renderedLength > 0)
+      .map(([id]) => id);
+    for (const module of [
+      '/schema-model/model.',
+      '/schema-model/builder.',
+      '/schema-model/validation.',
+      '/internal/tool/model.',
+      '/internal/tool/validation.',
+    ])
+      expect(retained.some((id) => id.includes(module))).toBe(false);
+    expect(output.unminified).not.toContain('CanonicalInputModel');
+
+    await instantiate(output.code);
+    const client = globalThis.__golemCompiledToolClient;
+    delete globalThis.__golemCompiledToolClient;
+    expect(await client.asymmetric({ input: { count: 7, labels: [null, 'right'] } })).toEqual({
+      label: 'left',
+      values: [2, 9],
+    });
+    await expect(client.asymmetric({ input: { count: 1, labels: [] } })).rejects.toMatchObject({
+      name: 'ToolCallError',
+    });
+    await expect(client.fail({})).rejects.toMatchObject({
+      cause: { tag: 'tool', error: { name: 'broken', payload: { code: 41 } } },
+    });
+  }, 30000);
+
   it('shares one compiled agent definition between dispatch and clients, including typed stream items', async () => {
     const output = await build('compiled-agent');
     const retained = Object.entries(output.modules)

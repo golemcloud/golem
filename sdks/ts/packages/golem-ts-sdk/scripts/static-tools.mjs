@@ -449,7 +449,7 @@ export function staticTools(config, runtime) {
     return name;
   }
 
-  function emitDefinition(builder) {
+  function emitDefinition(builder, clientOptions) {
     const tool = metadata().tool.getExtendedToolDefinition(builder);
     const descriptor = metadata().encode(tool);
     const declarations = [];
@@ -457,9 +457,10 @@ export function staticTools(config, runtime) {
     const visit = (node, commandPath, aliases) => {
       if (node.body) {
         const fields = tool.canonicalInputFields(node);
+        const inputGraph = tool.canonicalInputModel(node).codec.graph;
         const input = codecSource(
           {
-            graph: tool.canonicalInputModel(node).codec.graph,
+            graph: inputGraph,
             fields: fields.map((f) => ({
               name: f.name.replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase()),
               codec: f.codec,
@@ -472,7 +473,7 @@ export function staticTools(config, runtime) {
             ? `{codec:${codecSource(codec, declarations)},graph:${literal(metadata().graph(codec.graph))}}`
             : 'undefined';
         commands.push(
-          `{path:${literal(commandPath)},aliases:${literal(aliases)},nested:${node.subcommands.length > 0},input:${input},result:${typed(node.body.result?.codec)},errors:{${node.body.errors.map((e) => `${literal(e.name)}:${typed(e.payloadCodec)}`).join(',')}},stdin:${literal(node.body.stdin)},stdout:${literal(node.body.stdout)}}`,
+          `{path:${literal(commandPath)},aliases:${literal(aliases)},nested:${node.subcommands.length > 0},input:{codec:${input},graph:${literal(metadata().graph(inputGraph))}},result:${typed(node.body.result?.codec)},errors:{${node.body.errors.map((e) => `${literal(e.name)}:${typed(e.payloadCodec)}`).join(',')}},stdin:${literal(node.body.stdin)},stdout:${literal(node.body.stdout)}}`,
         );
       }
       for (const child of node.subcommands)
@@ -483,7 +484,7 @@ export function staticTools(config, runtime) {
         );
     };
     visit(tool.root, [], [[]]);
-    return `(()=>{${declarations.join('\n')}return __compiledTool(${literal(tool.toolName)},${literal(descriptor)},[${commands.join(',')}])})()`;
+    return `(()=>{${declarations.join('\n')}return ${clientOptions === undefined ? `__compiledTool(${literal(tool.toolName)},${literal(descriptor)},[${commands.join(',')}])` : `__compiledToolClient(${literal(tool.toolName)},[${commands.join(',')}],${clientOptions})`}})()`;
   }
 
   function emitAgent(definition) {
@@ -535,6 +536,20 @@ export function staticTools(config, runtime) {
       const visit = (node) => {
         if (ts.isCallExpression(node)) {
           const declaration = checker.getResolvedSignature(node)?.declaration;
+          if (
+            declaration?.name?.text === 'client' &&
+            declaration.getSourceFile().fileName.endsWith('/dist/index.d.mts')
+          ) {
+            edits.push([
+              node.getStart(source),
+              node.end,
+              emitDefinition(
+                evaluate(node.arguments[0]),
+                node.arguments[1]?.getText(source) ?? '{}',
+              ),
+            ]);
+            return;
+          }
           if (
             declaration?.name?.text === 'defineAgent' &&
             declaration.getSourceFile().fileName.endsWith('/dist/index.d.mts')
@@ -592,7 +607,7 @@ export function staticTools(config, runtime) {
       for (const [start, end, replacement] of edits.sort((a, b) => b[0] - a[0]))
         code = code.slice(0, start) + replacement + code.slice(end);
       return {
-        code: `import { compiledTool as __compiledTool } from ${literal(path.join(runtime, 'internal/tool/compiled.mjs'))};\nimport { compiledAgent as __compiledAgent, concretePrincipal as __concretePrincipal } from ${literal(path.join(runtime, 'internal/compiledAgent.mjs'))};\n${code}`,
+        code: `import { compiledTool as __compiledTool } from ${literal(path.join(runtime, 'internal/tool/compiled.mjs'))};\nimport { compiledToolClient as __compiledToolClient } from ${literal(path.join(runtime, 'toolClient.mjs'))};\nimport { compiledAgent as __compiledAgent, concretePrincipal as __concretePrincipal } from ${literal(path.join(runtime, 'internal/compiledAgent.mjs'))};\n${code}`,
         map: null,
       };
     },
