@@ -443,14 +443,14 @@ impl RustBridgeGenerator {
                     let __config_graph: crate::__golem_bridge_runtime::schema::SchemaGraph =
                         serde_json::from_str(#config_graph_json)
                             .map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to load config schema: {__e}") })?;
+                    let __config_json = golem_client::invocation_session::encode_generated_streamless_value(
+                        &__config_graph,
+                        &__config_value,
+                    ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode public config value: {__e}") })?;
                     session_config.push(golem_common::model::invocation_session_public::PublicConfigEntry {
                         path: vec![#(#path_segments),*],
-                        value: golem_client::invocation_session::encode_generated_streamless_value(
-                            &__config_graph,
-                            &__config_value,
-                        ).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to encode public config value: {__e}") })?,
+                        value: __config_json.clone(),
                     });
-                    let __config_json = serde_json::to_value(&__config_value).map_err(|__e| crate::__golem_bridge_runtime::ClientError::InvocationFailed { message: format!("Failed to serialize config value: {__e}") })?;
                     agent_config.push(golem_client::model::AgentConfigEntryDto {
                         path: vec![#(#path_segments),*],
                         value: __config_json.into(),

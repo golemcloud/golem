@@ -305,6 +305,48 @@ fn static_and_instance_agent_methods_can_share_names() {
 }
 
 #[test]
+fn external_rest_config_uses_schema_guided_public_json() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "ConfigAgent",
+        "typescript",
+        vec![],
+        vec![],
+        vec![],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(vec!["limits", "maximum"], SchemaType::u64())];
+    let package_dir = target.join("config-agent-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::ExternalRest,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("config-agent-client.ts")).unwrap();
+    let config_lines = source
+        .lines()
+        .filter(|line| line.contains(".push({ path: [\"limits\",\"maximum\"]"))
+        .collect::<Vec<_>>();
+    assert!(!config_lines.is_empty(), "missing generated config entry");
+    for line in config_lines {
+        assert!(
+            line.contains(".toString()"),
+            "config is not public JSON: {line}"
+        );
+        assert!(
+            !line.contains("kind:"),
+            "config is tagged schema JSON: {line}"
+        );
+    }
+}
+
+#[test]
 fn guest_agent_runtime_import_alias_does_not_collide_with_agent_class() {
     let dir = TempDir::new().unwrap();
     generate_and_compile_with_mode(
@@ -1047,6 +1089,8 @@ fn external_streaming_generation_compiles_recursive_streams() {
     .unwrap();
     assert!(source.contains("createStreamingRemoteMethod"));
     assert!(source.contains("AgentStream<base.AgentBinary>"));
+    assert!(source.contains("toString('base64url')"));
+    assert!(source.contains("'base64url'"));
     assert!(source.contains("AgentStream<number>"));
     assert!(source.contains(": bigint;"));
     assert!(source.contains("amount: base.QuantityValue"));
@@ -1057,6 +1101,19 @@ fn external_streaming_generation_compiles_recursive_streams() {
     assert!(source.contains("\"stable\""));
     assert!(source.contains("config: this.publicConfig"));
     assert!(source.contains("path: [\"limits\",\"maximum\"]"));
+    for line in source
+        .lines()
+        .filter(|line| line.contains(".push({ path: [\"limits\",\"maximum\"]"))
+    {
+        assert!(
+            line.contains(".toString()"),
+            "config is not public JSON: {line}"
+        );
+        assert!(
+            !line.contains("kind:"),
+            "config is tagged schema JSON: {line}"
+        );
+    }
     assert!(source.contains("val: 9007199254740993n"));
     assert!(source.contains("val: 18446744073709551615n"));
     assert!(!source.contains("triggerExchange"));

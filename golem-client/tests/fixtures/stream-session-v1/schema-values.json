@@ -15,7 +15,7 @@
     {"canonical":"\"λ\"","name":"char","schema":{"kind":"char"}},
     {"canonical":"\"Golem\"","name":"string","schema":{"kind":"string"}},
     {"canonical":"{\"language\":\"en-GB\",\"text\":\"hello\"}","name":"text","schema":{"kind":"text"}},
-    {"canonical":"{\"bytes\":\"+/8=\",\"mimeType\":\"application/octet-stream\"}","name":"binary-padded-standard-base64","schema":{"kind":"binary","maxBytes":16,"mimeTypes":["application/octet-stream"]}},
+    {"canonical":"{\"bytes\":\"-_8\",\"mimeType\":\"application/octet-stream\"}","name":"binary-unpadded-base64url","schema":{"kind":"binary","maxBytes":16,"mimeTypes":["application/octet-stream"]}},
     {"canonical":"\"/tmp/input.wav\"","name":"path","schema":{"kind":"path"}},
     {"canonical":"\"https://example.com/a\"","name":"url","schema":{"kind":"url"}},
     {"canonical":"\"2026-08-28T12:34:56.123456789Z\"","name":"datetime","schema":{"kind":"datetime"}},

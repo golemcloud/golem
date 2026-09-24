@@ -1644,21 +1644,20 @@ impl TypeScriptBridgeGenerator {
         }
         for (config, param_name) in local_configs.iter().zip(&names.config_parameters) {
             let path = serde_json::to_string(&config.path)?;
-            let encoded_value = self.encode_schema_value(param_name, &config.value_type)?;
+            let public_value = self.encode_public_value_with_stream(
+                param_name,
+                &config.value_type,
+                "((_value: any) => { throw new Error('configuration streams are unsupported'); })",
+            )?;
+            let public_value =
+                self.validate_public_value(&public_value, &config.value_type, "none");
             writer.write_line(format!("if ({param_name} !== undefined) {{"));
             writer.indent();
             writer.write_line(format!(
-                "{}.push({{ path: {path}, value: {encoded_value} }});",
+                "{}.push({{ path: {path}, value: {public_value} }});",
                 names.agent_config
             ));
             if self.has_external_streams() {
-                let public_value = self.encode_public_value_with_stream(
-                    param_name,
-                    &config.value_type,
-                    "((_value: any) => { throw new Error('configuration streams are unsupported'); })",
-                )?;
-                let public_value =
-                    self.validate_public_value(&public_value, &config.value_type, "none");
                 writer.write_line(format!(
                     "{}.push({{ path: {path}, value: {public_value} }});",
                     names.public_config
@@ -2013,7 +2012,7 @@ impl TypeScriptBridgeGenerator {
                 )
             }
             SchemaType::Binary { .. } => format!(
-                "({{ bytes: Buffer.from(({value}).bytes).toString('base64'), ...(({value}).mimeType !== undefined ? {{ mimeType: ({value}).mimeType }} : {{}}) }})"
+                "({{ bytes: Buffer.from(({value}).bytes).toString('base64url'), ...(({value}).mimeType !== undefined ? {{ mimeType: ({value}).mimeType }} : {{}}) }})"
             ),
             SchemaType::Text { .. } => value.to_string(),
             SchemaType::Map {
@@ -2163,7 +2162,7 @@ impl TypeScriptBridgeGenerator {
                 self.decode_public_value(&format!("({value} as any).value"), inner)?
             ),
             SchemaType::Binary { .. } => format!(
-                "({{ bytes: Uint8Array.from(Buffer.from(({value} as any).bytes, 'base64')), mimeType: ({value} as any).mimeType }})"
+                "({{ bytes: Uint8Array.from(Buffer.from(({value} as any).bytes, 'base64url')), mimeType: ({value} as any).mimeType }})"
             ),
             SchemaType::Duration { .. } => format!("BigInt(({value} as any).nanoseconds)"),
             SchemaType::Quantity { .. } => format!(
