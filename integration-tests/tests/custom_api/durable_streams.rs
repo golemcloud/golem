@@ -451,9 +451,8 @@ async fn customized_json_routes_apply_aliases_policy_and_route_local_load_limits
         paths["/durable-stream-agents/{id}/custom-echo/invocations/{session}/streams/input"]
             .is_null()
     );
-    let input_path = &paths[format!(
-        "/durable-stream-agents/{{id}}/custom-echo/invocations/{{session}}/streams/messages"
-    )];
+    let input_path =
+        &paths["/durable-stream-agents/{id}/custom-echo/invocations/{session}/streams/messages"];
     assert!(input_path["post"].is_object());
     assert!(input_path["delete"].is_null());
     assert!(input_path["get"]["responses"]["429"].is_object());
