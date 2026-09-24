@@ -13,7 +13,7 @@ autotests = false
 
 [features]
 test-utils = []
-fs-snapshot-benchmark = ["dep:clap", "dep:rayon"]
+fs-snapshot-benchmark = ["dep:clap"]
 
 [lib]
 path = "src/lib.rs"
@@ -96,7 +96,7 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
-rayon = { workspace = true, optional = true }
+rayon = { workspace = true }
 regex = { workspace = true }
 ringbuf = { workspace = true }
 rustic_core = { workspace = true }
@@ -169,7 +169,6 @@ goldenfile = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }
 proptest = { workspace = true }
 rand = { workspace = true }
-rayon = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
 test-r = { workspace = true }

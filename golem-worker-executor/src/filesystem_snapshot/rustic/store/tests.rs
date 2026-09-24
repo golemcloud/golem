@@ -1416,3 +1416,175 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
         "{deleted:?}"
     );
 }
+
+/// The operation label, the path and the nice value of the calling thread of each storage call.
+#[cfg(target_os = "linux")]
+type NiceCalls = Arc<std::sync::Mutex<Vec<(String, String, i32)>>>;
+
+/// A storage that records the nice value of the thread of each call.
+#[cfg(target_os = "linux")]
+fn nice_recording_storage() -> (Arc<ScriptedBlobStorage>, NiceCalls) {
+    let calls = NiceCalls::default();
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let calls = calls.clone();
+        move |op_label, path| {
+            calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((
+                    op_label.to_string(),
+                    path.display().to_string(),
+                    super::super::priority::own_nice(),
+                ));
+            Script::Pass
+        }
+    });
+    (storage, calls)
+}
+
+/// Takes the recorded calls with the operation label.
+#[cfg(target_os = "linux")]
+fn taken_calls(calls: &NiceCalls, op_label: &str) -> Vec<(String, i32)> {
+    std::mem::take(
+        &mut *calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+    .into_iter()
+    .filter(|(op, _, _)| op == op_label)
+    .map(|(_, path, nice)| (path, nice))
+    .collect()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn the_writes_of_a_save_run_at_nice_19() {
+    let (storage, calls) = nice_recording_storage();
+    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let scope = new_scope();
+    let tree = fixture_tree();
+
+    store.save(&scope, &name("p-1"), tree.path()).await.unwrap();
+    let writes = taken_calls(&calls, "write");
+
+    assert_eq!(
+        (
+            writes.is_empty(),
+            writes
+                .iter()
+                .filter(|(_, nice)| *nice != 19)
+                .collect::<Vec<_>>()
+        ),
+        (false, Vec::<&(String, i32)>::new())
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn the_writes_of_a_prune_run_at_nice_19() {
+    let (storage, calls) = nice_recording_storage();
+    let store = store(storage, policy(LONG_DEADLINE, 1, Duration::ZERO));
+    let scope = new_scope();
+    let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
+    store
+        .save(&scope, &name("p-deleted"), deleted_tree.path())
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-kept"), kept_tree.path())
+        .await
+        .unwrap();
+    taken_calls(&calls, "write");
+
+    store.delete(&scope, &name("p-deleted")).await.unwrap();
+    let writes = taken_calls(&calls, "write");
+
+    assert_eq!(
+        (
+            writes.is_empty(),
+            writes
+                .iter()
+                .filter(|(_, nice)| *nice != 19)
+                .collect::<Vec<_>>()
+        ),
+        (false, Vec::<&(String, i32)>::new())
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
+    let process_nice = super::super::priority::own_nice();
+    let (storage, calls) = nice_recording_storage();
+    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let scope = new_scope();
+    let tree = fixture_tree();
+    store.save(&scope, &name("p-1"), tree.path()).await.unwrap();
+    std::mem::take(&mut *calls.lock().unwrap());
+
+    let restored = restored_listing(&store, &scope, &name("p-1")).await;
+    let recorded = std::mem::take(&mut *calls.lock().unwrap());
+
+    assert_eq!(
+        (
+            restored.ok(),
+            recorded.is_empty(),
+            recorded
+                .iter()
+                .filter(|(_, _, nice)| *nice != process_nice)
+                .collect::<Vec<_>>()
+        ),
+        (
+            Some(listing(tree.path())),
+            false,
+            Vec::<&(String, String, i32)>::new()
+        )
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
+    // All tasks wait for each other, so each runs on its own thread of the blocking pool, and the
+    // idle threads that ran the saves and the prune are among them.
+    const TASKS: usize = 16;
+    let process_nice = super::super::priority::own_nice();
+    let store = store(
+        Arc::new(InMemoryBlobStorage::new()),
+        policy(LONG_DEADLINE, 1, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
+    store
+        .save(&scope, &name("p-deleted"), deleted_tree.path())
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-kept"), kept_tree.path())
+        .await
+        .unwrap();
+    store.delete(&scope, &name("p-deleted")).await.unwrap();
+
+    let barrier = Arc::new(std::sync::Barrier::new(TASKS));
+    let blocking = futures::future::join_all((0..TASKS).map(|_| {
+        let barrier = barrier.clone();
+        tokio::task::spawn_blocking(move || {
+            barrier.wait();
+            super::super::priority::own_nice()
+        })
+    }))
+    .await
+    .into_iter()
+    .map(Result::unwrap)
+    .collect::<Vec<_>>();
+    let rayon = rayon::broadcast(|_| super::super::priority::own_nice());
+
+    assert_eq!(
+        (
+            blocking.iter().all(|nice| *nice == process_nice),
+            rayon.iter().all(|nice| *nice == process_nice),
+        ),
+        (true, true),
+        "{blocking:?} {rayon:?}"
+    );
+}

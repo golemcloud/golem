@@ -23,6 +23,7 @@
 use super::backend::BlobBackend;
 use super::fault::{Operation, classify, is_file_missing, is_storage_failure, storage_failure};
 use super::files::SnapshotFiles;
+use super::priority::at_low_priority;
 use super::prune::{PruneLedger, prune_due, read_ledger, write_ledger};
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -261,7 +262,9 @@ impl RusticSnapshotStore {
         let key = self.key.clone();
         let settings = self.policy.prune;
         let report = self
-            .blocking(Operation::Prune, move || prune(backend, &key, &settings))
+            .blocking(Operation::Prune, move || {
+                at_low_priority("fs-snap-prune", move || prune(backend, &key, &settings))
+            })
             .await?;
         let marked_packs = report.as_ref().is_some_and(leaves_marked_packs);
         write_ledger(&files, &PruneLedger::after_prune(now, marked_packs))
@@ -288,7 +291,9 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let tree: Box<Path> = tree.into();
         let staged = self
             .blocking(Operation::Save, move || {
-                stage_save(backend, &stage, &key, &policy, &name, &tree)
+                at_low_priority("fs-snap-save", move || {
+                    stage_save(backend, &stage, &key, &policy, &name, &tree)
+                })
             })
             .await?;
         let (staged, info) = staged.ok_or(SnapshotStoreError::AlreadyExists)?;

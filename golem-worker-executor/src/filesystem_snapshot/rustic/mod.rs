@@ -21,6 +21,7 @@
 mod backend;
 mod fault;
 mod files;
+mod priority;
 mod prune;
 mod publish;
 mod scope;
