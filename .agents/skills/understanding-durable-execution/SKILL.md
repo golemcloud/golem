@@ -405,8 +405,47 @@ unclaimed matching* `Start` between cursor and target. That is the only justifie
 scan-ahead: it routes concurrent completions to the right awaiter. It does not license the guest
 to make different calls; when no matching `Start` exists, replay fails with a divergence error.
 
+**Entry ownership.** A reader that drives the cursor without owning the entry at its head — a
+positional marker read, a direct call awaiting its own `End`, a sibling's terminal drain — is
+entitled to nothing it did not record. Kind and owner are validated before consumption:
+
+- A durable-call `Start` nobody has claimed is never handed to a positional reader and is never
+  parked on either: its owner may be a concurrent host task that needs the very Store the parked
+  reader holds (an entity body waiting for admission, an accessor task behind a Store-holding
+  direct call). The cursor commits past it and **retains** it (`CursorState::retained_starts`,
+  in oplog order, together with its terminal once reached). The owner's later identity claim
+  checks retained `Start`s before the head (`claim_retained_start` in `claim_start_matching` and
+  `claim_start_matching_request`); a `CompletionDelivered` marker at the head may belong to a
+  retained `Start`, so retained-first ordering is required, not an optimisation.
+- Positional reads through the shared cursor are attributed per Store (`get_oplog_entry(scope)`,
+  `OplogEntry::entity_attribution()`): the primary agent consumes only entries with no entity
+  parent, an entity body only entries recorded under its own invocation `Start`. A read that
+  finds another Store's entry at the head parks only while that Store can still consume it (the
+  primary while the cursor replays; an entity body whose `Start` is claimed, retained, or
+  scan-ahead claimed). Otherwise `check_parked_positional_read` reports the head as divergence
+  instead of hanging replay; the invocation-boundary reader never parks on another Store.
+- Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
+  tolerance (`AbandonedStarts`); when a live primary invocation finishes they are released with a
+  warning. A settled entity body that returned without claiming a retained descendant is a
+  structural divergence (`ensure_body_claimed_retained_descendants`, `entity.rs`).
+- While unclaimed retained `Start`s exist, a call arriving after the live transition may still be
+  their replayed owner, so durable-call admission and per-call quota charging use
+  `durable_call_is_live()` (stricter than `is_live()`): such calls claim first and append a fresh
+  `Start` only when replay reports none remains (`claim_start_for_store`, which also returns
+  `StoreAlreadyLive` for an incomplete entity that continued live locally). Positional readers,
+  authorization and snapshot decisions keep using `is_live()`.
+
+Tests: `replay_state/tests.rs` (`positional_reader_waits_for_a_retained_entity_start_to_be_claimed`,
+`interleaved_positional_markers_are_consumed_only_by_the_recording_store`,
+`request_matching_claim_adopts_retained_start_behind_its_own_delivery_marker`),
+`tests/tool_streaming.rs` (`positional_atomic_marker_does_not_consume_unclaimed_body_*`,
+`direct_call_waits_without_blocking_body_admission_*`,
+`incomplete_custom_durability_waits_for_overlapping_completed_reconstruction`).
+
 Tolerance machinery (poll-ID stabilisation, response reordering, synthesized readiness, "skip
-unmatched entries") hides the first real bug and must not be added.
+unmatched entries") hides the first real bug and must not be added. Retaining an unclaimed
+`Start` is not tolerance: the entry stays claimable only by its identity-validated owner and is
+reported if nobody claims it.
 
 ## Replay-to-live
 
