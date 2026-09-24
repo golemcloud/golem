@@ -9,7 +9,7 @@ description: "Fan out work to multiple parallel agents and collect results in a 
 
 A single Golem agent processes invocations **sequentially** — it cannot run work in parallel by itself. To execute work concurrently, distribute it across **multiple agent instances** and have them run at the same time. The Go SDK gives you two building blocks:
 
-1. **`CallAsync` + `Future.Get`** — start several cross-agent calls at once, then await each. This is the SDK's only source of concurrency: `Call` (synchronous `invoke-and-await`) blocks the whole component, whereas `Future.Get` is async, so a goroutine blocked in it yields to the component-model event loop and lets the other in-flight calls proceed.
+1. **`CallAsync` + `Future.Get`** — start several cross-agent calls at once, then await each. `Call` awaits one call at a time; `CallAsync` returns immediately, so several calls are in flight together, and a goroutine blocked in `Future.Get` yields to the component-model event loop while the others proceed.
 2. **`Trigger` + promises** — fire-and-forget each worker, hand each a promise ID, then await all the promises. Best for long-running work where you don't want a call in flight the whole time.
 
 > **Platform contract:** a single target instance handles one invocation at a time. Concurrency comes from fanning out to **different** target instances (distinct `ID`s), not from calling the same instance repeatedly.

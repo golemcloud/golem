@@ -23,10 +23,10 @@ import (
 // Future is an invocation that has been started but not yet awaited, returned by
 // [MethodDef.CallAsync].
 //
-// Several futures can be in flight at once. This is the SDK's only source of
-// concurrency: `invoke-and-await` is a synchronous import that blocks the whole
-// component, while a future's Get is async, so a goroutine blocked in Get yields
-// to the component-model event loop and lets other goroutines run.
+// Several futures can be in flight at once. Get is asynchronous: a goroutine
+// blocked in it yields to the component-model event loop and lets other
+// goroutines run. [MethodDef.Call] is CallAsync followed by Get, so it yields in
+// the same way.
 //
 // It wraps the host resource rather than replacing it — a handle, not data, so
 // nothing here crosses the schema marshaler.

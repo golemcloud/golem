@@ -63,12 +63,16 @@ type witRPC struct {
 	target string
 }
 
+// invokeAndAwait awaits through the asynchronous import, for the same reason
+// [MethodDef.Call] does: it is the form a suspended caller is resumed into.
 func (w witRPC) invokeAndAwait(method string, input types.SchemaValueTree) (types.SchemaValueTree, bool, error) {
-	res := w.rpc.InvokeAndAwait(method, input, noScopeCard())
+	inv := w.rpc.AsyncInvokeAndAwait(method, input, noScopeCard())
+	res := inv.Future.Get()
+	inv.Future.Drop()
 	if res.Tag() == witTypes.ResultErr {
 		return types.SchemaValueTree{}, false, rpcErrorToGo(w.target, method, res.Err())
 	}
-	out := res.Ok().Result
+	out := res.Ok()
 	if out.IsNone() {
 		return types.SchemaValueTree{}, false, nil
 	}

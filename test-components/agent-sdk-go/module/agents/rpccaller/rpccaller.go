@@ -11,6 +11,11 @@ type CallIn struct {
 	Amount int64
 }
 
+type AwaitRemoteIn struct {
+	Name     string
+	OplogIdx int64
+}
+
 var Agent = golem.DefineAgent[Id](golem.Spec{
 	Name: "RpcAgent", Description: "Cross-agent RPC caller", Mode: golem.Durable,
 })
@@ -21,4 +26,9 @@ var (
 	// AtomicCall makes the same RPC inside golem.Atomically — checks whether a
 	// cross-agent call settles before an atomic region closes.
 	AtomicCall = Agent.Method[CallIn, int64]("atomic-call", golem.Desc("Record via a synchronous RPC inside an atomic region"))
+	// AwaitRemote blocks on another agent's promise through a synchronous RPC,
+	// so the caller stays inside the call for as long as the promise is open.
+	AwaitRemote = Agent.Method[AwaitRemoteIn, string]("await-remote", golem.Desc("Await a PromiseAgent's promise through a synchronous RPC"))
+	// AwaitRemoteAsync is AwaitRemote through CallAsync + Future.Get.
+	AwaitRemoteAsync = Agent.Method[AwaitRemoteIn, string]("await-remote-async", golem.Desc("Await a PromiseAgent's promise through CallAsync + Future.Get"))
 )

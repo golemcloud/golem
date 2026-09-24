@@ -3402,6 +3402,11 @@ async fn test_ts_tool_guest_bridge_e2e() {
 /// client `golem build` generates for it. Asserts that the CLI generated the
 /// client where the consumer's go.mod points, and that a call made through it
 /// reaches the provider and comes back.
+///
+/// The consumer calls straight after deploying, while the larger Rust provider
+/// may still be compiling. That call can outlast the executor's RPC idle
+/// window, so this also covers a Go caller being suspended mid-call and resumed
+/// with the result.
 #[test]
 #[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]
@@ -3532,23 +3537,6 @@ async fn test_go_agent_guest_bridge_e2e() {
     );
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(outputs.success_or_dump());
-
-    // Call the provider directly once first, so its component has finished
-    // compiling before the consumer calls it. A Go component compiles faster than
-    // the Rust provider, and a call that waits on the compilation outlasts the
-    // executor's idle window: the Go caller is suspended mid-call and, unlike a
-    // Rust caller, never resumed when the result arrives. That is a Go SDK bug in
-    // its own right, independent of the generated bridge this test exercises.
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("CounterAgent(\"{}\")", Uuid::new_v4()),
-            "increment",
-        ])
-        .await;
     assert!(outputs.success_or_dump());
 
     let consumer_name = Uuid::new_v4().to_string();

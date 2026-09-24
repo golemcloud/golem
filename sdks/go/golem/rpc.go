@@ -53,26 +53,17 @@ func noScopeCard() witTypes.Option[*types.PermissionCard] {
 
 // Call invokes the method and waits for its result, panicking on an infra failure.
 //
-// This maps to the synchronous `invoke-and-await` import, so it blocks the whole
-// component until the remote returns. To have several calls in flight at once,
-// use [MethodDef.CallAsync].
+// It is [MethodDef.CallAsync] followed by [Future.Get]: the call goes through the
+// asynchronous import, as every other SDK's does, which is the form the executor
+// resumes into after suspending a caller that waited past its RPC idle window. A
+// call that outlasts that window therefore suspends the worker and resumes it
+// with the result, rather than holding it resident.
+//
+// While it waits, other goroutines of the same invocation may run: Call is a
+// yield point, exactly like Future.Get. To have several calls in flight at once,
+// use [MethodDef.CallAsync] directly.
 func (m MethodDef[Id, In, Out]) Call(c Client[Id], in In) Out {
-	if c.rpc == nil {
-		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
-	}
-	tree, err := m.encodeInput(in)
-	if err != nil {
-		panic(err)
-	}
-	res := c.rpc.InvokeAndAwait(m.name, tree, noScopeCard())
-	if res.IsErr() {
-		panic(rpcErrorToGo(c.agentID, m.name, res.Err()))
-	}
-	out, err := decodeOutput[Out](c.agentID, m.name, res.Ok().Result)
-	if err != nil {
-		panic(err)
-	}
-	return out
+	return m.CallAsync(c, in).Get()
 }
 
 // Trigger invokes the method without waiting for a result, returning the

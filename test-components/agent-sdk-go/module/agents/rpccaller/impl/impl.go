@@ -7,6 +7,7 @@ package impl
 
 import (
 	"agent-sdk-go/agents/ledger"
+	"agent-sdk-go/agents/promises"
 	"agent-sdk-go/agents/rpccaller"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
@@ -28,6 +29,14 @@ func init() {
 			total = ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 		})
 		return total
+	})
+	agent.Handle(rpccaller.AwaitRemote, func(_ *golem.Context[state], in rpccaller.AwaitRemoteIn) string {
+		c := promises.Agent.Get(promises.Id{Name: in.Name})
+		return promises.Await.Call(c, promises.OplogIdxIn{OplogIdx: in.OplogIdx})
+	})
+	agent.Handle(rpccaller.AwaitRemoteAsync, func(_ *golem.Context[state], in rpccaller.AwaitRemoteIn) string {
+		c := promises.Agent.Get(promises.Id{Name: in.Name})
+		return promises.Await.CallAsync(c, promises.OplogIdxIn{OplogIdx: in.OplogIdx}).Get()
 	})
 	agent.Handle(rpccaller.Async, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		c := ledger.Agent.Get(ledger.Id{Region: in.Region})
