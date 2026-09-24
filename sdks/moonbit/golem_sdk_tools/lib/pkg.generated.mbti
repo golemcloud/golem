@@ -184,6 +184,26 @@ pub(all) struct ConfigTypeInfo {
   fields : Array[(String, ParamType)]
 } derive(Eq, @debug.Debug)
 
+pub(all) struct DurableStreamRouteInfo {
+  slots : Array[DurableStreamSlotInfo]
+  allow_external_writes : Bool?
+  allow_stream_delete : Bool?
+  allow_invocation_delete : Bool?
+  max_concurrent_readers_per_stream : UInt?
+  max_append_requests_per_second_per_stream : UInt?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamSlotInfo {
+  source : DurableStreamSlotSourceInfo
+  name : String?
+  content_type : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) enum DurableStreamSlotSourceInfo {
+  Input(String)
+  Output(String)
+} derive(Eq, @debug.Debug)
+
 pub(all) struct FnSignature {
   gen_name : String
   user_name : String
@@ -197,6 +217,7 @@ pub(all) struct HttpEndpointInfo {
   headers : Array[(String, String)]
   auth : Bool?
   cors : Array[String]
+  durable_streams : DurableStreamRouteInfo?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct HttpMountInfo {

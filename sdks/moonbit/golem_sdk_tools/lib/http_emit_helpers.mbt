@@ -87,6 +87,45 @@ fn cors_options_str(patterns : Array[String]) -> String {
 }
 
 ///|
+fn durable_streams_str(options : DurableStreamRouteInfo?) -> String {
+  match options {
+    None => "None"
+    Some(options) => {
+      let slots = options.slots
+        .map(slot => {
+          let source = match slot.source {
+            Input(value) =>
+              "@common.DurableStreamSlotSource::Input(\"\{escape_string_lit(value)}\")"
+            Output(value) =>
+              "@common.DurableStreamSlotSource::Output(\"\{escape_string_lit(value)}\")"
+          }
+          "{ source: \{source}, name: \{opt_string_lit(slot.name)}, content_type: \{opt_string_lit(slot.content_type)} }"
+        })
+        .join(", ")
+      let opt_bool = fn(value : Bool?) {
+        match value {
+          Some(v) => "Some(\{v})"
+          None => "None"
+        }
+      }
+      let opt_uint = fn(value : UInt?) {
+        match value {
+          Some(v) => "Some(\{v})"
+          None => "None"
+        }
+      }
+      let load = if options.max_concurrent_readers_per_stream is None &&
+        options.max_append_requests_per_second_per_stream is None {
+        "None"
+      } else {
+        "Some({ max_concurrent_readers_per_stream: \{opt_uint(options.max_concurrent_readers_per_stream)}, max_append_requests_per_second_per_stream: \{opt_uint(options.max_append_requests_per_second_per_stream)} })"
+      }
+      "Some({ slots: [\{slots}], allow_external_writes: \{opt_bool(options.allow_external_writes)}, allow_stream_delete: \{opt_bool(options.allow_stream_delete)}, allow_invocation_delete: \{opt_bool(options.allow_invocation_delete)}, load: \{load} })"
+    }
+  }
+}
+
+///|
 /// Renders a method's `http_endpoint` field — an `Array[@common.HttpEndpointDetails]`
 /// with zero or one entry. Empty when the method has no `#derive.endpoint`.
 fn http_endpoint_str(endpoint : HttpEndpointInfo?) -> String {
@@ -108,7 +147,7 @@ fn http_endpoint_str(endpoint : HttpEndpointInfo?) -> String {
         "{ query_param_name: \"\{escape_string_lit(q.query_param_name)}\", variable_name: \"\{escape_string_lit(q.variable_name)}\" }"
       })
       let query = "[" + query_parts.join(", ") + "]"
-      "[{ http_method: \{http_method_str(ep.http_method)}, path_suffix: \{path_suffix}, header_vars: \{header_vars}, query_vars: \{query}, auth_details: \{auth_details_str(ep.auth)}, cors_options: \{cors_options_str(ep.cors)} }]"
+      "[{ http_method: \{http_method_str(ep.http_method)}, path_suffix: \{path_suffix}, header_vars: \{header_vars}, query_vars: \{query}, auth_details: \{auth_details_str(ep.auth)}, cors_options: \{cors_options_str(ep.cors)}, durable_streams: \{durable_streams_str(ep.durable_streams)} }]"
     }
   }
 }
