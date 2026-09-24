@@ -393,13 +393,20 @@ impl GoBridgeGenerator {
         // One input struct and one descriptor per method.
         let mut outputs = Vec::with_capacity(self.agent_type.methods.len());
         for (idx, method) in self.agent_type.methods.iter().enumerate() {
-            let input = &n.inputs[idx];
-            self.write_input_struct(
-                input,
-                &format!("{input} holds the arguments of {}.", method.name),
-                &method.input_schema,
-                &mut writer,
-            )?;
+            // A method without parameters takes golem.Unit, as a hand-written
+            // Go agent's would, rather than an empty struct of its own.
+            let input = if user_supplied_fields(&method.input_schema).is_empty() {
+                "golem.Unit".to_string()
+            } else {
+                let input = n.inputs[idx].clone();
+                self.write_input_struct(
+                    &input,
+                    &format!("{input} holds the arguments of {}.", method.name),
+                    &method.input_schema,
+                    &mut writer,
+                )?;
+                input
+            };
             let output = match &method.output_schema {
                 OutputSchema::Unit => "golem.Unit".to_string(),
                 OutputSchema::Single(typ) => self.render(typ, &mut writer)?,
@@ -532,9 +539,13 @@ impl GoBridgeGenerator {
             .map(|(name, typ)| format!("{name} {typ}"))
             .collect::<Vec<_>>()
             .join(", ");
+        let input_type = if fields.is_empty() {
+            "golem.Unit"
+        } else {
+            n.inputs[idx].as_str()
+        };
         let input = format!(
-            "{}{{{}}}",
-            n.inputs[idx],
+            "{input_type}{{{}}}",
             field_idents
                 .iter()
                 .zip(&param_idents)

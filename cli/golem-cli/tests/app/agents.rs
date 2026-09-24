@@ -3398,6 +3398,178 @@ async fn test_ts_tool_guest_bridge_e2e() {
     );
 }
 
+/// A Go component calling an agent in another component through the guest
+/// client `golem build` generates for it. Asserts that the CLI generated the
+/// client where the consumer's go.mod points, and that a call made through it
+/// reaches the provider and comes back.
+#[test]
+#[tag(agents_guest_bridge)]
+#[timeout("15 minutes")]
+async fn test_go_agent_guest_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "go-agent-bridge";
+
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    for (template, component_name) in [
+        ("rust", "go-agent-bridge:provider"),
+        ("go", "go-agent-bridge:consumer"),
+    ] {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                template,
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    merge_into_manifest(
+        &ctx.cwd_path_join("golem.yaml"),
+        indoc! {r#"
+            components:
+              go-agent-bridge:consumer:
+                dependencies:
+                  agents:
+                    - go-agent-bridge:provider/CounterAgent
+        "#},
+    )
+    .unwrap();
+
+    // The Go template brings its own CounterAgent, which would collide with the
+    // provider's; the consumer gets an agent of its own instead. The component
+    // directory, and so the Go module path, is whatever `golem new` chose, so
+    // it is read back rather than assumed.
+    let consumer = ctx.cwd_path_join("consumer");
+    let go_mod = consumer.join("go.mod");
+    let module = fs::read_to_string(&go_mod)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
+        .expect("the consumer's go.mod names its module");
+    fs::remove(consumer.join("agents/counter")).unwrap();
+    fs::write_str(
+        consumer.join("agents/consumer/consumer.go"),
+        indoc! {r#"
+            package consumer
+
+            import "github.com/golemcloud/golem/sdks/go/golem"
+
+            type ID struct{ Name string }
+
+            type IncrementProviderIn struct{ ProviderName string }
+
+            var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterConsumerAgent"})
+
+            var IncrementProvider = Agent.Method[IncrementProviderIn, string]("incrementProvider")
+        "#},
+    )
+    .unwrap();
+    fs::write_str(
+        consumer.join("agents/consumer/impl/impl.go"),
+        formatdoc! {r#"
+            package impl
+
+            import (
+            	"fmt"
+
+            	"{module}/agents/consumer"
+
+            	provider "golem.local/bridge/counter-agent-guest-client"
+
+            	"github.com/golemcloud/golem/sdks/go/golem"
+            )
+
+            type state struct{{}}
+
+            var agent = consumer.Agent.Implement(func(consumer.ID) *state {{ return &state{{}} }})
+
+            func init() {{
+            	agent.Handle(consumer.IncrementProvider, func(_ *golem.Context[state], in consumer.IncrementProviderIn) string {{
+            		counter := provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName}})
+            		return fmt.Sprintf("ok:%d", counter.Increment())
+            	}})
+            }}
+        "#},
+    )
+    .unwrap();
+    let main_go = consumer.join("main.go");
+    fs::write_str(
+        &main_go,
+        fs::read_to_string(&main_go).unwrap().replace(
+            &format!("{module}/agents/counter/impl"),
+            &format!("{module}/agents/consumer/impl"),
+        ),
+    )
+    .unwrap();
+
+    // As in every other SDK, the consumer names the generated client itself.
+    fs::write_str(
+        &go_mod,
+        fs::read_to_string(&go_mod).unwrap()
+            + indoc! {r#"
+
+                require golem.local/bridge/counter-agent-guest-client v0.0.0
+
+                replace golem.local/bridge/counter-agent-guest-client => ../golem-temp/bridge-sdk/go/internal/counter-agent-guest-client
+            "#},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/go/internal/counter-agent-guest-client/client.go")
+            .exists(),
+        "golem build should generate the Go guest client where the consumer's go.mod points"
+    );
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    // Call the provider directly once first, so its component has finished
+    // compiling before the consumer calls it. A Go component compiles faster than
+    // the Rust provider, and a call that waits on the compilation outlasts the
+    // executor's idle window: the Go caller is suspended mid-call and, unlike a
+    // Rust caller, never resumed when the result arrives. That is a Go SDK bug in
+    // its own right, independent of the generated bridge this test exercises.
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("CounterAgent(\"{}\")", Uuid::new_v4()),
+            "increment",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let consumer_name = Uuid::new_v4().to_string();
+    let provider_name = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("CounterConsumerAgent(\"{consumer_name}\")"),
+            "incrementProvider",
+            &format!("\"{provider_name}\""),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("ok:1"),
+        "expected the Go consumer to return ok:1 through the generated guest client"
+    );
+}
+
 #[test]
 #[tag(agents_guest_bridge)]
 #[timeout("15 minutes")]

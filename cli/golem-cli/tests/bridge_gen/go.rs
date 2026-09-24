@@ -319,6 +319,12 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         client.contains("golem.DeclareRemoteAgent[CounterAgentId](\"CounterAgent\")"),
         "{client}"
     );
+    // A method without parameters takes golem.Unit, as a hand-written one would.
+    assert!(
+        client.contains("Method[golem.Unit, float64](\"increment\")"),
+        "{client}"
+    );
+    assert!(!client.contains("CounterAgentIncrementInput"), "{client}");
     // A method with no output returns nothing; one with an output returns it.
     assert!(
         client.contains("func (c CounterAgentClient) Increment() float64 {"),

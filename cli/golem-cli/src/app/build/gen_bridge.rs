@@ -5,6 +5,7 @@ use crate::app::context::BuildContext;
 use crate::bridge_gen::effect::effect_external::EffectExternalBridgeGenerator;
 use crate::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
 use crate::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
+use crate::bridge_gen::go::{GoBridgeGenerator, GoBridgeMode};
 use crate::bridge_gen::moonbit::tool::MoonBitToolBridgeGenerator;
 use crate::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode};
 use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
@@ -1133,10 +1134,16 @@ async fn gen_bridge_sdk_target(
                                 MoonBitBridgeMode::GuestWasmRpc,
                             )?)
                         }
-                        // Go has no bridge generator yet; see
-                        // BridgeSdkTargetKind::supports.
-                        (GuestLanguage::Go, _) => bail!(
-                            "bridge generation is not supported for {} yet",
+                        (GuestLanguage::Go, BridgeMode::Guest) => {
+                            Box::new(GoBridgeGenerator::new_with_mode(
+                                agent_type,
+                                &output_dir,
+                                GoBridgeMode::GuestWasmRpc,
+                            )?)
+                        }
+                        // Not generated yet; see BridgeSdkTargetKind::supports.
+                        (GuestLanguage::Go, BridgeMode::External) => bail!(
+                            "external bridge generation is not supported for {} yet",
                             GuestLanguage::Go.to_string().log_color_highlight()
                         ),
                     };
@@ -1389,27 +1396,27 @@ mod tests {
 
     #[test]
     fn bridge_sdk_support_matrix_matches_current_capabilities() {
-        // Bridge generation exists for these languages; Go has none yet
-        // (no src/bridge_gen/go), so it is unsupported for every kind and mode.
-        let bridge_languages = [
-            GuestLanguage::TypeScript,
-            GuestLanguage::Rust,
-            GuestLanguage::Scala,
-            GuestLanguage::MoonBit,
-        ];
-        let capabilities = [
-            (BridgeSdkTargetKind::Agent, BridgeMode::External, true),
-            (BridgeSdkTargetKind::Agent, BridgeMode::Guest, true),
-            (BridgeSdkTargetKind::Tool, BridgeMode::External, false),
-            (BridgeSdkTargetKind::Tool, BridgeMode::Guest, true),
+        use GuestLanguage::*;
+        // Every language with a full generator. Go generates guest agent
+        // clients only, so it is listed per capability instead.
+        let full = [TypeScript, Effect, Rust, Scala, MoonBit];
+        let capabilities: [(BridgeSdkTargetKind, BridgeMode, &[GuestLanguage]); 4] = [
+            (BridgeSdkTargetKind::Agent, BridgeMode::External, &full),
+            (
+                BridgeSdkTargetKind::Agent,
+                BridgeMode::Guest,
+                &[TypeScript, Effect, Rust, Scala, MoonBit, Go],
+            ),
+            // No language generates external tool clients.
+            (BridgeSdkTargetKind::Tool, BridgeMode::External, &[]),
+            (BridgeSdkTargetKind::Tool, BridgeMode::Guest, &full),
         ];
 
-        for (kind, mode, expected) in capabilities {
+        for (kind, mode, supported) in capabilities {
             for language in GuestLanguage::iter() {
-                let expected = expected && bridge_languages.contains(&language);
                 assert_eq!(
                     kind.supports(mode, language),
-                    expected,
+                    supported.contains(&language),
                     "{kind} {mode} bridge support for {language}"
                 );
             }

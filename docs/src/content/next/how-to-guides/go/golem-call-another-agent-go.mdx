@@ -90,6 +90,43 @@ total := ledger.Record.Call(c, in).MustOk()
 - **impl packages never import each other.** All cross-agent references go through the callee's **definition** package, which imports only the SDK.
 - This keeps the import graph a DAG no matter how cyclic the *call* graph is (A↔B mutual calls are fine as long as each impl imports the other's def, not its impl).
 
+## Calling an agent in another component
+
+The definition package only exists inside the component that defines the agent. To call an agent that lives in another component — in any language — use the guest client `golem build` generates for it.
+
+Declare the dependency on the calling component in `golem.yaml`:
+
+```yaml
+components:
+  example:caller:
+    dir: caller
+    templates: go
+    dependencies:
+      agents:
+        - example:weather/WeatherAgent
+```
+
+`golem build` then generates `golem-temp/bridge-sdk/go/internal/weather-agent-guest-client`, a Go module named `golem.local/bridge/weather-agent-guest-client`. Point the calling component's `go.mod` at it:
+
+```
+require golem.local/bridge/weather-agent-guest-client v0.0.0
+
+replace golem.local/bridge/weather-agent-guest-client => ../golem-temp/bridge-sdk/go/internal/weather-agent-guest-client
+```
+
+Import it and call through the typed client:
+
+```go
+import weather "golem.local/bridge/weather-agent-guest-client"
+
+forecast := weather.GetWeatherAgent(weather.WeatherAgentId{City: "London"}).Forecast(3)
+```
+
+- Each method on the client calls `MethodDef.Call` underneath, so a failed call panics with the SDK's own error, exactly as a same-component call does.
+- The `.local` module path can never be fetched from a module proxy, so a missing `replace` fails the build rather than silently resolving something else.
+- The client's types are the callee's, generated from its schema: records become structs, variants sealed interfaces with one type per case, enums integer constants with a `String()` method.
+- Methods that take or return a stream are not generated yet.
+
 ## Key Constraints
 
 - You call `Method.Call(client, in)` (not `client.Call(method, in)`): the method descriptor carries the input/output types. Same for `Trigger`, `Schedule`, `CallAsync`.
