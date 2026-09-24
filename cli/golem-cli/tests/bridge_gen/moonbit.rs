@@ -2619,7 +2619,11 @@ fn external_recursive_stream_client_compiles() {
     std::fs::write(&mod_path, serde_json::to_string_pretty(&module).unwrap()).unwrap();
     let manifest_path = pkg.module_dir().join("runtime/moon.pkg");
     let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
-    manifest = manifest.replacen("import {", "import {\n  \"moonbitlang/x/fs\" @fs,", 1);
+    manifest = manifest.replacen(
+        "import {",
+        "import {\n  \"moonbitlang/core/encoding/base64\",\n  \"moonbitlang/x/fs\" @fs,",
+        1,
+    );
     std::fs::write(&manifest_path, manifest).unwrap();
     std::fs::write(
         pkg.module_dir().join("runtime/frozen_fixture_wbtest.mbt"),
@@ -2636,7 +2640,7 @@ test "binary codec matches every frozen public v1 frame" {
       let pair = payload_hex.substring(start=i * 2, end=i * 2 + 2)
       @string.parse_int(pair[:], base=16).to_byte()
     })
-    let actual = pvc_base64_encode(encode_binary_envelope(metadata, payload))
+    let actual = @base64.encode(encode_binary_envelope(metadata, payload), padding=true)
     assert_true(actual == expect_string(get_field(object, "frameBase64")))
   }
 }
