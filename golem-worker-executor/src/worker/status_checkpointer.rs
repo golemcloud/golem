@@ -88,6 +88,8 @@ pub struct StatusCheckpointer {
     /// Set once the owning worker starts deleting. After this, no checkpoint is written, so an
     /// in-flight write cannot resurrect the checkpoint after `remove_cached_status` deletes it.
     delete_started: AtomicBool,
+    /// Set once this executor gives the agent up; see [`Self::stop_for_give_up`].
+    given_up: AtomicBool,
 
     /// Serializes checkpoint writes and guards the persisted baseline.
     state: Mutex<CheckpointState>,
@@ -108,8 +110,22 @@ impl StatusCheckpointer {
             min_oplog_delta,
             worker_service,
             delete_started: AtomicBool::new(false),
+            given_up: AtomicBool::new(false),
             state: Mutex::new(CheckpointState { last_written: None }),
         }
+    }
+
+    /// Whether no checkpoint may be written: the worker is being deleted, or given up.
+    fn writes_stopped(&self) -> bool {
+        self.delete_started.load(Ordering::Acquire) || self.given_up.load(Ordering::Acquire)
+    }
+
+    /// Stops every later checkpoint write for a generation this executor has given up: the
+    /// checkpoint belongs to the shard's new owner now. Synchronous, like
+    /// [`crate::worker::status_flusher::AgentStatusFlusher::stop_for_give_up`], and for the same
+    /// reason does not wait out a write already in progress.
+    pub fn stop_for_give_up(&self) {
+        self.given_up.store(true, Ordering::Release);
     }
 
     /// Prevents any future checkpoint write from resurrecting the checkpoint after it is deleted.
@@ -144,7 +160,7 @@ impl StatusCheckpointer {
     /// Best-effort: a write failure is logged and metered, the baseline is left unchanged, and the
     /// worker continues. The oplog remains the source of truth.
     pub async fn maybe_checkpoint(&self, status: &AgentStatusRecord, reason: CheckpointReason) {
-        if self.is_ephemeral || !self.enabled || self.delete_started.load(Ordering::Acquire) {
+        if self.is_ephemeral || !self.enabled || self.writes_stopped() {
             return;
         }
 
@@ -152,7 +168,7 @@ impl StatusCheckpointer {
 
         // Re-check after taking the lock: `begin_delete` may have set the flag while we waited for
         // it (it takes this same lock as a barrier), so once we hold the lock the flag is final.
-        if self.delete_started.load(Ordering::Acquire) {
+        if self.writes_stopped() {
             return;
         }
 

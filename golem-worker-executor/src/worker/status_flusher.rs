@@ -118,6 +118,8 @@ pub struct AgentStatusFlusher {
     /// Set once the worker starts deleting; prevents a concurrent background flush from resurrecting
     /// the blob after `remove_cached_status` has deleted it.
     delete_started: AtomicBool,
+    /// Set once this executor gives the agent up; see [`Self::stop_for_give_up`].
+    given_up: AtomicBool,
 }
 
 impl AgentStatusFlusher {
@@ -149,7 +151,25 @@ impl AgentStatusFlusher {
             }),
             dirty: AtomicBool::new(false),
             delete_started: AtomicBool::new(false),
+            given_up: AtomicBool::new(false),
         })
+    }
+
+    /// Whether nothing more may be written for this worker: it is being deleted, or given up.
+    fn writes_stopped(&self) -> bool {
+        self.delete_started.load(Ordering::Acquire) || self.given_up.load(Ordering::Acquire)
+    }
+
+    /// Stops every later write for a generation this executor has given up, the blob and the
+    /// recovery-index row alike: both belong to the shard's new owner now, and a write from here
+    /// could overwrite its status or drop the row its crash recovery relies on.
+    ///
+    /// Synchronous, so `Worker::mark_given_up` can call it under the worker lifecycle lock. Unlike
+    /// [`Self::begin_delete`] it does not wait out a flush already past its early-out; that write
+    /// was under way before the give-up, like any other write racing the takeover.
+    pub fn stop_for_give_up(&self) {
+        self.given_up.store(true, Ordering::Release);
+        self.dirty.store(false, Ordering::Release);
     }
 
     /// Called from the hot path whenever the in-memory status changed. Updates the recovery index
@@ -161,7 +181,7 @@ impl AgentStatusFlusher {
         previous_status: &AgentStatusRecord,
         new_status: &AgentStatusRecord,
     ) {
-        if self.is_ephemeral {
+        if self.is_ephemeral || self.given_up.load(Ordering::Acquire) {
             return;
         }
 
@@ -210,7 +230,7 @@ impl AgentStatusFlusher {
     /// flag is the source of truth; the queue entry is just a wakeup, so we only enqueue on the
     /// clean→dirty transition.
     fn mark_dirty(&self) {
-        if self.is_ephemeral || self.delete_started.load(Ordering::Acquire) {
+        if self.is_ephemeral || self.writes_stopped() {
             return;
         }
         if !self.dirty.swap(true, Ordering::AcqRel) {
@@ -240,7 +260,7 @@ impl AgentStatusFlusher {
         let mut baseline = self.baseline.lock().await;
 
         // Authoritative early-outs under the lock.
-        if self.delete_started.load(Ordering::Acquire) {
+        if self.writes_stopped() {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         }
@@ -290,7 +310,7 @@ impl AgentStatusFlusher {
                 crate::metrics::workers::record_agent_status_flush_failed(reason.as_str());
                 // Restore the dirty flag and re-enqueue so the sweeper retries.
                 self.dirty.store(true, Ordering::Release);
-                if !self.delete_started.load(Ordering::Acquire) {
+                if !self.writes_stopped() {
                     self.queue.enqueue(self.queue_id, self.self_weak.clone());
                 }
                 Err(err)

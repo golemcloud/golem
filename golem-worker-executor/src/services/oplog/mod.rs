@@ -1415,44 +1415,25 @@ impl OpenOplogs {
         } else {
             lifecycle.slot.as_ref().unwrap().as_ref()
         };
-        // Set when the cached handle is discarded for a reason other than retirement: the
-        // close-wait below is skipped in that case, since the point of a fresh open here is to
-        // hand out a working handle without waiting on the old one's shutdown.
-        let mut discard_without_wait = false;
-        if let Some(oplog) = cached.and_then(|entry| entry.oplog.upgrade()) {
-            if oplog.is_retired() {
-                oplog.retire();
-            } else {
-                // A handle the storage has fenced is finished: every write through it is refused.
-                // It stays alive while the worker that hit the fence is still stopping, and an
-                // opener arriving in that window - this executor re-granted the shard, recovering
-                // the agent - must get a fresh handle at its own epoch, not the finished one.
-                //
-                // Nor is a handle opened for an older ownership generation handed to an opener
-                // that asserts a newer epoch, fenced or not: a fork's unfenced copy, or a handle
-                // still held when the shard left this executor and came back at a higher epoch.
-                // It would go on writing at the epoch it was opened with, and the newer claim
-                // would never be recorded. Only a strictly newer request evicts. An equal or older
-                // one is handed the cached handle, so no second live handle is ever built at the
-                // epoch a handle already asserts. A handle that does not assert the epoch it was
-                // opened with (an ephemeral one) belongs to no generation: opened with an epoch,
-                // it is reused whatever epoch is requested. An evicted handle keeps any background
-                // work it started, such as a layered oplog's archive transfer, until its holder
-                // drops it.
-                let entry_epoch = cached.and_then(|entry| entry.requested_epoch);
-                let older_generation =
-                    requested_epoch > entry_epoch && oplog.shard_epoch() == entry_epoch;
-                if oplog.fence().is_none() && !older_generation {
+        match cached.and_then(|entry| entry.oplog.upgrade()) {
+            Some(oplog) if !oplog.is_retired() => {
+                let opened_with = cached.and_then(|entry| entry.requested_epoch);
+                if can_reuse(&*oplog, opened_with, requested_epoch) {
                     return oplog;
                 }
-                discard_without_wait = true;
+                // Replaced without waiting for it to close: see `can_reuse`.
             }
-        }
-        if !discard_without_wait && let Some(cached) = cached {
-            // Completion, including an error, proves the old layer no longer owns running
-            // work. The new attempt reloads persisted state rather than inheriting the old
-            // error.
-            let _ = cached.closed.clone().await;
+            live => {
+                if let Some(oplog) = live {
+                    oplog.retire();
+                }
+                if let Some(cached) = cached {
+                    // Completion, including an error, proves the old layer no longer owns running
+                    // work. The new attempt reloads persisted state rather than inheriting the old
+                    // error.
+                    let _ = cached.closed.clone().await;
+                }
+            }
         }
         let owner = self.clone();
         let close_agent_id = agent_id.clone();
@@ -1481,6 +1462,27 @@ impl OpenOplogs {
         });
         oplog
     }
+}
+
+/// Whether a live cached handle can be handed to an opener asking for `requested`. It cannot,
+/// and is replaced, when:
+/// - it is fenced: the storage refused one of its writes, so every later one is refused too;
+/// - or it belongs to an older ownership generation: `requested` is newer than the epoch it was
+///   opened with (`None`, opened without a claim, is older than any epoch) and it really asserts
+///   that epoch. An ephemeral handle opened with an epoch asserts none, so it is reused at any
+///   epoch; one opened without a claim is replaced by any open that makes one.
+///
+/// A replaced handle may still be held by a worker that is stopping, so nobody waits for it to
+/// close; it keeps any background work, such as an archive transfer, until its holder drops it.
+/// An equal or older request gets the cached handle, so no two live handles assert one epoch.
+fn can_reuse(
+    oplog: &dyn Oplog,
+    opened_with: Option<ShardEpoch>,
+    requested: Option<ShardEpoch>,
+) -> bool {
+    let fenced = oplog.fence().is_some();
+    let older_generation = requested > opened_with && oplog.shard_epoch() == opened_with;
+    !fenced && !older_generation
 }
 
 impl Debug for OpenOplogs {

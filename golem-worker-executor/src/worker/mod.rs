@@ -1233,6 +1233,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// no worker lifecycle lock.
     pub(crate) fn mark_given_up(&self, reason: GiveUpReason) -> bool {
         let first = self.given_up_reason.set(reason).is_ok();
+        // Before anything else can run: the status blob, its checkpoint and the recovery-index
+        // row are the new owner's now, and none of them is fenced.
+        self.status_flusher.stop_for_give_up();
+        self.status_checkpointer.stop_for_give_up();
         if first && let Some(reason) = self.given_up_reason.get() {
             // Debug rather than warn: the oplog that latched a fence has already warned with both
             // epochs, and a revoke or reassignment is logged by the sweep that gives agents up.
@@ -2987,7 +2991,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             self.before_deletion_stage(WorkerDeletionStage::StreamsCleaned)
                 .await?;
-            let producer = DurableStreamStore::load_indexed_with_commit(
+            let producer = match DurableStreamStore::load_indexed_with_commit(
                 self.oplog.clone(),
                 self.owned_agent_id.clone(),
                 self.initial_worker_metadata.fingerprint,
@@ -3003,7 +3007,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.agent_mode(),
             )
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            {
+                Ok(producer) => producer,
+                Err(error) => {
+                    let error = error.into_worker_executor_error(WorkerExecutorError::runtime);
+                    return Err(self.deletion_step_failed(error).await);
+                }
+            };
             let activity = crate::services::activity::ActivityGate::new();
             let guard = activity.try_enter().unwrap();
             let maintenance = std::panic::AssertUnwindSafe(guard.scope(async {
@@ -3065,7 +3075,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             producer.wait_durable_drained().await;
             self.state_actor.drain_lifecycle().await?;
             self.durable_stream_commit()(None).await;
-            maintenance?;
+            if let Err(error) = maintenance {
+                return Err(self.deletion_step_failed(error).await);
+            }
             self.complete_deletion_stage(WorkerDeletionStage::StreamsCleaned)
                 .await;
         }
@@ -3144,6 +3156,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.mark_given_up(reason);
         self.active_agents().remove_worker(self, true).await;
         self.give_up_error()
+    }
+
+    /// The error a failed deletion step ends the attempt with. A step that failed because the
+    /// shard has a new owner - typed, or flattened into another error after the refused write
+    /// latched this oplog's fence - hands the deletion to that owner, as a refused storage remove
+    /// does. Any other failure is returned unchanged.
+    async fn deletion_step_failed(
+        self: &Arc<Self>,
+        error: WorkerExecutorError,
+    ) -> WorkerExecutorError {
+        match shard_lost_give_up_reason(&error, self.oplog.fence()) {
+            Some(reason) => self.leave_deletion_to_new_owner(reason).await,
+            None => error,
+        }
     }
 
     async fn before_deletion_stage(
@@ -9169,20 +9195,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
 
                 // Make sure the oplog is committed. Best-effort: a stop must finish.
-                let fenced = match self.oplog.commit(CommitLevel::Always).await {
-                    Ok(_) => false,
+                match self.oplog.commit(CommitLevel::Always).await {
+                    Ok(_) => {}
                     Err(OplogError::Fenced(fence)) => {
                         // The shard has a new owner. `mark_given_up` is synchronous and takes
                         // no lock, so it is safe under the worker lifecycle lock this arm holds -
                         // calling `give_up` here would deadlock on that same lock.
                         self.mark_given_up(GiveUpReason::Fenced(Some(Box::new(fence))));
-                        true
                     }
                     Err(error) => {
                         warn!(%error, "Committing the oplog while stopping failed");
-                        false
                     }
-                };
+                }
 
                 // After the commit: it can be the first write to find that the shard has a new
                 // owner, and the waiters are then told to retry there rather than handed the
@@ -9201,10 +9225,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // logged/metered inside `flush` and re-queued; the blob is reconstructable from the
                 // oplog, so it must not block the stop.
                 //
-                // Skipped entirely when the commit was fenced: this is a key-value write, which is
-                // NOT fenced, so it would happily overwrite the new owner's newer status blob with
-                // our stale one.
-                if !fenced
+                // Skipped entirely for an agent given up here, whether by the commit above or by a
+                // revoke or reassignment that latched no fence: this is a key-value write, which
+                // is NOT fenced, so it would happily overwrite the new owner's newer status blob
+                // with our stale one. The flusher refuses it too once `mark_given_up` has run.
+                if !self.is_given_up()
                     && let Err(err) = self
                         .status_flusher
                         .flush(status_flusher::FlushReason::Forced)

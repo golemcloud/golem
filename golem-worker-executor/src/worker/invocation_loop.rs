@@ -1301,12 +1301,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             // Making sure all pending commits are flushed
             // Make sure all pending commits are done
             let worker = store.lock().await.data().get_public_state().worker();
-            if worker
+            // A failed commit is a refused one, and gives the agent up.
+            let _ = worker
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await
-                .is_err()
-            {
-                // Given up: its status is not this executor's to persist any more.
+                .await;
+            if worker.is_given_up() {
+                // Given up, by that commit or by a revoke or reassignment that latched no fence:
+                // its status is not this executor's to persist any more.
                 return;
             }
 

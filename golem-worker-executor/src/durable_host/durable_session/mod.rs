@@ -899,24 +899,18 @@ impl StreamSession {
 
     /// Commits and indexes a session record through the producer's owned write path.
     ///
-    /// A refused write is returned as an error; any other failure means the internally generated
-    /// record is invalid.
+    /// Every failure goes back to the session, not only a fence: a producer retired or poisoned
+    /// under the session answers `RecoveryRequired`, and a failed publication `LiveBus`, neither
+    /// of which says the record is invalid.
     async fn append_record(
         &self,
         context: Option<&StreamWriteContext>,
         record: StreamSessionRecord,
     ) -> Result<(), String> {
-        match self
-            .producer
+        self.producer
             .append_session_record_attributed(context, self.entity_parent_start_index, record)
             .await
-        {
-            Ok(()) => Ok(()),
-            Err(error @ StreamStoreError::Fenced(_)) => Err(error.to_string()),
-            Err(error) => {
-                panic!("internally generated durable session record is invalid: {error}")
-            }
-        }
+            .map_err(|error| error.to_string())
     }
 
     async fn try_append_record(

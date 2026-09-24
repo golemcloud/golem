@@ -10457,3 +10457,67 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
         [StreamRecordReference::Foreign(_)]
     ));
 }
+
+/// A session write that races the producer's retirement gets the retirement back as an error. It
+/// used to panic as an "invalid record", and with `panic = "abort"` that took down every agent on
+/// the executor, not just this session.
+#[test]
+async fn a_session_write_through_a_retired_producer_is_an_error_not_a_panic() {
+    let source = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        source.environment_id,
+        source.agent_id.clone(),
+        source.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = producer
+        .register(
+            None,
+            registration(
+                &source,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: source.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let streams = StreamSession::new(
+        producer.clone(),
+        oplog.clone(),
+        StreamRegistrationInvocation::Remote(source.invocation.clone()),
+        [],
+    );
+
+    // Retirement poisons the producer without latching any fence on the oplog.
+    producer.poison();
+
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: 1,
+        handle,
+        role: SessionStreamRole::Output,
+    };
+    let record = StreamSessionRecord::Mapping(
+        golem_common::model::durable_stream::StreamSessionMappingUpdateRecord {
+            format_version: 1,
+            session_key: StreamRegistrationInvocation::Remote(source.invocation.clone()),
+            mapping: StreamBindingRecord::foreign(&mapping),
+        },
+    );
+    let error = streams
+        .append_record(None, record)
+        .await
+        .expect_err("a write through a retired producer must fail");
+    assert!(
+        error.contains("RecoveryRequired"),
+        "the session must be told the producer needs recovery, got: {error}"
+    );
+}
