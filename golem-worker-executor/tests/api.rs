@@ -26,7 +26,7 @@ use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
 };
@@ -3885,12 +3885,25 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
         assert!(failure.contains("status"), "{failure}");
         assert!(executor.worker_is_cached(&owned).await);
         executor.get_worker_metadata(&worker_id).await?;
+        let metadata = Worker::get_latest_metadata(&all, &owned).await?.unwrap();
+        let reconstructed =
+            golem_worker_executor::worker::status::calculate_last_known_status_with_checkpoint(
+                &all,
+                &owned,
+                metadata.agent_mode,
+                None,
+            )
+            .await
+            .map_err(anyhow::Error::msg)?
+            .unwrap();
+        assert_eq!(metadata.last_known_status, reconstructed);
 
         // The old attempt keeps its error, but all old writes have finished. An explicit retry
         // can now remove the persisted generation without a late actor restoring its index.
         executor.delete_worker(&worker_id).await?;
         assert!(!executor.worker_is_cached(&owned).await);
         assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+        assert!(Worker::get_latest_metadata(&all, &owned).await?.is_none());
         assert_eq!(hook.calls(WorkerDeletionStage::OwnedWorkJoined), 1);
         // Keeping the old shell alive retains its failed stop result across the explicit retry.
         assert_eq!(old_weak.upgrade().is_some(), !drop_old_shell);
@@ -4769,7 +4782,26 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 35 * 65536);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let initial_memory = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Create(create) => Some(create.initial_total_linear_memory_size),
+            _ => None,
+        })
+        .expect("the worker must have a Create entry");
+    let memory_growth: u64 = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(growth) => Some(growth.delta),
+            _ => None,
+        })
+        .sum();
+    assert!(initial_memory > 0);
+    assert_eq!(
+        metadata2.total_linear_memory_size,
+        initial_memory + memory_growth
+    );
     Ok(())
 }
 

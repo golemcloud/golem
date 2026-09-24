@@ -14,8 +14,8 @@ use golem_common::base_model::durable_stream::{
     AttachmentId, LocalStreamId, LocalStreamReaderId, PersistedInvocationTarget,
     PersistedStreamInvocationDescriptor, ResumeAttemptDescriptor, StartAttemptDescriptor,
     StreamAttachmentKey, StreamId, StreamInvocationId, StreamOffset, StreamRegistrationInvocation,
-    StreamSessionAttachedRecord, StreamSessionFinishedRecord, StreamSessionMapping,
-    StreamSessionPreparedRecord,
+    StreamSessionAttachedRecord, StreamSessionExpiryPolicy, StreamSessionFinishedRecord,
+    StreamSessionMapping, StreamSessionPreparedRecord,
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
@@ -937,7 +937,10 @@ async fn append_prepared_pending(
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
+                public_session_id: identity.invocation.idempotency_key.value.clone(),
                 session_key: identity.invocation.idempotency_key.clone(),
+                expiry_policy: StreamSessionExpiryPolicy::None,
+                expiry_deadline_millis: None,
                 attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
@@ -7109,7 +7112,10 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
+                public_session_id: identity.invocation.idempotency_key.value.clone(),
                 session_key: identity.invocation.idempotency_key.clone(),
+                expiry_policy: StreamSessionExpiryPolicy::None,
+                expiry_deadline_millis: None,
                 attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
@@ -7717,7 +7723,10 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
+                public_session_id: consumer.invocation.idempotency_key.value.clone(),
                 session_key: consumer.invocation.idempotency_key.clone(),
+                expiry_policy: StreamSessionExpiryPolicy::None,
+                expiry_deadline_millis: None,
                 attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: consumer.invocation.clone(),
@@ -8202,7 +8211,10 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
+                public_session_id: identity.invocation.idempotency_key.value.clone(),
                 session_key: identity.invocation.idempotency_key.clone(),
+                expiry_policy: StreamSessionExpiryPolicy::None,
+                expiry_deadline_millis: None,
                 attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: identity.invocation.clone(),
@@ -8661,7 +8673,10 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
+                public_session_id: session_key.idempotency_key.value.clone(),
                 session_key: session_key.idempotency_key.clone(),
+                expiry_policy: StreamSessionExpiryPolicy::None,
+                expiry_deadline_millis: None,
                 attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: session_key.clone(),
@@ -9180,7 +9195,10 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
             None,
             StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
+                public_session_id: consumer.invocation.idempotency_key.value.clone(),
                 session_key: consumer.invocation.idempotency_key.clone(),
+                expiry_policy: StreamSessionExpiryPolicy::None,
+                expiry_deadline_millis: None,
                 attempt: StartAttemptDescriptor {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: consumer.invocation.clone(),
@@ -9274,6 +9292,26 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
             .activate_forwarded_mapping(attachment, mapping.clone(), remote_producer.clone(), 200)
             .await
             .unwrap();
+    }
+
+    let drain = StreamSession::new(
+        resumed.producer.clone(),
+        consumer_oplog.clone(),
+        StreamRegistrationInvocation::Local(consumer.invocation.idempotency_key.clone()),
+        [],
+    );
+    let stale_transport = drain.clone().with_attachment(1, start_attempt_id);
+    drain.recover_session_mappings().await.unwrap();
+    assert_eq!(drain.mapping(17), Some(root_mapping.clone()));
+    assert_eq!(drain.mapping(18), Some(nested_mapping.clone()));
+    for mapping in [&root_mapping, &nested_mapping] {
+        assert!(
+            stale_transport
+                .validate_recovered_mapping(mapping)
+                .await
+                .is_err()
+        );
+        drain.validate_recovered_mapping(mapping).await.unwrap();
     }
 
     let cursors = HashMap::from([

@@ -37,8 +37,8 @@ use golem_api_grpc::proto::golem::worker::{
     ExternalToolInvocation, InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest, ExportStreamControlResult,
-    ReadStreamSlotRequest, ReadStreamSlotSuccess,
+    CreateStreamSessionRequest, CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest,
+    ExportStreamControlResult, ReadStreamSlotRequest, ReadStreamSlotSuccess,
 };
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
@@ -1858,9 +1858,12 @@ impl WorkerService {
     pub async fn create_stream_session(
         &self,
         agent_id: &AgentId,
-        request: InvocationStart,
+        request: CreateStreamSessionRequest,
     ) -> WorkerResult<CreateStreamSessionSuccess> {
         let auth_ctx: AuthCtx = request
+            .invocation
+            .as_ref()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("invocation not found"))?
             .auth_ctx
             .clone()
             .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
@@ -1935,9 +1938,8 @@ impl WorkerService {
         &self,
         agent_id: &AgentId,
         request: golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
-    ) -> WorkerResult<
-        golem_api_grpc::proto::golem::workerexecutor::v1::append_to_stream_slot_response::Result,
-    > {
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotResponse>
+    {
         let auth_ctx: AuthCtx = request
             .auth_ctx
             .clone()
@@ -3778,6 +3780,31 @@ mod tests {
 
     #[async_trait]
     impl RegistryService for TestRegistryService {
+        async fn resolve_mcp_import(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+            _: bool,
+        ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+        {
+            panic!("unexpected MCP discovery")
+        }
+        async fn get_mcp_runtime_credential(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+        ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+        {
+            panic!("unexpected MCP credential request")
+        }
+        async fn report_mcp_resource_unauthorized(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+            _: Option<uuid::Uuid>,
+        ) -> Result<(), RegistryServiceError> {
+            panic!("unexpected MCP feedback")
+        }
         async fn authenticate_token(
             &self,
             _: &golem_common::model::auth::TokenSecret,
@@ -6549,8 +6576,10 @@ mod tests {
             deployment_revision: DeploymentRevision::INITIAL,
             registered_tools: BTreeMap::from([(tool_name.clone(), registered.clone())]),
             tool_bindings: BTreeMap::new(),
+            mcp_imports: Vec::new(),
             registered_tool_middlewares: BTreeMap::new(),
             tool_middleware_chains: BTreeMap::new(),
+            tool_middleware_configuration: Default::default(),
         };
         for (owner, summary) in [
             (

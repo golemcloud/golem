@@ -185,6 +185,7 @@ pub trait BlobStorage: Debug + Send + Sync {
     }
 }
 
+/// Creates a blob-storage facade that binds the service and API labels once for multiple calls.
 pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized> {
     fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledBlobStorage<'_, S>;
 }
@@ -199,6 +200,7 @@ impl<S: BlobStorage + ?Sized> BlobStorageLabelledApi<S> for S {
     }
 }
 
+/// A blob-storage facade with service and API labels bound to every operation.
 pub struct LabelledBlobStorage<'a, S: BlobStorage + ?Sized> {
     svc_name: &'static str,
     api_name: &'static str,
@@ -221,6 +223,16 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
     ) -> Result<Option<Vec<u8>>, Error> {
         self.storage
             .get_raw(self.svc_name, self.api_name, namespace, path)
+            .await
+    }
+
+    pub async fn get_stream(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        self.storage
+            .get_stream(self.svc_name, self.api_name, namespace, path)
             .await
     }
 
@@ -254,6 +266,17 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
     ) -> Result<(), Error> {
         self.storage
             .put_raw(self.svc_name, self.api_name, namespace, path, data)
+            .await
+    }
+
+    pub async fn put_stream(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<(), Error> {
+        self.storage
+            .put_stream(self.svc_name, self.api_name, namespace, path, stream)
             .await
     }
 

@@ -28,6 +28,7 @@ struct LiveBodies {
 impl LiveBodies {
     fn guard(&self) -> BodyGuard {
         self.count.fetch_add(1, Ordering::SeqCst);
+        self.changed.notify_waiters();
         BodyGuard(self.clone())
     }
 
@@ -36,7 +37,7 @@ impl LiveBodies {
     }
 
     async fn wait_for(&self, expected: usize) {
-        tokio::time::timeout(CLEANUP_TIMEOUT, async {
+        let result = tokio::time::timeout(CLEANUP_TIMEOUT, async {
             loop {
                 let changed = self.changed.notified();
                 tokio::pin!(changed);
@@ -47,8 +48,10 @@ impl LiveBodies {
                 changed.await;
             }
         })
-        .await
-        .unwrap_or_else(|_| panic!("body count did not become {expected}; was {}", self.count()));
+        .await;
+        if result.is_err() && self.count() != expected {
+            panic!("body count did not become {expected}; was {}", self.count());
+        }
     }
 }
 
@@ -59,6 +62,19 @@ impl Drop for BodyGuard {
         self.0.count.fetch_sub(1, Ordering::SeqCst);
         self.0.changed.notify_waiters();
     }
+}
+
+#[test]
+#[timeout("5s")]
+async fn body_count_waiter_wakes_when_upgrade_adds_a_body() {
+    let bodies = LiveBodies::default();
+    let waiting = bodies.wait_for(1);
+    tokio::pin!(waiting);
+    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    let guard = bodies.guard();
+    waiting.await;
+    drop(guard);
+    bodies.wait_for(0).await;
 }
 
 fn idle_body(guard: BodyGuard) -> Body {

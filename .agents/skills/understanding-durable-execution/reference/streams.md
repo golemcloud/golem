@@ -87,16 +87,25 @@ the selected stream's continuation starts open unless the create request closes 
 If the cut precedes execution, the export fork retains its selected queued invocation and any
 pending constructor. Unrelated queued invocations and updates are cancelled as in ordinary forks.
 
-Forks copy ordinary oplog history and append only `ForkCut`. The cut marker identifies the retained
-prefix and clips stream state at that boundary; it resets live controls and stores the creation receipt.
-It carries no handle aliases or terminal-authorship mappings. Copied item offsets remain ordinary
-copied history, while later source writes are never inherited. Revert appends an adjacent `Revert`
-and self-targeted `ForkCut`, raises the generation/epoch floor to fence every old handle, drains the
-old producer, then refolds and reconstructs through the ordinary worker lifecycle.
+Forks copy ordinary oplog history and append `ForkCut`. Export forks additionally append
+`ExportForkInitialized` before staged publication; it records the exported public ID, the fresh target
+invocation key, the source invocation, request hash and expiry policy/deadline. The cut marker identifies
+the retained prefix and clips stream state at that boundary; it resets live controls and stores the
+creation receipt. It carries no handle aliases or terminal-authorship mappings. Copied item offsets
+remain ordinary copied history, while later source writes are never inherited. Revert appends an
+adjacent `Revert` and self-targeted `ForkCut`, raises the generation/epoch floor to fence every old
+handle, drains the old producer, then refolds and reconstructs through the ordinary worker lifecycle.
 
 Session control and topology recovery caches that encounter a committed cut in their suffix reload
 the authoritative session index, discarding pre-cut cached state. An uncommitted marker fails closed
 instead of repeatedly loading an index that cannot yet cover it.
+
+The worker's post-publication stream reconciler uses the committed in-memory status tip as the
+topology suffix boundary. After recovery leaves no dirty topology and producer metadata reports no
+active attachment, the task parks on `DurableStreamStore::session_records_changed`; it does not
+periodically reopen an idle worker's oplog merely because historical stream records exist. A
+committed session mutation wakes it, active attachments keep the renewal deadline armed, and a
+failed pass keeps periodic retry armed.
 
 A repeated `Start` for a retained session reports the current epoch, even after a resume or revert.
 It does not reactivate foreign bindings when its original attempt no longer owns the attachment.
@@ -116,8 +125,9 @@ to reuse that start record, but publishes stderr and handles traps as live execu
 the guest makes no positional host call. Cursor exhaustion alone does not publish liveness.
 
 The export creation receipt also records the original request, resolved anchor and initial-body
-hash. Retries use that receipt before consulting the source, so a later append or tombstone cannot
-move a default-tail cut. Initial content is schema-validated and committed in the hidden stage.
+hash. Retries use that receipt before consulting the source, so source advancement, expiry, deletion
+or a later tombstone cannot hide an already-published target or move a default-tail cut. Initial
+content is schema-validated and committed in the hidden stage.
 Byte-limit failures precede quota reservation. The source commits `ExportForkAdmitted` under the
 existing worker instance lock before publishing the target. Its chosen cut and quota charge are
 folded into `AgentStatusRecord.export_fork_admissions`; losing cached status cannot erase them.
@@ -132,6 +142,36 @@ fork tests, and the CLI `reference_client_export_protocol_compatibility` scenari
 The target is pinned by `streaming_target_fingerprint`: `AgentFingerprint`
 (`golem-common/src/base_model/worker.rs`) is minted once at agent creation and stable across
 restarts, so a deleted-and-recreated agent with the same `AgentId` is a different producer.
+
+### Public session identity and expiry
+
+The custom HTTP API's public session ID is an opaque lookup key, not the invocation idempotency key.
+`StreamSessionIndexService` persists the independent `DurableStreamPublicBinding` projection:
+`Live` points to the concrete invocation key and its expiry policy/deadline, while `Retired` keeps
+the last key fenced after expiry. This unbounded mapping is not stored in the cached
+`AgentStatusRecord`. During projection rebuild, records inherited before the last ordinary
+non-revert `ForkCut` do not publish source public bindings. A concrete retained `Prepared` session
+keeps its invocation identity for continuation; a target-only export identity is replaced by
+`ExportForkInitialized`.
+
+Durable creation mints a fresh UUID invocation key. After `Expired` retires the old binding, an
+explicit PUT of the same public ID starts a new invocation and preserves no compatibility alias to
+the old key. Ephemeral sessions use the public ID as their invocation key and reject recreation,
+because an ephemeral invocation cannot resume or be started a second time.
+
+`ExpiryRefreshed` durably advances a sliding deadline; `Expired` retires exactly the expected live
+binding and triggers stream cancellation. Every scheduled
+`ScheduledAction::ExpireDurableStreamSession` carries the agent fingerprint, invocation key and
+expected deadline. Delivery is `Stale` if any fence changed, `Early` if the clock has not reached
+the expected deadline (and is rescheduled), `Applied` when it appends expiry, and `AlreadyApplied`
+for the matching retired binding. Lazy admission performs the same fenced transition, so scheduler
+delay does not let an expired binding admit work.
+
+To bound oplog and scheduler growth, a sliding touch is coalesced until it extends the current
+deadline by at least 10% of the TTL. A new origin GET and an accepted or duplicate external append
+are touches. HEAD, a repeated PUT of an already-live binding, continuation reads used by long-poll
+and SSE, and bytes produced by the agent are not touches. Consequently “idle” means no new touching
+request; bytes received on an already-open SSE connection do not keep the session alive.
 
 ### Two durable journals
 

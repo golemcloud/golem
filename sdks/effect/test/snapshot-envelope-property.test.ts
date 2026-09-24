@@ -1,6 +1,6 @@
-import { describe, expect, it } from "@effect/vitest"
+import { describe, expect } from "@effect/vitest"
 import { Schema } from "effect"
-import * as fc from "effect/testing/FastCheck"
+import * as fc from "fast-check"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import {
   decodeEnvelope,
@@ -9,6 +9,7 @@ import {
   encodeMultipartJsonEnvelope,
   serializePrincipal,
 } from "../src/internal/snapshotEnvelope.js"
+import { prop } from "./property.js"
 
 // ---------------------------------------------------------------------------
 // Arbitraries
@@ -96,7 +97,15 @@ const StateSchema = Schema.Struct({
   }),
 })
 
-const stateArb = Schema.toArbitrary(StateSchema)
+const stateArb: fc.Arbitrary<typeof StateSchema.Type> = fc.record({
+  count: fc.integer(),
+  label: fc.string(),
+  flags: fc.array(fc.boolean()),
+  nested: fc.record({
+    name: fc.string(),
+    optional: fc.oneof(fc.constant(null), fc.string()),
+  }),
+})
 
 const dbPartArb = fc.record({
   name: fc.stringMatching(/^[a-zA-Z_][a-zA-Z0-9_]*$/),
@@ -108,10 +117,11 @@ const dbPartArb = fc.record({
 // ---------------------------------------------------------------------------
 
 describe("snapshot-envelope properties", () => {
-  it.prop(
+  prop(
     "JSON envelope round-trips arbitrary principal + arbitrary state",
     { principal: principalArb, state: stateArb },
     ({ principal, state }) => {
+      expect(Schema.is(StateSchema)(state)).toBe(true)
       const env = encodeJsonEnvelope(principal, state)
       expect(env.mimeType).toBe("application/json")
       const decoded = decodeEnvelope(env, { tag: "anonymous" })
@@ -125,7 +135,7 @@ describe("snapshot-envelope properties", () => {
     },
   )
 
-  it.prop(
+  prop(
     "binary envelope round-trips arbitrary principal + arbitrary user payload",
     { principal: principalArb, userPayload: fc.uint8Array({ maxLength: 1024 }) },
     ({ principal, userPayload }) => {
@@ -141,7 +151,7 @@ describe("snapshot-envelope properties", () => {
     },
   )
 
-  it.prop(
+  prop(
     "multipart envelope round-trips arbitrary principal + state + DB parts",
     {
       principal: principalArb,

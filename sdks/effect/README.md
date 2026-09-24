@@ -492,14 +492,12 @@ invocation.
 
 When a handler returns, the underlying rejects new admissions but does not implicitly cancel calls already admitted. Cleanup releases their observers after pending observation is safe. For a command declaring stdout, return/select a stream with the typed `context.stdout` callback (or the universal result's `stdout`). The SDK forwards it into the host-provided writer, calls `finish` after clean EOF, and calls `fail` on forwarding failure; middleware never owns that writer directly.
 
-There are three build worlds:
-
-- `agent-guest`: agents plus tool guests (`@golemcloud/effect-golem`)
-- `tool-middleware-guest`: standalone middleware (`@golemcloud/effect-golem/middleware`)
-- `agent-tool-middleware-guest`: combined agent/tool/middleware component
-
-The SDK and templates support all three worlds. The CLI accepts middleware metadata and manifest
-attachment; runtime traversal and invocation behavior remain separate deployment concerns.
+The single `agent-guest` build world exports agents, tools, snapshots, and tool middleware. It
+supports ordinary, standalone-middleware, and combined components; discovery returns empty lists
+for categories a component does not define. Middleware authoring APIs remain available from
+`@golemcloud/effect-golem/middleware`, and invocation-scoped underlying access still advances the
+pinned middleware chain. The CLI accepts middleware metadata and manifest attachment; runtime
+traversal and invocation behavior remain separate deployment concerns.
 
 ## Durability 1.6
 
@@ -553,15 +551,14 @@ npm test
 npm run build
 npm run build:bundle
 $env.WASI_SDK_PATH = "/opt/wasi-sdk"
-npm run build-agent-template # builds all three worlds
+npm run build-agent-template # builds the default world
 npm run check:dts
 npm run check:contracts
 npm run check:artifacts
 ```
 
-`build-agent-template` creates/checks `agent_guest.wasm`, `tool_middleware_guest.wasm`, and
-`agent_tool_middleware_guest.wasm`. `check:artifacts` compares committed/generated provenance and
-fails on stale world artifacts.
+`build-agent-template` creates/checks `agent_guest.wasm`. `check:artifacts` compares
+committed/generated provenance and fails on stale artifacts.
 
 Canonical WIT dependencies live at repository-root `wit/deps`; never edit `sdks/effect/wit/deps`
 by hand. From the repository root:
@@ -569,7 +566,7 @@ by hand. From the repository root:
 ```nu
 cargo make wit          # mirror canonical WIT into every SDK
 cd sdks/effect
-npm run generate-dts    # regenerate declarations for all three worlds
+npm run generate-dts    # regenerate declarations for the default world
 npm run check:dts       # fail if generated declarations drift
 npm run check:artifacts # fail if bundles/templates/WASM drift
 ```

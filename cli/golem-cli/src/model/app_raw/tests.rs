@@ -130,6 +130,55 @@ fn arb_config_key_scope_model() -> BoxedStrategy<ManifestConfigKeyScope> {
     .boxed()
 }
 
+fn arb_tool_middleware_installation_model() -> BoxedStrategy<ToolMiddlewareInstallation> {
+    let shortcut = (arb_tool_name(), arb_opt(arb_semver())).prop_map(|(name, version)| {
+        ToolMiddlewareInstallation::Shortcut(match version {
+            Some(version) => format!("{name}@{version}"),
+            None => name,
+        })
+    });
+    let structured = (
+        arb_tool_name(),
+        arb_opt(arb_semver()),
+        arb_json_value(),
+        arb_opt(
+            arb_ident()
+                .prop_map(|name| format!("{name}@example.com"))
+                .boxed(),
+        ),
+        arb_opt(arb_secret_key_scope_model()),
+        arb_opt(arb_secret_key_scope_model()),
+        prop_oneof![
+            Just(ToolFilesystemAccess::Unset),
+            Just(ToolFilesystemAccess::Allowed),
+            Just(ToolFilesystemAccess::Denied),
+        ],
+    )
+        .prop_map(
+            |(
+                name,
+                version,
+                parameters,
+                account,
+                secret_keys_readable,
+                secret_keys_revealable,
+                filesystem_access,
+            )| {
+                ToolMiddlewareInstallation::Structured(ToolMiddlewareInstallationStruct {
+                    name: ToolMiddlewareName::try_from(name).unwrap(),
+                    version,
+                    parameters: NormalizedJsonValue::new(parameters),
+                    account,
+                    secret_keys_readable,
+                    secret_keys_revealable,
+                    filesystem_access,
+                })
+            },
+        );
+
+    prop_oneof![shortcut, structured].boxed()
+}
+
 fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
     (
         arb_opt(arb_semver()),
@@ -150,6 +199,15 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
         arb_opt(arb_secret_key_scope_model()),
         arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
         arb_opt(arb_secret_key_scope_model()),
+        arb_opt(prop::collection::vec(arb_tool_middleware_installation_model(), 0..=3).boxed()),
+        arb_opt(
+            prop_oneof![
+                Just(ToolMiddlewareMergeMode::Prepend),
+                Just(ToolMiddlewareMergeMode::Append),
+                Just(ToolMiddlewareMergeMode::Replace),
+            ]
+            .boxed(),
+        ),
     )
         .prop_map(
             |(
@@ -163,6 +221,8 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
                 secret_keys_readable,
                 secret_keys_revealable_merge_mode,
                 secret_keys_revealable,
+                middleware,
+                middleware_merge_mode,
             )| ToolBinding {
                 version,
                 parameters_merge_mode,
@@ -175,8 +235,8 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
                 secret_keys_revealable_merge_mode,
                 secret_keys_revealable,
                 filesystem_access: None,
-                middleware: None,
-                middleware_merge_mode: None,
+                middleware,
+                middleware_merge_mode,
             },
         )
         .boxed()
@@ -996,8 +1056,64 @@ fn arb_mcp_model() -> BoxedStrategy<Mcp> {
     )
     .prop_map(|deployments| Mcp {
         deployments: IndexMap::from_iter(deployments),
+        imports: IndexMap::new(),
     })
     .boxed()
+}
+
+#[test]
+fn mcp_imports_serde_and_schema_preserve_order_and_shapes() {
+    let yaml = r#"
+mcp:
+  imports:
+    prod:
+      - url: https://first.example.com/mcp
+        auth:
+          bearer: "{{ MCP_TOKEN }}"
+        prefix: first
+        include: ["read_*", "list_*"]
+      - url: https://second.example.com/mcp
+        auth:
+          basic:
+            user: alice
+            password: "{{ MCP_PASSWORD }}"
+        exclude: ["delete_*"]
+        version: "2025-03-26"
+      - url: https://third.example.com/mcp
+        securityScheme: oauth
+"#;
+    let value: serde_json::Value = serde_yaml::from_str(yaml).unwrap();
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    let app: Application = serde_yaml::from_str(yaml).unwrap();
+    let imports = &app.mcp.unwrap().imports[&EnvironmentName("prod".into())];
+    assert_eq!(imports.len(), 3);
+    assert_eq!(imports[0].prefix.as_deref(), Some("first"));
+    assert_eq!(imports[1].version.as_deref(), Some("2025-03-26"));
+}
+
+#[test]
+fn mcp_imports_schema_and_semantic_validation_reject_conflicting_fields() {
+    for extra in [
+        serde_json::json!({ "auth": {} }),
+        serde_json::json!({ "auth": { "bearer": "token", "basic": { "user": "u", "password": "p" } } }),
+        serde_json::json!({ "auth": { "bearer": "token" }, "securityScheme": "oauth" }),
+        serde_json::json!({ "include": [], "exclude": [] }),
+    ] {
+        let mut import = serde_json::json!({ "url": "http://internal.example/mcp" });
+        import
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let manifest = serde_json::json!({ "mcp": { "imports": { "prod": [import.clone()] } } });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&manifest));
+        let input: golem_common::model::mcp_import::McpImportDeployment =
+            serde_json::from_value(import).unwrap();
+        assert!(
+            input
+                .into_parts(golem_common::model::environment::EnvironmentId::new())
+                .is_err()
+        );
+    }
 }
 
 fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
@@ -1572,6 +1688,103 @@ fn manifest_loading_accepts_wildcard_and_escaped_tool_binding_paths() {
         "# };
 
     Application::from_yaml_str(source).expect("valid scopes should load");
+}
+
+#[test]
+fn middleware_secret_scopes_preserve_omitted_empty_wildcard_and_concrete_values() {
+    let installations: Vec<ToolMiddlewareInstallation> = serde_yaml::from_str(
+        r#"
+- audit
+- name: audit
+  secretKeysReadable: []
+  secretKeysRevealable: "*"
+- name: audit
+  secretKeysReadable: ['credentials.github\=token']
+  secretKeysRevealable: ['"database url".password']
+"#,
+    )
+    .unwrap();
+
+    let common = installations
+        .into_iter()
+        .map(ToolMiddlewareInstallation::into_common)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(common[0].secret_keys_readable, None);
+    assert_eq!(common[0].secret_keys_revealable, None);
+    assert_eq!(
+        common[1].secret_keys_readable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::new()
+        ))
+    );
+    assert_eq!(
+        common[1].secret_keys_revealable,
+        Some(golem_common::model::tool::SecretKeyScope::All)
+    );
+    assert_eq!(
+        common[2].secret_keys_readable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::from(
+                [golem_common::model::agent_secret::CanonicalAgentSecretPath(
+                    vec!["credentials".to_string(), "githubToken".to_string(),]
+                )]
+            )
+        ))
+    );
+    assert_eq!(
+        common[2].secret_keys_revealable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::from(
+                [golem_common::model::agent_secret::CanonicalAgentSecretPath(
+                    vec!["databaseUrl".to_string(), "password".to_string(),]
+                )]
+            )
+        ))
+    );
+}
+
+#[test]
+fn middleware_secret_scopes_reject_invalid_values_and_unknown_fields() {
+    for yaml in [
+        "name: audit\nsecretKeysReadable: anything\n",
+        "name: audit\nsecretKeysRevealable: ['*']\n",
+        "name: audit\nsecretKeysReadable: ['credentials\\']\n",
+        "name: audit\nsecretKeysReadble: []\n",
+    ] {
+        assert!(
+            serde_yaml::from_str::<ToolMiddlewareInstallation>(yaml).is_err(),
+            "middleware installation unexpectedly accepted:\n{yaml}"
+        );
+    }
+}
+
+#[test]
+fn schema_validates_middleware_secret_scopes() {
+    let valid = serde_json::json!({
+        "app": "test-app",
+        "environments": {
+            "local": {
+                "server": "local",
+                "tools": {
+                    "middleware": [
+                        {
+                            "name": "audit",
+                            "secretKeysReadable": [],
+                            "secretKeysRevealable": "*"
+                        }
+                    ]
+                }
+            }
+        }
+    });
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&valid));
+
+    let mut invalid = valid;
+    invalid["environments"]["local"]["tools"]["middleware"][0]["secretKeysReadable"] =
+        serde_json::json!(["*"]);
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&invalid));
 }
 
 #[test]

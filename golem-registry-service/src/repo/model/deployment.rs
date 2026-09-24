@@ -50,12 +50,13 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::mcp_deployment::McpDeployment;
+use golem_common::model::mcp_import::{McpImport, McpImportCredential};
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionId};
 use golem_common::model::security_scheme::{
     CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
 };
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolDeploymentState,
+    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolDeploymentState,
     ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_middleware::{
@@ -263,8 +264,30 @@ pub struct DeploymentIdentity {
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
     pub mcp_deployments: Vec<McpDeploymentRevisionIdentityRecord>,
     pub tools: Vec<DeploymentToolIdentityRecord>,
+    pub mcp_imports: Vec<DeploymentMcpImportIdentityRecord>,
     pub middleware: DeploymentMiddlewareIdentity,
 }
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentMcpImportIdentityRecord {
+    pub import_index: i64,
+    pub import_hash: SqlBlake3Hash,
+}
+
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct DeploymentMcpImportRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub import_index: i64,
+    pub import_hash: SqlBlake3Hash,
+    pub import_config: Blob<McpImport>,
+}
+
+pub struct DeploymentMcpImportCreationRecord {
+    pub deployment: DeploymentMcpImportRecord,
+    pub inline_credential: Option<Blob<McpImportCredential>>,
+}
+
 #[derive(Default)]
 pub struct DeploymentMiddlewareIdentity {
     pub registered: Vec<RegisteredToolMiddleware>,
@@ -323,6 +346,18 @@ impl DeploymentIdentity {
                 .map(|mcd| mcd.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             remote_tools,
+            mcp_imports: self
+                .mcp_imports
+                .into_iter()
+                .map(|entry| {
+                    Ok(
+                        golem_common::model::deployment::DeploymentPlanMcpImportEntry {
+                            index: entry.import_index.try_into().map_err(anyhow::Error::new)?,
+                            hash: entry.import_hash.into(),
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, DeployRepoError>>()?,
             published_tools,
             remote_tool_middlewares: diffable
                 .remote_tool_middleware_deployments
@@ -402,6 +437,16 @@ impl DeploymentIdentity {
                 })
                 .collect(),
             remote_tools,
+            mcp_imports: self
+                .mcp_imports
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.import_index.to_string(),
+                        diff::HashOf::from_blake3_hash(entry.import_hash.into()),
+                    )
+                })
+                .collect(),
             published_tools,
             remote_tool_middleware_deployments: diff::remote_tool_middleware_deployments(
                 self.middleware.registered.clone(),
@@ -490,6 +535,19 @@ impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
                 .map(|mcd| mcd.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
             remote_tools,
+            mcp_imports: value
+                .identity
+                .mcp_imports
+                .into_iter()
+                .map(|entry| {
+                    Ok(
+                        golem_common::model::deployment::DeploymentPlanMcpImportEntry {
+                            index: entry.import_index.try_into().map_err(anyhow::Error::new)?,
+                            hash: entry.import_hash.into(),
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, DeployRepoError>>()?,
             published_tools,
             remote_tool_middlewares: diffable
                 .remote_tool_middleware_deployments
@@ -815,7 +873,9 @@ pub struct ToolDeploymentStateRecord {
     pub deployment_revision_id: i64,
     pub registered_tools: Vec<DeploymentRegisteredToolRecord>,
     pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
+    pub mcp_imports: Vec<DeploymentMcpImportRecord>,
     pub middleware_snapshot: Option<DeploymentToolMiddlewareSnapshotRecord>,
+    pub middleware_configuration: golem_common::model::tool_middleware::ToolMiddlewareConfiguration,
 }
 
 #[derive(Debug, Clone, PartialEq, FromRow)]
@@ -838,6 +898,9 @@ pub struct DeploymentToolMiddlewareBindingRecord {
     pub tool_name: String,
     pub merge_mode: Option<String>,
     pub has_installations: bool,
+    pub config_keys_readable: Blob<golem_common::model::tool::ConfigKeyScope>,
+    pub secret_keys_readable: Blob<golem_common::model::tool::SecretKeyScope>,
+    pub secret_keys_revealable: Blob<golem_common::model::tool::SecretKeyScope>,
 }
 #[derive(Debug, Clone, PartialEq, FromRow)]
 pub struct DeploymentToolMiddlewareInstallationRecord {
@@ -848,6 +911,8 @@ pub struct DeploymentToolMiddlewareInstallationRecord {
     pub middleware_version: Option<String>,
     pub parameters: Blob<NormalizedJsonValue>,
     pub account_email: Option<String>,
+    pub secret_keys_readable: Option<Blob<SecretKeyScope>>,
+    pub secret_keys_revealable: Option<Blob<SecretKeyScope>>,
     pub filesystem_access: String,
 }
 impl DeploymentToolMiddlewareInstallationRecord {
@@ -858,6 +923,8 @@ impl DeploymentToolMiddlewareInstallationRecord {
             version: self.middleware_version,
             parameters: self.parameters.into_value(),
             account: self.account_email.map(AccountEmail::new),
+            secret_keys_readable: self.secret_keys_readable.map(Blob::into_value),
+            secret_keys_revealable: self.secret_keys_revealable.map(Blob::into_value),
             filesystem_access: filesystem_access(&self.filesystem_access)?,
         })
     }
@@ -892,6 +959,11 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
     type Error = DeployRepoError;
 
     fn try_from(value: ToolDeploymentStateRecord) -> Result<Self, Self::Error> {
+        if value.middleware_snapshot.is_none() {
+            return Err(DeployRepoError::InternalError(anyhow!(
+                "tool deployment state is missing its middleware snapshot"
+            )));
+        }
         let deployment_revision: DeploymentRevision = value.deployment_revision_id.try_into()?;
         let registered_tools = value
             .registered_tools
@@ -979,38 +1051,46 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
             deployment_revision,
             registered_tools,
             tool_bindings,
+            mcp_imports: value.mcp_imports.into_iter().enumerate().map(|(index, record)| {
+                if record.deployment_revision_id != value.deployment_revision_id
+                    || record.import_index != index as i64
+                {
+                    return Err(DeployRepoError::InternalError(anyhow!(
+                        "MCP import row has non-contiguous index or mismatched deployment revision"
+                    )));
+                }
+                Ok(record.import_config.into_value())
+            }).collect::<Result<Vec<_>, _>>()?,
+            tool_middleware_configuration: value.middleware_configuration,
             registered_tool_middlewares: value
                 .middleware_snapshot
                 .as_ref()
-                .map(|snapshot| {
-                    snapshot
-                        .registered_middlewares
-                        .value()
-                        .iter()
-                        .cloned()
-                        .map(|middleware| {
-                            (
-                                ToolMiddlewareName::try_from(middleware.definition.name.clone())
-                                    .expect("validated snapshot name"),
-                                middleware,
-                            )
-                        })
-                        .collect()
+                .expect("middleware snapshot checked above")
+                .registered_middlewares
+                .value()
+                .iter()
+                .cloned()
+                .map(|middleware| {
+                    (
+                        ToolMiddlewareName::try_from(middleware.definition.name.clone())
+                            .expect("validated snapshot name"),
+                        middleware,
+                    )
                 })
-                .unwrap_or_default(),
-            tool_middleware_chains: value
-                .middleware_snapshot
-                .map(|snapshot| {
-                    let mut result = std::collections::BTreeMap::new();
-                    for chain in snapshot.compiled_chains.into_value() {
-                        result
-                            .entry(chain.owner.clone())
-                            .or_insert_with(std::collections::BTreeMap::new)
-                            .insert(chain.tool_name.clone(), chain);
-                    }
+                .collect(),
+            tool_middleware_chains: {
+                let snapshot = value
+                    .middleware_snapshot
+                    .expect("middleware snapshot checked above");
+                let mut result = std::collections::BTreeMap::new();
+                for chain in snapshot.compiled_chains.into_value() {
                     result
-                })
-                .unwrap_or_default(),
+                        .entry(chain.owner.clone())
+                        .or_insert_with(std::collections::BTreeMap::new)
+                        .insert(chain.tool_name.clone(), chain);
+                }
+                result
+            },
         })
     }
 }
@@ -1083,6 +1163,7 @@ pub struct DeploymentRevisionCreationRecord {
     pub registered_agent_types: Vec<DeploymentRegisteredAgentTypeRecord>,
     pub registered_tools: Vec<DeploymentRegisteredToolRecord>,
     pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
+    pub mcp_imports: Vec<DeploymentMcpImportCreationRecord>,
     pub tool_releases: Vec<ToolReleaseRecord>,
     pub registered_tool_middlewares: Vec<RegisteredToolMiddleware>,
     pub tool_middleware_chains: Vec<CompiledToolMiddlewareChain>,
@@ -1106,6 +1187,12 @@ pub struct DeploymentRevisionCreationRecord {
     pub created_retry_policies: Vec<RetryPolicyCreationRecord>,
 
     pub user_account_id: Uuid,
+}
+
+#[derive(Debug)]
+pub struct CompiledTools {
+    pub registered_tools: Vec<RegisteredTool>,
+    pub agent_tool_bindings: Vec<CompiledToolBinding>,
 }
 
 pub struct DeploymentMiddlewareCreationInput {
@@ -1135,8 +1222,8 @@ impl DeploymentRevisionCreationRecord {
         compiled_routes: Vec<UnboundCompiledRoute>,
         compiled_mcp: Vec<CompiledMcp>,
         registered_agent_types: Vec<DeployedRegisteredAgentType>,
-        registered_tools: Vec<RegisteredTool>,
-        agent_tool_bindings: Vec<CompiledToolBinding>,
+        compiled_tools: CompiledTools,
+        mcp_imports: Vec<(u32, McpImport, Option<McpImportCredential>)>,
         tool_releases: Vec<ToolReleaseRecord>,
         middleware: DeploymentMiddlewareCreationInput,
         created_agent_secrets: Vec<DeploymentAgentSecretCreation>,
@@ -1146,6 +1233,10 @@ impl DeploymentRevisionCreationRecord {
         created_retry_policies: Vec<RetryPolicyCreationRecord>,
         actor: AccountId,
     ) -> anyhow::Result<Self> {
+        let CompiledTools {
+            registered_tools,
+            agent_tool_bindings,
+        } = compiled_tools;
         let published_tool_names = tool_releases
             .iter()
             .map(|release| release.tool_name.clone())
@@ -1246,6 +1337,22 @@ impl DeploymentRevisionCreationRecord {
                     DeploymentAgentToolBindingRecord::from_model(environment_id, binding)
                 })
                 .collect(),
+            mcp_imports: mcp_imports
+                .into_iter()
+                .map(|(index, import, credential)| {
+                    let import_hash = import.hash()?;
+                    Ok(DeploymentMcpImportCreationRecord {
+                        deployment: DeploymentMcpImportRecord {
+                            environment_id: environment_id.0,
+                            deployment_revision_id: deployment_revision.into(),
+                            import_index: index.into(),
+                            import_hash: import_hash.into(),
+                            import_config: Blob::new(import),
+                        },
+                        inline_credential: credential.map(Blob::new),
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?,
             tool_releases,
             registered_tool_middlewares: middleware.registered,
             tool_middleware_chains: middleware.chains,

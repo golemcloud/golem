@@ -25,9 +25,9 @@ use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
-use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
+use tonic::transport::server::TcpIncoming;
 use tonic_tracing_opentelemetry::middleware::server::OtelGrpcLayer;
 use tracing::Instrument;
 
@@ -80,11 +80,14 @@ pub async fn start_grpc_server(
                     services.registry_change_notifier.clone(),
                     services.registry_change_repo.clone(),
                     services.resource_definition_service.clone(),
+                    services.mcp_oauth_service.clone(),
+                    services.mcp_import_resolver.clone(),
                 ))
                 .send_compressed(CompressionEncoding::Gzip)
                 .accept_compressed(CompressionEncoding::Gzip),
             )
-            .serve_with_incoming(TcpListenerStream::new(listener))
+            // Custom incoming streams bypass Server's TCP_NODELAY default.
+            .serve_with_incoming(TcpIncoming::from(listener).with_nodelay(Some(true)))
             .map_err(anyhow::Error::from)
             .in_current_span()
     });

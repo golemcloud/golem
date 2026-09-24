@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::replayable_stream::{ContentHash, ReplayableStream};
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
+use crate::storage::blob::{BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace};
 use anyhow::{Context, Error};
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -42,9 +42,8 @@ impl InitialAgentFilesService {
     ) -> Result<bool, Error> {
         let metadata = self
             .blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "exists")
             .get_metadata(
-                INITIAL_AGENT_FILES_LABEL,
-                "exists",
                 BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
@@ -60,9 +59,8 @@ impl InitialAgentFilesService {
         key: AgentFileContentHash,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         self.blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "get")
             .get_stream(
-                INITIAL_AGENT_FILES_LABEL,
-                "get",
                 BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
@@ -93,9 +91,8 @@ impl InitialAgentFilesService {
 
         let metadata = self
             .blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "get_metadata")
             .get_metadata(
-                INITIAL_AGENT_FILES_LABEL,
-                "get_metadata",
                 BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &key,
             )
@@ -106,9 +103,8 @@ impl InitialAgentFilesService {
             debug!("Storing initial agent file with hash: {}", hash.0);
 
             self.blob_storage
+                .with(INITIAL_AGENT_FILES_LABEL, "put")
                 .put_stream(
-                    INITIAL_AGENT_FILES_LABEL,
-                    "put",
                     BlobStorageNamespace::InitialAgentFiles { environment_id },
                     &key,
                     &data.erased(),

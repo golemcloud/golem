@@ -33,6 +33,7 @@ export default {
   "golem-add-transactions-scala": "Saga-Pattern Transactions (Scala)",
   "golem-schedule-agent-scala": "Scheduling a Future Agent Invocation",
   "golem-schedule-future-call-scala": "Scheduling a Future Agent Invocation (Scala)",
+  "golem-streaming-agent-scala": "Streaming Agent Methods in Scala",
   "golem-trigger-agent-scala": "Triggering a Fire-and-Forget Agent Invocation",
   "golem-add-ignite-scala": "Using Apache Ignite from a Scala Agent",
   "golem-add-mysql-scala": "Using MySQL from a Scala Agent",

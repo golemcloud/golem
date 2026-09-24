@@ -677,14 +677,66 @@ pub struct StartAttemptDescriptor {
     pub live_join_buffer_events: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamSessionExpiryPolicy {
+    #[default]
+    None,
+    Sliding {
+        ttl_seconds: u64,
+    },
+    Absolute {
+        expires_at_millis: u64,
+    },
+}
+
+impl StreamSessionExpiryPolicy {
+    pub fn accepts_deadline(self, deadline_millis: Option<u64>) -> bool {
+        match (self, deadline_millis) {
+            (Self::None, None) => true,
+            (Self::Sliding { .. }, Some(_)) => true,
+            (Self::Absolute { expires_at_millis }, Some(deadline_millis)) => {
+                expires_at_millis == deadline_millis
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionPreparedRecord {
     pub format_version: u8,
     pub session_key: IdempotencyKey,
+    pub public_session_id: String,
+    pub expiry_policy: StreamSessionExpiryPolicy,
+    pub expiry_deadline_millis: Option<u64>,
     pub attempt: StartAttemptDescriptor,
     pub stream_mappings: Vec<StreamBindingRecord>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamSessionExpiryRefreshedRecord {
+    pub format_version: u8,
+    pub session_key: IdempotencyKey,
+    pub public_session_id: String,
+    pub expected_deadline_millis: u64,
+    pub refreshed_at_millis: u64,
+    pub deadline_millis: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamSessionExpiredRecord {
+    pub format_version: u8,
+    pub session_key: IdempotencyKey,
+    pub public_session_id: String,
+    pub expected_deadline_millis: u64,
+    pub expired_at_millis: u64,
 }
 
 /// Owner-relative source bound to a transport slot in an oplog record.
@@ -1270,6 +1322,7 @@ pub struct StreamExportFork {
     pub content_type: String,
     pub initial_content_hash: Vec<u8>,
     pub closed: bool,
+    pub target_expiry_policy: StreamSessionExpiryPolicy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1279,6 +1332,10 @@ pub struct StreamExportForkCandidate {
     pub horizon: OplogIndex,
     pub cut: OplogIndex,
     pub selected: StreamId,
+    pub source_invocation: StreamInvocationId,
+    pub target_session_key: IdempotencyKey,
+    pub expiry_policy: StreamSessionExpiryPolicy,
+    pub expiry_deadline_millis: Option<u64>,
     pub retained_through: Option<StreamOffset>,
     pub initial: Option<StreamItemsPayload>,
 }
@@ -1297,9 +1354,24 @@ pub struct StreamExportForkAdmittedRecord {
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamExportForkInitializedRecord {
+    pub format_version: u8,
+    pub public_session_id: String,
+    pub session_key: IdempotencyKey,
+    pub source_invocation: StreamInvocationId,
+    pub request_hash: Vec<u8>,
+    pub expiry_policy: StreamSessionExpiryPolicy,
+    pub expiry_deadline_millis: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamSessionRecord {
     CallerAttempt(StreamCallerAttemptRecord),
     Prepared(StreamSessionPreparedRecord),
+    ExpiryRefreshed(StreamSessionExpiryRefreshedRecord),
+    Expired(StreamSessionExpiredRecord),
     Attached(StreamSessionAttachedRecord),
     ResumeAttempt(StreamSessionResumeAttemptRecord),
     Detached(StreamSessionDetachedRecord),
@@ -1325,6 +1397,7 @@ pub enum StreamSessionRecord {
     Tombstoned(StreamSlotTombstonedRecord),
     CancelRequested(StreamSessionCancelRequestedRecord),
     ExportForkAdmitted(StreamExportForkAdmittedRecord),
+    ExportForkInitialized(StreamExportForkInitializedRecord),
     ForkCut(StreamForkCutRecord),
 }
 
@@ -1333,6 +1406,8 @@ impl StreamSessionRecord {
     pub fn local_session_key(&self) -> Option<&IdempotencyKey> {
         let reference = match self {
             Self::Prepared(record) => return Some(&record.session_key),
+            Self::ExpiryRefreshed(record) => return Some(&record.session_key),
+            Self::Expired(record) => return Some(&record.session_key),
             Self::Attached(record) => return Some(&record.session_key),
             Self::ResumeAttempt(record) => return Some(&record.session_key),
             Self::Detached(record) => return Some(&record.session_key),
@@ -1340,6 +1415,7 @@ impl StreamSessionRecord {
             Self::Finished(record) => &record.session_key,
             Self::Tombstoned(record) => &record.session_key,
             Self::CancelRequested(record) => &record.session_key,
+            Self::ExportForkInitialized(record) => return Some(&record.session_key),
             Self::ConsumerCancelApplied(record) => &record.intent.session_key,
             _ => return None,
         };
@@ -1353,6 +1429,8 @@ impl StreamSessionRecord {
         match self {
             Self::CallerAttempt(record) => record.format_version,
             Self::Prepared(record) => record.format_version,
+            Self::ExpiryRefreshed(record) => record.format_version,
+            Self::Expired(record) => record.format_version,
             Self::Attached(record) => record.format_version,
             Self::ResumeAttempt(record) => record.format_version,
             Self::Detached(record) => record.format_version,
@@ -1378,6 +1456,7 @@ impl StreamSessionRecord {
             Self::Tombstoned(record) => record.format_version,
             Self::CancelRequested(record) => record.format_version,
             Self::ExportForkAdmitted(record) => record.format_version,
+            Self::ExportForkInitialized(record) => record.format_version,
             Self::ForkCut(record) => record.format_version,
         }
     }
@@ -1421,7 +1500,11 @@ impl StreamSessionRecord {
                     .iter()
                     .map(|mapping| (&mapping.source, mapping.role))
                     .collect::<HashSet<_>>();
-                supported_attempt(&record.attempt)
+                !record.public_session_id.is_empty()
+                    && record
+                        .expiry_policy
+                        .accepts_deadline(record.expiry_deadline_millis)
+                    && supported_attempt(&record.attempt)
                     && record.session_key == record.attempt.session_key.idempotency_key
                     && record
                         .attempt
@@ -1451,6 +1534,14 @@ impl StreamSessionRecord {
                             StreamRecordReference::Local(_) => true,
                             StreamRecordReference::Foreign(handle) => handle == original,
                         })
+            }
+            Self::ExpiryRefreshed(record) => {
+                !record.public_session_id.is_empty()
+                    && record.refreshed_at_millis <= record.deadline_millis
+            }
+            Self::Expired(record) => {
+                !record.public_session_id.is_empty()
+                    && record.expired_at_millis >= record.expected_deadline_millis
             }
             Self::Mapping(record) => record.mapping.source.has_supported_format(),
             Self::AttachmentPrepared(record) => {
@@ -1604,6 +1695,13 @@ impl StreamSessionRecord {
                     && record.candidate.cut > OplogIndex::NONE
                     && record.candidate.cut <= record.candidate.horizon
             }
+            Self::ExportForkInitialized(record) => {
+                !record.public_session_id.is_empty()
+                    && record.request_hash.len() == 32
+                    && record
+                        .expiry_policy
+                        .accepts_deadline(record.expiry_deadline_millis)
+            }
             Self::ForkCut(record) => {
                 let valid_revert = record.revert.as_ref().is_none_or(|region| {
                     record.cut_index.as_u64().checked_add(1) == Some(region.start.as_u64())
@@ -1647,7 +1745,8 @@ mod tests {
         PersistedInvocationTarget, PersistedStreamInvocationDescriptor, SessionStreamRole,
         StartAttemptDescriptor, StreamAttachmentKey, StreamBindingRecord,
         StreamConsumerItemValueRecord, StreamId, StreamInvocationId, StreamOffset,
-        StreamOffsetError, StreamRecordReference, StreamSessionPreparedRecord, StreamSessionRecord,
+        StreamOffsetError, StreamRecordReference, StreamSessionExpiryPolicy,
+        StreamSessionPreparedRecord, StreamSessionRecord,
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
     use crate::base_model::environment::EnvironmentId;
@@ -1925,6 +2024,9 @@ mod tests {
         let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
             session_key: session_key.idempotency_key.clone(),
+            public_session_id: session_key.idempotency_key.value.clone(),
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
@@ -1988,6 +2090,9 @@ mod tests {
         let mut prepared = StreamSessionPreparedRecord {
             format_version: 1,
             session_key: session_key.idempotency_key.clone(),
+            public_session_id: session_key.idempotency_key.value.clone(),
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),

@@ -3,7 +3,10 @@ use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
-use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
+use crate::services::{
+    HasComponentService, HasConfig, HasOplogService, HasWorkerService, UsesAllDeps,
+};
+use crate::worker::Worker;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -147,7 +150,13 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 
         let mut workers: Vec<AgentMetadata> = vec![];
         for (agent_id, worker) in active_agents {
-            let metadata = worker.get_latest_worker_metadata().await;
+            let initial = worker.get_initial_worker_metadata();
+            let owned_agent_id =
+                golem_common::model::OwnedAgentId::new(initial.environment_id, &agent_id);
+            let Some(metadata) = Worker::get_latest_metadata(worker.all(), &owned_agent_id).await?
+            else {
+                continue;
+            };
             if agent_id.component_id == *component_id
                 && (metadata.last_known_status.status == AgentStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))

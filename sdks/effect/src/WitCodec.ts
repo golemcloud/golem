@@ -71,6 +71,7 @@ import {
   peekGuestPermissionCardHandle,
 } from "./internal/schema-model/permissionCardHandle.js"
 import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
+import { SchemaRef, type JsonValue } from "./SchemaRef.js"
 
 // Branded so `Durability.wrap` (and any other downstream consumer that uses
 // nominal SDK-error detection) can route this into the defect channel without
@@ -165,6 +166,18 @@ export interface CompiledWitCodec<S extends Schema.Top> extends WitCodec<S> {
   readonly decode: (
     value: CoreTypes.SchemaValueTree,
   ) => Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]>
+}
+
+/** A compiled schema whose public boundary is the schema model's canonical JSON representation. */
+export interface CompiledJsonCodec<S extends Schema.Top> {
+  readonly schema: S
+  readonly jsonSchema: JsonValue
+  readonly decode: (
+    value: JsonValue,
+  ) => Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]>
+  readonly encode: (
+    value: S["Type"],
+  ) => Effect.Effect<JsonValue, Schema.SchemaError, S["EncodingServices"]>
 }
 
 /** Leaf pair for a primitive whose schema value carries a single `value`. */
@@ -493,8 +506,19 @@ const discriminatorMatches = (rule: UnionBranch["discriminator"], value: unknown
 
 const declarationConstructorTag = (a: SchemaAST.AST): string | undefined => {
   if (a._tag !== "Declaration") return undefined
-  const tc = (a.annotations as { typeConstructor?: { _tag?: string } } | undefined)?.typeConstructor
-  return tc?._tag
+  const id = (a.annotations as { representation?: { id?: string } } | undefined)?.representation?.id
+  switch (id) {
+    case "effect/schema/Option":
+      return "effect/Option"
+    case "effect/schema/Result":
+      return "effect/Result"
+    case "effect/schema/ReadonlyMap":
+      return "ReadonlyMap"
+    case "effect/schema/HashMap":
+      return "effect/HashMap"
+    default:
+      return undefined
+  }
 }
 
 const typedArrayKindOf = (a: SchemaAST.AST): WitTypedArrayKind | undefined =>
@@ -1656,37 +1680,49 @@ export const toWitCodec = <S extends Schema.Top>(
 
     const svToEncoded = SchemaValueCarrier.pipe(
       Schema.decodeTo(EncodedCarrier, {
-        decode: SchemaGetter.transformOrFail((sv: SchemaValue) => {
+        decode: SchemaGetter.transformEffect((sv: SchemaValue, options) => {
           const converted = Effect.try({
             try: () => {
               assertValueShape(graph, root, sv)
               return sv
             },
             catch: (error) =>
-              new SchemaIssue.InvalidValue(Option.some(sv), {
-                message: error instanceof Error ? error.message : String(error),
-              }),
+              new SchemaIssue.InvalidValue(
+                {
+                  message: error instanceof Error ? error.message : String(error),
+                },
+                sv,
+                options,
+              ),
           })
           return Effect.flatMap(converted, (checked) =>
             Effect.flatMap(Effect.context<any>(), (context) =>
               Effect.try({
                 try: () => withConversionContext(context, () => pair.fromValue(checked)),
                 catch: (error) =>
-                  new SchemaIssue.InvalidValue(Option.some(sv), {
-                    message: error instanceof Error ? error.message : String(error),
-                  }),
+                  new SchemaIssue.InvalidValue(
+                    {
+                      message: error instanceof Error ? error.message : String(error),
+                    },
+                    sv,
+                    options,
+                  ),
               }),
             ),
           )
         }),
-        encode: SchemaGetter.transformOrFail((enc: S["Encoded"]) =>
+        encode: SchemaGetter.transformEffect((enc: S["Encoded"], options) =>
           Effect.flatMap(Effect.context<any>(), (context) =>
             Effect.try({
               try: () => withConversionContext(context, () => pair.toValue(enc)),
               catch: (error) =>
-                new SchemaIssue.InvalidValue(Option.some(enc), {
-                  message: error instanceof Error ? error.message : String(error),
-                }),
+                new SchemaIssue.InvalidValue(
+                  {
+                    message: error instanceof Error ? error.message : String(error),
+                  },
+                  enc,
+                  options,
+                ),
             }),
           ),
         ),
@@ -1710,7 +1746,7 @@ export const toWitCodec = <S extends Schema.Top>(
 
 const wireSchemaError = (error: unknown): Schema.SchemaError =>
   new Schema.SchemaError(
-    new SchemaIssue.InvalidValue(Option.none(), {
+    new SchemaIssue.InvalidValue({
       message: error instanceof Error ? error.message : String(error),
     }),
   )
@@ -1735,6 +1771,34 @@ export const compile = <S extends Schema.Top>(
       ),
     decode: (value) => decodeFromWire(compiled.codec, value),
   }))
+
+/** Compile an Effect Schema to its validated canonical JSON boundary. */
+export const compileJson = <S extends Schema.Top>(
+  schema: S,
+): Effect.Effect<CompiledJsonCodec<S>, UnsupportedSchemaError> =>
+  Effect.flatMap(compile(schema), (compiled) => {
+    const ref = new SchemaRef(compiled.schemaGraph)
+    const eligibility = ref.jsonEligibility()
+    if (!eligibility.success)
+      return Effect.fail(
+        new UnsupportedSchemaError(
+          eligibility.issues[0]?.message ?? "schema has no canonical JSON representation",
+        ),
+      )
+    return Effect.succeed({
+      schema,
+      jsonSchema: ref.toJsonSchema({ includeDraftMarker: false }),
+      decode: (value) =>
+        Effect.flatMap(
+          Effect.try({ try: () => ref.packJson(value), catch: wireSchemaError }),
+          compiled.decode,
+        ),
+      encode: (value) =>
+        Effect.flatMap(compiled.encodeAsync(value), (encoded) =>
+          Effect.try({ try: () => ref.unpackJson(encoded), catch: wireSchemaError }),
+        ),
+    })
+  })
 
 /** Decode a complete wire value while retaining ownership until validation succeeds.
  * @since 1.6.0 @category codecs

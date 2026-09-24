@@ -486,10 +486,11 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
         if let Some(reader) = reader {
             let output = reader.lock().unwrap();
             assert!(output.bytes.is_empty());
-            assert!(matches!(
-                output.terminal,
-                Some(ByteStreamCloseCause::Failed(_))
-            ));
+            assert!(
+                matches!(output.terminal, Some(ByteStreamCloseCause::Failed(_))),
+                "{expected} rejection selected {:?}",
+                output.terminal
+            );
             assert_eq!(output.drops, 1);
         }
         assert!(store.data().writers.is_empty());

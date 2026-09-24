@@ -417,6 +417,7 @@ pub struct ToolActivationSnapshot {
     pub binding: CompiledToolBinding,
     pub filesystem: FilesystemCapability,
     pub middleware_chain: Option<crate::model::tool_middleware::CompiledToolMiddlewareChain>,
+    pub mcp_import: Option<Box<crate::model::entity::McpImportActivation>>,
 }
 
 #[cfg(feature = "full")]
@@ -430,6 +431,7 @@ pub enum ToolDispatchTarget {
         provision: ToolProvisionConfig,
         binding: Box<CompiledToolBinding>,
         filesystem: FilesystemCapability,
+        mcp_import: Option<Box<crate::model::entity::McpImportActivation>>,
     },
 }
 
@@ -500,6 +502,7 @@ impl ToolActivationSnapshot {
         let policy = EntityActivationPolicy::Tool {
             provision: self.registered_tool.provision.clone(),
             binding: Box::new(self.binding.clone()),
+            mcp_import: self.mcp_import.clone(),
         };
         let leaf = match &self.registered_tool.source {
             ToolSource::Component {
@@ -539,6 +542,7 @@ impl ToolActivationSnapshot {
                 EntityActivationPolicy::Tool {
                     provision: self.registered_tool.provision,
                     binding: Box::new(self.binding),
+                    mcp_import: self.mcp_import,
                 },
                 self.filesystem,
             )
@@ -553,6 +557,7 @@ impl ToolActivationSnapshot {
                 provision: self.registered_tool.provision,
                 binding: Box::new(self.binding),
                 filesystem: self.filesystem,
+                mcp_import: self.mcp_import,
             }),
         }
     }
@@ -771,6 +776,9 @@ pub struct ToolDeploymentState {
     pub deployment_revision: DeploymentRevision,
     pub registered_tools: BTreeMap<ToolName, RegisteredTool>,
     pub tool_bindings: BTreeMap<ToolBindingOwner, BTreeMap<ToolName, CompiledToolBinding>>,
+    pub mcp_imports: Vec<crate::base_model::mcp_import::McpImport>,
+    pub tool_middleware_configuration:
+        crate::base_model::tool_middleware::ToolMiddlewareConfiguration,
     pub registered_tool_middlewares: BTreeMap<
         crate::model::tool_middleware::ToolMiddlewareName,
         crate::model::tool_middleware::RegisteredToolMiddleware,
