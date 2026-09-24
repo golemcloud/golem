@@ -2670,6 +2670,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .and_then(|result| result)
                     {
                         tracing::error!(%error, "Failed to complete durable streaming session");
+                        self.parent
+                            .durable_stream_producer
+                            .changed()
+                            .notify_waiters();
                         return failed_agent_invocation_outcome(
                             self.parent.agent_mode(),
                             RetryDecision::Immediate,
@@ -2688,11 +2692,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
                     .await;
-                if self.uses_streams {
-                    let _ = self
+                if self.uses_streams
+                    && self
                         .parent
                         .fail_durable_streaming_session(idempotency_key, kind.to_string())
-                        .await;
+                        .await
+                        .is_err()
+                {
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
                 }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
             }
@@ -2710,11 +2720,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         },
                     )
                     .await;
-                if self.uses_streams {
-                    let _ = self
+                if self.uses_streams
+                    && self
                         .parent
                         .fail_durable_streaming_session(idempotency_key, error.to_string())
-                        .await;
+                        .await
+                        .is_err()
+                {
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
                 }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }

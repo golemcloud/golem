@@ -41,7 +41,6 @@ pub const DEFAULT_LIVE_JOIN_BUFFER_SIZE: usize = 32;
 pub const MIN_LIVE_JOIN_BUFFER_SIZE: usize = 1;
 pub const MAX_LIVE_JOIN_BUFFER_SIZE: usize = 1024;
 pub const STREAM_ATTACHMENT_LEASE_TTL_MILLIS: u64 = 60_000;
-pub const STREAM_ATTACHMENT_RENEWAL_TARGET_MILLIS: u64 = 20_000;
 pub const STREAM_ATTACHMENT_RECONCILIATION_INTERVAL_MILLIS: u64 = 30_000;
 pub const STREAM_ATTACHMENT_RECONCILIATION_BATCH_SIZE: usize = 256;
 pub const STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS: u64 = 5 * 60_000;
@@ -1251,17 +1250,6 @@ pub struct StreamReaderForwardIntentRecord {
     pub destination: StreamReaderForwardDestination,
 }
 
-/// Proves acceptance of the exact destination recorded by an earlier forwarding intent.
-/// This settles a reader, not its source attachment or a replayable terminal observation.
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamReaderForwardAcceptedRecord {
-    pub format_version: u8,
-    pub session_key: StreamRegistrationInvocation,
-    pub intent_oplog_index: OplogIndex,
-}
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -1451,7 +1439,6 @@ pub enum StreamSessionRecord {
     ConsumerCancelApplied(StreamConsumerCancelAppliedRecord),
     ConsumerTerminal(StreamConsumerTerminalRecord),
     ReaderForwardIntent(StreamReaderForwardIntentRecord),
-    ReaderForwardAccepted(StreamReaderForwardAcceptedRecord),
     InvocationResult(StreamSessionInvocationResultRecord),
     Finished(StreamSessionFinishedRecord),
     Tombstoned(StreamSlotTombstonedRecord),
@@ -1511,7 +1498,6 @@ impl StreamSessionRecord {
             Self::ConsumerCancelApplied(record) => record.format_version,
             Self::ConsumerTerminal(record) => record.format_version,
             Self::ReaderForwardIntent(record) => record.format_version,
-            Self::ReaderForwardAccepted(record) => record.format_version,
             Self::InvocationResult(record) => record.format_version,
             Self::Finished(record) => record.format_version,
             Self::Tombstoned(record) => record.format_version,
@@ -1708,7 +1694,6 @@ impl StreamSessionRecord {
                         }
                     }
             }
-            Self::ReaderForwardAccepted(record) => record.intent_oplog_index.is_defined(),
             Self::InvocationResult(record) => {
                 let unique_transport_ids = record
                     .stream_mappings

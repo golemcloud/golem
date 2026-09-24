@@ -9966,14 +9966,6 @@ async fn root_forwarding_records_original_reader_before_local_and_rpc_destinatio
         assert!(index < destination_reader.introducing_oplog_index);
         assert_eq!(metadata.topology_count(), 0);
         drop(metadata);
-        assert!(
-            !origin
-                .current_control_metadata()
-                .await
-                .unwrap()
-                .has_accepted_reader_forward(reader_id)
-                .unwrap()
-        );
 
         let before_retry = oplog.current_oplog_index().await;
         for changed_destination in [false, true] {
@@ -10239,7 +10231,6 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                     assert_eq!(*recovered_index, intent_index);
                     assert_eq!(*intent, original_intent);
                 }
-                assert!(!metadata.has_accepted_reader_forward(reader_id).unwrap());
                 drop(metadata);
                 assert_eq!(
                     destination
@@ -10652,7 +10643,6 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                     assert_eq!(*new_index, intent_index);
                     assert_eq!(*new_intent, intent);
                 }
-                assert!(!metadata.has_accepted_reader_forward(reader_id).unwrap());
                 if retained_stage == 3 {
                     assert_eq!(recovered_oplog.current_oplog_index().await, before);
                 }
@@ -11035,7 +11025,6 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
                 metadata.reader_forward_intent(reader_id).unwrap().unwrap(),
                 &original_intent
             );
-            assert!(!metadata.has_accepted_reader_forward(reader_id).unwrap());
         } else {
             if mode == "cancel_failed_activation" {
                 assert!(result.unwrap_err().contains("RecoveryRequired"));
@@ -11053,14 +11042,6 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
                 }
             ));
             assert!(reader.next().await.unwrap().is_none());
-            assert!(
-                !origin
-                    .current_control_metadata()
-                    .await
-                    .unwrap()
-                    .has_accepted_reader_forward(reader_id)
-                    .unwrap()
-            );
             if mode == "already_terminal" {
                 assert_eq!(remote_oplog.current_oplog_index().await, before_remote);
             }

@@ -16,7 +16,6 @@ mod attachment;
 mod catch_up;
 mod external_input;
 mod fork;
-pub(crate) mod forwarding;
 mod index;
 mod items;
 pub(crate) mod metadata;

@@ -358,9 +358,8 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
     use crate::model::StreamId;
     use crate::model::durable_stream::{
         DurableStreamHandle, LocalStreamId, LocalStreamReaderId, StreamBindingRecord,
-        StreamReaderForwardAcceptedRecord, StreamReaderForwardDestination,
-        StreamReaderForwardIntentRecord, StreamReaderForwardPublication, StreamRecordReference,
-        StreamSessionMappingRecord,
+        StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
+        StreamReaderForwardPublication, StreamRecordReference, StreamSessionMappingRecord,
     };
     use golem_schema::schema::SchemaFingerprintV1;
 
@@ -393,11 +392,6 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
             mapping: mapping.clone(),
         },
     };
-    let accepted = StreamReaderForwardAcceptedRecord {
-        format_version: 1,
-        session_key: source,
-        intent_oplog_index: OplogIndex::from_u64(11),
-    };
     let local = StreamReaderForwardIntentRecord {
         destination: StreamReaderForwardDestination::SessionBinding {
             session_key: StreamRegistrationInvocation::Remote(invocation),
@@ -409,7 +403,6 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
     for record in [
         StreamSessionRecord::ReaderForwardIntent(intent.clone()),
         StreamSessionRecord::ReaderForwardIntent(local.clone()),
-        StreamSessionRecord::ReaderForwardAccepted(accepted.clone()),
     ] {
         assert!(record.has_supported_format());
         let bytes = crate::serialization::serialize(&record).unwrap();
@@ -506,20 +499,6 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
     for record in invalid {
         assert!(!StreamSessionRecord::ReaderForwardIntent(record).has_supported_format());
     }
-    assert!(
-        !StreamSessionRecord::ReaderForwardAccepted(StreamReaderForwardAcceptedRecord {
-            format_version: 0,
-            ..accepted.clone()
-        })
-        .has_supported_format()
-    );
-    assert!(
-        !StreamSessionRecord::ReaderForwardAccepted(StreamReaderForwardAcceptedRecord {
-            intent_oplog_index: OplogIndex::NONE,
-            ..accepted
-        })
-        .has_supported_format()
-    );
 }
 
 #[test]

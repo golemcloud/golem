@@ -64,17 +64,29 @@ async fn setup(
     Arc<Worker<TestWorkerCtx>>,
     KeyValueStorageFaults,
 )> {
+    setup_with_retry_interval(last_unique_id, deps, component, Duration::from_millis(50)).await
+}
+
+async fn setup_with_retry_interval(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    component: &PrecompiledComponent,
+    retry_interval: Duration,
+) -> anyhow::Result<(
+    TestWorkerExecutor,
+    Arc<Worker<TestWorkerCtx>>,
+    KeyValueStorageFaults,
+)> {
     let context = TestContext::new(last_unique_id);
     let faults = KeyValueStorageFaults::default();
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
+            configure: Some(Arc::new(move |config| {
                 config.active_agents.ttl = CACHE_TTL;
                 config.oplog.max_payload_size = 1;
-                config.durable_stream.renewal_interval = Duration::from_millis(50);
-                config.durable_stream.reconciliation_interval = Duration::from_millis(50);
+                config.durable_stream.reconciliation_interval = retry_interval;
                 config.agent_status_flush.enabled = false;
             })),
             wrap_key_value_storage: Some(Arc::new({
@@ -590,6 +602,98 @@ async fn session_records(
         }
     }
     Ok(result)
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn active_consumer_read_repairs_lost_producer_activation_without_a_timer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (_executor, seed, _faults) =
+        setup_with_retry_interval(last_unique_id, deps, component, Duration::from_secs(3600))
+            .await?;
+    async {
+        let producer = acquire(&seed, &target(&seed, "read-repair-source")).await?;
+        let consumer_id = target(&seed, "read-repair-consumer");
+        let consumer = acquire(&seed, &consumer_id).await?;
+        // Keep the consumer cold: only its durable authority, not consumer recovery, can
+        // authorize and repair the producer's missing activation.
+        seed.active_agents().remove(&consumer_id).await;
+        let source = register_stream(&producer).await?;
+        prepare_session(&producer, false).await?;
+        let consumer_stream = register_stream(&consumer).await?;
+        let (attachment, mapping) =
+            prepare_foreign_topology(&consumer, &source, consumer_stream.source_invocation, 17)
+                .await?;
+        let now = Timestamp::now_utc().to_millis();
+        producer
+            .add_and_commit_oplog(OplogEntry::stream_session(
+                None,
+                OplogPayload::Inline(Box::new(StreamSessionRecord::AttachmentPrepared(
+                    StreamAttachmentPreparedRecord {
+                        format_version: 1,
+                        key: attachment.clone(),
+                        prepared_at_millis: now,
+                        lease_expires_at_millis: now + STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
+                    },
+                ))),
+            ))
+            .await;
+        let request =
+            DurableStreamReadRequest::AttachedConsumer(Box::new(AttachedStreamSegmentRequest {
+                format_version: 1,
+                attachment: attachment.clone(),
+                mapping: mapping.clone(),
+                after: None,
+                through: None,
+                wait_for_events: false,
+            }));
+        assert!(
+            seed.rpc()
+                .read_durable_stream_segment(request.clone(), &AuthCtx::System)
+                .await
+                .is_err()
+        );
+        assert!(
+            !session_records(&producer)
+                .await?
+                .iter()
+                .any(|record| matches!(record, StreamSessionRecord::AttachmentActivated(_)))
+        );
+
+        // Publish only the consumer half: no activation RPC reaches the producer.
+        consumer
+            .add_and_commit_oplog(OplogEntry::stream_session(
+                None,
+                OplogPayload::Inline(Box::new(StreamSessionRecord::TopologyActivated(
+                    StreamTopologyActivatedRecord {
+                        format_version: 1,
+                        session_key: source.source_invocation,
+                        attachment: attachment.clone(),
+                        mapping,
+                    },
+                ))),
+            ))
+            .await;
+        for _ in 0..2 {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                seed.rpc()
+                    .read_durable_stream_segment(request.clone(), &AuthCtx::System),
+            )
+            .await?
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            assert_eq!(session_records(&producer).await?.iter().filter(|record| matches!(
+            record, StreamSessionRecord::AttachmentActivated(record) if record.key == attachment
+        )).count(), 1);
+        }
+        Ok::<_, anyhow::Error>(())
+    }
+    .await
 }
 
 async fn prepare_session(

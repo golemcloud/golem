@@ -606,6 +606,7 @@ impl DurableStreamStore {
     /// Observes authoritative lifecycle state without racing a prearmed publication.
     /// The observation must not submit mutations, acquire session locks, or perform recovery/RPC.
     /// Status-actor reconstruction is allowed; cached status is not an authoritative observation.
+    #[cfg(test)]
     pub(crate) async fn observe_publication<T>(
         &self,
         observation: impl Future<Output = Result<T, StreamStoreError>>,

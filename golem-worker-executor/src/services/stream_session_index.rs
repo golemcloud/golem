@@ -25,8 +25,7 @@ use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
 use golem_common::base_model::durable_stream::{
-    LocalStreamReaderId, StreamAttachmentKey, StreamBindingRecord, StreamSessionKey,
-    StreamSessionRecord,
+    LocalStreamReaderId, StreamSessionKey, StreamSessionRecord,
 };
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
@@ -61,39 +60,6 @@ fn stream_resume_index_field(
 
 fn stream_control_index_field(key: &StreamSessionKey) -> Result<String, String> {
     Ok(format!("control:{}", hex::encode(serialize(key)?)))
-}
-
-fn epoch_authority_field(key: &StreamSessionKey, epoch: u64) -> Result<String, String> {
-    Ok(format!("epoch:{}", hex::encode(serialize(&(key, epoch))?)))
-}
-
-fn topology_witness_field(
-    key: &StreamSessionKey,
-    binding: &StreamBindingRecord,
-    segment: OplogIndex,
-) -> Result<String, String> {
-    Ok(format!(
-        "topology-witness:{}",
-        hex::encode(serialize(&(key, binding, segment))?)
-    ))
-}
-
-/// Historical consumer acceptance evidence, never current attachment or read authority.
-/// A receipt inspector must validate its lifecycle referent and the containing publication.
-#[derive(Clone, Debug, PartialEq, Eq, desert_rust::BinaryCodec)]
-pub(crate) struct TopologyAcceptanceWitness {
-    pub attachment: StreamAttachmentKey,
-    pub prepared_index: OplogIndex,
-    pub activated_index: OplogIndex,
-    /// None for a caller-side journal whose session authority belongs to another owner.
-    pub epoch_authority: Option<OplogIndex>,
-}
-
-#[derive(Clone, Default, desert_rust::BinaryCodec)]
-struct TopologyWitnessRow {
-    prepared: Option<(StreamAttachmentKey, OplogIndex)>,
-    accepted: Option<TopologyAcceptanceWitness>,
-    conflicted: bool,
 }
 
 fn consumer_journal_index_field(
@@ -165,36 +131,6 @@ impl StreamSessionIndexService {
         id: &OwnedAgentId,
         mode: AgentMode,
     ) -> Result<ProducerIdentityLookup, String> {
-        let metadata = self.lookup_metadata(id, mode).await?;
-        Ok(ProducerIdentityLookup {
-            covered_through: metadata.covered_through,
-            producer_fingerprint: metadata
-                .producer_fingerprint
-                .ok_or("producer identity is missing from covered metadata")?,
-        })
-    }
-
-    /// Identifies retained history independently of ordinary append progress. Historical acceptance
-    /// checks retry on an incarnation change, fork or revert, but must not starve on a busy producer.
-    pub(crate) async fn lookup_retained_history(
-        &self,
-        id: &OwnedAgentId,
-        mode: AgentMode,
-    ) -> Result<(AgentFingerprint, StreamForkLineage), String> {
-        let metadata = self.lookup_metadata(id, mode).await?;
-        Ok((
-            metadata
-                .producer_fingerprint
-                .ok_or("producer identity is missing from covered metadata")?,
-            metadata.stream_fork_lineage,
-        ))
-    }
-
-    async fn lookup_metadata(
-        &self,
-        id: &OwnedAgentId,
-        mode: AgentMode,
-    ) -> Result<Metadata, String> {
         let oplog = self.oplog.upgrade().ok_or("oplog service is unavailable")?;
         let horizon = oplog.get_last_index(id, mode).await;
         self.catch_up(id, mode, horizon).await?;
@@ -207,7 +143,12 @@ impl StreamSessionIndexService {
         if metadata.covered_through < horizon {
             return Err("producer identity coverage is unavailable".into());
         }
-        Ok(metadata)
+        Ok(ProducerIdentityLookup {
+            covered_through: metadata.covered_through,
+            producer_fingerprint: metadata
+                .producer_fingerprint
+                .ok_or("producer identity is missing from covered metadata")?,
+        })
     }
 
     #[tracing::instrument(
@@ -308,122 +249,6 @@ impl StreamSessionIndexService {
         })
         .await
         .map_err(|error| format!("durable resume lookup task failed: {error}"))?
-    }
-
-    /// Returns a retained Attached or ResumeAttempt establishing the requested historical epoch.
-    /// Copied fork history may share an epoch with a later authority; this grants no live authority.
-    pub(crate) async fn lookup_epoch_authority(
-        &self,
-        id: &OwnedAgentId,
-        mode: AgentMode,
-        key: &StreamSessionKey,
-        epoch: u64,
-    ) -> Result<Option<OplogIndex>, String> {
-        let this = self.clone();
-        let id = id.clone();
-        let key = key.clone();
-        spawn_with_activity(async move {
-            let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
-            let horizon = oplog.get_last_index(&id, mode).await;
-            this.catch_up_inner(&id, mode, horizon).await?;
-            let offset: Option<OplogIndex> = this
-                .kv
-                .with_entity("stream_session_index", "lookup_epoch", "authority")
-                .get(Self::namespace(&id), &epoch_authority_field(&key, epoch)?)
-                .await?;
-            Ok(offset.filter(|index| *index <= horizon))
-        })
-        .await
-        .map_err(|error| format!("durable epoch lookup task failed: {error}"))?
-    }
-
-    /// Finds the earliest historical witness in the publication's lineage segment or a later one.
-    /// Earlier segments cannot accept a publication introduced after their lineage cut.
-    pub(crate) async fn lookup_topology_witness(
-        &self,
-        id: &OwnedAgentId,
-        mode: AgentMode,
-        key: &StreamSessionKey,
-        binding: &StreamBindingRecord,
-        publication: OplogIndex,
-    ) -> Result<Option<TopologyAcceptanceWitness>, String> {
-        let this = self.clone();
-        let id = id.clone();
-        let key = key.clone();
-        let binding = binding.clone();
-        spawn_with_activity(async move {
-            let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
-            let horizon = oplog.get_last_index(&id, mode).await;
-            this.catch_up_inner(&id, mode, horizon).await?;
-            loop {
-                let namespace = Self::namespace(&id);
-                let before = this
-                    .kv
-                    .with_entity("stream_session_index", "lookup_witness", "metadata")
-                    .get_raw(namespace.clone(), METADATA_FIELD)
-                    .await?;
-                let metadata: Metadata = before
-                    .as_ref()
-                    .map(|bytes| deserialize(bytes))
-                    .transpose()?
-                    .unwrap_or_default();
-                if metadata.covered_through < horizon {
-                    return Err("topology witness coverage is unavailable".into());
-                }
-                let segment = metadata
-                    .stream_fork_lineage
-                    .cuts()
-                    .iter()
-                    .filter(|(marker, _)| *marker <= publication)
-                    .map(|(marker, _)| *marker)
-                    .max()
-                    .unwrap_or(OplogIndex::NONE);
-                let fields = std::iter::once(segment)
-                    .chain(
-                        metadata
-                            .stream_fork_lineage
-                            .cuts()
-                            .iter()
-                            .map(|(marker, _)| *marker)
-                            .filter(|marker| *marker > segment),
-                    )
-                    .map(|segment| topology_witness_field(&key, &binding, segment))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let rows = this
-                    .kv
-                    .with_entity("stream_session_index", "lookup_witness", "witness")
-                    .get_many_raw(namespace.clone(), fields.into())
-                    .await?;
-                let after = this
-                    .kv
-                    .with_entity("stream_session_index", "lookup_witness", "metadata")
-                    .get_raw(namespace, METADATA_FIELD)
-                    .await?;
-                if before != after {
-                    continue;
-                }
-                if !publication.is_defined()
-                    || publication > metadata.covered_through
-                    || metadata
-                        .stream_fork_lineage
-                        .deleted_regions()
-                        .is_in_deleted_region(publication)
-                {
-                    return Ok(None);
-                }
-                for bytes in rows.into_iter().flatten() {
-                    let row: TopologyWitnessRow = deserialize(&bytes)?;
-                    if !row.conflicted
-                        && let Some(accepted) = row.accepted
-                    {
-                        return Ok(Some(accepted));
-                    }
-                }
-                return Ok(None);
-            }
-        })
-        .await
-        .map_err(|error| format!("topology witness lookup task failed: {error}"))?
     }
 
     pub async fn lookup_recovery_metadata(
@@ -1092,8 +917,6 @@ impl StreamSessionIndexService {
                 let mut controls = HashMap::<StreamSessionKey, SessionControlMetadata>::new();
                 let mut journal_pages = HashMap::<String, Vec<OplogIndex>>::new();
                 let mut resume_offsets = HashMap::<String, OplogIndex>::new();
-                let mut epoch_authorities = HashMap::<String, OplogIndex>::new();
-                let mut topology_witnesses = HashMap::<String, TopologyWitnessRow>::new();
                 let mut consumer_deleting = None;
                 for (idx, entry) in &entries {
                     if let OplogEntry::PendingAgentInvocation {
@@ -1208,65 +1031,6 @@ impl StreamSessionIndexService {
                         consumer_deleting = Some(None);
                         continue;
                     }
-                    let topology = match record {
-                        StreamSessionRecord::TopologyPrepared(record) => Some((&record.session_key, &record.attachment, &record.mapping, false)),
-                        StreamSessionRecord::TopologyActivated(record) => Some((&record.session_key, &record.attachment, &record.mapping, true)),
-                        _ => None,
-                    };
-                    if let Some((session, attachment, mapping, active)) = topology {
-                        let owner_local = session.callee_environment_id == attachment.consumer_environment_id
-                            && session.callee == attachment.consumer
-                            && session.callee_fingerprint == attachment.expected_consumer_fingerprint;
-                        let key = if owner_local {
-                            StreamSessionKey {
-                                callee_environment_id: id.environment_id,
-                                callee: id.agent_id.clone(),
-                                callee_fingerprint: producer_fingerprint,
-                                idempotency_key: session.idempotency_key.clone(),
-                            }
-                        } else { session.clone() };
-                        let segment = metadata.stream_fork_lineage.cuts().iter()
-                            .filter(|(marker, _)| marker <= idx)
-                            .map(|(marker, _)| *marker).max().unwrap_or(OplogIndex::NONE);
-                        let field = topology_witness_field(&key, &StreamBindingRecord::foreign(mapping), segment)?;
-                        if !topology_witnesses.contains_key(&field) {
-                            let row = self.kv.with_entity("stream_session_index", "read_witness", "witness")
-                                .get(namespace.clone(), &field).await?.unwrap_or_default();
-                            topology_witnesses.insert(field.clone(), row);
-                        }
-                        let row = topology_witnesses.get_mut(&field).unwrap();
-                        row.conflicted |= !record.has_supported_format();
-                        if row.accepted.is_none() && !row.conflicted {
-                            if !active {
-                                if row.prepared.as_ref().is_none_or(|(old, _)| old.epoch < attachment.epoch) {
-                                    row.prepared = Some((attachment.clone(), *idx));
-                                } else if row.prepared.as_ref().is_some_and(|(old, _)| old != attachment) {
-                                    row.conflicted = true;
-                                }
-                            } else {
-                                if !controls.contains_key(&key) {
-                                    let control = self.kv.with_entity("stream_session_index", "read_control", "session")
-                                        .get(namespace.clone(), &stream_control_index_field(&key)?).await?.unwrap_or_default();
-                                    controls.insert(key.clone(), control);
-                                }
-                                let control = &controls[&key];
-                                let prepared_index = row.prepared.as_ref()
-                                    .filter(|(prepared, prepared_index)| prepared == attachment && prepared_index < idx)
-                                    .map(|(_, index)| *index);
-                                row.conflicted |= prepared_index.is_none();
-                                if let Some(prepared_index) = prepared_index
-                                    && (!owner_local || (control.topology_epoch() == Some(attachment.epoch)
-                                    && control.topology_epoch_position().is_some())) {
-                                    row.accepted = Some(TopologyAcceptanceWitness {
-                                        attachment: attachment.clone(),
-                                        prepared_index,
-                                        activated_index: *idx,
-                                        epoch_authority: owner_local.then(|| control.topology_epoch_position()).flatten(),
-                                    });
-                                }
-                            }
-                        }
-                    }
                     if metadata.stream_fork_lineage.resets_control(*idx, record) {
                         continue;
                     }
@@ -1320,25 +1084,6 @@ impl StreamSessionIndexService {
                     }
                     if let StreamSessionRecord::ConsumerDeleting(record) = record {
                         consumer_deleting = Some(Some(record.clone()));
-                    }
-                    let authority = match record {
-                        StreamSessionRecord::Attached(record) => Some((&record.session_key, record.epoch)),
-                        StreamSessionRecord::ResumeAttempt(record) => Some((&record.session_key, record.accepted_epoch)),
-                        _ => None,
-                    };
-                    if let Some((session_key, epoch)) = authority {
-                        let field = epoch_authority_field(&StreamSessionKey {
-                            callee_environment_id: id.environment_id,
-                            callee: id.agent_id.clone(),
-                            callee_fingerprint: producer_fingerprint,
-                            idempotency_key: session_key.clone(),
-                        }, epoch)?;
-                        if let std::collections::hash_map::Entry::Vacant(entry) = epoch_authorities.entry(field) {
-                            let old: Option<OplogIndex> = self.kv
-                                .with_entity("stream_session_index", "read_epoch", "authority")
-                                .get(namespace.clone(), entry.key()).await?;
-                            entry.insert(old.unwrap_or(*idx));
-                        }
                     }
                     if let StreamSessionRecord::ResumeAttempt(record) = record {
                         let field = stream_resume_index_field(
@@ -1506,12 +1251,6 @@ impl StreamSessionIndexService {
                 }
                 for (field, offset) in resume_offsets {
                     fields.push((field, serialize(&offset)?));
-                }
-                for (field, offset) in epoch_authorities {
-                    fields.push((field, serialize(&offset)?));
-                }
-                for (field, witness) in topology_witnesses {
-                    fields.push((field, serialize(&witness)?));
                 }
                 for (page, keys) in recovery_pages {
                     fields.push((recovery_catalogue_field(page), serialize(&keys)?));

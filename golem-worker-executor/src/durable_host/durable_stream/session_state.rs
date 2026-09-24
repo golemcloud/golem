@@ -89,7 +89,6 @@ pub struct SessionControlMetadata {
     finished: Option<OplogIndex>,
     root_outputs: Vec<u64>,
     topology_epoch: Option<u64>,
-    topology_epoch_position: Option<OplogIndex>,
     topologies: HashMap<
         (
             AttachmentId,
@@ -106,7 +105,6 @@ pub struct SessionControlMetadata {
     closed_consumer_streams: HashSet<LocalStreamReaderId>,
     reader_forward_intents:
         HashMap<LocalStreamReaderId, (OplogIndex, StreamReaderForwardIntentRecord)>,
-    accepted_reader_forwards: HashSet<OplogIndex>,
     incoming_reader_forwards: BTreeMap<OplogIndex, StreamReaderForwardIntentRecord>,
     cancel_intents: HashMap<StreamRecordReference, StreamConsumerCancelIntentRecord>,
     applied_cancel_intents: HashSet<StreamConsumerCancelIntentRecord>,
@@ -188,10 +186,6 @@ impl SessionControlMetadata {
     pub fn topology_epoch(&self) -> Option<u64> {
         self.topology_epoch
     }
-    /// Position of the Attached or ResumeAttempt record establishing the folded epoch.
-    pub(crate) fn topology_epoch_position(&self) -> Option<OplogIndex> {
-        self.topology_epoch_position
-    }
     /// Returns the unique folded caller attempt, rejecting conflicting records.
     pub fn caller_attempt_id(&self) -> Result<Option<AttemptId>, String> {
         if self.caller_attempt_conflict {
@@ -234,13 +228,6 @@ impl SessionControlMetadata {
         self.ensure_valid()?;
         self.reader_binding(reader)?;
         Ok(self.reader_forward_intents.get(&reader))
-    }
-
-    /// Historical reader disposition, not a replay terminal or current attachment authority.
-    pub fn has_accepted_reader_forward(&self, reader: LocalStreamReaderId) -> Result<bool, String> {
-        Ok(self
-            .reader_forward_intent(reader)?
-            .is_some_and(|(index, _)| self.accepted_reader_forwards.contains(index)))
     }
 
     /// Canonical source intents reserving destination slots in this owner-local session journal.
@@ -842,24 +829,6 @@ impl SessionControlMetadata {
                     .insert(record.reader_id, (index, record.clone()));
             }
         }
-        if let StreamSessionRecord::ReaderForwardAccepted(record) = record
-            && record_matches
-        {
-            if record.intent_oplog_index >= index
-                || !self
-                    .reader_forward_intents
-                    .values()
-                    .any(|(intent_index, intent)| {
-                        *intent_index == record.intent_oplog_index
-                            && intent.session_key == record.session_key
-                    })
-            {
-                self.malformed_record = true;
-            } else {
-                self.accepted_reader_forwards
-                    .insert(record.intent_oplog_index);
-            }
-        }
         let consumer_reader = match record {
             StreamSessionRecord::ConsumerItemValue(record) if record_matches => {
                 Some(record.reader_id)
@@ -892,11 +861,9 @@ impl SessionControlMetadata {
                     self.initial_attached = Some(index);
                 }
                 self.topology_epoch = Some(record.epoch);
-                self.topology_epoch_position = Some(index);
             }
             StreamSessionRecord::ResumeAttempt(record) if record_matches => {
                 self.topology_epoch = Some(record.accepted_epoch);
-                self.topology_epoch_position = Some(index);
             }
             _ => {}
         }
@@ -1111,7 +1078,6 @@ impl SessionControlMetadata {
         if result.topology_epoch.is_some() {
             result.topology_epoch = Some(cut.epoch_floor);
         }
-        result.topology_epoch_position = None;
         result.topologies.clear();
         result.finalized_attachments.clear();
         result.consumer_deleting = None;
@@ -1125,8 +1091,8 @@ mod tests {
     use crate::durable_host::durable_stream::tests::identity;
     use golem_common::base_model::durable_stream::{
         DurableStreamHandle, StreamCallerAttemptRecord, StreamConsumerCancelAppliedRecord,
-        StreamReaderForwardAcceptedRecord, StreamReaderForwardDestination,
-        StreamReaderForwardPublication, StreamSessionMappingUpdateRecord,
+        StreamReaderForwardDestination, StreamReaderForwardPublication,
+        StreamSessionMappingUpdateRecord,
     };
     use golem_common::model::StreamId;
     use golem_common::model::component::ComponentRevision;
@@ -1258,7 +1224,7 @@ mod tests {
     }
 
     #[test]
-    fn forwarding_disposition_is_exact_reader_history_not_terminal_or_attachment_authority() {
+    fn forwarding_intent_is_exact_reader_history_not_terminal_or_attachment_authority() {
         let owner = identity();
         let key = owner.invocation.clone();
         let reference = StreamRegistrationInvocation::Local(key.idempotency_key.clone());
@@ -1289,13 +1255,8 @@ mod tests {
             }),
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: reference.clone(),
-                mapping: destination.clone(),
-            }),
-            StreamSessionRecord::ReaderForwardAccepted(StreamReaderForwardAcceptedRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: reference,
-                intent_oplog_index: OplogIndex::from_u64(11),
+                mapping: destination.clone(),
             }),
         ];
         for prefix in 1..=records.len() {
@@ -1328,10 +1289,6 @@ mod tests {
                     reconstructed.reader_forward_intent(reader).unwrap(),
                     (prefix >= 2).then_some(&(OplogIndex::from_u64(11), intent.clone()))
                 );
-                assert_eq!(
-                    reconstructed.has_accepted_reader_forward(reader).unwrap(),
-                    prefix == 4
-                );
                 assert!(reconstructed.consumer_record_counts.is_empty());
                 assert_eq!(
                     reconstructed.reader_bindings.len(),
@@ -1344,23 +1301,12 @@ mod tests {
                     let destination_reader = reconstructed.reader_id(&destination).unwrap();
                     assert_ne!(destination_reader, reader);
                     assert!(
-                        !reconstructed
-                            .has_accepted_reader_forward(destination_reader)
+                        reconstructed
+                            .reader_forward_intent(destination_reader)
                             .unwrap()
+                            .is_none()
                     );
                 }
-            }
-            if prefix == 4 {
-                state.apply(
-                    OplogIndex::from_u64(14),
-                    &key,
-                    &records[3],
-                    owner.environment_id,
-                    &owner.agent_id,
-                    owner.fingerprint,
-                );
-                state.ensure_valid().unwrap();
-                assert_eq!(state.accepted_reader_forwards.len(), 1);
             }
         }
     }
@@ -1424,63 +1370,6 @@ mod tests {
         );
         assert_eq!(forked.reader_forward_intents, state.reader_forward_intents);
         assert_eq!(state.reader_bindings.len(), 1);
-    }
-
-    #[test]
-    fn forward_acceptance_rejects_missing_later_and_other_session_intents() {
-        let owner = identity();
-        let key = owner.invocation.clone();
-        let reference = StreamRegistrationInvocation::Local(key.idempotency_key.clone());
-        let other = StreamRegistrationInvocation::Local(golem_common::model::IdempotencyKey::new(
-            "other".into(),
-        ));
-        for (intent_index, intent_reference) in [
-            (10, reference.clone()),
-            (12, reference.clone()),
-            (13, reference.clone()),
-            (11, other),
-        ] {
-            let mut state = SessionControlMetadata::default();
-            let records = [
-                StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: reference.clone(),
-                    mapping: binding(&mapping()),
-                }),
-                StreamSessionRecord::ReaderForwardIntent(StreamReaderForwardIntentRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: intent_reference,
-                    reader_id: LocalStreamReaderId {
-                        introducing_oplog_index: OplogIndex::from_u64(10),
-                        binding_slot: 0,
-                    },
-                    destination: StreamReaderForwardDestination::SessionBinding {
-                        session_key: reference.clone(),
-                        binding: binding(&mapping()),
-                        publication: StreamReaderForwardPublication::InvocationResult {
-                            handle_index: 0,
-                        },
-                    },
-                }),
-                StreamSessionRecord::ReaderForwardAccepted(StreamReaderForwardAcceptedRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: reference.clone(),
-                    intent_oplog_index: OplogIndex::from_u64(intent_index),
-                }),
-            ];
-            for (position, record) in records.iter().enumerate() {
-                state.apply(
-                    OplogIndex::from_u64(position as u64 + 10),
-                    &key,
-                    record,
-                    owner.environment_id,
-                    &owner.agent_id,
-                    owner.fingerprint,
-                );
-            }
-            assert!(state.ensure_valid().is_err());
-            assert!(state.accepted_reader_forwards.is_empty());
-        }
     }
 
     #[test]
@@ -1631,16 +1520,10 @@ mod tests {
             13,
             &StreamSessionRecord::ReaderForwardIntent(intent.clone()),
         );
-        apply(
-            &mut baseline,
-            14,
-            &StreamSessionRecord::ReaderForwardAccepted(StreamReaderForwardAcceptedRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: reference,
-                intent_oplog_index: OplogIndex::from_u64(13),
-            }),
+        assert_eq!(
+            baseline.reader_forward_intent(reader).unwrap(),
+            Some(&(OplogIndex::from_u64(13), intent))
         );
-        assert!(baseline.has_accepted_reader_forward(reader).unwrap());
     }
 
     #[test]

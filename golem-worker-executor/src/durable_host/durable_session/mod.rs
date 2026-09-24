@@ -1623,6 +1623,7 @@ impl StreamSession {
             .has_persisted_mapping(&binding))
     }
 
+    #[cfg(test)]
     async fn ensure_nested_mapping(
         &self,
         context: Option<&Arc<StreamWriteAdmission>>,
@@ -1641,6 +1642,7 @@ impl StreamSession {
             .await
     }
 
+    #[cfg(test)]
     async fn ensure_nested_mapping_under_lock(
         &self,
         admission: &Arc<StreamWriteAdmission>,

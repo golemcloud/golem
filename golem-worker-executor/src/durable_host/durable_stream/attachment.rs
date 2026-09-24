@@ -477,7 +477,7 @@ impl StreamAttachmentControl for DurableStreamStore {
 }
 
 impl DurableStreamStore {
-    /// Returns whether producer-side attachment state still needs periodic probing or renewal.
+    /// Returns whether producer-side attachments need inspection on load or deletion.
     pub async fn has_reconcilable_attachments(&self) -> bool {
         self.reconcilable_attachment_count.load(Ordering::Acquire) != 0
     }

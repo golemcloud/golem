@@ -7813,6 +7813,101 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
 
 #[test]
 #[timeout("30s")]
+async fn stream_terminals_wake_session_recovery_after_fold_but_items_do_not() {
+    for cancel in [false, true] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let block = Arc::new(AtomicBool::new(false));
+        let committed = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let folded = Arc::new(AtomicBool::new(false));
+        let commit: DurableStreamCommit = Arc::new({
+            let oplog = oplog.clone();
+            let block = block.clone();
+            let committed = committed.clone();
+            let release = release.clone();
+            let folded = folded.clone();
+            move |receipt| {
+                let oplog = oplog.clone();
+                let block = block.clone();
+                let committed = committed.clone();
+                let release = release.clone();
+                let folded = folded.clone();
+                Box::pin(async move {
+                    oplog.commit(CommitLevel::Always).await;
+                    if let Some(receipt) = receipt {
+                        let _ = receipt.send(());
+                    }
+                    if block.swap(false, Ordering::AcqRel) {
+                        committed.notify_one();
+                        release.notified().await;
+                        folded.store(true, Ordering::Release);
+                    }
+                })
+            }
+        });
+        let live = DurableStreamStore::load_with_commit(
+            oplog,
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let handle = live
+            .register(None, root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        live.wait_durable_drained().await;
+        let mut notification = Box::pin(live.session_records_changed().notified());
+        notification.as_mut().enable();
+        live.write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::Values(vec![vec![3]]),
+        )
+        .await
+        .unwrap();
+        live.wait_durable_drained().await;
+        assert!(futures::poll!(notification.as_mut()).is_pending());
+
+        block.store(true, Ordering::Release);
+        let caller = tokio::spawn({
+            let live = live.clone();
+            async move {
+                if cancel {
+                    live.cancel_open(
+                        None,
+                        handle.stream_id,
+                        StreamCancelRole::InputConsumer,
+                        StreamCancelReason::GuestDrop,
+                        None,
+                    )
+                    .await
+                } else {
+                    live.end_open(None, handle.stream_id, StreamEndResult::Ok)
+                        .await
+                }
+            }
+        });
+        committed.notified().await;
+        assert!(futures::poll!(notification.as_mut()).is_pending());
+        assert!(!folded.load(Ordering::Acquire));
+        caller.abort();
+        let _ = caller.await;
+        release.notify_one();
+        notification.await;
+        assert!(folded.load(Ordering::Acquire));
+        live.wait_durable_drained().await;
+    }
+}
+
+#[test]
+#[timeout("30s")]
 async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
     for lifecycle in [false, true] {
         let identity = identity();
