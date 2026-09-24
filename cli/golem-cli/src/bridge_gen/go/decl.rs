@@ -17,18 +17,21 @@
 //! A record is a struct and flags are a struct of booleans, which are the
 //! obvious shapes. The other three need a decision:
 //!
-//! - An **enum** becomes a named string type with one constant per case. The
-//!   wire carries a case index, so the codec maps between the two; the constant
-//!   holds the schema's own case name, which is what makes a log line and a
-//!   debugger readable. An integer-backed enum would make the codec marginally
-//!   simpler and every other reader's job worse.
+//! - An **enum** becomes a named `uint32` with one constant per case, because
+//!   the wire carries the case index and because the guest SDK's `DefineEnum`
+//!   accepts only an integer type. A `String()` method returns the schema's own
+//!   case name, so a log line still reads `in-transit` rather than `1`.
 //! - A **variant** becomes a sealed interface with one struct per case. Go has
 //!   no sum type, and the alternative — one struct with a tag and a pointer per
 //!   case — lets a caller build a value that names one case and carries
-//!   another. With an interface, a case *is* its payload and cannot be
-//!   half-constructed.
-//! - A **union** becomes the same shape. It is also a closed sum; only how the
-//!   wire recognises a branch differs, and that is the codec's business.
+//!   another. A case with a payload wraps it in a `Value` field, which is what
+//!   the guest SDK's `WrappedCase` registers; a case without one is an empty
+//!   struct. The payload is wrapped rather than being the case type itself
+//!   because a defined type over a `time.Time`, a `values.Text`, an `Option` or
+//!   another variant is a *different type* to the SDK, and would publish a
+//!   different schema.
+//! - A **union** becomes the same shape, registered with `WrappedBranch`. It is
+//!   also a closed sum; only how the wire recognises a branch differs.
 //!
 //! Go switches are not exhaustive, so a caller matching on a variant gets no
 //! compile-time warning when a case is added. The sealed interface at least
@@ -123,9 +126,16 @@ fn write_record(
     }
     writer.line(format!("type {name} struct {{"));
     writer.indent();
+    let documented: Vec<bool> = fields.iter().map(|f| has_doc(&f.metadata)).collect();
+    let widths = aligned_widths(&idents, &documented);
     for (idx, field) in fields.iter().enumerate() {
         write_member_doc(&idents[idx], &field.metadata, writer);
-        writer.line(format!("{} {}", idents[idx], rendered[idx]));
+        writer.line(format!(
+            "{:<width$} {}",
+            idents[idx],
+            rendered[idx],
+            width = widths[idx]
+        ));
     }
     writer.dedent();
     writer.line("}");
@@ -135,7 +145,10 @@ fn write_record(
 
 fn write_enum(name: &str, cases: &[String], metadata: &MetadataEnvelope, writer: &mut GoWriter) {
     write_doc(name, metadata, writer);
-    writer.line(format!("type {name} string"));
+    // Integer-backed, because the wire carries the case index and because that
+    // is what the guest SDK's DefineEnum accepts: a Go agent and a generated
+    // client then spell an enum the same way.
+    writer.line(format!("type {name} uint32"));
     writer.blank();
 
     // The constant is named <Type><Case> so two enums in the same package can
@@ -148,26 +161,57 @@ fn write_enum(name: &str, cases: &[String], metadata: &MetadataEnvelope, writer:
     );
     writer.line("const (");
     writer.indent();
-    for (idx, case) in cases.iter().enumerate() {
-        writer.line(format!("{} {name} = {}", idents[idx], go_string(case)));
+    for (idx, ident) in idents.iter().enumerate() {
+        if idx == 0 {
+            writer.line(format!("{ident} {name} = iota"));
+        } else {
+            writer.line(ident);
+        }
     }
     writer.dedent();
     writer.line(")");
     writer.blank();
 
-    // The declared cases, in schema order. The codec needs the index, and a
-    // caller occasionally wants to enumerate them.
-    writer.line(format!(
-        "// All{name} lists the declared cases, in schema order."
-    ));
-    writer.line(format!("var All{name} = []{name}{{"));
+    // The schema's own case names, in case order. String() reads them, so a log
+    // line or a debugger shows "in-transit" rather than 1.
+    let names = format!("{}Names", lower_ident(name));
+    writer.line(format!("var {names} = [...]string{{"));
     writer.indent();
-    for ident in &idents {
-        writer.line(format!("{ident},"));
+    for case in cases {
+        writer.line(format!("{},", go_string(case)));
     }
     writer.dedent();
     writer.line("}");
     writer.blank();
+
+    writer.line(format!(
+        "// String returns the case name the schema declares, or a placeholder for a"
+    ));
+    writer.line("// value outside the declared cases.");
+    writer.line(format!("func (v {name}) String() string {{"));
+    writer.indent();
+    writer.line(format!("if int(v) < len({names}) {{"));
+    writer.indent();
+    writer.line(format!("return {names}[v]"));
+    writer.dedent();
+    writer.line("}");
+    writer.import("strconv");
+    writer.line(format!(
+        "return \"{name}(\" + strconv.FormatUint(uint64(v), 10) + \")\""
+    ));
+    writer.dedent();
+    writer.line("}");
+    writer.blank();
+}
+
+/// An unexported identifier derived from a type name, for package-private
+/// helpers that belong to it.
+fn lower_ident(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 fn write_flags(name: &str, flags: &[String], metadata: &MetadataEnvelope, writer: &mut GoWriter) {
@@ -178,10 +222,11 @@ fn write_flags(name: &str, flags: &[String], metadata: &MetadataEnvelope, writer
         return;
     }
     let idents = unique_idents(flags.iter().map(|flag| to_field_ident(flag)).collect());
+    let widths = aligned_widths(&idents, &vec![false; idents.len()]);
     writer.line(format!("type {name} struct {{"));
     writer.indent();
-    for ident in &idents {
-        writer.line(format!("{ident} bool"));
+    for (idx, ident) in idents.iter().enumerate() {
+        writer.line(format!("{ident:<width$} bool", width = widths[idx]));
     }
     writer.dedent();
     writer.line("}");
@@ -216,7 +261,7 @@ fn write_variant(
     writer.line(format!(
         "// A value is one of the {name}… types below; nothing else can implement it."
     ));
-    writer.line(format!("type {name} interface {{ {seal}() }}"));
+    writer.line(format!("type {name} interface{{ {seal}() }}"));
     writer.blank();
 
     for (idx, case) in cases.iter().enumerate() {
@@ -225,13 +270,49 @@ fn write_variant(
         match &payloads[idx] {
             // A case with a payload carries it as Value, so a caller writes
             // ShapeCircle{Value: r} whatever the payload's shape is.
-            Some(payload) => writer.line(format!("type {ident} struct {{ Value {payload} }}")),
+            Some(payload) => writer.line(format!("type {ident} struct{{ Value {payload} }}")),
             None => writer.line(format!("type {ident} struct{{}}")),
         }
+        writer.blank();
         writer.line(format!("func ({ident}) {seal}() {{}}"));
         writer.blank();
     }
     Ok(())
+}
+
+/// The padded width of each struct field name, reproducing gofmt's alignment.
+///
+/// gofmt aligns field types into a column, but only within a run of adjacent
+/// field lines: a line with no cells — a comment, or a blank line — ends the
+/// run. A documented field is preceded by its comment line, so it starts a new
+/// run. Matching this exactly is what keeps `gofmt -l` silent on generated
+/// code, which is how a generated file is told apart from an edited one.
+fn aligned_widths(idents: &[String], documented: &[bool]) -> Vec<usize> {
+    let mut widths = vec![0; idents.len()];
+    let mut start = 0;
+    while start < idents.len() {
+        let mut end = start + 1;
+        while end < idents.len() && !documented[end] {
+            end += 1;
+        }
+        let width = idents[start..end]
+            .iter()
+            .map(|i| i.len())
+            .max()
+            .unwrap_or(0);
+        for w in &mut widths[start..end] {
+            *w = width;
+        }
+        start = end;
+    }
+    widths
+}
+
+fn has_doc(metadata: &MetadataEnvelope) -> bool {
+    metadata
+        .doc
+        .as_deref()
+        .is_some_and(|doc| !doc.trim().is_empty())
 }
 
 fn write_doc(name: &str, metadata: &MetadataEnvelope, writer: &mut GoWriter) {
@@ -351,7 +432,7 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("type Order struct {\n\tOrderId string\n\tItemCount uint32\n}"),
+            rendered.contains("type Order struct {\n\tOrderId   string\n\tItemCount uint32\n}"),
             "{rendered}"
         );
     }
@@ -363,6 +444,35 @@ mod tests {
             metadata: meta(),
         };
         assert!(emit("Empty", &typ).contains("type Empty struct{}"));
+    }
+
+    /// gofmt aligns field types only within a run of adjacent fields; a doc
+    /// comment line ends the run. Matching it is what keeps gofmt silent on the
+    /// generated file.
+    #[test]
+    fn field_alignment_follows_gofmts_runs() {
+        let typ = SchemaType::Record {
+            fields: vec![
+                field("x", SchemaType::String { metadata: meta() }),
+                NamedFieldType {
+                    name: "longer-name".into(),
+                    body: SchemaType::S32 {
+                        restrictions: None,
+                        metadata: meta(),
+                    },
+                    metadata: documented("A documented field."),
+                },
+                field("y", SchemaType::Bool { metadata: meta() }),
+            ],
+            metadata: meta(),
+        };
+        let rendered = emit("A", &typ);
+        assert!(
+            rendered.contains(
+                "\tX string\n\t// LongerName is a documented field.\n\tLongerName int32\n\tY          bool\n"
+            ),
+            "{rendered}"
+        );
     }
 
     /// Go drops the separator, so field names that stay distinct in the schema
@@ -377,29 +487,34 @@ mod tests {
             metadata: meta(),
         };
         let rendered = emit("Person", &typ);
-        assert!(rendered.contains("FirstName string"), "{rendered}");
+        assert!(rendered.contains("FirstName  string"), "{rendered}");
         assert!(rendered.contains("FirstName2 string"), "{rendered}");
     }
 
-    /// The constant carries the schema's own case name, so a log line and a
-    /// debugger both read it, and the type prefix keeps two enums apart.
+    /// Integer-backed, because the wire carries the index and the guest SDK's
+    /// DefineEnum only accepts an integer type; String() keeps it readable.
     #[test]
-    fn an_enum_becomes_a_string_type_with_prefixed_constants() {
+    fn an_enum_becomes_an_indexed_integer_that_prints_its_case_name() {
         let typ = SchemaType::Enum {
             cases: vec!["pending".into(), "in-transit".into()],
             metadata: meta(),
         };
         let rendered = emit("Status", &typ);
-        assert!(rendered.contains("type Status string"), "{rendered}");
+        assert!(rendered.contains("type Status uint32"), "{rendered}");
         assert!(
-            rendered.contains("StatusPending Status = \"pending\""),
+            rendered.contains("const (\n\tStatusPending Status = iota\n\tStatusInTransit\n)"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("StatusInTransit Status = \"in-transit\""),
+            rendered
+                .contains("var statusNames = [...]string{\n\t\"pending\",\n\t\"in-transit\",\n}"),
             "{rendered}"
         );
-        assert!(rendered.contains("var AllStatus = []Status{"), "{rendered}");
+        assert!(
+            rendered.contains("func (v Status) String() string {"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("import \"strconv\""), "{rendered}");
     }
 
     #[test]
@@ -410,7 +525,7 @@ mod tests {
         };
         let rendered = emit("Permissions", &typ);
         assert!(
-            rendered.contains("type Permissions struct {\n\tRead bool\n\tWrite bool\n}"),
+            rendered.contains("type Permissions struct {\n\tRead  bool\n\tWrite bool\n}"),
             "{rendered}"
         );
     }
@@ -439,11 +554,11 @@ mod tests {
         };
         let rendered = emit("Shape", &typ);
         assert!(
-            rendered.contains("type Shape interface { isShape() }"),
+            rendered.contains("type Shape interface{ isShape() }"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("type ShapeCircle struct { Value float64 }"),
+            rendered.contains("type ShapeCircle struct{ Value float64 }"),
             "{rendered}"
         );
         assert!(
@@ -504,11 +619,11 @@ mod tests {
         };
         let rendered = emit("Payload", &typ);
         assert!(
-            rendered.contains("type Payload interface { isPayload() }"),
+            rendered.contains("type Payload interface{ isPayload() }"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("type PayloadInline struct { Value string }"),
+            rendered.contains("type PayloadInline struct{ Value string }"),
             "{rendered}"
         );
     }
@@ -564,6 +679,6 @@ mod tests {
             cases: vec!["say \"hi\"".into()],
             metadata: meta(),
         };
-        assert!(emit("Greeting", &typ).contains("\"say \\\"hi\\\"\""));
+        assert!(emit("Greeting", &typ).contains("\"say \\\"hi\\\"\","));
     }
 }
