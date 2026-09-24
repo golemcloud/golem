@@ -1417,9 +1417,10 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
     );
 }
 
-/// The operation label, the path and the nice value of the calling thread of each storage call.
+/// The operation label, the path, and the name and the nice value of the calling thread of each
+/// storage call.
 #[cfg(target_os = "linux")]
-type NiceCalls = Arc<std::sync::Mutex<Vec<(String, String, i32)>>>;
+type NiceCalls = Arc<std::sync::Mutex<Vec<(String, String, String, i32)>>>;
 
 /// A storage that records the nice value of the thread of each call.
 #[cfg(target_os = "linux")]
@@ -1434,6 +1435,10 @@ fn nice_recording_storage() -> (Arc<ScriptedBlobStorage>, NiceCalls) {
                 .push((
                     op_label.to_string(),
                     path.display().to_string(),
+                    std::thread::current()
+                        .name()
+                        .unwrap_or_default()
+                        .to_string(),
                     super::super::priority::own_nice(),
                 ));
             Script::Pass
@@ -1451,8 +1456,8 @@ fn taken_calls(calls: &NiceCalls, op_label: &str) -> Vec<(String, i32)> {
             .unwrap_or_else(std::sync::PoisonError::into_inner),
     )
     .into_iter()
-    .filter(|(op, _, _)| op == op_label)
-    .map(|(_, path, nice)| (path, nice))
+    .filter(|(op, _, _, _)| op == op_label)
+    .map(|(_, path, _, nice)| (path, nice))
     .collect()
 }
 
@@ -1531,13 +1536,13 @@ async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
             recorded.is_empty(),
             recorded
                 .iter()
-                .filter(|(_, _, nice)| *nice != process_nice)
+                .filter(|(_, _, _, nice)| *nice != process_nice)
                 .collect::<Vec<_>>()
         ),
         (
             Some(listing(tree.path())),
             false,
-            Vec::<&(String, String, i32)>::new()
+            Vec::<&(String, String, String, i32)>::new()
         )
     );
 }
@@ -1586,5 +1591,116 @@ async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
         ),
         (true, true),
         "{blocking:?} {rayon:?}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_nice_19() {
+    // The deleted snapshot shares a pack with the kept one, so the prune repacks that pack. The
+    // prune reads the index files and repacks with rayon, on the workers of the pool of the prune.
+    let (storage, calls) = nice_recording_storage();
+    let base = policy(LONG_DEADLINE, 1, Duration::ZERO);
+    let store = store(
+        storage,
+        StorePolicy {
+            prune: PruneSettings {
+                repack: RepackLimits::Unlimited,
+                ..base.prune
+            },
+            ..base
+        },
+    );
+    let scope = new_scope();
+    let file = |content: &[u8]| Spec::File {
+        content: Box::from(content),
+        mode: 0o644,
+    };
+    let both = Scratch::new();
+    write_tree(
+        both.path(),
+        &[
+            ("kept.txt", file(b"kept content")),
+            ("deleted.txt", file(b"deleted content")),
+        ],
+    );
+    let kept = Scratch::new();
+    write_tree(kept.path(), &[("kept.txt", file(b"kept content"))]);
+    store
+        .save(&scope, &name("p-both"), both.path())
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-kept"), kept.path())
+        .await
+        .unwrap();
+    std::mem::take(&mut *calls.lock().unwrap());
+
+    store.delete(&scope, &name("p-both")).await.unwrap();
+    let recorded = std::mem::take(&mut *calls.lock().unwrap());
+    let from_workers = recorded
+        .iter()
+        .filter(|(_, _, thread, _)| thread.starts_with("fs-snap-prune-"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (
+            recorded
+                .iter()
+                .any(|(op, path, _, _)| op == "write" && path.starts_with("data/")),
+            from_workers.is_empty(),
+            from_workers
+                .iter()
+                .filter(|(_, _, _, nice)| *nice != 19)
+                .count(),
+            restored_listing(&store, &scope, &name("p-kept")).await.ok(),
+        ),
+        (true, false, 0, Some(listing(kept.path())))
+    );
+}
+
+/// A pool builder that cannot start a thread.
+#[cfg(target_os = "linux")]
+fn no_pool(
+    _: &str,
+    _: Option<NonZeroUsize>,
+) -> Result<rayon::ThreadPool, rayon::ThreadPoolBuildError> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .spawn_handler(|_| Err(std::io::Error::other("no thread can start here")))
+        .build()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_without_their_pool()
+{
+    // Without its own pool, the rayon work of a save goes to the global pool from a thread at
+    // nice 19. The store starts the global pool when it is made, so its threads keep the normal
+    // priority also when a save is the first rayon work of the process.
+    let process_nice = super::super::priority::own_nice();
+    let store = RusticSnapshotStore {
+        low_priority: super::super::priority::LowPriority {
+            build_pool: no_pool,
+            ..super::super::priority::LowPriority::new(NonZeroUsize::new(2))
+        },
+        ..RusticSnapshotStore::new(Arc::new(InMemoryBlobStorage::new()), &config())
+    };
+    let scope = new_scope();
+    let (first, second) = (one_file_tree("first"), fixture_tree());
+    store
+        .save(&scope, &name("p-1"), first.path())
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-2"), second.path())
+        .await
+        .unwrap();
+
+    let global = rayon::broadcast(|_| super::super::priority::own_nice());
+
+    assert!(
+        global.iter().all(|nice| *nice == process_nice),
+        "{global:?}"
     );
 }

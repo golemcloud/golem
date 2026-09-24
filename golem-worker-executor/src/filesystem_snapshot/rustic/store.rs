@@ -23,7 +23,7 @@
 use super::backend::BlobBackend;
 use super::fault::{Operation, classify, is_file_missing, is_storage_failure, storage_failure};
 use super::files::SnapshotFiles;
-use super::priority::at_low_priority;
+use super::priority::LowPriority;
 use super::prune::{PruneLedger, prune_due, read_ledger, write_ledger};
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -129,6 +129,8 @@ pub(crate) struct RusticSnapshotStore {
     root: CancellationToken,
     /// Counts the blocking tasks, the backends and the deletes of dropped publishes.
     tracker: TaskTracker,
+    /// Runs saves and prunes at a low priority.
+    low_priority: LowPriority,
 }
 
 impl RusticSnapshotStore {
@@ -149,12 +151,16 @@ impl RusticSnapshotStore {
         key: RepositoryKey,
         policy: StorePolicy,
     ) -> Self {
+        // The global rayon pool starts at its first use, and its threads keep the priority of the
+        // thread that starts it. It starts here, at the normal priority, before a save or a prune.
+        let _ = rayon::current_num_threads();
         Self {
             storage,
             key,
             policy,
             root: CancellationToken::new(),
             tracker: TaskTracker::new(),
+            low_priority: LowPriority::new(policy.save.threads),
         }
     }
 
@@ -261,9 +267,10 @@ impl RusticSnapshotStore {
         let backend = Arc::new(self.backend(scope, token)?);
         let key = self.key.clone();
         let settings = self.policy.prune;
+        let low_priority = self.low_priority;
         let report = self
             .blocking(Operation::Prune, move || {
-                at_low_priority("fs-snap-prune", move || prune(backend, &key, &settings))
+                low_priority.run("fs-snap-prune", move || prune(backend, &key, &settings))
             })
             .await?;
         let marked_packs = report.as_ref().is_some_and(leaves_marked_packs);
@@ -289,9 +296,10 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let policy = self.policy;
         let name = name.clone();
         let tree: Box<Path> = tree.into();
+        let low_priority = self.low_priority;
         let staged = self
             .blocking(Operation::Save, move || {
-                at_low_priority("fs-snap-save", move || {
+                low_priority.run("fs-snap-save", move || {
                     stage_save(backend, &stage, &key, &policy, &name, &tree)
                 })
             })
