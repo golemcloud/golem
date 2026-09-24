@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"fmt"
 	"reflect"
 )
 
@@ -44,16 +45,51 @@ import (
 // An unexported marker method keeps the set closed: no type outside the
 // declaring package can join the variant.
 
-// CaseDef is one case of a variant, produced by [Case].
+// CaseDef is one case of a variant, produced by [Case] or [WrappedCase].
 type CaseDef struct {
 	name string
 	typ  reflect.Type
+	// wrapped means typ is a one-field struct whose field is the payload.
+	wrapped bool
 }
 
 // Case declares a variant case: the payload type T, carried under name on the
 // wire.
 func Case[T any](name string) CaseDef {
 	return CaseDef{name: name, typ: reflect.TypeFor[T]()}
+}
+
+// WrappedCase declares a variant case whose payload is the single field of T,
+// rather than T itself:
+//
+//	type EventAt struct{ Value time.Time }
+//	func (EventAt) isEvent() {}
+//
+//	var _ = golem.DefineVariant[Event](golem.WrappedCase[EventAt]("at"))
+//
+// publishes `at(datetime)`. Reach for it when the payload cannot itself carry
+// the variant's marker method without losing what it is: a time.Time, a
+// golem.Text, an Option or Result, another variant. A defined type over any of
+// those — `type EventAt time.Time` — is a different type to the SDK, and would
+// publish a different schema.
+func WrappedCase[T any](name string) CaseDef {
+	return CaseDef{name: name, typ: reflect.TypeFor[T](), wrapped: true}
+}
+
+// wrappedPayloadErr reports why t cannot wrap a payload, or "" when it can. A
+// wrapper is a struct with exactly one exported field: anything else leaves it
+// unclear which part is the payload.
+func wrappedPayloadErr(t reflect.Type) string {
+	if t.Kind() != reflect.Struct {
+		return fmt.Sprintf("%s is not a struct", t)
+	}
+	if t.NumField() != 1 {
+		return fmt.Sprintf("%s has %d fields; a wrapper has exactly one", t, t.NumField())
+	}
+	if !t.Field(0).IsExported() {
+		return fmt.Sprintf("%s's field %s is unexported", t, t.Field(0).Name)
+	}
+	return ""
 }
 
 // variantDef is the registered case list for one interface type. Case order is
@@ -95,6 +131,11 @@ func defineVariantInto[Iface any](d *definitions, cases ...CaseDef) *variantDef 
 		}
 		if seen[c.name] {
 			d.recordErr("", "", "variant %s has duplicate case name %q", it, c.name)
+		}
+		if c.wrapped {
+			if reason := wrappedPayloadErr(c.typ); reason != "" {
+				d.recordErr("", "", "variant %s: wrapped case %q: %s", it, c.name, reason)
+			}
 		}
 		if seenType[c.typ] {
 			// The wire case is chosen by the value's dynamic type, so one type

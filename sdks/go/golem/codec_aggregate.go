@@ -243,9 +243,9 @@ func (d *definitions) compileVariant(c *codec, vd *variantDef) {
 	unit := make([]bool, len(vd.cases))
 	byType := make(map[reflect.Type]int, len(vd.cases))
 	for i, cs := range vd.cases {
-		unit[i] = isUnitCase(cs.typ)
+		unit[i] = !cs.wrapped && isUnitCase(cs.typ)
 		if !unit[i] {
-			caseCodecs[i] = d.compile(cs.typ)
+			caseCodecs[i] = d.compile(payloadType(cs.typ, cs.wrapped))
 		}
 		byType[cs.typ] = i
 	}
@@ -280,7 +280,7 @@ func (d *definitions) compileVariant(c *codec, vd *variantDef) {
 				Payload: witTypes.None[int32](),
 			}))
 		}
-		payload := caseCodecs[i].encode(b, concrete)
+		payload := caseCodecs[i].encode(b, payloadValue(concrete, vd.cases[i].wrapped))
 		return b.push(types.MakeSchemaValueNodeVariantValue(types.VariantValuePayload{
 			Case:    uint32(i),
 			Payload: witTypes.Some(payload),
@@ -310,12 +310,31 @@ func (d *definitions) compileVariant(c *codec, vd *variantDef) {
 		if p.Payload.IsNone() {
 			return fmt.Errorf("%s: case %q carries no payload", c.typ, vd.cases[p.Case].name)
 		}
-		if err := caseCodecs[p.Case].decode(dec, out, p.Payload.Some()); err != nil {
+		if err := caseCodecs[p.Case].decode(dec, payloadValue(out, vd.cases[p.Case].wrapped), p.Payload.Some()); err != nil {
 			return fmt.Errorf("%s case %q: %w", c.typ, vd.cases[p.Case].name, err)
 		}
 		dst.Set(out)
 		return nil
 	}
+}
+
+// payloadType is the type a case or branch publishes: the type itself, or for a
+// wrapper, its single field's type.
+func payloadType(t reflect.Type, wrapped bool) reflect.Type {
+	if wrapped {
+		return t.Field(0).Type
+	}
+	return t
+}
+
+// payloadValue is the part of a case or branch value that travels: the value
+// itself, or for a wrapper, its single field. It stays settable when v is, so
+// decoding writes straight into the wrapper.
+func payloadValue(v reflect.Value, wrapped bool) reflect.Value {
+	if wrapped {
+		return v.Field(0)
+	}
+	return v
 }
 
 // isUnitCase reports whether a variant case carries no payload. Go spells a

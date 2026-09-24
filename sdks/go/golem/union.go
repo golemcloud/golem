@@ -90,17 +90,27 @@ func Matches(pattern string) Discriminator {
 	return Discriminator{types.MakeDiscriminatorRuleRegex(pattern)}
 }
 
-// BranchDef is one branch of a union, produced by [Branch].
+// BranchDef is one branch of a union, produced by [Branch] or [WrappedBranch].
 type BranchDef struct {
 	tag           string
 	typ           reflect.Type
 	discriminator Discriminator
+	// wrapped means typ is a one-field struct whose field is the body.
+	wrapped bool
 }
 
 // Branch declares a union branch: the body type T, recognised by the given
 // discriminator and reported under tag.
 func Branch[T any](tag string, discriminator Discriminator) BranchDef {
 	return BranchDef{tag: tag, typ: reflect.TypeFor[T](), discriminator: discriminator}
+}
+
+// WrappedBranch declares a union branch whose body is the single field of T,
+// for the same reason [WrappedCase] exists: a body such as a golem.Text or a
+// string-prefixed identifier cannot carry the union's marker method itself
+// without becoming a different type.
+func WrappedBranch[T any](tag string, discriminator Discriminator) BranchDef {
+	return BranchDef{tag: tag, typ: reflect.TypeFor[T](), discriminator: discriminator, wrapped: true}
 }
 
 // unionDef is the registered branch list for one interface type. Branch order is
@@ -144,6 +154,11 @@ func defineUnionInto[Iface any](d *definitions, branches ...BranchDef) *unionDef
 			d.recordErr("", "", "DefineUnion[%s]: duplicate branch tag %q", it, b.tag)
 		}
 		seen[b.tag] = true
+		if b.wrapped {
+			if reason := wrappedPayloadErr(b.typ); reason != "" {
+				d.recordErr("", "", "DefineUnion[%s]: wrapped branch %q: %s", it, b.tag, reason)
+			}
+		}
 		if !b.typ.Implements(it) {
 			d.recordErr("", "", "DefineUnion[%s]: branch %q has type %s, which does not implement %s",
 				it, b.tag, b.typ, it)
@@ -160,7 +175,7 @@ func (d *definitions) compileUnion(c *codec, ud *unionDef) {
 	branchCodecs := make([]*codec, len(ud.branches))
 	byType := make(map[reflect.Type]int, len(ud.branches))
 	for i, b := range ud.branches {
-		branchCodecs[i] = d.compile(b.typ)
+		branchCodecs[i] = d.compile(payloadType(b.typ, b.wrapped))
 		byType[b.typ] = i
 	}
 
@@ -189,7 +204,7 @@ func (d *definitions) compileUnion(c *codec, ud *unionDef) {
 		if !ok {
 			panic(&encodeError{fmt.Sprintf("%s is not a registered branch of union %s", concrete.Type(), c.typ)})
 		}
-		body := branchCodecs[i].encode(b, concrete)
+		body := branchCodecs[i].encode(b, payloadValue(concrete, ud.branches[i].wrapped))
 		return b.push(types.MakeSchemaValueNodeUnionValue(types.UnionValuePayload{
 			Tag:  ud.branches[i].tag,
 			Body: body,
@@ -210,7 +225,7 @@ func (d *definitions) compileUnion(c *codec, ud *unionDef) {
 				continue
 			}
 			out := reflect.New(b.typ).Elem()
-			if err := branchCodecs[i].decode(dec, out, p.Body); err != nil {
+			if err := branchCodecs[i].decode(dec, payloadValue(out, b.wrapped), p.Body); err != nil {
 				return fmt.Errorf("%s branch %q: %w", c.typ, b.tag, err)
 			}
 			dst.Set(out)
