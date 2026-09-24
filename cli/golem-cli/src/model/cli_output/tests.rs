@@ -433,6 +433,31 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_resource_update_result
     ),
     registry_entry!(
+        "McpImportAuthorizeView",
+        "api.mcp-import.authorize",
+        arb_mcp_import_authorize_result
+    ),
+    registry_entry!(
+        "McpImportCompleteView",
+        "api.mcp-import.complete",
+        arb_mcp_import_complete_result
+    ),
+    registry_entry!(
+        "McpImportDisconnectView",
+        "api.mcp-import.disconnect",
+        arb_mcp_import_disconnect_result
+    ),
+    registry_entry!(
+        "McpImportStatusView",
+        "api.mcp-import.status",
+        arb_mcp_import_status_result
+    ),
+    registry_entry!(
+        "McpImportToolsView",
+        "api.mcp-import.tools",
+        arb_mcp_import_tools_result
+    ),
+    registry_entry!(
         "RetryPolicyCreateView",
         "retry-policy.create",
         arb_retry_policy_create_result
@@ -1882,6 +1907,7 @@ fn empty_deployment_diff() -> golem_common::model::diff::DeploymentDiff {
         components: BTreeMap::new(),
         http_api_deployments: BTreeMap::new(),
         mcp_deployments: BTreeMap::new(),
+        mcp_imports: BTreeMap::new(),
         remote_tools: BTreeMap::new(),
         published_tools: Default::default(),
         remote_tool_middleware_deployments: BTreeMap::new(),
@@ -5978,9 +6004,33 @@ fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::Cu
         arb_small_string(),
         arb_hash(),
         arb_small_u64(),
+        proptest::collection::vec(
+            (
+                proptest::option::of(any::<u32>()),
+                proptest::option::of(arb_small_string()),
+                arb_small_string(),
+            )
+                .prop_map(|(import_index, upstream_tool_name, reason)| {
+                    golem_common::model::deployment::DeployValidationWarning::McpImportDiscovery(
+                        golem_common::model::deployment::McpImportDiscovery {
+                            import_index,
+                            upstream_tool_name,
+                            reason,
+                        },
+                    )
+                }),
+            0..4,
+        ),
     )
         .prop_map(
-            |(environment_id, revision, version, deployment_hash, current_revision)| {
+            |(
+                environment_id,
+                revision,
+                version,
+                deployment_hash,
+                current_revision,
+                validation_warnings,
+            )| {
                 golem_common::model::deployment::CurrentDeployment {
                     environment_id: golem_common::model::environment::EnvironmentId(environment_id),
                     revision: golem_common::model::deployment::DeploymentRevision::new(revision)
@@ -5992,7 +6042,7 @@ fn arb_current_deployment() -> BoxedStrategy<golem_common::model::deployment::Cu
                             current_revision,
                         )
                         .expect("generated revision should be valid"),
-                    validation_warnings: Vec::new(),
+                    validation_warnings,
                 }
             },
         )
@@ -6555,6 +6605,108 @@ fn arb_api_retry_policy_with_depth(
         }),
     ]
     .boxed()
+}
+
+fn arb_mcp_import_authorize_result() -> OutputDocumentStrategy {
+    serialized_output((any::<u64>(), any::<Option<u64>>(), any::<u32>()).prop_map(
+        |(authorization_id, deployment_revision, import_index)| {
+            crate::model::mcp::McpImportAuthorizeView(crate::model::mcp::McpImportAuthorization {
+                authorization_url: format!(
+                    "https://provider.example/authorize?id={authorization_id}"
+                ),
+                deployment_revision,
+                import_index,
+            })
+        },
+    ))
+}
+
+fn arb_mcp_import_oauth_status() -> impl Strategy<Value = crate::model::mcp::McpImportOAuthStatus> {
+    (
+        any::<u128>(),
+        any::<Option<u64>>(),
+        any::<u32>(),
+        any::<String>(),
+        any::<String>(),
+    )
+        .prop_map(
+            |(environment_id, deployment_revision, import_index, security_scheme, status)| {
+                crate::model::mcp::McpImportOAuthStatus {
+                    environment_id: uuid::Uuid::from_u128(environment_id),
+                    deployment_revision,
+                    import_index,
+                    security_scheme,
+                    status,
+                }
+            },
+        )
+}
+
+fn arb_mcp_import_complete_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_mcp_import_oauth_status().prop_map(crate::model::mcp::McpImportCompleteView),
+    )
+}
+
+fn arb_mcp_import_disconnect_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_mcp_import_oauth_status().prop_map(crate::model::mcp::McpImportDisconnectView),
+    )
+}
+
+fn arb_mcp_import_status_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_mcp_import_oauth_status().prop_map(crate::model::mcp::McpImportStatusView),
+    )
+}
+
+fn arb_mcp_import_tools_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            any::<u128>(),
+            any::<u64>(),
+            any::<u32>(),
+            any::<String>(),
+            prop::collection::vec((any::<String>(), any::<String>()), 0..3),
+            prop::collection::vec((any::<String>(), any::<String>()), 0..3),
+        )
+            .prop_map(
+                |(
+                    environment_id,
+                    deployment_revision,
+                    import_index,
+                    protocol_version,
+                    tools,
+                    diagnostics,
+                )| {
+                    crate::model::mcp::McpImportToolsView(golem_client::model::McpImportTools {
+                        environment_id: uuid::Uuid::from_u128(environment_id),
+                        deployment_revision,
+                        import_index,
+                        protocol_version,
+                        tools: tools
+                            .into_iter()
+                            .map(
+                                |(upstream_name, digest)| golem_client::model::McpImportedTool {
+                                    upstream_name,
+                                    digest,
+                                    definition: sample_tool_release().definition,
+                                },
+                            )
+                            .collect(),
+                        diagnostics: diagnostics
+                            .into_iter()
+                            .map(|(upstream_name, reason)| {
+                                golem_client::model::McpImportDiagnostic {
+                                    upstream_name,
+                                    reason,
+                                }
+                            })
+                            .collect(),
+                    })
+                },
+            ),
+    )
 }
 
 fn arb_retry_policy_create_result() -> OutputDocumentStrategy {

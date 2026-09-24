@@ -21,7 +21,6 @@ mod read;
 mod route_compilation;
 mod router_file_index;
 mod routes;
-pub mod tool_middlewares;
 mod write;
 
 pub use self::deploy_validation_error::DeployValidationError;

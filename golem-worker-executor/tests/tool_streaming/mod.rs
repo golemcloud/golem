@@ -29,6 +29,7 @@ use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::json::NormalizedJsonValue;
+use golem_common::model::mcp_import::{McpImport, McpImportSource};
 use golem_common::model::oplog::payload::types::{
     SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
 };
@@ -36,12 +37,13 @@ use golem_common::model::oplog::{
     OplogIndex, PublicAgentEntityKind, PublicOplogEntry, PublicOplogEntryAttribution,
 };
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingOwner,
-    ToolDeploymentState, ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
+    ToolBindingInput, ToolBindingOwner, ToolDeploymentState, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
-    ToolMiddlewareName, ToolMiddlewareSource,
+    ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
 };
 use golem_common::schema::tool::{ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
@@ -54,13 +56,15 @@ use golem_common::{
         AgentInvocationResult, AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig,
     },
 };
+use golem_mcp_import::tool::{Limits, ProjectedTool};
+use golem_service_base::model::mcp_import::McpImportObservation;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::tool::{
     ToolAttachmentModeMetadata, ToolBodyAdmissionMetadata, ToolOperationLaneMetadata,
     ToolOperationMetadata, ToolOperationWinnerMetadata, ToolOwnerFailureMetadata,
 };
 use golem_worker_executor::services::environment_state::{
-    EnvironmentStateService, ToolActivationOutcome, ToolDiscoveryError,
+    EnvironmentStateService, ToolDiscoveryError,
 };
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
@@ -269,6 +273,8 @@ fn deployment_state(
         deployment_revision,
         registered_tools,
         tool_bindings: BTreeMap::from([(owner, bindings)]),
+        mcp_imports: Vec::new(),
+        tool_middleware_configuration: Default::default(),
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
     }
@@ -481,6 +487,8 @@ fn native_deployment_state(
         deployment_revision,
         registered_tools: BTreeMap::from([(tool_name.clone(), registered)]),
         tool_bindings: BTreeMap::from([(owner.clone(), BTreeMap::from([(tool_name, binding)]))]),
+        mcp_imports: Vec::new(),
+        tool_middleware_configuration: Default::default(),
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
     };
@@ -529,6 +537,7 @@ fn native_deployment_state(
 
 struct ReorderedToolActivationService {
     inner: TestEnvironmentStateService,
+    first_deployment: std::sync::RwLock<Option<Arc<ToolDeploymentState>>>,
     activation_calls: AtomicUsize,
     first_call_blocked: tokio::sync::Notify,
     release_first_call: tokio::sync::Notify,
@@ -538,6 +547,7 @@ impl Default for ReorderedToolActivationService {
     fn default() -> Self {
         Self {
             inner: TestEnvironmentStateService::default(),
+            first_deployment: std::sync::RwLock::new(None),
             activation_calls: AtomicUsize::new(0),
             first_call_blocked: tokio::sync::Notify::new(),
             release_first_call: tokio::sync::Notify::new(),
@@ -553,6 +563,11 @@ impl ReorderedToolActivationService {
         component_revision: ComponentRevision,
         deployment: Option<ToolDeploymentState>,
     ) {
+        *self.first_deployment.write().unwrap() = deployment.as_ref().map(|deployment| {
+            let mut deployment = deployment.clone();
+            deployment.tool_bindings.clear();
+            Arc::new(deployment)
+        });
         self.inner.set_tool_deployment(
             environment_id,
             component_id,
@@ -627,28 +642,24 @@ impl EnvironmentStateService for ReorderedToolActivationService {
         self.inner.get_retry_policies(environment_id).await
     }
 
-    async fn get_tool_activation(
+    async fn get_live_tool_deployment_state(
         &self,
         environment_id: golem_common::model::environment::EnvironmentId,
         component_id: golem_common::model::component::ComponentId,
         component_revision: ComponentRevision,
-        owner: &ToolBindingOwner,
-        tool_name: &ToolName,
-    ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
+    ) -> Result<Option<Arc<ToolDeploymentState>>, ToolDiscoveryError> {
         match self.activation_calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
                 self.first_call_blocked.notify_one();
                 self.release_first_call.notified().await;
-                Ok(ToolActivationOutcome::NotBound)
+                Ok(self.first_deployment.read().unwrap().clone())
             }
             1 => {
                 self.inner
-                    .get_tool_activation(
+                    .get_live_tool_deployment_state(
                         environment_id,
                         component_id,
                         component_revision,
-                        owner,
-                        tool_name,
                     )
                     .await
             }
@@ -839,7 +850,6 @@ async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, 
     });
     (port, task, requests)
 }
-
 async fn start_trap_attempt_server() -> (u16, tokio::task::JoinHandle<()>) {
     use tokio::io::AsyncWriteExt;
 
@@ -1290,6 +1300,574 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
             "short(async-redeployed)",
         ]
     );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_leaf_offline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
+
+    let requests = Arc::new(Mutex::new(Vec::<(Value, String)>::new()));
+    let (pending_started, mut pending_started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let handler = post({
+        let requests = requests.clone();
+        move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
+            let requests = requests.clone();
+            let pending_started = pending_started.clone();
+            async move {
+                assert_eq!(body["method"], "tools/call");
+                assert_eq!(body["params"]["name"], "upstream-probe");
+                let value = body["params"]["arguments"]["value"]
+                    .as_str()
+                    .expect("projected string argument");
+                let key = headers["idempotency-key"].to_str().unwrap().to_string();
+                requests.lock().unwrap().push((body.clone(), key));
+                if value.ends_with("-pending") {
+                    pending_started.send(()).unwrap();
+                    std::future::pending::<()>().await;
+                }
+                axum::Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "content": [{"type": "text", "text": format!("stdout:{value}")}],
+                        "structuredContent": {"evidence": format!("leaf({value})")}
+                    }
+                }))
+            }
+        }
+    });
+    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/mcp", handler))
+            .await
+            .unwrap();
+    }));
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware-mcp")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let transform = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-transform-input")
+        .unwrap();
+    let fanout = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-mcp-fanout")
+        .unwrap();
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools.clone(),
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![(
+            transform.name.as_str(),
+            empty_middleware_parameters(transform),
+        )],
+    );
+    deployment.registered_tools.clear();
+    deployment.tool_bindings.clear();
+    deployment.tool_middleware_chains.clear();
+    deployment.mcp_imports = vec![McpImport {
+        url: format!("http://127.0.0.1:{port}/mcp"),
+        auth: None,
+        security_scheme: None,
+        prefix: None,
+        include: None,
+        exclude: None,
+        version: None,
+    }];
+    deployment.tool_middleware_configuration.universal = vec![ToolMiddlewareInstallation {
+        name: ToolMiddlewareName::try_from(transform.name.as_str()).unwrap(),
+        version: Some(transform.version.clone()),
+        parameters: NormalizedJsonValue::new(json!({})),
+        account: None,
+        secret_keys_readable: None,
+        secret_keys_revealable: None,
+        filesystem_access: ToolFilesystemAccess::Unset,
+    }];
+    deployment
+        .tool_middleware_configuration
+        .universal
+        .push(ToolMiddlewareInstallation {
+            name: ToolMiddlewareName::try_from(fanout.name.as_str()).unwrap(),
+            version: Some(fanout.version.clone()),
+            parameters: NormalizedJsonValue::new(json!({})),
+            account: None,
+            secret_keys_readable: None,
+            secret_keys_revealable: None,
+            filesystem_access: ToolFilesystemAccess::Unset,
+        });
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let source = McpImportSource {
+        environment_id: context.default_environment_id,
+        deployment_revision: 1_u64.try_into().unwrap(),
+        import_index: 0,
+        upstream_tool_name: String::new(),
+    };
+    let projected = ProjectedTool::new(
+        &json!({
+            "name": "upstream-probe",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {"evidence": {"type": "string"}},
+                "required": ["evidence"],
+                "additionalProperties": false
+            }
+        }),
+        tool_name.as_str(),
+        Limits::default(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    environment_state.set_mcp_observation(
+        source.clone(),
+        Ok(McpImportObservation {
+            source: source.clone(),
+            protocol_version: golem_mcp_import::transport::PROTOCOL_VERSION.to_string(),
+            tools: vec![projected],
+            diagnostics: Vec::new(),
+        }),
+    );
+    let mut credential_source = source;
+    credential_source.upstream_tool_name = "upstream-probe".to_string();
+    environment_state.set_mcp_credential(
+        credential_source,
+        golem_service_base::clients::registry::McpRuntimeCredential {
+            credential: None,
+            oauth_grant_generation: None,
+        },
+    );
+
+    let (checkpoint_port, checkpoint_server, mut checkpoints) =
+        start_promise_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "dynamic-mcp-middleware");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([(
+                "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
+                checkpoint_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let call_executor = executor.clone();
+    let call_component = caller_component.clone();
+    let call_agent = agent_id.clone();
+    let call = tokio::spawn(async move {
+        call_executor
+            .invoke_and_await_agent(
+                &call_component,
+                &call_agent,
+                "dynamic_mcp_chain_probe",
+                data_value!("acceptance"),
+            )
+            .await?
+            .into_typed::<Vec<String>>()
+    });
+    let checkpoint = next_promise_checkpoint(&mut checkpoints, "mcp-pending-admitted").await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        pending_started_rx.recv(),
+    )
+    .await?
+    .expect("pending MCP request was observed");
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx: checkpoint.oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+    let result = call.await??;
+    assert_eq!(
+        result,
+        [
+            "leaf(middleware(acceptance)-second)",
+            "stdout:middleware(acceptance)-second"
+        ],
+        "the projected MCP contract must traverse both middleware layers"
+    );
+    let observed = requests.lock().unwrap().clone();
+    assert_eq!(observed.len(), 3);
+    assert_eq!(
+        observed
+            .iter()
+            .map(|(request, _)| request["params"]["arguments"]["value"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "middleware(acceptance)-first",
+            "middleware(acceptance)-second",
+            "middleware(acceptance)-pending"
+        ]
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .map(|(_, key)| key)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3,
+        "each underlying start needs a distinct idempotency key"
+    );
+
+    drop(server);
+    environment_state.clear_mcp_observations();
+    environment_state.clear_mcp_credentials();
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        None,
+    );
+    executor.simulated_crash(&worker_id).await?;
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let _: String = executor
+        .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        3,
+        "completed Host-leaf replay repeated the MCP effect"
+    );
+    assert_eq!(environment_state.mcp_observation_requests().len(), 1);
+    assert_eq!(environment_state.mcp_credential_requests().len(), 3);
+
+    checkpoint_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn dynamic_mcp_executes_genuine_monomorphic_middleware_and_replays_offline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
+
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let handler = post({
+        let requests = requests.clone();
+        move |axum::Json(body): axum::Json<Value>| {
+            let requests = requests.clone();
+            async move {
+                assert_eq!(body["method"], "tools/call");
+                let value = body["params"]["arguments"]["value"]
+                    .as_str()
+                    .expect("projected string argument");
+                requests.lock().unwrap().push(body.clone());
+                axum::Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "content": [{"type": "text", "text": format!("stdout:{value}")}],
+                        "structuredContent": {"evidence": format!("leaf({value})")}
+                    }
+                }))
+            }
+        }
+    });
+    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/mcp", handler))
+            .await
+            .unwrap();
+    }));
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware-monomorphic-mcp")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let projection = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-monomorphic-mcp-projection")
+        .expect("monomorphic MCP middleware export");
+    assert!(matches!(
+        projection.scope,
+        ToolMiddlewareScope::Monomorphic(_)
+    ));
+
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools.clone(),
+    );
+    deployment.registered_tool_middlewares.insert(
+        ToolMiddlewareName::try_from(projection.name.as_str()).unwrap(),
+        RegisteredToolMiddleware {
+            deployment_revision: deployment.deployment_revision,
+            release_id: None,
+            definition: projection.clone(),
+            provision: ToolProvisionConfig::default(),
+            source: ToolMiddlewareSource::Component {
+                component_id: middleware_component.id,
+                component_revision: middleware_component.revision,
+                component_name: ComponentName(
+                    "golem-it:tool-streaming-rust-middleware".to_string(),
+                ),
+            },
+            owner_account_id: context.account_id,
+            owner_account_email: AccountEmail::new("middleware@golem"),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: Default::default(),
+        },
+    );
+    deployment.registered_tools.clear();
+    deployment.tool_bindings.clear();
+    deployment.tool_middleware_chains.clear();
+    deployment.mcp_imports = vec![McpImport {
+        url: format!("http://127.0.0.1:{port}/mcp"),
+        auth: None,
+        security_scheme: None,
+        prefix: None,
+        include: None,
+        exclude: None,
+        version: None,
+    }];
+    deployment
+        .tool_middleware_configuration
+        .agent_bindings
+        .entry(agent_type.clone())
+        .or_default()
+        .insert(
+            tool_name.clone(),
+            ToolBindingInput {
+                version: None,
+                parameters: NormalizedJsonValue::new(json!({})),
+                account: None,
+                config_keys_readable: ConfigKeyScope::All,
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: ToolFilesystemAccess::Unset,
+                middleware: Some(vec![ToolMiddlewareInstallation {
+                    name: ToolMiddlewareName::try_from(projection.name.as_str()).unwrap(),
+                    version: Some(projection.version.clone()),
+                    parameters: NormalizedJsonValue::new(json!({})),
+                    account: None,
+                    secret_keys_readable: None,
+                    secret_keys_revealable: None,
+                    filesystem_access: ToolFilesystemAccess::Unset,
+                }]),
+                middleware_merge_mode: None,
+            },
+        );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let source = McpImportSource {
+        environment_id: context.default_environment_id,
+        deployment_revision: 1_u64.try_into().unwrap(),
+        import_index: 0,
+        upstream_tool_name: String::new(),
+    };
+    let projected = ProjectedTool::new(
+        &json!({
+            "name": "upstream-probe",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {"evidence": {"type": "string"}},
+                "required": ["evidence"],
+                "additionalProperties": false
+            }
+        }),
+        tool_name.as_str(),
+        Limits::default(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    environment_state.set_mcp_observation(
+        source.clone(),
+        Ok(McpImportObservation {
+            source: source.clone(),
+            protocol_version: golem_mcp_import::transport::PROTOCOL_VERSION.to_string(),
+            tools: vec![projected],
+            diagnostics: Vec::new(),
+        }),
+    );
+    let mut credential_source = source;
+    credential_source.upstream_tool_name = "upstream-probe".to_string();
+    environment_state.set_mcp_credential(
+        credential_source,
+        golem_service_base::clients::registry::McpRuntimeCredential {
+            credential: None,
+            oauth_grant_generation: None,
+        },
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "dynamic-mcp-monomorphic");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "dynamic_mcp_stdout_probe",
+            data_value!("acceptance"),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "stdout:monomorphic(acceptance)");
+    let observed = requests.lock().unwrap().clone();
+    assert_eq!(observed.len(), 1);
+    assert_eq!(
+        observed[0]["params"]["arguments"]["value"],
+        "monomorphic(acceptance)"
+    );
+
+    drop(server);
+    environment_state.clear_mcp_observations();
+    environment_state.clear_mcp_credentials();
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        None,
+    );
+    executor.simulated_crash(&worker_id).await?;
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let _: String = executor
+        .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    assert_eq!(environment_state.mcp_observation_requests().len(), 1);
+    assert_eq!(environment_state.mcp_credential_requests().len(), 1);
+
     Ok(())
 }
 
@@ -2861,7 +3439,7 @@ async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
         "completed replay must not repeat native effects"
     );
     assert_eq!(executor.native_test_helper_effect_count(), helper_effects);
-    assert!(environment_state.tool_activation_calls() >= 5);
+    assert!(environment_state.tool_deployment_calls() >= 5);
     Ok(())
 }
 

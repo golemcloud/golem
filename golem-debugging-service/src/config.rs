@@ -62,6 +62,7 @@ pub struct DebugConfig {
     pub registry_service: GrpcRegistryServiceConfig,
     pub engine: EngineConfig,
     pub resource_limits: ResourceLimitsConfig,
+    pub mcp_transport: golem_worker_executor::services::mcp::Limits,
     pub cors_origin_regex: String,
 }
 
@@ -104,6 +105,7 @@ impl DebugConfig {
             // unused
             grpc: GrpcApiConfig::default(),
             http_client: Default::default(),
+            mcp_transport: self.mcp_transport,
             http_address: self.http_address,
             http_port: self.http_port,
             shard_manager: Default::default(),
@@ -168,6 +170,7 @@ impl Default for DebugConfig {
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
             engine: EngineConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
+            mcp_transport: default_golem_config.mcp_transport,
             cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
     }
@@ -187,6 +190,17 @@ pub fn make_debug_config_loader() -> ConfigLoader<DebugConfig> {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn debugging_executor_preserves_mcp_transport_policy() {
+        let mut config = DebugConfig::default();
+        config.mcp_transport.concurrency = 3;
+        config.mcp_transport.response_bytes = 123;
+        let config = config.into_golem_config();
+        assert_eq!(config.mcp_transport.concurrency, 3);
+        assert_eq!(config.mcp_transport.response_bytes, 123);
+        assert!(config.validate().is_ok());
+    }
 
     #[test]
     fn debugging_executor_does_not_expose_unsupported_metering() {

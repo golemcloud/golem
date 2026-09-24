@@ -16,6 +16,7 @@ pub mod agent_secret;
 pub mod auth;
 pub mod component;
 pub mod environment;
+pub mod mcp_import;
 pub mod plugin_registration;
 pub mod quota_lease;
 pub mod retry_policy;

@@ -348,7 +348,9 @@ impl RustToolBridgeGenerator {
             let name = &field.name;
             param_defs.push(quote! { #param_ident: #typ });
             field_encodes.push(quote! {
-                __fields.push((#encode).map_err(|e| golem_rust::agentic::tool_protocol_error(format!("failed to encode tool parameter `{}`: {e}", #name)))?);
+                __fields.push((|| -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
+                    #encode
+                })().map_err(|e| golem_rust::agentic::tool_protocol_error(format!("failed to encode tool parameter `{}`: {e}", #name)))?);
             });
         }
         let stdin_expr = match &body.stdin {

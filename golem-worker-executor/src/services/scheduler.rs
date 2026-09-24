@@ -887,6 +887,7 @@ mod tests {
     };
     use crate::services::shard::{ShardService, ShardServiceDefault};
     use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
+    use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::scheduler::memory::InMemorySchedulerStorage;
     use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
@@ -2132,12 +2133,12 @@ mod tests {
     /// loop-lifetime span never closes, so it is never exported and it retains
     /// every event recorded inside it for as long as the process runs.
     #[test]
-    async fn process_records_one_closed_span_per_tick() {
+    async fn process_records_one_closed_span_per_tick(tracing: &Tracing) {
         let storage = Arc::new(InMemorySchedulerStorage::new());
         let promise_service = create_promise_service_mock();
         let svc = create_scheduler(storage, promise_service).await;
 
-        let recorder = crate::span_test_support::record_spans();
+        let recorder = crate::span_test_support::record_spans(tracing);
         svc.process(Utc::now()).await.unwrap();
 
         recorder.assert_closed_span("scheduler_tick");

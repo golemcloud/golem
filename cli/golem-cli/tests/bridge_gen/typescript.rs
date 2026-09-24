@@ -807,7 +807,12 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(source.contains("base.UnstructuredTextType<['en', 'de']>"));
     assert!(source.contains("base.UnstructuredBinaryType<['image/png']>"));
     assert!(source.contains("payload: { tag: 'text', text: v.val, language: v.languageCode }"));
-    assert!(source.contains("payload: { tag: 'binary', bytes: v.val, mimeType: v.mimeType }"));
+    assert!(
+        source.contains(
+            "payload: { tag: 'binary', bytes: v.val as Uint8Array, mimeType: v.mimeType }"
+        )
+    );
+    assert!(source.contains("{ tag: 'url', value: v.val as string }"));
     assert!(
         source.contains("base.UnstructuredText.fromInline(n.payload.text, n.payload.language)")
     );

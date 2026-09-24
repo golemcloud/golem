@@ -3872,6 +3872,7 @@ impl StreamSession {
                                             admission
                                                 .submit(move |_, context| async move {
                                                     let session = session_for_write;
+                                                    session.recover_session_mappings().await?;
                                                     for (output, nested_handle) in nested_outputs
                                                         .into_iter()
                                                         .zip(nested_handles)

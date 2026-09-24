@@ -15,25 +15,25 @@
 use super::{
     compile_tool_middleware_chains, effective_installations, synthesize_effective_definition,
 };
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::agent_secret::CanonicalAgentSecretPath;
-use golem_common::model::component::ComponentRevision;
-use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::json::NormalizedJsonValue;
-use golem_common::model::tool::{
+use crate::model::agent::AgentTypeName;
+use crate::model::agent_secret::CanonicalAgentSecretPath;
+use crate::model::component::ComponentRevision;
+use crate::model::deployment::DeploymentRevision;
+use crate::model::json::NormalizedJsonValue;
+use crate::model::tool::{
     CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
     ToolName, ToolSource,
 };
-use golem_common::model::tool_middleware::{
+use crate::model::tool_middleware::{
     RegisteredToolMiddleware, ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
     ToolMiddlewareName, ToolMiddlewareSource,
 };
-use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
-use golem_common::schema::tool::{
+use crate::schema::tool::compatibility::ToolCompatibilityMode;
+use crate::schema::tool::{
     CommandBody, CommandIndex, CommandNode, CommandTree, Doc, ErrorCase, ErrorKind, Globals,
     MonomorphicToolMiddlewareScope, Positionals, Tool, ToolMiddleware, ToolMiddlewareScope,
 };
-use golem_common::schema::{NamedFieldType, SchemaGraph, SchemaType, SchemaTypeDef, TypeId};
+use crate::schema::{NamedFieldType, SchemaGraph, SchemaType, SchemaTypeDef, TypeId};
 use std::collections::BTreeMap;
 use test_r::test;
 
@@ -208,7 +208,7 @@ impl CompilerFixture {
             binding: CompiledToolBinding {
                 deployment_revision: DeploymentRevision::INITIAL,
                 release_id: None,
-                owner: golem_common::model::tool::ToolBindingOwner::AgentType {
+                owner: crate::model::tool::ToolBindingOwner::AgentType {
                     agent_type_name: agent.clone(),
                 },
                 tool_name: tool_name.clone(),
@@ -318,14 +318,14 @@ fn registry_is_validated_without_bindings() {
         commands: CommandTree { nodes: Vec::new() },
         schema: SchemaGraph::empty(),
     };
-    let registered = golem_common::model::tool::RegisteredTool {
+    let registered = RegisteredTool {
         deployment_revision: DeploymentRevision::INITIAL,
         release_id: None,
         definition: invalid,
         provision: Default::default(),
-        source: golem_common::model::tool::ToolSource::Component {
+        source: ToolSource::Component {
             component_id: Default::default(),
-            component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+            component_revision: ComponentRevision::INITIAL,
             component_name: "test:component".try_into().unwrap(),
         },
         owner_account_id: Default::default(),
@@ -344,7 +344,7 @@ fn registry_is_validated_without_bindings() {
         &Default::default(),
         &Default::default(),
         &Default::default(),
-        golem_common::schema::tool::compatibility::ToolCompatibilityMode::StructuralSubtype,
+        ToolCompatibilityMode::StructuralSubtype,
     );
 
     assert!(!compiled.errors.is_empty());

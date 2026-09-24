@@ -43,6 +43,10 @@ declare_unions! {
         /// its effective readable scope and were removed during compilation.
         ToolRevealableSecretKeysDropped(ToolRevealableSecretKeysDropped),
 
+        /// Best-effort import discovery failed or excluded an upstream definition.
+        /// Runtime discovery remains authoritative and may succeed later.
+        McpImportDiscovery(McpImportDiscovery),
+
         /// A non-fatal tool middleware compilation diagnostic.
         ToolMiddleware(ToolMiddlewareWarning)
     }
@@ -67,6 +71,12 @@ declare_structs! {
     pub struct ToolRevealableSecretKeysDropped {
         pub agent_type: AgentTypeName,
         pub tool_name: ToolName,
+    }
+
+    pub struct McpImportDiscovery {
+        pub import_index: Option<u32>,
+        pub upstream_tool_name: Option<String>,
+        pub reason: String,
     }
 
     pub struct ToolMiddlewareWarning {
@@ -101,6 +111,16 @@ impl fmt::Display for DeployValidationWarning {
                 tool_name = w.tool_name,
                 agent_type = w.agent_type,
             ),
+            DeployValidationWarning::McpImportDiscovery(w) => {
+                write!(f, "MCP import")?;
+                if let Some(index) = w.import_index {
+                    write!(f, " {index}")?;
+                }
+                if let Some(name) = &w.upstream_tool_name {
+                    write!(f, " tool `{name}`")?;
+                }
+                write!(f, ": {}", w.reason)
+            }
             DeployValidationWarning::ToolMiddleware(w) => write!(
                 f,
                 "Tool middleware{middleware}{agent_tool}: {message}",

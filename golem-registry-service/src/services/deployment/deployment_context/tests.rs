@@ -1630,6 +1630,7 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                 &[],
                 &[],
                 &[],
+                &[],
                 Default::default(),
                 &BTreeMap::new(),
                 &BTreeMap::new(),

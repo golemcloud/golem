@@ -164,6 +164,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
+        mcp_transport: Arc<golem_worker_executor::services::mcp::McpTransport>,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<DebugContext>> {
         create_debugging_service_services(
@@ -201,6 +202,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             leak_sentinel,
         )
         .await
@@ -247,6 +249,7 @@ pub async fn create_debugging_service_services(
     shutdown_token: tokio_util::sync::CancellationToken,
     http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
     websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
+    mcp_transport: Arc<golem_worker_executor::services::mcp::McpTransport>,
     leak_sentinel: Arc<()>,
 ) -> anyhow::Result<All<DebugContext>> {
     let debug_oplog_service = Arc::new(DebugOplogService::new(
@@ -296,6 +299,7 @@ pub async fn create_debugging_service_services(
         shutdown_token.clone(),
         http_connection_pool.clone(),
         websocket_connection_pool.clone(),
+        mcp_transport.clone(),
         additional_deps.clone(),
         leak_sentinel.clone(),
     ));
@@ -339,6 +343,7 @@ pub async fn create_debugging_service_services(
         external_durable_streams.clone(),
         http_connection_pool.clone(),
         websocket_connection_pool.clone(),
+        mcp_transport.clone(),
         additional_deps.clone(),
         leak_sentinel.clone(),
     ));
@@ -377,6 +382,7 @@ pub async fn create_debugging_service_services(
         shutdown_token,
         http_connection_pool,
         websocket_connection_pool,
+        mcp_transport,
         environment_state_service,
         native_tool_catalog,
         additional_deps,

@@ -187,6 +187,19 @@ impl ApiDeploymentCommandHandler {
             .unwrap_or_default())
     }
 
+    pub async fn deployable_manifest_mcp_imports(
+        &self,
+        environment_name: &EnvironmentName,
+    ) -> anyhow::Result<Vec<golem_common::model::mcp_import::McpImportDeployment>> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        Ok(app_ctx
+            .application()
+            .mcp_imports(environment_name)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     pub async fn get_http_api_deployment_revision_by_id(
         &self,
         http_api_deployment_id: &HttpApiDeploymentId,

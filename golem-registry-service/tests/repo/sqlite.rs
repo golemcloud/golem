@@ -355,6 +355,11 @@ async fn test_update_http_call_counts(deps: &Deps) {
 }
 
 #[test]
+async fn test_mcp_http_policy(deps: &Deps) {
+    crate::repo::common::test_mcp_http_policy(deps).await;
+}
+
+#[test]
 async fn test_update_rpc_call_counts(deps: &Deps) {
     crate::repo::common::test_update_rpc_call_counts(deps).await;
 }
