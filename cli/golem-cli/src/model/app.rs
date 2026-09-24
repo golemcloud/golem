@@ -690,25 +690,47 @@ impl Application {
         build_application_preload(apps)
     }
 
-    pub fn language_templates_from_raw_apps(
+    /// Names of all component templates referenced by the raw applications, used for selecting
+    /// the built-in templates that have to be loaded. Tool and tool middleware declarations are
+    /// parsed leniently, as their errors are reported when the application is built.
+    pub fn referenced_template_names_from_raw_apps(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> HashSet<GuestLanguage> {
-        apps.iter()
-            .flat_map(|app| {
-                app.application
-                    .component_templates
-                    .values()
-                    .map(|template| &template.templates)
-                    .chain(
-                        app.application
-                            .components
-                            .values()
-                            .map(|component| &component.templates),
-                    )
-                    .flat_map(|templates| templates.clone().into_vec())
-                    .filter_map(GuestLanguage::from_component_template_name)
-            })
-            .collect()
+    ) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        for app in apps {
+            let application = &app.application;
+            for templates in application
+                .component_templates
+                .values()
+                .map(|template| &template.templates)
+                .chain(
+                    application
+                        .components
+                        .values()
+                        .map(|component| &component.templates),
+                )
+                .chain(application.agents.values().map(|agent| &agent.templates))
+            {
+                names.extend(templates.clone().into_vec());
+            }
+
+            let (tools, middlewares) = application.tools.clone().into_tools_and_middleware();
+            for tool in tools.into_values() {
+                if let Ok(declaration) = serde_json::from_value::<app_raw::ToolDeclaration>(tool) {
+                    names.extend(declaration.templates.into_vec());
+                }
+            }
+            if let Some(middlewares) = middlewares
+                && let Ok(declarations) = serde_json::from_value::<
+                    IndexMap<String, app_raw::ToolMiddlewareDeclaration>,
+                >(middlewares)
+            {
+                for declaration in declarations.into_values() {
+                    names.extend(declaration.templates.into_vec());
+                }
+            }
+        }
+        names
     }
 
     pub fn application_name(&self) -> &ApplicationName {
