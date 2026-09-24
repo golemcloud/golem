@@ -950,14 +950,13 @@ impl MultiLayerOplog {
         }
         let lower = NEVec::try_from_vec(lower).expect("At least one lower layer is required");
 
-        let initial_primary_length = primary.length().await;
         let last_reported_commit_index =
             AtomicOplogIndex::from_oplog_index(primary.current_oplog_index().await);
-        let last_transfer_point = AtomicOplogIndex::from_oplog_index(
-            last_reported_commit_index
-                .get()
-                .subtract(initial_primary_length),
-        );
+        let mut archived_through = OplogIndex::NONE;
+        for layer in &lower {
+            archived_through = archived_through.max(layer.get_last_index().await);
+        }
+        let last_transfer_point = AtomicOplogIndex::from_oplog_index(archived_through);
         let result = Arc::new(Self {
             owned_agent_id: owned_agent_id.clone(),
             agent_mode,
@@ -1658,11 +1657,162 @@ fn validate_transfer_source(
 #[cfg(test)]
 mod transfer_lifecycle_tests {
     use super::*;
+    use crate::services::oplog::compressed::CompressedOplogArchiveService;
+    use crate::services::oplog::primary::PrimaryOplogService;
+    use crate::services::oplog::tests::{
+        default_execution_status, default_last_known_status, make_agent_metadata,
+    };
+    use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use golem_common::model::oplog::{AgentError, OplogErrorKind};
+    use golem_common::model::{RetryConfig, Timestamp};
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use nonempty_collections::nev;
     use proptest::prelude::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
     test_r::enable!();
+
+    #[test]
+    async fn observer_open_preserves_cursor_when_primary_grows() {
+        observer_open_after_primary_growth(0).await;
+    }
+
+    #[test]
+    async fn observer_open_uses_deep_archive_watermark_when_primary_grows() {
+        observer_open_after_primary_growth(3).await;
+    }
+
+    async fn observer_open_after_primary_growth(archived: u64) {
+        let indexed = Arc::new(InMemoryIndexedStorage::new());
+        let blob = Arc::new(InMemoryBlobStorage::new());
+        let writer_service = PrimaryOplogService::new(
+            indexed.clone(),
+            blob.clone(),
+            100,
+            100,
+            100,
+            RetryConfig::default(),
+        )
+        .await;
+        let observer_service = Arc::new(
+            PrimaryOplogService::new(indexed.clone(), blob, 100, 100, 100, RetryConfig::default())
+                .await,
+        );
+        let first: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+            indexed.clone(),
+            1,
+            RetryConfig::default(),
+        ));
+        let deepest: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+            indexed,
+            2,
+            RetryConfig::default(),
+        ));
+        let account = AccountId::new();
+        let environment = EnvironmentId::new();
+        let agent = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "observer".into(),
+        };
+        let owned = OwnedAgentId::new(environment, &agent);
+        let metadata = make_agent_metadata(agent.clone(), account, environment);
+        let writer = writer_service
+            .open(
+                &mut writer_service.lock_lifecycle(&agent).await,
+                &owned,
+                AgentMode::Durable,
+                None,
+                metadata.clone(),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+            )
+            .await;
+        let entries = (1..=archived + 10)
+            .map(|index| {
+                OplogEntry::Error {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                    kind: OplogErrorKind::Invocation,
+                    error: AgentError::Unknown(index.to_string()),
+                    retry_from: OplogIndex::NONE,
+                    inside_atomic_region: false,
+                    retry_policy_state: None,
+                }
+                .rounded()
+            })
+            .collect::<Vec<_>>();
+        let captured = archived + 2;
+        for entry in &entries[..captured as usize] {
+            writer.add(entry.clone()).await;
+        }
+        writer.commit(CommitLevel::Always).await;
+        let deep_archive = deepest.open(&owned, AgentMode::Durable).await;
+        if archived > 0 {
+            let prefix = entries[..archived as usize]
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| (OplogIndex::from_u64(index as u64 + 1), entry.clone()))
+                .collect::<Vec<_>>();
+            deep_archive.append(&prefix).await;
+            writer.drop_prefix(OplogIndex::from_u64(archived)).await;
+        }
+        let observer = observer_service
+            .open(
+                &mut observer_service.lock_lifecycle(&agent).await,
+                &owned,
+                AgentMode::Durable,
+                None,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+            )
+            .await;
+        assert_eq!(
+            observer.current_oplog_index().await,
+            OplogIndex::from_u64(captured)
+        );
+        for entry in &entries[captured as usize..] {
+            writer.add(entry.clone()).await;
+        }
+        writer.commit(CommitLevel::Always).await;
+        assert_eq!(observer.length().await, 10);
+
+        let service = MultiLayerOplogService::new(observer_service, nev![first, deepest], 100, 100);
+        let observer = MultiLayerOplog::new(
+            owned,
+            AgentMode::Durable,
+            account,
+            observer,
+            service,
+            Box::new(|| {}),
+        )
+        .await;
+        let layered = downcast_oplog::<MultiLayerOplog>(&observer).unwrap();
+        assert_eq!(
+            layered.last_transfer_point.get(),
+            OplogIndex::from_u64(archived)
+        );
+        assert_eq!(
+            observer.current_oplog_index().await,
+            OplogIndex::from_u64(captured)
+        );
+        for (index, entry) in entries[..captured as usize].iter().enumerate() {
+            assert_eq!(
+                &observer.read(OplogIndex::from_u64(index as u64 + 1)).await,
+                entry
+            );
+        }
+        assert_eq!(
+            writer.current_oplog_index().await,
+            OplogIndex::from_u64(archived + 10)
+        );
+        assert_eq!(writer.length().await, 10);
+        assert_eq!(
+            deep_archive.get_last_index().await,
+            OplogIndex::from_u64(archived)
+        );
+    }
 
     #[derive(Debug, Clone)]
     enum Operation {

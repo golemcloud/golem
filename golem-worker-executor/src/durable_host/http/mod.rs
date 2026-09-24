@@ -19,6 +19,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::warn;
 
 pub mod inline_retry;
+mod mcp;
 pub mod outgoing_http;
 pub(crate) mod policy;
 pub mod types;

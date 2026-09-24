@@ -136,6 +136,21 @@
       "$ref": "#/definitions/api.domain.register"
     },
     {
+      "$ref": "#/definitions/api.mcp-import.authorize"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.complete"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.disconnect"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.status"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.tools"
+    },
+    {
       "$ref": "#/definitions/api.security-scheme.create"
     },
     {
@@ -2121,6 +2136,101 @@
         "expiresAt": {
           "type": "string"
         }
+      },
+      "additionalProperties": false
+    },
+    "api.mcp-import.authorize": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem api mcp-import authorize`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import authorize",
+      "required": ["$type", "authorizationUrl", "deploymentRevision", "importIndex"],
+      "properties": {
+        "$type": { "const": "api.mcp-import.authorize" },
+        "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when authorizing the selected manifest declaration before deployment." },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "authorizationUrl": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    },
+    "api.mcp-import.complete": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.complete" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import complete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import complete"
+    },
+    "api.mcp-import.disconnect": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.disconnect" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import disconnect`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import disconnect"
+    },
+    "api.mcp-import.status": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.status" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import status`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import status"
+    },
+    "api.mcp-import.tools": {
+      "type": "object",
+      "description": "Projected metadata for an individual import before native and earlier-import precedence.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import tools",
+      "x-golem-commands": ["api mcp-import tools", "api mcp-import refresh"],
+      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "protocolVersion", "tools", "diagnostics"],
+      "properties": {
+        "$type": { "const": "api.mcp-import.tools" },
+        "environmentId": { "type": "string", "format": "uuid" },
+        "deploymentRevision": { "type": "integer", "minimum": 0 },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "protocolVersion": { "type": "string" },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["upstreamName", "digest", "definition"],
+            "properties": {
+              "upstreamName": { "type": "string" },
+              "digest": { "type": "string" },
+              "definition": { "$ref": "#/definitions/Tool" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["upstreamName", "reason"],
+            "properties": {
+              "upstreamName": { "type": "string" },
+              "reason": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpImportOAuthStatusOutput": {
+      "type": "object",
+      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "securityScheme", "status"],
+      "properties": {
+        "$type": { "enum": ["api.mcp-import.complete", "api.mcp-import.disconnect", "api.mcp-import.status"] },
+        "environmentId": { "type": "string", "format": "uuid" },
+        "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when inspecting or managing the selected manifest declaration before deployment." },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "securityScheme": { "type": "string" },
+        "status": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -4753,6 +4863,17 @@
             "ttlNanos": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "importIndex", "upstreamToolName", "reason"],
+          "properties": {
+            "type": { "const": "McpImportDiscovery" },
+            "importIndex": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 },
+            "upstreamToolName": { "type": ["string", "null"] },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -5655,6 +5776,7 @@
         "components": { "$ref": "#/definitions/DeploymentDiffSection" },
         "httpApiDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
         "mcpDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "mcpImports": { "$ref": "#/definitions/DeploymentDiffSection" },
         "remoteTools": { "$ref": "#/definitions/DeploymentDiffSection" },
         "publishedTools": { "$ref": "#/definitions/DeploymentSetDiffSection" },
         "remoteToolMiddlewareDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
@@ -6408,6 +6530,9 @@
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "mcpDeployments": {
+          "$ref": "#/definitions/DeploymentDiffSection"
+        },
+        "mcpImports": {
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "remoteTools": {
@@ -8877,6 +9002,26 @@
     {
       "type": "api.domain.register",
       "rustType": "DomainRegistrationNewView"
+    },
+    {
+      "type": "api.mcp-import.authorize",
+      "rustType": "McpImportAuthorizeView"
+    },
+    {
+      "type": "api.mcp-import.complete",
+      "rustType": "McpImportCompleteView"
+    },
+    {
+      "type": "api.mcp-import.disconnect",
+      "rustType": "McpImportDisconnectView"
+    },
+    {
+      "type": "api.mcp-import.status",
+      "rustType": "McpImportStatusView"
+    },
+    {
+      "type": "api.mcp-import.tools",
+      "rustType": "McpImportToolsView"
     },
     {
       "type": "api.security-scheme.create",

@@ -422,6 +422,7 @@ fn activation_with_policy(
         EntityActivationPolicy::Tool {
             provision,
             binding: Box::new(binding),
+            mcp_import: None,
         },
         filesystem,
     )

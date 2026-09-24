@@ -20,9 +20,7 @@ use golem_common::schema::agent::{
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::{is_multimodal_schema_type, multimodal_variant_cases};
 use golem_common::schema::schema_type::SchemaType;
-use rmcp::model::{
-    GetPromptResult, Prompt, PromptMessage, PromptMessageContent, PromptMessageRole,
-};
+use rmcp::model::{GetPromptResult, Prompt, PromptMessage, Role};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -95,15 +93,12 @@ impl AgentMcpPrompt {
     }
 
     pub fn get_prompt_result(&self) -> GetPromptResult {
-        GetPromptResult {
-            description: self.prompt.description.clone(),
-            messages: vec![PromptMessage {
-                role: PromptMessageRole::User,
-                content: PromptMessageContent::Text {
-                    text: self.prompt_text.clone(),
-                },
-            }],
-        }
+        let mut result = GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            self.prompt_text.clone(),
+        )]);
+        result.description = self.prompt.description.clone();
+        result
     }
 }
 
@@ -323,10 +318,10 @@ mod tests {
 
         let result = prompt.get_prompt_result();
         assert_eq!(result.messages.len(), 1);
-        assert!(matches!(result.messages[0].role, PromptMessageRole::User));
+        assert!(matches!(result.messages[0].role, rmcp::model::Role::User));
         match &result.messages[0].content {
-            PromptMessageContent::Text { text } => {
-                assert_eq!(text, "Do something useful");
+            rmcp::model::ContentBlock::Text(text) => {
+                assert_eq!(text.text, "Do something useful");
             }
             _ => panic!("expected text content"),
         }

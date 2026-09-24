@@ -25,6 +25,7 @@ use crate::model::agent_secret::{
     DeploymentAgentSecretCreation, DeploymentAgentSecretReplacement, DeploymentAgentSecretUpdate,
 };
 use crate::model::api_definition::UnboundCompiledRoute;
+use crate::repo::model::deployment::CompiledTools;
 use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use crate::services::agent_secret::schema_contains_host_managed_capability;
 use crate::services::deployment::route_compilation::validate_path_segments;
@@ -41,6 +42,7 @@ use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
+use golem_common::model::mcp_import::McpImport;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation, ResourceName};
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
@@ -68,12 +70,6 @@ use golem_service_base::model::component::Component;
 use golem_service_base::model::retry_policy::StoredRetryPolicy;
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
-
-#[derive(Debug)]
-pub struct CompiledTools {
-    pub registered_tools: Vec<RegisteredTool>,
-    pub agent_tool_bindings: Vec<CompiledToolBinding>,
-}
 
 #[derive(Debug)]
 pub struct InProgressDeployedRegisteredAgentType {
@@ -301,6 +297,7 @@ impl DeploymentContext {
         &self,
         compiled_tools: &CompiledTools,
         published_tools: &[ToolName],
+        mcp_imports: &[McpImport],
         registered_tool_middlewares: &[RegisteredToolMiddleware],
         published_tool_middlewares: &[ToolMiddlewareName],
         universal_tool_middlewares: &[golem_common::model::tool_middleware::ToolMiddlewareInstallation],
@@ -341,6 +338,11 @@ impl DeploymentContext {
                     .collect(),
                 &published_tools,
             )?,
+            mcp_imports: mcp_imports
+                .iter()
+                .enumerate()
+                .map(|(index, import)| (index.to_string(), HashOf::form_value(import.clone())))
+                .collect(),
             published_tools,
             remote_tool_middleware_deployments: diff::remote_tool_middleware_deployments(
                 registered_tool_middlewares.to_vec(),
@@ -2625,6 +2627,7 @@ mod tests {
             let server_hash = context
                 .hash_with_tools(
                     &compiled,
+                    &[],
                     &[],
                     &[],
                     &[],

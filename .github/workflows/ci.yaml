@@ -61,7 +61,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 20
+        timeout-minutes: 30
       - name: Packaging all binaries with cargo-nextest
         run: |
           mkdir -pv tmp

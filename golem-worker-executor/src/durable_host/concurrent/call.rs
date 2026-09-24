@@ -1322,11 +1322,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             }
             outcome @ (ReplayStartClaimOutcome::ReplayEnded
             | ReplayStartClaimOutcome::DeletedRegion) => {
-                if !prepared.replaying_incomplete_entity {
+                let primary_replay_tail = prepared.primary_runtime
+                    && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
+                if !prepared.replaying_incomplete_entity && !primary_replay_tail {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
                         format!(
-                            "replay continuation at {} is valid only for an incomplete entity",
+                            "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
                             prepared.replay_state.last_replayed_index()
                         ),
                     ));

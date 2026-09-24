@@ -5,6 +5,7 @@ members = [
     "golem-api-grpc",
     "golem-client",
     "golem-common",
+    "golem-mcp-import",
     "golem-native-tool",
     "golem-rust-macro",
     "golem-service-base",
@@ -39,6 +40,7 @@ golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
+golem-mcp-import = { version = "=0.0.0", path = "golem-mcp-import" }
 golem-native-tool = { version = "=0.0.0", path = "golem-native-tool" }
 golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
@@ -139,6 +141,7 @@ heck = "0.5.0"
 hex = "0.4.3"
 hmac = "0.12.1"
 http = "1.3.1"
+http-auth = { version = "0.1.10", default-features = false }
 http-body = "1.0.1"
 http-body-util = "0.1.3"
 humanize-rs = "0.1.5"
@@ -186,6 +189,7 @@ nonempty-collections = "1.2.1"
 nonzero_ext = "0.3.0"
 num-bigint = "0.4"
 num-traits = "0.2.19"
+oauth2 = { version = "5.0.0", default-features = false }
 once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
 openidconnect = "4.0.1"
@@ -226,7 +230,7 @@ reqwest-retry = "0.9.1"
 reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_30"] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
-rmcp = { version = "0.16.0", features = ["server", "transport-streamable-http-server"] }
+rmcp = { version = "3.4.0", features = ["server", "transport-streamable-http-server"] }
 rsa = "0.9.7"
 
 rust_decimal = "1.39.0"
@@ -252,6 +256,7 @@ spdx = "0.10.8"
 sqlparser = { version = "=0.62.0", features = ["visitor"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "postgres", "mysql", "uuid", "migrate", "derive", "chrono", "json", "bigdecimal", "mac_address", "bit-vec", "ipnetwork", ] }
 sqlx-core = { version = "0.8" }
+sse-stream = "0.2.5"
 stacker = "0.1.25"
 strip-ansi-escapes = "0.2.0"
 strum = "0.27.1"
