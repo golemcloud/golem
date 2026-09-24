@@ -1,11 +1,12 @@
 //! Fail-closed controls for a derived index in the spawned PostgreSQL benchmark backend.
 
-use crate::components::rdb::DbInfo;
+use crate::components::rdb::{DbInfo, PostgresInfo};
 use crate::config::benchmark::TestMode;
 use crate::config::{BenchmarkTestDependencies, TestDependencies};
 use anyhow::{Context, ensure};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::{IdempotencyKey, OwnedAgentId};
+use golem_common::model::{AgentStatusRecord, IdempotencyKey, OwnedAgentId};
+use golem_common::serialization::try_deserialize;
 use golem_service_base::storage::blob::{BlobStorageNamespace, ExistsResult};
 use sha2::{Digest, Sha256};
 use sqlx::{Connection, PgConnection};
@@ -14,6 +15,81 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 type IndexRows = Vec<(String, Vec<u8>)>;
+
+/// Read-only observation of exact fields, usable after a live producer's completion barrier.
+/// Status is an asynchronously persisted baseline; callers must check `oplog_idx` before
+/// interpreting absence from its bounded recent-session set as eviction.
+pub struct LiveSessionIndexInspection {
+    pub status: Option<AgentStatusRecord>,
+    pub coverage_present: bool,
+    pub sessions_present: BTreeSet<IdempotencyKey>,
+}
+
+pub async fn inspect_live_session_index(
+    mode: &TestMode,
+    deps: &BenchmarkTestDependencies,
+    id: &OwnedAgentId,
+    sessions: &[IdempotencyKey],
+) -> anyhow::Result<LiveSessionIndexInspection> {
+    let info = live_postgres(matches!(mode, TestMode::Spawned { .. }), || {
+        deps.rdb().info()
+    })?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut connection = PgConnection::connect_with(&info.to_connect_options()).await?;
+        let mut keys = vec!["coverage".to_string()];
+        keys.extend(sessions.iter().map(|key| format!("session:{}", key.value)));
+        let rows: IndexRows = sqlx::query_as(
+            "SELECT key, value FROM golem_worker_executor.kv_storage WHERE namespace = $1 AND key = ANY($2)",
+        )
+        .bind(id.agent_id.durable_stream_session_index_namespace())
+        .bind(keys)
+        .fetch_all(&mut connection)
+        .await?;
+        let status: Option<(Vec<u8>,)> = sqlx::query_as(
+            "SELECT value FROM golem_worker_executor.kv_storage WHERE namespace = $1 AND key = $2",
+        )
+        .bind(format!("agent-status:{}", id.agent_id.to_redis_key()))
+        .bind("core")
+        .fetch_optional(&mut connection)
+        .await?;
+        decode_live_inspection(rows, status.map(|(bytes,)| bytes))
+    }).await?
+}
+
+fn live_postgres(spawned: bool, info: impl FnOnce() -> DbInfo) -> anyhow::Result<PostgresInfo> {
+    ensure!(spawned, "live index inspection requires spawned mode");
+    let DbInfo::Postgres(info) = info() else {
+        anyhow::bail!("live index inspection requires PostgreSQL");
+    };
+    Ok(info)
+}
+
+fn decode_live_inspection(
+    rows: IndexRows,
+    status: Option<Vec<u8>>,
+) -> anyhow::Result<LiveSessionIndexInspection> {
+    ensure!(
+        rows.iter().all(|(_, value)| !value.is_empty()),
+        "empty index value"
+    );
+    Ok(LiveSessionIndexInspection {
+        coverage_present: rows.iter().any(|(key, _)| key == "coverage"),
+        sessions_present: rows
+            .iter()
+            .filter_map(|(key, _)| {
+                key.strip_prefix("session:")
+                    .map(|key| IdempotencyKey::new(key.to_string()))
+            })
+            .collect(),
+        status: status
+            .map(|bytes| {
+                try_deserialize(&bytes)
+                    .map_err(anyhow::Error::msg)?
+                    .context("invalid status serialization")
+            })
+            .transpose()?,
+    })
+}
 
 pub struct SpawnedSessionIndexControl<'a> {
     deps: &'a BenchmarkTestDependencies,
@@ -227,6 +303,55 @@ async fn payload_snapshot(
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn live_inspection_rejects_uncontrolled_backends() {
+        assert!(
+            live_postgres(false, || panic!(
+                "uncontrolled backend must not be accessed"
+            ))
+            .unwrap_err()
+            .to_string()
+            .contains("spawned")
+        );
+        assert!(
+            live_postgres(true, || DbInfo::Sqlite(PathBuf::new()))
+                .unwrap_err()
+                .to_string()
+                .contains("PostgreSQL")
+        );
+    }
+
+    #[test]
+    fn live_session_index_inspection_preserves_status_horizon_and_absence() {
+        let status = AgentStatusRecord {
+            oplog_idx: golem_common::model::oplog::OplogIndex::from_u64(127),
+            ..Default::default()
+        };
+        let observed = decode_live_inspection(
+            vec![
+                ("coverage".into(), vec![1]),
+                ("session:old".into(), vec![2]),
+            ],
+            Some(
+                golem_common::serialization::serialize(&status)
+                    .unwrap()
+                    .to_vec(),
+            ),
+        )
+        .unwrap();
+        assert!(observed.coverage_present);
+        assert_eq!(observed.status.unwrap().oplog_idx, status.oplog_idx);
+        assert_eq!(
+            observed.sessions_present,
+            BTreeSet::from([IdempotencyKey::new("old".into())])
+        );
+        let absent = decode_live_inspection(vec![], None).unwrap();
+        assert!(!absent.coverage_present);
+        assert!(absent.status.is_none());
+        assert!(decode_live_inspection(vec![("coverage".into(), vec![])], None).is_err());
+        assert!(decode_live_inspection(vec![], Some(vec![255])).is_err());
+    }
 
     #[test]
     fn missing_index_control_validates_exact_sessions_and_coverage() {
