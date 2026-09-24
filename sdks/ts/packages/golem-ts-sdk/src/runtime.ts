@@ -36,7 +36,6 @@ import {
   GraphEncoder,
   mergeGraphDefs,
   SchemaGraph,
-  SchemaValue,
   schemaValueFromWit,
   schemaValueToWitAsync,
 } from './internal/schema-model';
@@ -125,11 +124,26 @@ interface MethodCodec {
   httpEndpoints: HttpEndpointDetails[];
 }
 
-/** Compiled agent: the assembled `AgentType` plus the per-schema codecs. */
-export interface RegisteredAgent {
+/** Runtime dispatch accepts concrete wire operations, independently of metadata compilation. */
+export interface AgentRuntime {
   name: string;
   className: AgentClassName;
   agentType: AgentType;
+  readId(input: SchemaValueTree, principal: HostPrincipal): Record<string, unknown>;
+  runtimeMethods: Map<
+    string,
+    {
+      hasInput: boolean;
+      read(input: SchemaValueTree, principal: HostPrincipal): unknown;
+      write(value: unknown): Promise<SchemaValueTree | undefined>;
+    }
+  >;
+  configAccessor(): ReturnType<typeof buildConfigAccessor>;
+  snapshotStateSchema?: StandardSchemaV1;
+}
+
+/** Dynamic metadata compilation retains model codecs only for explicit runtime definitions. */
+export interface RegisteredAgent extends AgentRuntime {
   idCodecs: NamedCodec[];
   methodCodecs: Map<string, MethodCodec>;
   configDeclarations: ConfigDeclaration[];
@@ -221,7 +235,43 @@ export function registerAgentType(
     configDeclarations,
     configTree,
     snapshotStateSchema,
+    readId: (input, principal) => readNamedInputs(idCodecs, input, principal),
+    runtimeMethods: new Map(
+      [...methodCodecs].map(([methodName, mc]) => [
+        methodName,
+        {
+          hasInput: mc.inputCodecs.length !== 0,
+          read: (input: SchemaValueTree, principal: HostPrincipal) =>
+            readNamedInputs(mc.inputCodecs, input, principal),
+          write: async (value: unknown) =>
+            mc.output.tag === 'unit'
+              ? undefined
+              : schemaValueToWitAsync(mc.output.codec.toValue(value)),
+        },
+      ]),
+    ),
+    configAccessor: () => buildConfigAccessor(configTree),
   };
+}
+
+function readNamedInputs(
+  codecs: NamedCodec[],
+  input: SchemaValueTree,
+  principal: HostPrincipal,
+): Record<string, unknown> {
+  const value = schemaValueFromWit(input);
+  const expected = codecs.filter((c) => c.codec.autoInjected !== 'principal').length;
+  if (value.tag !== 'record' || value.fields.length !== expected)
+    throw new TypeError(`expected a record with ${expected} user-supplied fields`);
+  let index = 0;
+  return Object.fromEntries(
+    codecs.map(({ name, codec }) => [
+      name,
+      codec.autoInjected === 'principal'
+        ? sdkPrincipalFromHost(principal)
+        : codec.fromValue(value.fields[index++]),
+    ]),
+  );
 }
 
 /**
@@ -455,7 +505,7 @@ function assembleAgentType(
  */
 class ResolvedAgentImpl {
   constructor(
-    private readonly reg: RegisteredAgent,
+    private readonly reg: AgentRuntime,
     /** The handler `this`: state fields + `getId`/`getPhantomId` helpers. */
     private readonly instance: Record<string, unknown>,
     private readonly methods: Record<string, (...args: unknown[]) => unknown>,
@@ -479,7 +529,7 @@ class ResolvedAgentImpl {
     methodArgs: SchemaValueTree,
     principal: HostPrincipal,
   ): Promise<Result<SchemaValueTree | undefined, AgentError>> {
-    const mc = this.reg.methodCodecs.get(methodName);
+    const mc = this.reg.runtimeMethods.get(methodName);
     if (!mc) {
       return {
         tag: 'err',
@@ -496,29 +546,7 @@ class ResolvedAgentImpl {
 
     let args: unknown;
     try {
-      if (mc.inputCodecs.length === 0) {
-        args = undefined;
-      } else {
-        // The wire record carries ONE field per user-supplied parameter, in
-        // declaration order; an auto-injected `s.principal()` parameter has NO
-        // wire field and is filled from the separate `principal` arg. Walk with a
-        // cursor so user-supplied decoding stays aligned (mirrors the base SDK's
-        // `decodeInputRecord`). When every parameter is auto-injected the wire
-        // record is empty, so only read `methodArgs` when a user-supplied field exists.
-        const hasUserSupplied = mc.inputCodecs.some((ic) => ic.codec.autoInjected !== 'principal');
-        const fields = hasUserSupplied
-          ? (schemaValueFromWit(methodArgs) as Extract<SchemaValue, { tag: 'record' }>).fields
-          : [];
-        const record: Record<string, unknown> = {};
-        let cursor = 0;
-        for (const ic of mc.inputCodecs) {
-          record[ic.name] =
-            ic.codec.autoInjected === 'principal'
-              ? sdkPrincipalFromHost(principal)
-              : ic.codec.fromValue(fields[cursor++]);
-        }
-        args = record;
-      }
+      args = await mc.read(methodArgs, principal);
     } catch (e) {
       return {
         tag: 'err',
@@ -530,19 +558,15 @@ class ResolvedAgentImpl {
 
     let result: unknown;
     try {
-      result =
-        mc.inputCodecs.length === 0
-          ? await handler.call(this.instance)
-          : await handler.call(this.instance, args);
+      result = !mc.hasInput
+        ? await handler.call(this.instance)
+        : await handler.call(this.instance, args);
     } catch (e) {
       return { tag: 'err', val: createCustomError(errorMessage(e)) };
     }
 
     try {
-      if (mc.output.tag === 'unit') {
-        return { tag: 'ok', val: undefined };
-      }
-      return { tag: 'ok', val: await schemaValueToWitAsync(mc.output.codec.toValue(result)) };
+      return { tag: 'ok', val: await mc.write(result) };
     } catch (e) {
       return {
         tag: 'err',
@@ -723,14 +747,14 @@ async function validateSnapshotState(
 
 /** Register the agent's initiator. On `initiate`, decode id, run `init`, wire handlers. */
 export function registerAgentInitiator(
-  reg: RegisteredAgent,
+  reg: AgentRuntime,
   impl: AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>,
 ): void {
   if (AgentInitiatorRegistry.exists(reg.name)) {
     throw new Error(`Agent "${reg.name}" already has an implementation`);
   }
   const resolveContext = (
-    constructorInput: SchemaValue,
+    constructorInput: SchemaValueTree,
     principal: HostPrincipal,
   ):
     | { tag: 'err'; val: AgentError }
@@ -739,29 +763,14 @@ export function registerAgentInitiator(
         val: {
           idRecord: Record<string, unknown>;
           agentId: ParsedAgentId;
-          phantomId: ReturnType<ParsedAgentId['parsed']>[2];
+          phantomId: ReturnType<ParsedAgentId['parsedWire']>[2];
           sdkPrincipal: ReturnType<typeof sdkPrincipalFromHost>;
           config: ReturnType<typeof buildConfigAccessor>;
         };
       } => {
     let idRecord: Record<string, unknown>;
     try {
-      // Same cursor-based decode as `invoke`: an auto-injected `s.principal()`
-      // id field is filled from the separate `principal` arg and consumes no
-      // wire field. For the common all-user-supplied case this is identical to
-      // a positional read.
-      const hasUserSupplied = reg.idCodecs.some((ic) => ic.codec.autoInjected !== 'principal');
-      const fields = hasUserSupplied
-        ? (constructorInput as Extract<SchemaValue, { tag: 'record' }>).fields
-        : [];
-      idRecord = {};
-      let cursor = 0;
-      for (const ic of reg.idCodecs) {
-        idRecord[ic.name] =
-          ic.codec.autoInjected === 'principal'
-            ? sdkPrincipalFromHost(principal)
-            : ic.codec.fromValue(fields[cursor++]);
-      }
+      idRecord = reg.readId(constructorInput, principal);
     } catch (e) {
       return {
         tag: 'err',
@@ -780,13 +789,13 @@ export function registerAgentInitiator(
         ),
       };
     }
-    const [, , phantomId] = agentId.parsed();
+    const [, , phantomId] = agentId.parsedWire();
     const sdkPrincipal = sdkPrincipalFromHost(principal);
 
     // Fresh-reading config accessor; shared by `init` (via context) and the
     // handler `this`. Each getter re-fetches on access (config may change
     // between invocations).
-    const config = buildConfigAccessor(reg.configTree);
+    const config = reg.configAccessor();
 
     return {
       tag: 'ok',
@@ -814,7 +823,7 @@ export function registerAgentInitiator(
   };
 
   AgentInitiatorRegistry.register(reg.className, {
-    async initiate(constructorInput: SchemaValue, principal: HostPrincipal) {
+    async initiate(constructorInput: SchemaValueTree, principal: HostPrincipal) {
       const resolved = resolveContext(constructorInput, principal);
       if (resolved.tag === 'err') return resolved;
       const { idRecord, phantomId, sdkPrincipal, config } = resolved.val;

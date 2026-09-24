@@ -753,6 +753,7 @@ function streamMarker<Output>(
     const itemCodec = recurse(inner);
     return {
       graph: { defs: itemCodec.graph.defs, root: t.stream(itemCodec.graph.root) },
+      streamItem: itemCodec,
       toValue: (value) => v.stream(agentStreamToHandle(value as AgentStream<Output>, itemCodec)),
       fromValue: (value) => {
         if (value.tag !== 'stream') {

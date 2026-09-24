@@ -17,7 +17,6 @@ import type { TypedSchemaValue as WireTypedSchemaValue } from 'golem:core/types@
 import { directSchemaValueFromWit, schemaValueIsCanonical } from '../../schema/codec';
 import {
   deepEqual,
-  schemaGraphFromWit,
   typedSchemaValueFromWit,
   type SchemaValue,
   type TypedSchemaValue,
@@ -59,6 +58,7 @@ export interface ResolvedToolInvocation {
 
 interface InternalResolvedToolInvocation extends ResolvedToolInvocation {
   prepareValues(input: readonly CanonicalInputValue[]): PreparedToolInvocation;
+  prepareRecord(input: Readonly<Record<string, unknown>>): PreparedToolInvocation;
 }
 
 export interface ResolvableToolRuntime {
@@ -223,6 +223,18 @@ function resolveToolInvocationInternal(
     pathsEqual(candidate.commandPath, canonicalPath),
   );
   if (binding) {
+    const prepareRecord = (input: Readonly<Record<string, unknown>>): PreparedToolInvocation => ({
+      invoke: async (context) =>
+        await binding.handler.call(
+          binding.receiver,
+          Object.fromEntries(
+            tool
+              .canonicalInputFields(command)
+              .map((field) => [camelCase(field.name), input[field.name]]),
+          ),
+          context,
+        ),
+    });
     const prepareValues = (inputValues: readonly CanonicalInputValue[]): PreparedToolInvocation => {
       let projectedValues: CanonicalInputValue[];
       try {
@@ -247,25 +259,17 @@ function resolveToolInvocationInternal(
           return prepareValues(decodeCanonicalInput(tool, command, typedSchemaValueFromWit(input)));
         }
         try {
-          if (!deepEqual(schemaGraphFromWit(input.graph), inputModel.codec.graph)) {
-            throw new Error('tool input schema does not match the command canonical input schema');
-          }
           const decoded = directSchemaValueFromWit(inputModel.codec, input.value) as Record<
             string,
             unknown
           >;
-          const handlerInput = Object.fromEntries(
-            inputModel.fields.map((field) => [camelCase(field.name), decoded[field.name]]),
-          );
-          return {
-            invoke: async (context) =>
-              await binding.handler.call(binding.receiver, handlerInput, context),
-          };
+          return prepareRecord(decoded);
         } catch (error) {
           throw invalidInput(error);
         }
       },
       prepareValues,
+      prepareRecord,
     };
   }
 
@@ -293,11 +297,45 @@ function resolveToolInvocationInternal(
   return {
     command,
     prepare: (input) => childResolved.prepareValues(decodeCanonicalInput(tool, command, input)),
-    prepareWire: (input) =>
-      childResolved.prepareValues(
-        decodeCanonicalInput(tool, command, typedSchemaValueFromWit(input)),
-      ),
+    prepareWire: (input) => {
+      const source = tool.canonicalInputModel(command);
+      if (!source.codec.direct) {
+        return childResolved.prepareValues(
+          decodeCanonicalInput(tool, command, typedSchemaValueFromWit(input)),
+        );
+      }
+      try {
+        const decoded = directSchemaValueFromWit(source.codec, input.value) as Record<
+          string,
+          unknown
+        >;
+        const targetFields = child.extended.canonicalInputFields(childResolved.command);
+        const projected = Object.fromEntries(
+          targetFields.map((target) => {
+            const sourceField = source.fields.find((candidate) =>
+              canonicalSurfacesOverlap(target, candidate),
+            );
+            if (!sourceField)
+              throw new Error(`missing canonical tool input field \`${target.name}\``);
+            if (!deepEqual(sourceField.codec.graph, target.codec.graph)) {
+              throw new Error(
+                `canonical tool input field \`${sourceField.name}\` has incompatible schema for forwarded field \`${target.name}\``,
+              );
+            }
+            const value = decoded[sourceField.name];
+            if (sourceField.optionalCarrier && !target.optionalCarrier && value === undefined) {
+              throw new Error(`missing required inherited tool input field \`${target.name}\``);
+            }
+            return [target.name, value];
+          }),
+        );
+        return childResolved.prepareRecord(projected);
+      } catch (error) {
+        throw invalidInput(error);
+      }
+    },
     prepareValues: (inputValues) => childResolved.prepareValues(inputValues),
+    prepareRecord: (input) => childResolved.prepareRecord(input),
   };
 }
 
@@ -343,6 +381,14 @@ function pathsEqual(left: readonly string[], right: readonly string[]): boolean 
 
 function pathStartsWith(path: readonly string[], prefix: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => segment === path[index]);
+}
+
+function canonicalSurfacesOverlap(
+  left: Pick<CanonicalInputField, 'name' | 'aliases'>,
+  right: Pick<CanonicalInputField, 'name' | 'aliases'>,
+): boolean {
+  const leftNames = new Set([left.name, ...left.aliases]);
+  return [right.name, ...right.aliases].some((name) => leftNames.has(name));
 }
 
 function camelCase(name: string): string {

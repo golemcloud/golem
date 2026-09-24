@@ -31,12 +31,18 @@ import {
   type SchemaValue,
   t,
   type TypedSchemaValue,
+  typedSchemaValueToWit,
   v,
   validateSchemaGraph,
   encodeChild,
   isolateCapabilityRoot,
 } from '../schema-model';
-import { CodecShapeMismatchError, type SchemaCodec, withDirectCodec } from '../../schema/codec';
+import {
+  CodecShapeMismatchError,
+  directTypedSchemaValueToWit,
+  type SchemaCodec,
+  withDirectCodec,
+} from '../../schema/codec';
 import { toolBuildError } from './errors';
 
 export type {
@@ -288,6 +294,13 @@ export class CanonicalInputModel {
 
   encodeTyped(input: Record<string, unknown>): TypedSchemaValue {
     return { graph: this.codec.graph, value: this.encode(input) };
+  }
+
+  /** Encode the ordinary invocation carrier without allocating the owned schema-value model. */
+  encodeWire(input: Record<string, unknown>) {
+    return this.codec.direct
+      ? directTypedSchemaValueToWit(this.codec, input)
+      : typedSchemaValueToWit(this.encodeTyped(input));
   }
 
   decode(input: SchemaValue): Record<string, unknown> {

@@ -2,6 +2,7 @@ import ts from 'typescript';
 import { minify } from 'terser';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { staticTools } from './static-tools.mjs';
 
 const sdk = '@golemcloud/golem-ts-sdk';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -178,6 +179,8 @@ export default (async () => {
 
 export function componentPlugin(parsedConfig, main) {
   const capabilities = discoverCapabilities(parsedConfig);
+  const tools = staticTools(parsedConfig, runtime);
+  const dynamicModels = tools.usesDynamicModels || capabilities.middleware;
   const entry = '\0golem:component-entry';
   return {
     name: 'golem-component',
@@ -210,6 +213,39 @@ export function componentPlugin(parsedConfig, main) {
       if (id === entry) return componentEntry(main, capabilities);
     },
     transform(code, id) {
+      const compiled = tools.transform(code, id);
+      if (compiled) return compiled;
+      if (id === path.join(runtime, 'index.mjs')) {
+        if (capabilities.tools)
+          code = code
+            .replaceAll('./internal/registry/toolRegistry.mjs', './internal/tool/compiled.mjs')
+            .replaceAll('./internal/tool/invocationResult.mjs', './internal/tool/compiled.mjs');
+        if (!dynamicModels)
+          code = code.replace(
+            /^import ['"]\.\/schema\/(zod|valibot|arktype|effect)\.mjs['"];?\s*$/gm,
+            '',
+          );
+        return { code, map: null };
+      }
+      if (id === path.join(runtime, 'agentId.mjs') && !dynamicModels) {
+        const source = ts.createSourceFile(
+          id,
+          code,
+          ts.ScriptTarget.Latest,
+          true,
+          ts.ScriptKind.JS,
+        );
+        const edits = [];
+        for (const statement of source.statements) {
+          if (!ts.isClassDeclaration(statement) || statement.name?.text !== 'ParsedAgentId')
+            continue;
+          for (const member of statement.members)
+            if (['create', 'parsed', 'parts', 'dynamicClient'].includes(member.name?.text))
+              edits.push([member.getStart(source), member.end]);
+        }
+        for (const [start, end] of edits.reverse()) code = code.slice(0, start) + code.slice(end);
+        return { code, map: null };
+      }
       // Rollup does not eliminate unused class methods. Specialize only the two
       // registration methods of the SDK's builder, before Rollup links imports.
       // There are no capability tests or alternate implementations at runtime.

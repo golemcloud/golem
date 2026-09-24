@@ -57,6 +57,9 @@ import { StandardSchemaV1 } from './schema/standardSchema';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec } from './schema/codec';
 import { Secret } from './secret';
+import { reveal } from 'golem:secrets/reveal@0.1.0';
+import { SECRET_INTERNAL } from './internal/schema-model/secretInternal';
+import { peekGuestSecretHandle } from './internal/schema-model/secretHandle';
 
 /**
  * The agent's config spec: a single record of named fields, each a
@@ -253,6 +256,18 @@ function readLocalLeaf(d: ConfigDeclaration): unknown {
   return d.codec.fromValue(schemaValueFromWit(tree));
 }
 
+function secretLeaf(d: ConfigDeclaration): Secret<unknown> {
+  return new Secret(() => {
+    const sv = schemaValueFromWit(getConfigValue(d.path, schemaGraphToWit(d.graph)));
+    if (sv.tag !== 'secret')
+      throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
+    const raw = peekGuestSecretHandle(SECRET_INTERNAL, sv.handle);
+    if (raw === undefined)
+      throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
+    return d.codec.fromValue(schemaValueFromWit(reveal(raw, schemaGraphToWit(d.codec.graph))));
+  });
+}
+
 /**
  * Materialize a group into a plain object, or `undefined` when the group is
  * ABSENT (a required child resolved to `undefined`). Local leaves are read fresh
@@ -263,7 +278,7 @@ function materializeGroup(group: ConfigGroupNode): Record<string, unknown> | und
   for (const child of group.children) {
     if (child.kind === 'leaf') {
       const d = child.decl;
-      obj[d.name] = d.source === 'secret' ? new Secret(d) : readLocalLeaf(d);
+      obj[d.name] = d.source === 'secret' ? secretLeaf(d) : readLocalLeaf(d);
     } else {
       obj[child.name] = materializeGroup(child);
     }
@@ -294,7 +309,7 @@ export function buildConfigAccessor(tree: ConfigGroupNode): Record<string, unkno
       if (d.source === 'secret') {
         // A lazy, log-safe `Secret` handle; the plaintext is only revealed by
         // `Secret.get()` (which re-reads the live value each call).
-        root[d.name] = new Secret(d);
+        root[d.name] = secretLeaf(d);
       } else {
         Object.defineProperty(root, d.name, {
           enumerable: true,

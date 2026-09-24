@@ -19,7 +19,6 @@ import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
 import type { ExtendedCommandBody } from './internal/tool';
-import { schemaValueFromWit } from './internal/schema-model';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -269,9 +268,7 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = await (initiator.initiateFromWit
-    ? initiator.initiateFromWit(input, principal)
-    : initiator.initiate(schemaValueFromWit(input), principal));
+  const initiateResult = await initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
     initializedAgent = { agent: initiateResult.val, principal };
@@ -835,7 +832,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Agent is already initialized in this container`;
   }
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
+  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsedWire();
   const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
   if (registrationError) {
     // The snapshot WIT interface returns `result<_, string>`, not AgentError.

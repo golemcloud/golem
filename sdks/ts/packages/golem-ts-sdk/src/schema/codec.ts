@@ -106,6 +106,8 @@ export interface SchemaCodec {
   readonly optionInner?: SchemaCodec;
   /** Item codec for a WIT `list` or `fixed-list`. */
   readonly listItem?: SchemaCodec;
+  /** Item codec for a typed schema-value stream. */
+  readonly streamItem?: SchemaCodec;
   /** Child codecs for a WIT `map`, when the source schema exposes them. */
   readonly mapKey?: SchemaCodec;
   readonly mapValue?: SchemaCodec;

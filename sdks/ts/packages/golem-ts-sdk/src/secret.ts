@@ -18,13 +18,6 @@
 // and `toJSON()` throws so the handle can never be accidentally serialized into
 // a log line or a snapshot.
 
-import { getConfigValue } from 'golem:agent/host@2.0.0';
-import { reveal } from 'golem:secrets/reveal@0.1.0';
-import { SchemaValue, schemaGraphToWit, schemaValueFromWit } from './internal/schema-model';
-import { SECRET_INTERNAL } from './internal/schema-model/secretInternal';
-import { peekGuestSecretHandle } from './internal/schema-model/secretHandle';
-import type { ConfigDeclaration } from './config';
-
 /**
  * A lazy, log-safe handle over a `secret<inner>` config field. Obtained from
  * `this.config.<field>` (and `InitContext.config.<field>`) for any field
@@ -37,7 +30,7 @@ import type { ConfigDeclaration } from './config';
  *   the whole config object) can never leak the plaintext.
  */
 export class Secret<T> {
-  constructor(private readonly declaration: ConfigDeclaration) {}
+  constructor(private readonly read: () => T) {}
 
   /**
    * Reveal and decode the current plaintext value.
@@ -50,19 +43,7 @@ export class Secret<T> {
    * plain Node), so it is exercised at invocation time, never at import time.
    */
   get(): T {
-    const d = this.declaration;
-    const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
-    const sv = schemaValueFromWit(tree);
-    if (sv.tag !== 'secret') {
-      throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
-    }
-    const handle = (sv as Extract<SchemaValue, { tag: 'secret' }>).handle;
-    const raw = peekGuestSecretHandle(SECRET_INTERNAL, handle);
-    if (raw === undefined) {
-      throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
-    }
-    const revealedTree = reveal(raw, schemaGraphToWit(d.codec.graph));
-    return d.codec.fromValue(schemaValueFromWit(revealedTree)) as T;
+    return this.read();
   }
 
   /** Refuse serialization so secrets never leak through logs / JSON / snapshots. */

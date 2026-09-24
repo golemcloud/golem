@@ -827,7 +827,7 @@ describe('tool runtime client', () => {
     expect(invalidResult).toMatchObject({
       cause: {
         tag: 'rpc',
-        error: { tag: 'protocol-error', val: expect.stringContaining('schema') },
+        error: { tag: 'protocol-error', val: expect.stringContaining('local definition') },
       },
     });
   });
@@ -856,7 +856,7 @@ describe('tool runtime client', () => {
     });
   });
 
-  it('rejects output-only record reorder and width before positional decoding', async () => {
+  it('rejects output-only record reorder and width through concrete decoding', async () => {
     const definition = toolDefinition('adapted-result').body((body) =>
       body.returns(z.object({ first: z.string(), second: z.number() })),
     );
@@ -875,7 +875,7 @@ describe('tool runtime client', () => {
       expect(failure).toMatchObject({
         cause: {
           tag: 'rpc',
-          error: { tag: 'protocol-error', val: expect.stringContaining('schema') },
+          error: { tag: 'protocol-error', val: expect.stringContaining('local definition') },
         },
       });
     }
