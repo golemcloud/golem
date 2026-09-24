@@ -236,14 +236,6 @@ export const make: Effect.Effect<BlobFake> = Effect.gen(function* () {
           if (Option.isSome(queued)) {
             return yield* Effect.fail(queued.value)
           }
-          if (containers.has(name)) {
-            return yield* Effect.fail(
-              new BlobstoreHostError(
-                new Error(`container ${name} already exists`),
-                "createContainer",
-              ),
-            )
-          }
           return yield* acquire(ensure(name))
         }),
       getContainer: (name) =>

@@ -16,9 +16,8 @@
 //
 // The real host bindings (`wasi:keyvalue/*`, `wasi:blobstore/*`,
 // `golem:websocket/*`) are WASM-only and do not resolve under node/vitest, so
-// we replace them with in-memory fakes via `vi.mock`. The fakes + their shared
-// mutable state are built inside `vi.hoisted` (mock factories are hoisted above
-// imports and may only close over hoisted bindings). These fakes let us drive
+// we replace them with in-memory fakes. Key-value and WebSocket use `vi.mock`,
+// while blobstore uses the test alias in `vitest.config.ts`. These fakes let us drive
 // the PURE logic the surfaces own — the `forSchema` JSON validate/encode/decode
 // round-trip, the typed error classes, the whole-object read recovery, and the
 // list-objects paging — without touching a live host.
@@ -28,6 +27,7 @@ import { z } from 'zod';
 
 // Register the Zod Standard Schema walker (compileSchema dispatches on vendor).
 import '../src/schema/zod';
+import { __blobTestState } from './mocks/blobstore';
 
 // ---------------------------------------------------------------------------
 // In-memory host fakes (hoisted so the vi.mock factories can reference them)
@@ -69,103 +69,6 @@ const h = vi.hoisted(() => {
     }
   }
 
-  // --- blobstore ------------------------------------------------------------
-
-  class FakeBlobIncoming {
-    constructor(private readonly bytes: Uint8Array) {}
-    incomingValueConsumeSync(): Uint8Array {
-      return this.bytes;
-    }
-  }
-
-  class FakeBlobStream {
-    constructor(private readonly sink: { bytes: Uint8Array<ArrayBufferLike> }) {}
-    blockingWriteAndFlush(chunk: Uint8Array): void {
-      const merged = new Uint8Array(this.sink.bytes.length + chunk.length);
-      merged.set(this.sink.bytes, 0);
-      merged.set(chunk, this.sink.bytes.length);
-      this.sink.bytes = merged;
-    }
-  }
-
-  class FakeBlobOutgoing {
-    sink: { bytes: Uint8Array<ArrayBufferLike> } = { bytes: new Uint8Array(0) };
-    static newOutgoingValue(): FakeBlobOutgoing {
-      return new FakeBlobOutgoing();
-    }
-    outgoingValueWriteBody(): FakeBlobStream {
-      return new FakeBlobStream(this.sink);
-    }
-    get bytes(): Uint8Array {
-      return this.sink.bytes;
-    }
-  }
-
-  class FakeStreamObjectNames {
-    constructor(private remaining: string[]) {}
-    readStreamObjectNames(len: bigint): [string[], boolean] {
-      const take = this.remaining.splice(0, Number(len));
-      return [take, this.remaining.length === 0];
-    }
-    skipStreamObjectNames(num: bigint): [bigint, boolean] {
-      const n = Math.min(Number(num), this.remaining.length);
-      this.remaining.splice(0, n);
-      return [BigInt(n), this.remaining.length === 0];
-    }
-  }
-
-  // Controls whether the fake container treats getData `end` as inclusive
-  // (S3-like) or exclusive (in-memory/fs-like), so we can exercise both
-  // branches of the whole-object read recovery.
-  const blob = { endExclusive: false };
-
-  class FakeBlobContainer {
-    objects = new Map<string, Uint8Array>();
-    constructor(readonly cname: string) {}
-    name(): string {
-      return this.cname;
-    }
-    info(): { name: string; createdAt: bigint } {
-      return { name: this.cname, createdAt: 1000n };
-    }
-    getData(name: string, start: bigint, end: bigint): FakeBlobIncoming {
-      const data = this.objects.get(name);
-      if (data === undefined) throw 'no such object';
-      const endIdx = blob.endExclusive ? Number(end) : Number(end) + 1;
-      return new FakeBlobIncoming(data.subarray(Number(start), endIdx));
-    }
-    writeData(name: string, ov: FakeBlobOutgoing): void {
-      this.objects.set(name, ov.bytes);
-    }
-    listObjects(): FakeStreamObjectNames {
-      return new FakeStreamObjectNames(Array.from(this.objects.keys()));
-    }
-    deleteObject(name: string): void {
-      this.objects.delete(name);
-    }
-    deleteObjects(names: string[]): void {
-      for (const n of names) this.objects.delete(n);
-    }
-    hasObject(name: string): boolean {
-      return this.objects.has(name);
-    }
-    objectInfo(name: string): {
-      name: string;
-      container: string;
-      createdAt: bigint;
-      size: bigint;
-    } {
-      const data = this.objects.get(name);
-      if (data === undefined) throw 'no such object';
-      return { name, container: this.cname, createdAt: 2000n, size: BigInt(data.length) };
-    }
-    clear(): void {
-      this.objects.clear();
-    }
-  }
-
-  const blobContainers = new Map<string, FakeBlobContainer>();
-
   // --- websocket ------------------------------------------------------------
 
   // Holds the most recently constructed fake connection so the receive test can
@@ -205,16 +108,10 @@ const h = vi.hoisted(() => {
 
   return {
     kvStores,
-    blobContainers,
-    blob,
     ws,
     FakeIncomingValue,
     FakeOutgoingValue,
     FakeBucket,
-    FakeBlobIncoming,
-    FakeBlobOutgoing,
-    FakeBlobContainer,
-    FakeStreamObjectNames,
     FakeWebsocketConnection,
   };
 });
@@ -265,36 +162,6 @@ vi.mock('wasi:keyvalue/eventual-batch@0.1.0', () => ({
   keys: (bucket: InstanceType<typeof h.FakeBucket>) => Array.from(bucket.store.keys()),
 }));
 
-vi.mock('wasi:blobstore/types', () => ({
-  OutgoingValue: h.FakeBlobOutgoing,
-  IncomingValue: h.FakeBlobIncoming,
-}));
-
-vi.mock('wasi:blobstore/container', () => ({
-  Container: h.FakeBlobContainer,
-  StreamObjectNames: h.FakeStreamObjectNames,
-}));
-
-vi.mock('wasi:blobstore/blobstore', () => ({
-  createContainer: (name: string) => {
-    if (h.blobContainers.has(name)) throw 'container exists';
-    const c = new h.FakeBlobContainer(name);
-    h.blobContainers.set(name, c);
-    return c;
-  },
-  getContainer: (name: string) => {
-    const c = h.blobContainers.get(name);
-    if (c === undefined) throw 'no such container';
-    return c;
-  },
-  deleteContainer: (name: string) => {
-    h.blobContainers.delete(name);
-  },
-  containerExists: (name: string) => h.blobContainers.has(name),
-  copyObject: () => {},
-  moveObject: () => {},
-}));
-
 vi.mock('golem:websocket/client@1.5.0', () => ({
   WebsocketConnection: h.FakeWebsocketConnection,
 }));
@@ -309,8 +176,9 @@ import * as websocket from '../src/websocket';
 
 beforeEach(() => {
   h.kvStores.clear();
-  h.blobContainers.clear();
-  h.blob.endExclusive = false;
+  __blobTestState.containers.clear();
+  __blobTestState.endExclusive = false;
+  __blobTestState.lastOutgoingBody = undefined;
   h.ws.last = undefined;
 });
 
@@ -397,7 +265,7 @@ describe.skip('keyvalue', () => {
 // Blobstore
 // ---------------------------------------------------------------------------
 
-describe.skip('blobstore', () => {
+describe('blobstore', () => {
   it('exports the expected public surface', () => {
     for (const fn of [
       'createContainer',
@@ -433,7 +301,7 @@ describe.skip('blobstore', () => {
 
   it('whole-object read recovers when the backend treats end as exclusive', async () => {
     const c = await blobstore.createContainer('exclusive');
-    h.blob.endExclusive = true; // in-memory/fs-style backend bug
+    __blobTestState.endExclusive = true; // in-memory/fs-style backend bug
     await c.writeData('o', new TextEncoder().encode('abcd'));
     expect(new TextDecoder().decode(await c.getData('o'))).toBe('abcd');
   });
@@ -465,6 +333,22 @@ describe.skip('blobstore', () => {
     const b = await blobstore.getOrCreateContainer('shared');
     expect(a.name).toBe('shared');
     expect(b.name).toBe('shared');
+  });
+
+  it('createContainer opens an existing container', async () => {
+    const a = await blobstore.createContainer('existing');
+    const b = await blobstore.createContainer('existing');
+    expect(a.name).toBe('existing');
+    expect(b.name).toBe('existing');
+  });
+
+  it('streams outgoing data through its async iterator', async () => {
+    const container = await blobstore.createContainer('async-outgoing');
+    await container.writeData('object', new Uint8Array([1, 2, 3]));
+
+    const streamed: number[] = [];
+    for await (const byte of __blobTestState.lastOutgoingBody!) streamed.push(byte);
+    expect(streamed).toEqual([1, 2, 3]);
   });
 
   it('forSchema validates + JSON round-trips object bodies', async () => {

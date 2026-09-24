@@ -197,12 +197,19 @@ const consumeIncoming = (iv: Types.IncomingValue): Uint8Array =>
 const buildOutgoingValue = (bytes: Uint8Array): Types.OutgoingValue =>
   wrap('outgoingValueWriteBody', () => {
     const ov = Types.OutgoingValue.newOutgoingValue();
-    const chunks = async function* (): AsyncIterable<number> {
-      for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
-        yield* bytes.subarray(offset, offset + CHUNK_SIZE);
-      }
+    const chunks: AsyncIterable<number> & Iterable<number> = {
+      *[Symbol.iterator]() {
+        for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+          yield* bytes.subarray(offset, offset + CHUNK_SIZE);
+        }
+      },
+      async *[Symbol.asyncIterator]() {
+        for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
+          for (const byte of bytes.subarray(offset, offset + CHUNK_SIZE)) yield byte;
+        }
+      },
     };
-    ov.outgoingValueWriteBody(chunks());
+    ov.outgoingValueWriteBody(chunks);
     return ov;
   });
 
@@ -329,7 +336,7 @@ const makeContainer = (name: string, handle: ContainerNS.Container): Container =
 // Public API
 // ---------------------------------------------------------------------------
 
-/** Create a new empty container. Fails if a container of the same name exists. */
+/** Create a container if it does not exist, or open the existing container. */
 export async function createContainer(name: string): Promise<Container> {
   const handle = wrap('createContainer', () => Blob.createContainer(name));
   return makeContainer(name, handle);
@@ -348,24 +355,11 @@ export async function containerExists(name: string): Promise<boolean> {
 
 /**
  * Open the named container, creating it first if it does not exist.
- * `wasi:blobstore` has no atomic get-or-create primitive, so this optimistically
- * calls `createContainer` and, on failure, replays `getContainer` if
- * `containerExists` now reports the container present (collapses the TOCTOU
- * window). Otherwise the original create failure propagates.
+ * Container creation is idempotent, so this is the same operation as
+ * {@link createContainer}.
  */
 export async function getOrCreateContainer(name: string): Promise<Container> {
-  try {
-    return await createContainer(name);
-  } catch (createErr) {
-    let exists = false;
-    try {
-      exists = await containerExists(name);
-    } catch {
-      exists = false;
-    }
-    if (exists) return getContainer(name);
-    throw createErr;
-  }
+  return createContainer(name);
 }
 
 /** Delete a container and all of its objects. */

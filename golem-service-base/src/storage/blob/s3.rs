@@ -16,7 +16,7 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_path_is_root,
-    blob_path_to_string, validate_relative_blob_path,
+    blob_path_to_string, reject_root_blob_path, validate_relative_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -391,6 +391,9 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -441,6 +444,9 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -492,6 +498,9 @@ impl BlobStorage for S3BlobStorage {
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -543,6 +552,9 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -642,6 +654,7 @@ impl BlobStorage for S3BlobStorage {
         data: &[u8],
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        reject_root_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -682,6 +695,7 @@ impl BlobStorage for S3BlobStorage {
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        reject_root_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -751,6 +765,9 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(());
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -843,6 +860,9 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(());
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let marker = key.join("__dir_marker");
@@ -983,6 +1003,9 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<ExistsResult, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(ExistsResult::Directory);
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -1079,6 +1102,8 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(from)?;
         validate_relative_blob_path(to)?;
+        reject_root_blob_path(from)?;
+        reject_root_blob_path(to)?;
         let bucket = self.bucket_of(&namespace);
         let from_key = self.prefix_of(&namespace).join(from);
         let to_key = self.prefix_of(&namespace).join(to);

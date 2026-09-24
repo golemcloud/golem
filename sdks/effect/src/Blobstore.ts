@@ -412,8 +412,7 @@ const makeContainer = (host: HostContainer): Container => {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a new empty container. Fails with {@link BlobstoreHostError}
- * if a container with the same name already exists.
+ * Create a container if it does not exist, or open the existing container.
  *
  * @since 1.5.0
  * @category constructors

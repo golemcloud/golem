@@ -32,8 +32,16 @@ pub mod memory;
 pub mod s3;
 pub mod sqlite;
 
+/// Keeps blobs and explicit directory markers at paths within a namespace.
+///
+/// The namespace root is always a directory but has no stored marker or metadata. Reads at a root
+/// path find no blob, creates and deletes at a root path change nothing, and writes, copies, and
+/// moves at a root path return [`BlobNameError`]. A blob and an explicit directory marker may have
+/// the same path, and a blob may be below another blob. When both exist at one path, blob reads and
+/// [`BlobStorage::exists`] prefer the blob while deleting either entry preserves the other.
 #[async_trait]
 pub trait BlobStorage: Debug + Send + Sync {
+    /// Returns the blob at `path`. Directories, including the namespace root, have no blob.
     async fn get_raw(
         &self,
         target_label: &'static str,
@@ -42,6 +50,8 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error>;
 
+    /// Returns the blob at `path` as a stream. Directories, including the namespace root, have no
+    /// blob.
     async fn get_stream(
         &self,
         target_label: &'static str,
@@ -65,6 +75,10 @@ pub trait BlobStorage: Debug + Send + Sync {
         Ok(data.map(|data| data[(start as usize)..(end as usize)].to_vec()))
     }
 
+    /// Returns metadata for a blob or explicit directory marker.
+    ///
+    /// An implicit directory that only contains blobs and the namespace root have no metadata. A
+    /// blob takes precedence when a blob and directory marker have the same path.
     async fn get_metadata(
         &self,
         target_label: &'static str,
@@ -73,6 +87,9 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error>;
 
+    /// Writes a blob, replacing only a blob already at `path`.
+    ///
+    /// A directory marker at the same path is preserved. A root path returns [`BlobNameError`].
     async fn put_raw(
         &self,
         target_label: &'static str,
@@ -82,6 +99,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         data: &[u8],
     ) -> Result<(), Error>;
 
+    /// Streams a blob into storage with the same path rules as [`BlobStorage::put_raw`].
     async fn put_stream(
         &self,
         target_label: &'static str,
@@ -91,6 +109,9 @@ pub trait BlobStorage: Debug + Send + Sync {
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error>;
 
+    /// Deletes a blob without deleting a directory marker at the same path.
+    ///
+    /// A missing blob and a root path change nothing.
     async fn delete(
         &self,
         target_label: &'static str,
@@ -113,6 +134,9 @@ pub trait BlobStorage: Debug + Send + Sync {
         Ok(())
     }
 
+    /// Creates or refreshes an explicit directory marker.
+    ///
+    /// A blob at the same path is preserved. A root path changes nothing and stores no marker.
     async fn create_dir(
         &self,
         target_label: &'static str,
@@ -121,6 +145,10 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<(), Error>;
 
+    /// Lists blobs and explicit directory markers directly below `path`.
+    ///
+    /// Implicit directories that only contain blobs are omitted. A path can occur twice when it
+    /// has both a blob and an explicit directory marker. The result order is unspecified.
     async fn list_dir(
         &self,
         target_label: &'static str,
@@ -143,6 +171,10 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<bool, Error>;
 
+    /// Reports a blob, an explicit or implicit directory, or a missing path.
+    ///
+    /// The namespace root is always a directory. A blob takes precedence when a blob and
+    /// directory marker have the same path.
     async fn exists(
         &self,
         target_label: &'static str,
@@ -159,6 +191,10 @@ pub trait BlobStorage: Debug + Send + Sync {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(from)?;
+        validate_relative_blob_path(to)?;
+        reject_root_blob_path(from)?;
+        reject_root_blob_path(to)?;
         match self
             .get_raw(target_label, op_label, namespace.clone(), from)
             .await?
@@ -167,7 +203,10 @@ pub trait BlobStorage: Debug + Send + Sync {
                 self.put_raw(target_label, op_label, namespace, to, &data)
                     .await
             }
-            None => Err(anyhow!("Blob storage entry not found: {from:?}")),
+            None => Err(BlobMissingError {
+                path: from.to_path_buf(),
+            }
+            .into()),
         }
     }
 
@@ -412,23 +451,55 @@ pub struct BlobMetadata {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the blob storage has no blob at the path {path:?}")]
+pub struct BlobMissingError {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BlobNameError {
+    #[error("the blob path must be relative: {path:?}")]
+    NotRelative { path: PathBuf },
+    #[error("the blob path has a `..` name in it: {path:?}")]
+    ParentDir { path: PathBuf },
+    #[error("the blob path must be valid UTF-8: {path:?}")]
+    NotUtf8 { path: PathBuf },
+    #[error("the blob path has no name in it: {path:?}")]
+    NoName { path: PathBuf },
+}
+
 pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
     if path.is_absolute() {
-        return Err(anyhow!("Blob path must be relative: {path:?}"));
+        return Err(BlobNameError::NotRelative {
+            path: path.to_path_buf(),
+        }
+        .into());
     }
 
     for component in path.components() {
         match component {
             Component::Normal(_) | Component::CurDir => {}
             Component::ParentDir => {
-                return Err(anyhow!(
-                    "Blob path cannot contain parent traversal: {path:?}"
-                ));
+                return Err(BlobNameError::ParentDir {
+                    path: path.to_path_buf(),
+                }
+                .into());
             }
             Component::RootDir | Component::Prefix(_) => {
-                return Err(anyhow!("Blob path must be relative: {path:?}"));
+                return Err(BlobNameError::NotRelative {
+                    path: path.to_path_buf(),
+                }
+                .into());
             }
         }
+    }
+
+    if path.to_str().is_none() {
+        return Err(BlobNameError::NotUtf8 {
+            path: path.to_path_buf(),
+        }
+        .into());
     }
 
     Ok(())
@@ -438,16 +509,19 @@ pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
 ///
 /// A path is at the root when it has no name in it. An empty path is at the root, and so is a
 /// path that only has `.` in it.
-pub(crate) fn blob_path_is_root(path: &Path) -> bool {
+pub fn blob_path_is_root(path: &Path) -> bool {
     !path
         .components()
         .any(|component| matches!(component, Component::Normal(_)))
 }
 
 pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {
-    path.to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
+    path.to_str().map(|s| s.to_string()).ok_or_else(|| {
+        BlobNameError::NotUtf8 {
+            path: path.to_path_buf(),
+        }
+        .into()
+    })
 }
 
 pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, Error> {
@@ -459,10 +533,28 @@ pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, Error> {
 
 pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
     path.file_name()
-        .ok_or_else(|| anyhow!("Path must have a file name: {path:?}"))
-        .and_then(|name| {
-            name.to_str()
-                .map(|s| s.to_string())
-                .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
+        .ok_or_else(|| {
+            Error::from(BlobNameError::NoName {
+                path: PathBuf::new(),
+            })
         })
+        .and_then(|name| {
+            name.to_str().map(|s| s.to_string()).ok_or_else(|| {
+                BlobNameError::NotUtf8 {
+                    path: path.to_path_buf(),
+                }
+                .into()
+            })
+        })
+}
+
+pub(crate) fn reject_root_blob_path(path: &Path) -> Result<(), Error> {
+    if blob_path_is_root(path) {
+        Err(BlobNameError::NoName {
+            path: PathBuf::new(),
+        }
+        .into())
+    } else {
+        Ok(())
+    }
 }

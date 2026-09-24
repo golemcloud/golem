@@ -14,8 +14,8 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_path_is_root,
-    validate_relative_blob_path,
+    BlobMetadata, BlobMissingError, BlobStorage, BlobStorageNamespace, ExistsResult,
+    blob_path_is_root, reject_root_blob_path, validate_relative_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -27,6 +27,9 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
+
+const BLOB_FILE: &str = "~blob";
+const DIRECTORY_MARKER_FILE: &str = "~dir";
 
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
@@ -79,7 +82,7 @@ impl FileSystemBlobStorage {
         Ok(Self { root: canonical })
     }
 
-    fn path_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> PathBuf {
+    fn namespace_root(&self, namespace: &BlobStorageNamespace) -> PathBuf {
         let mut result = self.root.clone();
 
         match namespace {
@@ -125,8 +128,60 @@ impl FileSystemBlobStorage {
             }
         }
 
-        result.push(path);
         result
+    }
+
+    fn node_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> PathBuf {
+        let mut result = self.namespace_root(namespace);
+        for component in path.components() {
+            if let std::path::Component::Normal(name) = component {
+                let name = name
+                    .to_str()
+                    .expect("blob paths are validated before mapping");
+                if name.starts_with('~') {
+                    result.push(format!("~{name}"));
+                } else {
+                    result.push(name);
+                }
+            }
+        }
+        result
+    }
+
+    fn blob_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> PathBuf {
+        self.node_of(namespace, path).join(BLOB_FILE)
+    }
+
+    fn marker_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> PathBuf {
+        self.node_of(namespace, path).join(DIRECTORY_MARKER_FILE)
+    }
+
+    async fn prune_empty_nodes(
+        &self,
+        namespace: &BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), Error> {
+        let namespace_root = self.namespace_root(namespace);
+        let mut node = self.node_of(namespace, path);
+        while node != namespace_root {
+            match async_fs::remove_dir(&node).await {
+                Ok(()) => {}
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                    ) =>
+                {
+                    break;
+                }
+                Err(err) => return Err(err.into()),
+            }
+            let Some(parent) = node.parent() else {
+                break;
+            };
+            node = parent.to_path_buf();
+        }
+        Ok(())
     }
 
     fn ensure_path_is_inside_root(&self, path: &Path) -> Result<(), Error> {
@@ -174,7 +229,10 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
+        let full_path = self.blob_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
@@ -193,7 +251,10 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
+        let full_path = self.blob_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
@@ -213,7 +274,16 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
+        let blob_path = self.blob_of(&namespace, path);
+        let marker_path = self.marker_of(&namespace, path);
+        let full_path = if async_fs::metadata(&blob_path).await.is_ok() {
+            blob_path
+        } else {
+            marker_path
+        };
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Ok(metadata) = async_fs::metadata(&full_path).await {
@@ -239,7 +309,8 @@ impl BlobStorage for FileSystemBlobStorage {
         data: &[u8],
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        reject_root_blob_path(path)?;
+        let full_path = self.blob_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Some(parent) = full_path.parent()
@@ -262,7 +333,8 @@ impl BlobStorage for FileSystemBlobStorage {
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        reject_root_blob_path(path)?;
+        let full_path = self.blob_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Some(parent) = full_path.parent()
@@ -293,10 +365,18 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        if blob_path_is_root(path) {
+            return Ok(());
+        }
+        let full_path = self.blob_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        async_fs::remove_file(&full_path).await?;
+        match async_fs::remove_file(&full_path).await {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+        self.prune_empty_nodes(&namespace, path).await?;
         Ok(())
     }
 
@@ -308,10 +388,14 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        if blob_path_is_root(path) {
+            return Ok(());
+        }
+        let full_path = self.marker_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        async_fs::create_dir_all(&full_path).await?;
+        async_fs::create_dir_all(full_path.parent().unwrap()).await?;
+        async_fs::write(&full_path, []).await?;
 
         Ok(())
     }
@@ -324,16 +408,41 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
         validate_relative_blob_path(path)?;
-        let namespace_root = self.path_of(&namespace, Path::new(""));
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.node_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        let mut entries = async_fs::read_dir(&full_path).await?;
+        let mut entries = match async_fs::read_dir(&full_path).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err.into()),
+        };
 
         let mut result = Vec::new();
         while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {
-            if let Ok(path) = entry.path().strip_prefix(&namespace_root) {
-                result.push(path.to_path_buf());
+            if !entry.file_type().await?.is_dir() {
+                continue;
+            }
+            let encoded_name = entry.file_name();
+            let Some(encoded_name) = encoded_name.to_str() else {
+                continue;
+            };
+            let name = if let Some(name) = encoded_name.strip_prefix("~~") {
+                format!("~{name}")
+            } else {
+                encoded_name.to_string()
+            };
+            let child = path.join(name);
+            if async_fs::metadata(entry.path().join(BLOB_FILE))
+                .await
+                .is_ok()
+            {
+                result.push(child.clone());
+            }
+            if async_fs::metadata(entry.path().join(DIRECTORY_MARKER_FILE))
+                .await
+                .is_ok()
+            {
+                result.push(child);
             }
         }
         Ok(result)
@@ -352,20 +461,28 @@ impl BlobStorage for FileSystemBlobStorage {
             return Ok(false);
         }
 
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.node_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        let result = async_fs::remove_dir_all(&full_path).await;
-
-        if let Err(err) = result {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                Ok(false)
-            } else {
-                Err(err.into())
+        let mut entries = match async_fs::read_dir(&full_path).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        };
+        let mut deleted = false;
+        while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {
+            if entry.file_name() == BLOB_FILE {
+                continue;
             }
-        } else {
-            Ok(true)
+            deleted = true;
+            if entry.file_type().await?.is_dir() {
+                async_fs::remove_dir_all(entry.path()).await?;
+            } else {
+                async_fs::remove_file(entry.path()).await?;
+            }
         }
+        self.prune_empty_nodes(&namespace, path).await?;
+        Ok(deleted)
     }
 
     async fn exists(
@@ -376,15 +493,16 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<ExistsResult, Error> {
         validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        if blob_path_is_root(path) {
+            return Ok(ExistsResult::Directory);
+        }
+        let full_path = self.node_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if let Ok(metadata) = async_fs::metadata(&full_path).await {
-            if metadata.is_file() {
-                Ok(ExistsResult::File)
-            } else {
-                Ok(ExistsResult::Directory)
-            }
+        if async_fs::metadata(full_path.join(BLOB_FILE)).await.is_ok() {
+            Ok(ExistsResult::File)
+        } else if async_fs::metadata(&full_path).await.is_ok() {
+            Ok(ExistsResult::Directory)
         } else {
             Ok(ExistsResult::DoesNotExist)
         }
@@ -400,12 +518,20 @@ impl BlobStorage for FileSystemBlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(from)?;
         validate_relative_blob_path(to)?;
-        let from_full_path = self.path_of(&namespace, from);
-        let to_full_path = self.path_of(&namespace, to);
-        self.ensure_path_is_inside_root(&from_full_path)?;
-        self.ensure_path_is_inside_root(&to_full_path)?;
-
-        async_fs::copy(&from_full_path, &to_full_path).await?;
-        Ok(())
+        reject_root_blob_path(from)?;
+        reject_root_blob_path(to)?;
+        match self
+            .get_raw(_target_label, _op_label, namespace.clone(), from)
+            .await?
+        {
+            Some(data) => {
+                self.put_raw(_target_label, _op_label, namespace, to, &data)
+                    .await
+            }
+            None => Err(BlobMissingError {
+                path: from.to_path_buf(),
+            }
+            .into()),
+        }
     }
 }
