@@ -60,6 +60,8 @@ jobs:
         run: |
           cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' \
             --primary-only \
+            --retain-details \
+            --retain-selected-zero-counts \
             suite \
             --add-to-json benchmark-results/results/results.json \
             --runner-id github-actions-blacksmith-32vcpu \

@@ -20,8 +20,8 @@ use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
-    BenchmarkConfig, BenchmarkRecorder, BenchmarkRunner, BenchmarkSource, BenchmarkSuite,
-    BenchmarkSuiteItem, BenchmarkSuiteResult,
+    BenchmarkArtifacts, BenchmarkConfig, BenchmarkRecorder, BenchmarkRunner, BenchmarkSource,
+    BenchmarkSuite, BenchmarkSuiteItem, BenchmarkSuiteResult,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -32,6 +32,8 @@ use integration_tests::benchmarks::registry::{BenchmarkRegistry, benchmark_regis
 use integration_tests::benchmarks::{
     cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use tracing::{Level, debug, info, warn};
 
 #[tokio::main]
@@ -145,6 +147,10 @@ async fn main() {
                     source_ref: source_ref.clone(),
                 });
             }
+            suite_result.artifacts = Some(
+                suite_artifacts(params.benchmark_config.mode(), &suite)
+                    .expect("Failed to hash benchmark suite artifacts"),
+            );
             for benchmark in suite.benchmarks {
                 info!("Running {benchmark:?}");
 
@@ -207,6 +213,64 @@ async fn main() {
         );
         std::process::exit(1);
     }
+}
+
+fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<BenchmarkArtifacts> {
+    let component_directory = match mode {
+        TestMode::Spawned {
+            workspace_root,
+            component_directory,
+            ..
+        } => Path::new(workspace_root).join(component_directory),
+        TestMode::Provided {
+            component_directory,
+            ..
+        }
+        | TestMode::Cloud {
+            component_directory,
+            ..
+        } => PathBuf::from(component_directory),
+    };
+
+    let mut fixtures = BTreeMap::new();
+    for benchmark in &suite.benchmarks {
+        let names: &[&str] = match benchmark.name.as_str() {
+            "streaming-tool" => &[
+                "golem_it_tool_streaming_rust_caller_release",
+                "golem_it_tool_streaming_rust_provider_release",
+            ],
+            name if name == "streaming-rpc" || name.starts_with("streaming-rpc-") => {
+                &["golem_it_agent_rpc_rust_release"]
+            }
+            _ => &["benchmark_agent_rust_release"],
+        };
+        for name in names {
+            fixtures
+                .entry((*name).to_string())
+                .or_insert_with(|| component_directory.join(format!("{name}.wasm")));
+        }
+    }
+
+    let mut services = BTreeMap::new();
+    if let TestMode::Spawned {
+        workspace_root,
+        build_target,
+        ..
+    } = mode
+    {
+        let build_root = Path::new(workspace_root).join(build_target);
+        for name in [
+            "golem-component-compilation-service",
+            "golem-worker-service",
+            "golem-worker-executor",
+            "golem-shard-manager",
+            "golem-registry-service",
+        ] {
+            services.insert(name.to_string(), build_root.join(name));
+        }
+    }
+
+    BenchmarkArtifacts::collect(&std::env::current_exe()?, &services, &fixtures)
 }
 
 fn print_non_existing_benchmark(benchmarks_by_name: &BenchmarkRegistry, name: &String) -> ! {
