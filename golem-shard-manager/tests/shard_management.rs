@@ -193,7 +193,7 @@ impl RoutingTablePersistence for TestPersistence {
 }
 
 #[derive(Clone, Default)]
-struct TestWorkerExecutors {
+pub(crate) struct TestWorkerExecutors {
     local_assignments: Arc<Mutex<HashMap<Pod, BTreeSet<ShardId>>>>,
     failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
     failed_revocations: Arc<Mutex<HashMap<Pod, usize>>>,
@@ -228,7 +228,7 @@ impl TestWorkerExecutors {
             .insert(pod, shard_ids.iter().copied().map(ShardId::new).collect());
     }
 
-    async fn local_assignment(&self, pod: Pod) -> BTreeSet<ShardId> {
+    pub(crate) async fn local_assignment(&self, pod: Pod) -> BTreeSet<ShardId> {
         self.local_assignments
             .lock()
             .await
@@ -361,7 +361,7 @@ impl WorkerExecutorService for TestWorkerExecutors {
 }
 
 #[derive(Clone, Debug)]
-struct TestHealthCheck {
+pub(crate) struct TestHealthCheck {
     healthy: Arc<Mutex<HashMap<Pod, bool>>>,
     /// Pod whose check never answers, standing in for an executor that went silent.
     never_answers: Option<Pod>,
@@ -371,7 +371,7 @@ struct TestHealthCheck {
 }
 
 impl TestHealthCheck {
-    fn all_healthy() -> Self {
+    pub(crate) fn all_healthy() -> Self {
         Self {
             healthy: Arc::new(Mutex::new(HashMap::new())),
             never_answers: None,
@@ -402,14 +402,14 @@ impl HealthCheck for TestHealthCheck {
     }
 }
 
-fn pod(last_octet: u8, port: u16) -> Pod {
+pub(crate) fn pod(last_octet: u8, port: u16) -> Pod {
     Pod {
         ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, last_octet)),
         port,
     }
 }
 
-fn executor(idx: u128) -> ExecutorId {
+pub(crate) fn executor(idx: u128) -> ExecutorId {
     ExecutorId(Uuid::from_u128(idx))
 }
 
@@ -447,7 +447,7 @@ fn shards_at(shard_state: &ShardLeaseState, pod: Pod) -> BTreeSet<ShardId> {
         .expect("executor should hold a lease")
 }
 
-fn shard_ids(ids: &[i64]) -> BTreeSet<ShardId> {
+pub(crate) fn shard_ids(ids: &[i64]) -> BTreeSet<ShardId> {
     ids.iter().copied().map(ShardId::new).collect()
 }
 
