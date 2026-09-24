@@ -1488,6 +1488,235 @@ fn completed(first: u64, finished: u64) -> DurableStreamSessionStatus {
     }
 }
 
+async fn assert_stream_index_operation_bounds(missing: bool) {
+    use crate::services::oplog::tests::{ReadCountingBlobStorage, ReadCountingIndexedStorage};
+    use crate::storage::keyvalue::counting::CountingKeyValueStorage;
+
+    let mut valid_counts = Vec::new();
+    let mut rebuild_reads = Vec::new();
+    for history in [0, 600] {
+        let indexed = Arc::new(ReadCountingIndexedStorage::new());
+        let blob = Arc::new(ReadCountingBlobStorage::new());
+        let kv = Arc::new(CountingKeyValueStorage::new(Arc::new(
+            InMemoryKeyValueStorage::new(),
+        )));
+        let oplogs = Arc::new(
+            PrimaryOplogService::new(
+                indexed.clone(),
+                blob.clone(),
+                10000,
+                10000,
+                100,
+                RetryConfig::default(),
+            )
+            .await,
+        );
+        let make_service = || {
+            DefaultWorkerService::new(
+                kv.clone(),
+                Arc::new(ShardServiceDefault::new()),
+                oplogs.clone(),
+                Arc::new(UnusedComponentService),
+                Arc::new(GolemConfig::default()),
+            )
+        };
+        let service = make_service();
+        let id = owned_agent("bounded-index", ComponentId::new());
+        let oplog = create_oplog(oplogs.as_ref(), &id).await;
+        for number in 0..history {
+            let key = IdempotencyKey::new(format!("completed-{number}"));
+            append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
+            append_session(
+                oplog.as_ref(),
+                StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                    format_version: 1,
+                    session_key: local_registration(&session_key(&id, &key)),
+                    result: Ok(()),
+                }),
+            )
+            .await;
+        }
+        let active = IdempotencyKey::new("active".into());
+        append_session(oplog.as_ref(), prepared_record(&id, &active)).await;
+        oplog.commit(CommitLevel::Always).await;
+        let horizon = oplog.current_oplog_index().await;
+        let recovery = service
+            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+            .await
+            .unwrap();
+        assert_eq!(recovery.sessions.len(), 1);
+        assert_eq!(recovery.sessions[0].0, session_key(&id, &active));
+        let namespace = KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
+            agent_id: id.agent_id.clone(),
+        };
+        if missing {
+            let keys = kv
+                .with("test", "remove_index")
+                .keys(namespace.clone())
+                .await
+                .unwrap();
+            kv.with("test", "remove_index")
+                .del_many(namespace.clone(), keys.into())
+                .await
+                .unwrap();
+        }
+        drop(service);
+        let cold = make_service();
+        indexed.reset();
+        kv.reset();
+        blob.reset();
+        let recovery = cold
+            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+            .await
+            .unwrap();
+        assert_eq!(recovery.sessions.len(), 1);
+        assert_eq!(recovery.sessions[0].0, session_key(&id, &active));
+        assert_eq!(
+            blob.reads(),
+            0,
+            "inline history and recovery require no payload fetches"
+        );
+        if missing {
+            rebuild_reads.push(indexed.reads());
+        } else {
+            valid_counts.push((indexed.reads(), kv.calls()));
+        }
+        indexed.reset();
+        kv.reset();
+        let offsets = cold
+            .stream_session_index
+            .lookup_persisted_offsets(&id, AgentMode::Durable, horizon, &active)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(offsets.prepared.is_some());
+        assert!(offsets.finished.is_none());
+        assert_eq!(
+            indexed.reads(),
+            0,
+            "covered session lookup never scans oplog history"
+        );
+        assert_eq!(
+            kv.calls().values().sum::<usize>(),
+            2,
+            "covered lookup reads coverage, then the session with its coverage fence"
+        );
+        let metadata: Metadata = kv
+            .with_entity("test", "coverage", "metadata")
+            .get(namespace.clone(), METADATA_FIELD)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(metadata.covered_through, horizon);
+        if history > 0 {
+            for number in [0, history - 1] {
+                let status: DurableStreamSessionStatus = kv
+                    .with_entity("test", "session", "metadata")
+                    .get(namespace.clone(), &format!("session:completed-{number}"))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(status.finished.is_some());
+            }
+        }
+        indexed.reset();
+        kv.reset();
+        blob.reset();
+        let recovery = cold
+            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+            .await
+            .unwrap();
+        assert_eq!(recovery.sessions.len(), 1);
+        assert_eq!(blob.reads(), 0);
+        assert_eq!(
+            indexed.reads(),
+            1,
+            "only a committed-tip probe, never a second historical scan"
+        );
+        assert!(
+            kv.calls()
+                .keys()
+                .all(|(operation, _, _)| !matches!(*operation, "keys" | "get_all"))
+        );
+        assert!(
+            kv.calls().values().sum::<usize>() <= 6,
+            "bounded active catalogue lookup"
+        );
+
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                format_version: 1,
+                session_key: local_registration(&session_key(&id, &active)),
+                result: Ok(()),
+            }),
+        )
+        .await;
+        oplog.commit(CommitLevel::Always).await;
+        assert!(
+            cold.lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+                .await
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+        drop(cold);
+        for _ in 0..2 {
+            let restarted = make_service();
+            indexed.reset();
+            kv.reset();
+            blob.reset();
+            assert!(
+                restarted
+                    .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+                    .await
+                    .unwrap()
+                    .sessions
+                    .is_empty()
+            );
+            assert_eq!(blob.reads(), 0, "retired sessions require no payload reads");
+            assert_eq!(
+                indexed.reads(),
+                1,
+                "cold retirement reads only the tip, not session history"
+            );
+            assert_eq!(
+                kv.calls()
+                    .get(&("get_many", "stream_session_index", "read_recovery")),
+                Some(&1),
+                "only the empty catalogue header is read; no session reads"
+            );
+            assert_eq!(
+                kv.calls().values().sum::<usize>(),
+                2,
+                "cold retirement reads coverage and the empty catalogue, never session rows"
+            );
+        }
+    }
+    if missing {
+        assert!(rebuild_reads[0] > 1);
+        assert!(
+            rebuild_reads[1] > rebuild_reads[0],
+            "rebuild must scan the history in pages"
+        );
+    } else {
+        assert_eq!(
+            valid_counts[0], valid_counts[1],
+            "persisted index costs must not grow with completed history"
+        );
+    }
+}
+
+#[test]
+async fn durable_stream_index_reads_are_bounded() {
+    assert_stream_index_operation_bounds(false).await;
+}
+
+#[test]
+async fn durable_stream_missing_index_rebuilds_once() {
+    assert_stream_index_operation_bounds(true).await;
+}
+
 #[test]
 async fn persisted_control_projection_reopens_without_history_and_catches_committed_suffix() {
     use crate::services::oplog::tests::ReadCountingIndexedStorage;

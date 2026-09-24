@@ -184,6 +184,26 @@ mod tests {
     }
 
     #[test]
+    async fn kill_and_wait_refuses_unowned_processes() {
+        let cluster = cluster();
+        let error = cluster
+            .kill_all_and_wait(tokio::time::Instant::now())
+            .await
+            .unwrap_err();
+        let error = error.to_string();
+        for index in 0..3 {
+            assert!(error.contains(&format!("executor {index}:")), "{error}");
+        }
+        assert!(!cluster.all_reaped());
+        assert!(
+            cluster
+                .to_vec()
+                .iter()
+                .all(|executor| executor.metrics_endpoint().is_none())
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "restart_all is unsupported")]
     async fn restart_all_panics_on_worker_side() {
         cluster().restart_all().await;

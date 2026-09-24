@@ -21,7 +21,9 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, ResultKey, RunConfig};
+use golem_test_framework::benchmark::{
+    Benchmark, BenchmarkRecorder, BenchmarkResultValue, ResultKey, RunConfig,
+};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -72,8 +74,8 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> StreamingContext {
-        StreamingContext {
+    ) -> BenchmarkResultValue<StreamingContext> {
+        Ok(StreamingContext {
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -82,18 +84,23 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
                 otlp,
             )
             .await,
-        }
+        })
     }
 
-    async fn cleanup(context: StreamingContext) {
-        context.deps.kill_all().await
+    async fn cleanup(context: StreamingContext) -> BenchmarkResultValue {
+        context.deps.kill_all().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
-    async fn setup_iteration(&self, context: &StreamingContext) -> IterationContext {
+    async fn setup_iteration(
+        &self,
+        context: &StreamingContext,
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<IterationContext> {
         let user = context.deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
         let (component, caller) = if TOOL {
@@ -123,16 +130,20 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
         let agent_ids = (0..self.config.size)
             .map(|index| agent_id!(caller, format!("streaming-{index}")))
             .collect();
-        IterationContext {
+        Ok(IterationContext {
             user,
             component,
             agent_ids,
             chunk_count: self.config.length.try_into().expect("chunk count fits u32"),
             env_id: env.id,
-        }
+        })
     }
 
-    async fn warmup(&self, _context: &StreamingContext, iteration: &IterationContext) {
+    async fn warmup(
+        &self,
+        _context: &StreamingContext,
+        iteration: &IterationContext,
+    ) -> BenchmarkResultValue {
         let results = iteration
             .agent_ids
             .iter()
@@ -144,6 +155,7 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
         for result in results {
             assert_stream_result(&result.value, iteration.chunk_count);
         }
+        Ok(())
     }
 
     async fn run(
@@ -151,7 +163,7 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
         _context: &StreamingContext,
         iteration: &IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
+    ) -> BenchmarkResultValue {
         let results = iteration
             .agent_ids
             .iter()
@@ -172,16 +184,23 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
                 Duration::from_nanos(total),
             );
         }
+        Ok(())
     }
 
-    async fn cleanup_iteration(&self, _context: &StreamingContext, iteration: IterationContext) {
+    async fn cleanup_iteration(
+        &self,
+        _context: &StreamingContext,
+        iteration: IterationContext,
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
         let ids = iteration
             .agent_ids
             .iter()
             .filter_map(|id| AgentId::from_agent_id(iteration.component.id, id).ok())
             .collect::<Vec<_>>();
-        delete_workers(&iteration.user, &ids).await;
-        cleanup_user_state(&iteration.user, &iteration.env_id).await;
+        delete_workers(&iteration.user, &ids, &recorder).await;
+        cleanup_user_state(&iteration.user, &iteration.env_id, &recorder).await;
+        Ok(())
     }
 }
 

@@ -20,8 +20,8 @@ use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
-    Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkResult, BenchmarkRunner, BenchmarkSource,
-    BenchmarkSuite, BenchmarkSuiteItem, BenchmarkSuiteResult,
+    Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkRecorder, BenchmarkResult, BenchmarkRunner,
+    BenchmarkSource, BenchmarkSuite, BenchmarkSuiteItem, BenchmarkSuiteResult,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -199,6 +199,10 @@ async fn main() {
                 if let Some(run_id) = cloud_bench_run_id() {
                     result.run_id = Some(format!("bench-{run_id}"));
                 }
+                result.drop_zero_counts(params.retain_selected_zero_counts);
+                if !params.retain_details {
+                    result.drop_details();
+                }
                 if params.json {
                     let str = serde_json::to_string(&result)
                         .expect("Failed to serialize BenchmarkResult");
@@ -259,7 +263,7 @@ async fn main() {
                 info!("Running {benchmark:?}");
 
                 if let Some(f) = benchmarks_by_name.get(benchmark.name.as_str()) {
-                    let result = f(
+                    let mut result = f(
                         params.benchmark_config.mode(),
                         params.service_verbosity(),
                         &benchmark,
@@ -267,6 +271,10 @@ async fn main() {
                         params.otlp,
                     )
                     .await;
+                    result.drop_zero_counts(params.retain_selected_zero_counts);
+                    if !params.retain_details {
+                        result.drop_details();
+                    }
                     suite_result.add(result);
                 }
                 // no else: we already validated all names above
@@ -338,7 +346,7 @@ async fn run_benchmark<B: Benchmark>(
     primary_only: bool,
     otlp: bool,
 ) -> BenchmarkResult {
-    B::run_benchmark(mode, verbosity, item, primary_only, otlp).await
+    B::run_benchmark(mode, verbosity, item, primary_only, true, true, otlp).await
 }
 
 // ── Pre-flight warmup constants ───────────────────────────────────────────────
@@ -381,6 +389,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
 
     info!("Pre-flight warmup: creating throwaway user/env/component (50 invocations)...");
 
+    let recorder = BenchmarkRecorder::new();
     let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;
 
     let user = match deps.user().await {
@@ -407,7 +416,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
         Ok(a) => a,
         Err(e) => {
             warn!("Pre-flight warmup: failed to create app (skipping): {e:?}");
-            cleanup_account(&user).await;
+            cleanup_account(&user, &recorder).await;
             deps.kill_all().await;
             return;
         }
@@ -440,7 +449,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
                     app.id.0
                 );
             }
-            cleanup_account(&user).await;
+            cleanup_account(&user, &recorder).await;
             deps.kill_all().await;
             return;
         }
@@ -459,7 +468,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
                  ({WARMUP_COMPONENT_WASM}.wasm) — ensure it exists in the \
                  component directory: {e:?}"
             );
-            cleanup_user_state(&user, &env.id).await;
+            cleanup_user_state(&user, &env.id, &recorder).await;
             deps.kill_all().await;
             return;
         }
@@ -495,9 +504,9 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
     }
 
     if let Ok(worker_id) = AgentId::from_agent_id(component.id, &warmup_agent) {
-        delete_workers(&user, &[worker_id]).await;
+        delete_workers(&user, &[worker_id], &recorder).await;
     }
-    cleanup_user_state(&user, &env.id).await;
+    cleanup_user_state(&user, &env.id, &recorder).await;
     deps.kill_all().await;
 
     info!("Cloud pre-flight warmup complete.");

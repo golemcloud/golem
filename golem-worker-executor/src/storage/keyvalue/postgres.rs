@@ -117,10 +117,7 @@ impl PostgresKeyValueStorage {
                 agent_id,
                 fingerprint,
             } => {
-                format!(
-                    "agent:durable_stream_session_index:{}:{fingerprint}",
-                    agent_id.to_redis_key()
-                )
+                agent_id.durable_stream_session_index_namespace(fingerprint)
             }
             KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => {
                 format!(

@@ -62,11 +62,16 @@ fn inject_trace_context(request: &mut Request) {
 pub async fn delete_workers(
     user: &TestUserContext<BenchmarkTestDependencies>,
     agent_ids: &[AgentId],
+    recorder: &BenchmarkRecorder,
 ) {
     info!("Deleting {} workers...", agent_ids.len());
     for agent_id in agent_ids {
         if let Err(err) = user.delete_worker(agent_id).await {
-            warn!("Failed to delete worker: {:?}", err);
+            warn!(error = ?err, "Failed to delete worker");
+            recorder.failure(
+                &ResultKey::primary("cleanup-delete-worker"),
+                format!("{err:?}"),
+            );
         }
     }
     info!("Deleting {} workers completed", agent_ids.len());
