@@ -52,6 +52,7 @@ function metadataModules(runtime) {
     load(path.join(runtime, `schema/${vendor}.mjs`));
   return {
     tool: load(path.join(runtime, 'tool.mjs')),
+    http: load(path.join(runtime, 'http.mjs')),
     agent: {
       ...load(path.join(runtime, 'method.mjs')),
       defineAgent: (spec) => ({ name: spec.name, spec }),
@@ -166,7 +167,13 @@ export function staticTools(config, runtime) {
           : 'default';
         if (id === sdkName) {
           if (ts.isNamespaceImport(declaration))
-            return { ...metadata().tool, ...metadata().agent, ...metadata().schema };
+            return {
+              ...metadata().tool,
+              ...metadata().agent,
+              ...metadata().schema,
+              http: metadata().http,
+            };
+          if (name === 'http') return metadata().http;
           if (name in metadata().tool) return metadata().tool[name];
           if (name in metadata().agent) return metadata().agent[name];
           if (name in metadata().schema) return metadata().schema[name];
