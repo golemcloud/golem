@@ -422,6 +422,7 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 ## Features
 
 - **Agent registry** — register multiple agent types in a single component via `#derive.agent`
+- **HTTP routers** — named ephemeral routers, incremental byte streams, immutable files, and OpenAPI providers; ordinary durable agents can expose live files
 - **Custom data types** — `#derive.golem_schema` implements every nexessary trait to use custom data types on the public interface of your agents
 - **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`); stream-bearing methods are awaited, while stream-free methods also support fire-and-forget and scheduled invocations
 - **Runtime reflection** — discover agent types, pack reflected schemas, define caller-codec clients, or invoke direct `SchemaValue`s
@@ -471,6 +472,7 @@ one host-managed retry sequence.
 | `logging` | Structured logging with named loggers and level filtering |
 | `context` | Span-based tracing and invocation context |
 | `rpc` | Agent-to-agent RPC helpers |
+| `http` | Canonical `HttpRequest`, `HttpResponse`, `HttpHeader`, `openapi_json`, and outbound WASI HTTP |
 | `reflection` | Runtime discovery, reflected JSON packing, caller-defined static clients, and fully dynamic value invocation |
 | `tool-core` | Host-neutral tool descriptors, schemas, canonical input handling, and error model |
 | `tool` | Ordinary tool registry, dispatch, help rendering, and ambient typed RPC client runtime |

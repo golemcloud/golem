@@ -286,7 +286,7 @@ impl WorkerService {
                 ))
             },
             LocalSessionManager::default().into(),
-            StreamableHttpServerConfig::default(),
+            mcp_http_transport_config(),
         );
 
         let oauth_routes = oauth_proxy_routes(
@@ -331,5 +331,60 @@ impl WorkerService {
         );
 
         Ok(port)
+    }
+}
+
+fn mcp_http_transport_config() -> StreamableHttpServerConfig {
+    // Export hosts are deployment domains, not a static loopback allowlist.
+    // Export request limits are independent of the bounded outbound import client.
+    StreamableHttpServerConfig::default()
+        .disable_allowed_hosts()
+        .with_max_request_body_bytes(usize::MAX)
+}
+
+#[cfg(test)]
+mod mcp_transport_tests {
+    use super::*;
+    use poem::{
+        Body, Endpoint, Request,
+        http::{Method, StatusCode},
+    };
+    use serde_json::json;
+    use test_r::test;
+
+    #[derive(Clone)]
+    struct Server;
+    impl rmcp::ServerHandler for Server {}
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn mcp_export_transport_accepts_deployment_domain_hosts() {
+        let endpoint = StreamableHttpService::new(
+            || Ok(Server),
+            LocalSessionManager::default().into(),
+            mcp_http_transport_config(),
+        )
+        .compat();
+        let response = endpoint
+            .call(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("https://customer.example/mcp".parse().unwrap())
+                    .header("Host", "customer.example")
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json, text/event-stream")
+                    .body(
+                        Body::from_json(json!({
+                            "jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+                                "protocolVersion":"2025-03-26", "capabilities":{},
+                                "clientInfo":{"name":"test", "version":"1"}
+                            }
+                        }))
+                        .unwrap(),
+                    ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

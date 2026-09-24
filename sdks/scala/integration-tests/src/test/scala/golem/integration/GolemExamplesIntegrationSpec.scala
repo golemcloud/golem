@@ -835,7 +835,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     test("http-weather-root") {
       for {
         _              <- ZIO.service[GolemServer]
-        (status, body) <- httpGet("/api/weather/test-key/")
+        (status, body) <- httpGet("/api/weather/test-key")
       } yield assertTrue(status == 200) && assertTrue(body.contains("Welcome to the Weather API"))
     },
 

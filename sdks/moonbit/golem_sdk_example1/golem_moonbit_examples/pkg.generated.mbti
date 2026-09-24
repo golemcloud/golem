@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk_example1/golem_moonbit_examples"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/config",
+  "golemcloud/golem_sdk/http",
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/agent/host",
   "golemcloud/golem_sdk/interface/golem/core/types",
@@ -30,6 +31,8 @@ pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
 
 pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
 
+pub fn wasmExportAsyncInvokeToolMiddleware(Int, Int, Int) -> Int
+
 pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
 
 pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
@@ -37,6 +40,10 @@ pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
 pub fn wasmExportDiscoverAgentTypes() -> Int
 
 pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
+
+pub fn wasmExportDiscoverToolMiddlewares() -> Int
+
+pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int) -> Unit
 
 pub fn wasmExportDiscoverTools() -> Int
 
@@ -48,6 +55,10 @@ pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
 
 pub fn wasmExportGetTool(Int, Int) -> Int
 
+pub fn wasmExportGetToolMiddleware(Int, Int) -> Int
+
+pub fn wasmExportGetToolMiddlewarePostReturn(Int) -> Unit
+
 pub fn wasmExportGetToolPostReturn(Int) -> Unit
 
 pub fn wasmExportInitialize(Int) -> Int
@@ -55,6 +66,8 @@ pub fn wasmExportInitialize(Int) -> Int
 pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
 
 pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
+
+pub fn wasmExportInvokeToolMiddleware(Int) -> Int
 
 pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
 
@@ -322,6 +335,26 @@ pub(all) struct EmptyAgentInput {
 }
 pub impl @schema.IntoSchema for EmptyAgentInput
 
+type FileOwner
+pub async fn FileOwner::update(Self, String) -> Unit
+
+pub(all) struct FileOwnerClient {
+  client : @rpc.AgentClient
+}
+pub fn FileOwnerClient::drop(Self) -> Unit
+pub fn FileOwnerClient::get(String) -> Self raise @common.AgentError
+pub fn FileOwnerClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn FileOwnerClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub fn FileOwnerClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn FileOwnerClient::phantom_id(Self) -> @types.Uuid?
+pub fn FileOwnerClient::schedule_cancelable_update(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
+pub fn FileOwnerClient::schedule_update(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
+pub async fn[T] FileOwnerClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] FileOwnerClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] FileOwnerClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub fn FileOwnerClient::trigger_update(Self, String) -> Unit raise @common.AgentError
+pub async fn FileOwnerClient::update(Self, String) -> Unit
+
 type MoonBitReflectionTest
 pub fn MoonBitReflectionTest::canonical_values(Int64, UInt64, @schema.Duration, @schema.Quantity[ReflectionMeters], String?) -> String
 pub fn MoonBitReflectionTest::echo(String) -> String
@@ -447,6 +480,12 @@ pub async fn RpcExampleAgentClient::task_rpc_example(Self) -> UInt64
 pub fn RpcExampleAgentClient::trigger_counter_rpc_example(Self) -> Unit raise @common.AgentError
 pub fn RpcExampleAgentClient::trigger_get_last_value(Self) -> Unit raise @common.AgentError
 pub fn RpcExampleAgentClient::trigger_task_rpc_example(Self) -> Unit raise @common.AgentError
+
+type Site
+pub fn Site::describe(Self) -> String raise @http.OpenApiJsonError
+pub fn Site::serve(Self, @http.HttpRequest) -> @http.HttpResponse
+
+type StaticSite
 
 pub(all) struct TaskInfo {
   title : String

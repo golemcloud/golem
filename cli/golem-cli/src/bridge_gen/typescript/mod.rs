@@ -3224,7 +3224,7 @@ impl TypeScriptBridgeGenerator {
         {
             let binary_type = self.unstructured_binary_type(restrictions);
             return Ok(format!(
-                "((v: {binary_type}) => v.tag === 'inline' ? {{ tag: 'variant', caseIndex: 0, payload: {{ tag: 'binary', bytes: v.val, mimeType: v.mimeType }} }} : {{ tag: 'variant', caseIndex: 1, payload: {{ tag: 'url', value: v.val }} }})({value})"
+                "((v: {binary_type}) => v.tag === 'inline' ? {{ tag: 'variant', caseIndex: 0, payload: {{ tag: 'binary', bytes: v.val as Uint8Array, mimeType: v.mimeType }} }} : {{ tag: 'variant', caseIndex: 1, payload: {{ tag: 'url', value: v.val as string }} }})({value})"
             ));
         }
         let rendered = match typ {
@@ -4448,6 +4448,7 @@ mod streaming_tests {
             SchemaType::stream(Some(SchemaType::u8())),
         ))));
         let agent_type = AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: AgentTypeName("StreamingFixture".to_string()),
             description: String::new(),
             source_language: "rust".to_string(),

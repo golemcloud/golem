@@ -14,4 +14,4 @@ fn wasmImportWaitFor(p0 : Int64) -> Int = "wasi:clocks/monotonic-clock@0.3.0" "[
 
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 call $moonbit.decref)
+#|(func (param i32) local.get 0 call $moonbit.decref)

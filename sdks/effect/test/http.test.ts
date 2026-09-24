@@ -30,6 +30,7 @@ import {
   connect,
   withAuth,
   withCors,
+  withDurableStreams,
   withHeader,
   withHeaders,
   withPhantomAgent,
@@ -309,6 +310,9 @@ describe("Http compileMount / compileEndpoint", () => {
       { tag: "literal", val: "hooks" },
       { tag: "path-variable", val: { variableName: "tenant" } },
     ])
+    expect(w.staticBindings).toEqual([])
+    expect(w.filesystemBindings).toEqual([])
+    expect(w.openapiProviderMethod).toBeUndefined()
   })
 
   it("omits authDetails when auth is not requested", () => {
@@ -380,6 +384,50 @@ describe("Http compileMount / compileEndpoint", () => {
   it("endpoint with no auth option emits undefined authDetails (inherits)", () => {
     const w = compileEndpoint(get("/x"))
     expect(w.authDetails).toBeUndefined()
+    expect(w.durableStreams).toBeUndefined()
+  })
+
+  it("compiles full durable-stream options to the WIT metadata shape", () => {
+    expect(
+      compileEndpoint(
+        post("/process", {
+          durableStreams: {
+            slots: [
+              { source: "input", slot: "input", name: "messages" },
+              {
+                source: "output",
+                slot: "$result",
+                name: "results",
+                contentType: "application/vnd.golem.events",
+              },
+            ],
+            allowExternalWrites: true,
+            allowStreamDelete: false,
+            allowInvocationDelete: false,
+            load: {
+              maxConcurrentReadersPerStream: 8,
+              maxAppendRequestsPerSecondPerStream: 25,
+            },
+          },
+        }),
+      ).durableStreams,
+    ).toEqual({
+      slots: [
+        { source: { tag: "input", val: "input" }, name: "messages", contentType: undefined },
+        {
+          source: { tag: "output", val: "$result" },
+          name: "results",
+          contentType: "application/vnd.golem.events",
+        },
+      ],
+      allowExternalWrites: true,
+      allowStreamDelete: false,
+      allowInvocationDelete: false,
+      load: {
+        maxConcurrentReadersPerStream: 8,
+        maxAppendRequestsPerSecondPerStream: 25,
+      },
+    })
   })
 })
 
@@ -932,6 +980,25 @@ describe("Http pipeable combinators — endpoints", () => {
     expect(piped.cors).toEqual(["b", "c"])
     const literal = get("/x", { cors: ["b", "c"] })
     expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
+  })
+
+  it("`.pipe(withDurableStreams(...))` matches literal endpoint options", () => {
+    const durableStreams = {
+      slots: [{ source: "output" as const, slot: "$result" }],
+      allowExternalWrites: false,
+      allowStreamDelete: false,
+      allowInvocationDelete: false,
+      load: { maxConcurrentReadersPerStream: 0 },
+    }
+    const piped = post("/x").pipe(withDurableStreams(durableStreams))
+    const literal = endpoint("POST", "/x", { durableStreams })
+    expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
+    expect(compileEndpoint(piped).durableStreams).toMatchObject({
+      allowExternalWrites: false,
+      allowStreamDelete: false,
+      allowInvocationDelete: false,
+      load: { maxConcurrentReadersPerStream: 0 },
+    })
   })
 
   it("`.pipe(withHeader(name, varName))` appends one header binding", () => {

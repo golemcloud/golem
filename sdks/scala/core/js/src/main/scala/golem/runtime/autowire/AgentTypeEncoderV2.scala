@@ -81,6 +81,7 @@ object AgentTypeEncoderV2 {
 
   final case class AgentRequest(
     typeName: String,
+    kind: String,
     description: String,
     mode: String,
     constructor: Constructor,
@@ -148,6 +149,7 @@ object AgentTypeEncoderV2 {
 
     JsAgentType(
       typeName = req.typeName,
+      kind = req.kind,
       description = req.description,
       sourceLanguage = req.sourceLanguage,
       schema = mergedGraph,

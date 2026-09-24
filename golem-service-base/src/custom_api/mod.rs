@@ -19,7 +19,9 @@ use crate::model::SafeIndex;
 use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, AgentTypeName, HttpMethod, ReadOnlyConfig};
+use golem_common::model::agent::{
+    AgentFileContentHash, AgentMode, AgentTypeName, FileMapping, HttpMethod, ReadOnlyConfig,
+};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -241,12 +243,49 @@ pub struct CompiledInputSchema {
     pub input_schema: InputSchema,
 }
 
+impl CompiledInputSchema {
+    fn validate(&self) -> Result<(), String> {
+        let expected = SchemaType::record(
+            self.input_schema
+                .fields()
+                .iter()
+                .map(|field| golem_common::schema::NamedFieldType {
+                    name: field.name.clone(),
+                    body: field.schema.clone(),
+                    metadata: field.metadata.clone(),
+                })
+                .collect(),
+        );
+        if self.graph.root != expected {
+            return Err(
+                "Compiled input graph root must describe the positional input schema".into(),
+            );
+        }
+        golem_common::schema::validation::validate_graph(&self.graph)
+            .map_err(|errors| format!("Invalid compiled input graph: {errors:?}"))
+    }
+}
+
 /// Self-contained method output schema persisted in a compiled route.
 #[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
 pub struct CompiledOutputSchema {
     pub graph: SchemaGraph,
     pub output_schema: OutputSchema,
+}
+
+impl CompiledOutputSchema {
+    fn validate(&self) -> Result<(), String> {
+        let expected = match &self.output_schema {
+            OutputSchema::Unit => SchemaType::record(vec![]),
+            OutputSchema::Single(schema) => (**schema).clone(),
+        };
+        if self.graph.root != expected {
+            return Err("Compiled output graph root must describe the output schema".into());
+        }
+        golem_common::schema::validation::validate_graph(&self.graph)
+            .map_err(|errors| format!("Invalid compiled output graph: {errors:?}"))
+    }
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
@@ -318,13 +357,140 @@ pub struct CompiledRoutes {
 #[derive(Debug)]
 pub struct CompiledRoute {
     pub route_id: RouteId,
-    pub method: HttpMethod,
+    pub route_match: RouteMatch,
     pub path: Vec<PathSegment>,
-    // TODO: move this into the individual route behaviours
-    pub body: RequestBodySchema,
     pub behavior: RouteBehaviour,
     pub security: RouteSecurity,
     pub cors: CorsOptions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum RouteMatch {
+    Method {
+        method: HttpMethod,
+        trailing_slash: bool,
+    },
+    MountPrefix,
+}
+
+impl From<HttpMethod> for RouteMatch {
+    fn from(method: HttpMethod) -> Self {
+        Self::Method {
+            method,
+            trailing_slash: false,
+        }
+    }
+}
+
+impl RouteMatch {
+    pub fn method(&self) -> Option<&HttpMethod> {
+        match self {
+            Self::Method { method, .. } => Some(method),
+            Self::MountPrefix => None,
+        }
+    }
+
+    pub fn validate(&self, path: &[PathSegment], behavior: &RouteBehaviour) -> Result<(), String> {
+        let mount_behavior = matches!(
+            behavior,
+            RouteBehaviour::HttpRouter(_) | RouteBehaviour::AgentFilesystem(_)
+        );
+        if matches!(self, Self::MountPrefix) != mount_behavior {
+            return Err(
+                "MountPrefix must be paired with HttpRouter or AgentFilesystem behavior".into(),
+            );
+        }
+        if let Self::Method {
+            method,
+            trailing_slash,
+        } = self
+        {
+            http::Method::try_from(method.clone()).map_err(|error| error.to_string())?;
+            if *trailing_slash && path.is_empty() {
+                return Err("Root path cannot have a trailing-slash flag".into());
+            }
+        } else if path
+            .iter()
+            .any(|segment| matches!(segment, PathSegment::CatchAll { .. }))
+        {
+            return Err("MountPrefix cannot contain a catch-all".into());
+        }
+        match behavior {
+            RouteBehaviour::HttpRouter(router) => {
+                router.constructor_input.validate()?;
+                for method in router
+                    .handler
+                    .iter()
+                    .chain(router.openapi_provider_method.iter())
+                {
+                    method.input.validate()?;
+                    method.output.validate()?;
+                }
+                if path
+                    .iter()
+                    .any(|segment| !matches!(segment, PathSegment::Literal { .. }))
+                {
+                    return Err("HttpRouter mount must be literal".into());
+                }
+                if router
+                    .handler
+                    .iter()
+                    .chain(router.openapi_provider_method.iter())
+                    .any(|method| method.method_name.is_empty())
+                {
+                    return Err("Router method name must not be empty".into());
+                }
+                if let (Some(handler), Some(provider)) =
+                    (&router.handler, &router.openapi_provider_method)
+                    && handler.method_name == provider.method_name
+                {
+                    return Err("Router handler and provider must be distinct methods".into());
+                }
+                FileMapping::validate_list(&router.static_bindings)?;
+                let mut paths = BTreeSet::new();
+                for entry in &router.file_index {
+                    let path = entry
+                        .path
+                        .strip_prefix('/')
+                        .ok_or("Router file path must be absolute")?;
+                    if path.chars().any(char::is_control)
+                        || path.split('/').any(|part| {
+                            part.is_empty() || part == "." || part == ".." || part.contains('\\')
+                        })
+                    {
+                        return Err("Router file path must be canonical and name a file".into());
+                    }
+                    if !paths.insert(&entry.path) {
+                        return Err("Duplicate router file index path".into());
+                    }
+                }
+            }
+            RouteBehaviour::AgentFilesystem(filesystem) => {
+                filesystem.constructor_input.validate()?;
+                FileMapping::validate_list(&filesystem.filesystem_bindings)?;
+                let captures = path
+                    .iter()
+                    .filter(|segment| matches!(segment, PathSegment::Variable { .. }))
+                    .count();
+                let mut bound = BTreeSet::new();
+                for ConstructorParameter::Path {
+                    path_segment_index, ..
+                } in &filesystem.constructor_parameters
+                {
+                    let index: usize = (*path_segment_index).into();
+                    if index >= captures || !bound.insert(index) {
+                        return Err(
+                            "Filesystem constructor parameters must bind distinct mount captures"
+                                .into(),
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -335,6 +501,50 @@ pub enum RouteBehaviour {
     CorsPreflight(CorsPreflightBehaviour),
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
+    HttpRouter(HttpRouterBehaviour),
+    AgentFilesystem(AgentFilesystemBehaviour),
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct HttpRouterBehaviour {
+    pub component_id: ComponentId,
+    pub component_revision: ComponentRevision,
+    pub agent_type: AgentTypeName,
+    pub constructor_input: CompiledInputSchema,
+    pub handler: Option<RouterMethod>,
+    pub openapi_provider_method: Option<RouterMethod>,
+    pub static_bindings: Vec<FileMapping>,
+    pub file_index: Vec<RouterFileIndexEntry>,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct RouterMethod {
+    pub method_name: String,
+    pub input: CompiledInputSchema,
+    pub output: CompiledOutputSchema,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct RouterFileIndexEntry {
+    pub path: String,
+    /// BLAKE3 digest computed during upload, used for blob lookup and the immutable HTTP ETag.
+    pub blob_key: AgentFileContentHash,
+    pub size: u64,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct AgentFilesystemBehaviour {
+    pub component_id: ComponentId,
+    /// Revision at which the exposure policy was selected, not a required executor version.
+    pub component_revision: ComponentRevision,
+    pub agent_type: AgentTypeName,
+    pub constructor_input: CompiledInputSchema,
+    pub constructor_parameters: Vec<ConstructorParameter>,
+    pub filesystem_bindings: Vec<FileMapping>,
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
@@ -343,6 +553,7 @@ pub struct CallAgentBehaviour {
     pub route_mode: AgentRouteMode,
     /// Number of captured variables in the declared base path, excluding DS session and slot.
     pub base_path_variables: u32,
+    pub durable_streams: Option<DurableStreamRoutePolicy>,
     pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
     pub agent_type: AgentTypeName,
@@ -359,6 +570,7 @@ pub struct CallAgentBehaviour {
     /// HTTP method parameters, injecting auto-injected fields in declaration
     /// order.
     pub method_input: CompiledInputSchema,
+    pub body: RequestBodySchema,
     pub method_parameters: Vec<MethodParameter>,
     pub expected_agent_response: CompiledOutputSchema,
     #[desert(default)]
@@ -375,6 +587,76 @@ pub enum AgentRouteMode {
     Rest,
     DurableStreams,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct DurableStreamRoutePolicy {
+    pub slots: Vec<DurableStreamSlot>,
+    pub allow_external_writes: bool,
+    pub allow_stream_delete: bool,
+    pub allow_invocation_delete: bool,
+    pub load: Option<DurableStreamRouteLoadPolicy>,
+}
+
+impl DurableStreamRoutePolicy {
+    pub fn slot_by_public_name(&self, name: &str) -> Option<&DurableStreamSlot> {
+        self.slots.iter().find(|slot| slot.public_name == name)
+    }
+
+    pub fn slot_by_canonical_name(&self, name: &str) -> Option<&DurableStreamSlot> {
+        self.slots.iter().find(|slot| slot.canonical_name == name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct DurableStreamSlot {
+    pub canonical_name: String,
+    pub public_name: String,
+    pub direction: DurableStreamSlotDirection,
+    pub content_type: String,
+    pub representation: DurableStreamRepresentation,
+}
+
+impl DurableStreamSlot {
+    pub fn writable(&self) -> bool {
+        self.direction == DurableStreamSlotDirection::Input
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+pub enum DurableStreamSlotDirection {
+    Input,
+    Output,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BinaryCodec)]
+pub enum DurableStreamRepresentation {
+    Json,
+    Bytes,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct DurableStreamRouteLoadPolicy {
+    pub max_concurrent_readers_per_stream: Option<u32>,
+    pub max_append_requests_per_second_per_stream: Option<u32>,
+}
+/// Request headers for durable-stream session creation, conditional reads,
+/// closing appends and producer-tracked appends.
+pub const DURABLE_STREAM_REQUEST_HEADERS: &[&str] = &[
+    "content-type",
+    "if-none-match",
+    "stream-ttl",
+    "stream-expires-at",
+    "stream-forked-from",
+    "stream-fork-offset",
+    "stream-fork-sub-offset",
+    "stream-closed",
+    "producer-id",
+    "producer-epoch",
+    "producer-seq",
+];
 
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
@@ -393,6 +675,26 @@ pub struct CorsPreflightMethodPolicy {
     pub allowed_headers: BTreeSet<String>,
 }
 
+pub fn cors_allowed_request_headers(
+    body: &RequestBodySchema,
+    method_parameters: &[MethodParameter],
+    session_header: Option<&str>,
+) -> BTreeSet<String> {
+    let mut headers = BTreeSet::new();
+    for parameter in method_parameters {
+        if let MethodParameter::Header { header_name, .. } = parameter {
+            headers.insert(header_name.trim().to_ascii_lowercase());
+        }
+    }
+    if !matches!(body, RequestBodySchema::Unused) {
+        headers.insert("content-type".into());
+    }
+    if let Some(header) = session_header {
+        headers.insert(header.trim().to_ascii_lowercase());
+    }
+    headers
+}
+
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub struct WebhookCallbackBehaviour {
@@ -403,6 +705,7 @@ pub struct WebhookCallbackBehaviour {
 #[desert(evolution())]
 pub struct OpenApiSpecBehaviour {
     pub format: OpenApiSpecFormat,
+    pub scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme,
 }
 
 #[derive(Debug, Clone, Copy, BinaryCodec)]
@@ -417,6 +720,7 @@ pub enum RouteSecurity {
     None,
     SessionFromHeader(SessionFromHeaderRouteSecurity),
     SecurityScheme(SecuritySchemeRouteSecurity),
+    Unavailable,
 }
 
 #[derive(Debug, Clone, BinaryCodec)]
@@ -549,5 +853,52 @@ mod tests {
         assert!(exact.matches("https://example.com"));
         assert!(!exact.matches("https://other.com"));
         assert!(!exact.matches("http://example.com")); // scheme matters
+    }
+
+    #[test]
+    fn durable_stream_policy_resolves_public_and_canonical_slot_names() {
+        let policy = DurableStreamRoutePolicy {
+            slots: vec![
+                DurableStreamSlot {
+                    canonical_name: "input".into(),
+                    public_name: "requests".into(),
+                    direction: DurableStreamSlotDirection::Input,
+                    content_type: "application/json".into(),
+                    representation: DurableStreamRepresentation::Json,
+                },
+                DurableStreamSlot {
+                    canonical_name: "$result".into(),
+                    public_name: "responses".into(),
+                    direction: DurableStreamSlotDirection::Output,
+                    content_type: "application/vnd.golem.binary".into(),
+                    representation: DurableStreamRepresentation::Bytes,
+                },
+            ],
+            allow_external_writes: true,
+            allow_stream_delete: true,
+            allow_invocation_delete: true,
+            load: None,
+        };
+
+        assert_eq!(
+            policy
+                .slot_by_public_name("requests")
+                .map(|slot| slot.canonical_name.as_str()),
+            Some("input")
+        );
+        assert_eq!(
+            policy
+                .slot_by_public_name("responses")
+                .map(|slot| slot.canonical_name.as_str()),
+            Some("$result")
+        );
+        assert_eq!(
+            policy
+                .slot_by_canonical_name("$result")
+                .map(|slot| slot.public_name.as_str()),
+            Some("responses")
+        );
+        assert!(policy.slot_by_public_name("input").is_none());
+        assert!(policy.slot_by_canonical_name("responses").is_none());
     }
 }

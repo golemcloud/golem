@@ -1240,6 +1240,7 @@ mod tests {
             ExecutableTarget::new(component_id, component_revision),
             deployment_revision,
             EntityActivationPolicy::Tool {
+                mcp_import: None,
                 provision: ToolProvisionConfig::default(),
                 binding: Box::new(CompiledToolBinding {
                     deployment_revision,
