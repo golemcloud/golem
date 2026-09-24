@@ -148,6 +148,15 @@ pub fn get_principal() -> Option<Principal> {
 }
 
 pub fn register_agent_type(agent_type_name: AgentTypeName, mut agent_type: ExtendedAgentType) {
+    use crate::golem_agentic::golem::agent::common::AgentTypeKind;
+    if let Some(existing) = get_enriched_agent_type_by_name(&agent_type_name) {
+        assert!(
+            !matches!(existing.kind, AgentTypeKind::HttpRouter)
+                && !matches!(agent_type.kind, AgentTypeKind::HttpRouter),
+            "duplicate HTTP router agent type name '{}'; choose a unique #[http_router(name = ...)]",
+            agent_type_name.0,
+        );
+    }
     let mut indices: Vec<usize> = (0..agent_type.methods.len()).collect();
     indices.sort_by(|&a, &b| agent_type.methods[a].name.cmp(&agent_type.methods[b].name));
     agent_type.sorted_method_indices = indices;

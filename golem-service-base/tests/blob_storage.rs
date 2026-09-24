@@ -183,6 +183,12 @@ async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
         .send()
         .await
         .unwrap();
+    client
+        .create_bucket()
+        .bucket(&config.initial_agent_files_bucket)
+        .send()
+        .await
+        .unwrap();
     for bucket in &config.compressed_oplog_buckets {
         client.create_bucket().bucket(bucket).send().await.unwrap();
     }
@@ -222,6 +228,20 @@ impl BlobStorage for S3BlobStorageWithContainer {
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         self.storage
             .get_stream(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        self.storage
+            .get_range_stream(target_label, op_label, namespace, path, offset, length)
             .await
     }
 
@@ -449,6 +469,288 @@ fn custom_storage() -> BlobStorageNamespace {
 
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
+
+#[test]
+#[test_r::timeout("120s")]
+async fn bounded_initial_file_ranges(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let namespace = BlobStorageNamespace::InitialAgentFiles {
+        environment_id: EnvironmentId::new(),
+    };
+    let path = Path::new("range-test");
+    let size = BLOB_STREAM_CHUNK_SIZE * 35 + 19;
+    let data: Vec<u8> = (0..size)
+        .map(|i| ((i * 17 + i / 251) % 256) as u8)
+        .collect();
+    assert!(
+        storage
+            .get_range_stream("range", "missing", namespace.clone(), path, 0, 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    storage
+        .put_raw("range", "put", namespace.clone(), path, &data)
+        .await
+        .unwrap();
+    for (offset, length) in [
+        (0, size),
+        (size - 23, 17),
+        (BLOB_STREAM_CHUNK_SIZE - 3, 11),
+        (0, 0),
+        (size, 0),
+    ] {
+        let opened = storage
+            .get_range_stream(
+                "range",
+                "read",
+                namespace.clone(),
+                path,
+                offset as u64,
+                length as u64,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(opened.total_size, size as u64);
+        let mut stream = opened.stream;
+        let mut consumed = 0;
+        while let Some(chunk) = stream.try_next().await.unwrap() {
+            assert!(!chunk.is_empty());
+            assert!(chunk.len() <= BLOB_STREAM_CHUNK_SIZE);
+            assert_eq!(
+                &chunk[..],
+                &data[offset + consumed..offset + consumed + chunk.len()]
+            );
+            consumed += chunk.len();
+        }
+        assert_eq!(consumed, length);
+    }
+    for (offset, length) in [
+        (size as u64, 1),
+        (size as u64 + 1, 0),
+        (0, size as u64 + 1),
+        (u64::MAX, 2),
+    ] {
+        assert!(
+            storage
+                .get_range_stream("range", "invalid", namespace.clone(), path, offset, length)
+                .await
+                .is_err()
+        );
+    }
+    let other = BlobStorageNamespace::InitialAgentFiles {
+        environment_id: EnvironmentId::new(),
+    };
+    assert!(
+        storage
+            .get_range_stream("range", "other-env", other, path, 0, 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Dropping an unconsumed reader must release resources, including a SQLite connection.
+    drop(
+        storage
+            .get_range_stream("range", "drop", namespace.clone(), path, 0, size as u64)
+            .await
+            .unwrap(),
+    );
+    storage
+        .put_raw("range", "empty", namespace.clone(), Path::new("empty"), &[])
+        .await
+        .unwrap();
+    let mut empty = storage
+        .get_range_stream(
+            "range",
+            "empty",
+            namespace.clone(),
+            Path::new("empty"),
+            0,
+            0,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(empty.total_size, 0);
+    assert!(empty.stream.try_next().await.unwrap().is_none());
+    assert!(
+        storage
+            .get_range_stream(
+                "range",
+                "empty-invalid",
+                namespace,
+                Path::new("empty"),
+                0,
+                1
+            )
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn sqlite_range_drop_releases_pinned_connection() {
+    let dir = tempdir().unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(dir.path().join("blobs.db"))
+        .create_if_missing(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone())
+        .await
+        .unwrap();
+    let write_pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    let storage = SqliteBlobStorage::new(SqlitePool::new(pool.clone(), write_pool))
+        .await
+        .unwrap();
+    let namespace = BlobStorageNamespace::InitialAgentFiles {
+        environment_id: EnvironmentId::new(),
+    };
+    let path = Path::new("large");
+    storage
+        .put_raw(
+            "range",
+            "put",
+            namespace.clone(),
+            path,
+            &vec![7; BLOB_STREAM_CHUNK_SIZE * 8],
+        )
+        .await
+        .unwrap();
+    let mut stream = storage
+        .get_range_stream(
+            "range",
+            "read",
+            namespace.clone(),
+            path,
+            0,
+            (BLOB_STREAM_CHUNK_SIZE * 8) as u64,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .stream;
+    assert_eq!(
+        stream.try_next().await.unwrap().unwrap(),
+        Bytes::from(vec![7; BLOB_STREAM_CHUNK_SIZE])
+    );
+    assert_eq!(pool.num_idle(), 0);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        storage.put_raw(
+            "range",
+            "overwrite",
+            namespace.clone(),
+            path,
+            &vec![9; BLOB_STREAM_CHUNK_SIZE * 8],
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let mut remaining = 0;
+    while let Some(chunk) = stream.try_next().await.unwrap() {
+        assert!(
+            chunk.iter().all(|byte| *byte == 7),
+            "reader must retain its old WAL snapshot"
+        );
+        remaining += chunk.len();
+    }
+    assert_eq!(remaining, BLOB_STREAM_CHUNK_SIZE * 7);
+    let mut stream = storage
+        .get_range_stream(
+            "range",
+            "new-snapshot",
+            namespace,
+            path,
+            0,
+            (BLOB_STREAM_CHUNK_SIZE * 8) as u64,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .stream;
+    assert_eq!(
+        stream.try_next().await.unwrap().unwrap(),
+        Bytes::from(vec![9; BLOB_STREAM_CHUNK_SIZE])
+    );
+    assert_eq!(pool.num_idle(), 0);
+    drop(stream);
+    let connection = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(connection);
+}
+
+#[test]
+#[ignore = "SQLite allocator counters are process-global; run this test alone with --ignored"]
+#[test_r::timeout("60s")]
+async fn sqlite_range_native_memory_is_bounded() {
+    let dir = tempdir().unwrap();
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(dir.path().join("blobs.db"))
+        .create_if_missing(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    let storage = SqliteBlobStorage::new(SqlitePool::new(pool.clone(), pool.clone()))
+        .await
+        .unwrap();
+    let environment_id = EnvironmentId::new();
+    let total: i64 = 32 * 1024 * 1024;
+    sqlx::query("PRAGMA cache_size = -512")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO blob_storage (namespace, parent, name, value, size) VALUES (?, '', 'large', zeroblob(?), ?)")
+        .bind(format!("initial_agent_files-{environment_id}")).bind(total).bind(total).execute(&pool).await.unwrap();
+    for (offset, length) in [(total as u64 - 19, 13), (0, total as u64)] {
+        // SAFETY: SQLite's allocator counters are thread-safe. This ignored test runs
+        // alone so allocations from unrelated database tests cannot skew the peak.
+        let baseline = unsafe { libsqlite3_sys::sqlite3_memory_used() };
+        unsafe {
+            libsqlite3_sys::sqlite3_memory_highwater(1);
+        }
+        let mut opened = storage
+            .get_range_stream(
+                "range",
+                "memory",
+                BlobStorageNamespace::InitialAgentFiles { environment_id },
+                Path::new("large"),
+                offset,
+                length,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(opened.total_size, total as u64);
+        let mut consumed = 0;
+        while let Some(chunk) = opened.stream.try_next().await.unwrap() {
+            assert!(chunk.len() <= BLOB_STREAM_CHUNK_SIZE);
+            assert!(chunk.iter().all(|byte| *byte == 0));
+            consumed += chunk.len() as u64;
+        }
+        assert_eq!(consumed, length);
+        let growth = unsafe { libsqlite3_sys::sqlite3_memory_highwater(0) } - baseline;
+        assert!(
+            growth < 4 * 1024 * 1024,
+            "SQLite allocated {growth} bytes for a {length}-byte range"
+        );
+    }
+    pool.close().await;
+}
 
 #[test]
 #[tracing::instrument]

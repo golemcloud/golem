@@ -6016,8 +6016,10 @@ async fn run_completed_reconstruction_exclusive_p2_case(
             executor.diverge_next_completed_entity_reconstruction(&worker_id);
         }
         let mut replayed_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
-        executor.simulated_crash(&worker_id).await?;
-        original_success.abort_as_restart();
+        let (crash, ()) = tokio::join!(executor.simulated_crash(&worker_id), async {
+            original_success.abort_as_restart();
+        });
+        crash?;
         drop(original_success);
         let claimed_start =
             tokio::time::timeout(std::time::Duration::from_secs(30), replayed_claim.entered())

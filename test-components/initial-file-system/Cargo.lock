@@ -448,6 +448,7 @@ dependencies = [
 name = "golem-rust-macro"
 version = "0.0.0"
 dependencies = [
+ "golem-schema",
  "heck 0.5.0",
  "humantime",
  "proc-macro-crate",
@@ -694,6 +695,7 @@ name = "it_initial_file_system"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "blake3",
  "ctor",
  "golem-rust",
  "serde",

@@ -21,19 +21,23 @@ pub mod plugin_registration;
 pub mod quota_lease;
 pub mod retry_policy;
 
+use bytes::Bytes;
 use derive_more::Display;
 use desert_rust::BinaryCodec;
+use futures::Stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::component::{
     AgentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
+use golem_common::model::filesystem::{FileReadError, FileReadHead};
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind, AgentUpdateMode};
 use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -275,6 +279,21 @@ pub enum GetFileSystemNodeResult {
     Ok(Vec<ComponentFileSystemNode>),
     File(ComponentFileSystemNode),
     NotFound,
+}
+
+/// Metadata and bounded bytes from one serialized filesystem generation. Consumers must poll
+/// the body to EOF or drop it; errors after the head terminate the read without retrying it.
+pub struct FileReadResponse {
+    pub head: FileReadHead,
+    pub body: Pin<Box<dyn Stream<Item = Result<Bytes, FileReadError>> + Send + 'static>>,
+}
+
+impl std::fmt::Debug for FileReadResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileReadResponse")
+            .field("head", &self.head)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

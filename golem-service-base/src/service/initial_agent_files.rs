@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::replayable_stream::{ContentHash, ReplayableStream};
-use crate::storage::blob::{BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace};
+use crate::storage::blob::{
+    BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace,
+};
 use anyhow::{Context, Error};
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -66,6 +68,41 @@ impl InitialAgentFilesService {
             )
             .await
             .context("Failed getting data stream")
+    }
+
+    pub async fn get_metadata(
+        &self,
+        environment_id: EnvironmentId,
+        key: AgentFileContentHash,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        self.blob_storage
+            .with(INITIAL_AGENT_FILES_LABEL, "get_metadata")
+            .get_metadata(
+                BlobStorageNamespace::InitialAgentFiles { environment_id },
+                &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
+            )
+            .await
+            .context("Failed getting initial file metadata")
+    }
+
+    pub async fn get_range(
+        &self,
+        environment_id: EnvironmentId,
+        key: AgentFileContentHash,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        self.blob_storage
+            .get_range_stream(
+                INITIAL_AGENT_FILES_LABEL,
+                "get_range",
+                BlobStorageNamespace::InitialAgentFiles { environment_id },
+                &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
+                offset,
+                length,
+            )
+            .await
+            .context("Failed opening initial file range")
     }
 
     pub async fn put_if_not_exists(

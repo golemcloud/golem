@@ -1320,3 +1320,37 @@ fn install_and_build(package_dir: &Utf8Path) {
 fn generated_package_dir(target_dir: &Utf8Path, package_name: &str) -> Utf8PathBuf {
     target_dir.join(format!("{package_name}-client"))
 }
+
+#[test]
+fn http_router_bridge_rejection_uses_kind_not_name() {
+    let dir = TempDir::new().unwrap();
+    let path = Utf8Path::from_path(dir.path()).unwrap();
+    for mode in [
+        TypeScriptBridgeMode::ExternalRest,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    ] {
+        let mut metadata = agent(
+            "HttpRouterLookingName",
+            "typescript",
+            vec![],
+            vec![],
+            vec![],
+            AgentMode::Durable,
+        );
+        assert!(
+            TypeScriptBridgeGenerator::new_with_mode(metadata.clone(), path, false, mode).is_ok()
+        );
+        metadata.type_name =
+            golem_common::model::agent::AgentTypeName("OrdinaryLookingName".into());
+        metadata.kind = golem_common::schema::agent::AgentTypeKind::HttpRouter;
+        let result = TypeScriptBridgeGenerator::new_with_mode(metadata, path, false, mode);
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("HTTP routers do not have ordinary agent clients")
+        );
+    }
+}

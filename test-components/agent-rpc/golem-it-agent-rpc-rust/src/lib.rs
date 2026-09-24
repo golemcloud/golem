@@ -12,6 +12,8 @@ use golem_rust::{
 use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod http_router;
+
 fn encode_single_parameter<T: IntoSchema>(
     value: T,
 ) -> golem_rust::schema::wit::wire::SchemaValueTree {
@@ -313,6 +315,7 @@ pub trait StreamingRpcTarget {
     async fn consume_bytes(&self, input: AgentStream<u8>) -> Vec<u8>;
     fn produce_bytes(&self, values: Vec<u8>) -> AgentStream<u8>;
     fn produce_byte_then_wait(&self) -> AgentStream<u8>;
+    fn produce_then_spin(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     fn produce_many_bytes(&self, count: u32) -> AgentStream<u8>;
     fn transform_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
     fn transform_binary(&self, input: AgentStream<Bytes>) -> AgentStream<Bytes>;
@@ -434,6 +437,21 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
                 .await
                 .expect("failed to write byte before waiting");
             std::future::pending::<()>().await;
+        });
+        output
+    }
+
+    fn produce_then_spin(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            assert_eq!(input.next().await.expect("input available"), Some(7));
+            writer.write_one(7).await.expect("output attached");
+            assert_eq!(input.next().await.expect("input available"), Some(8));
+            writer.write_one(8).await.expect("output attached");
+            let mut value = 0u64;
+            loop {
+                value = std::hint::black_box(value.wrapping_add(1));
+            }
         });
         output
     }
@@ -623,6 +641,62 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
     }
 
     fn noop(&self) {}
+}
+
+#[agent_definition(mode = "ephemeral")]
+pub trait EphemeralStreamingRpcTarget {
+    fn new(name: String) -> Self;
+
+    fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
+    fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>);
+    fn produce_gated_siblings(&self) -> (PromiseId, AgentStream<String>, AgentStream<u32>);
+    fn produce_then_spin(&self, input: AgentStream<u32>) -> AgentStream<u32>;
+    async fn hold_input(&self, input: AgentStream<u32>) -> u64;
+    fn spin(&self) -> u64;
+}
+
+struct EphemeralStreamingRpcTargetImpl {
+    inner: StreamingRpcTargetImpl,
+}
+
+#[agent_implementation]
+impl EphemeralStreamingRpcTarget for EphemeralStreamingRpcTargetImpl {
+    fn new(name: String) -> Self {
+        Self {
+            inner: StreamingRpcTargetImpl::new(name),
+        }
+    }
+
+    fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32> {
+        self.inner.transform(input)
+    }
+
+    fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>) {
+        self.inner.produce_siblings()
+    }
+
+    fn produce_gated_siblings(&self) -> (PromiseId, AgentStream<String>, AgentStream<u32>) {
+        let gate = golem_rust::create_promise();
+        let (strings, numbers) = self.inner.produce_gated_siblings(gate.clone());
+        (gate, strings, numbers)
+    }
+
+    fn produce_then_spin(&self, input: AgentStream<u32>) -> AgentStream<u32> {
+        self.inner.produce_then_spin(input)
+    }
+
+    async fn hold_input(&self, input: AgentStream<u32>) -> u64 {
+        let _input = input;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(30_000_000_000).await;
+        42
+    }
+
+    fn spin(&self) -> u64 {
+        let mut value = 0u64;
+        loop {
+            value = std::hint::black_box(value.wrapping_add(1));
+        }
+    }
 }
 
 #[agent_definition]

@@ -60,7 +60,8 @@ object SourceDiscovery {
     descriptionValue: Option[String],
     mode: Option[String],
     methods: List[DiscoveredMethod],
-    configFields: List[ConfigField] = Nil
+    configFields: List[ConfigField] = Nil,
+    kind: String = "regular"
   )
 
   final case class ConstructorParam(name: String, typeExpr: String)
@@ -306,7 +307,7 @@ object SourceDiscovery {
     }
 
   private def hasAgentDefinition(mods: List[Mod]): Boolean =
-    hasAnnotation(mods, "agentDefinition")
+    hasAnnotation(mods, "agentDefinition") || hasAnnotation(mods, "httpRouter")
 
   private def hasAgentImplementation(mods: List[Mod]): Boolean =
     hasAnnotation(mods, "agentImplementation")
@@ -335,7 +336,9 @@ object SourceDiscovery {
     mods.collectFirst {
       case Mod.Annot(init) if {
             val full = init.tpe.syntax
-            full == "agentDefinition" || full.endsWith(".agentDefinition")
+            full == "agentDefinition" || full.endsWith(".agentDefinition") || full == "httpRouter" || full.endsWith(
+              ".httpRouter"
+            )
           } =>
         init
     }.flatMap { init =>
@@ -758,10 +761,11 @@ object SourceDiscovery {
         )
 
       case t: Defn.Trait if hasAgentDefinition(t.mods) =>
+        val router             = hasAnnotation(t.mods, "httpRouter")
         val typeName           = extractTypeName(t.mods)
         val (hasDesc, descVal) = extractDescription(t.mods)
         val ctorParams         = extractConstructorParams(t.templ)
-        val modeValue          = extractMode(t.mods)
+        val modeValue          = if (router) Some("ephemeral") else extractMode(t.mods)
         val discoveredMethods  = extractMethods(t.templ)
         val cfgFields          = extractAgentConfigType(t.templ, pkg)
           .flatMap(cfgType => extractConfigFields(cfgType, pkg, caseClassIndex, Nil))
@@ -776,7 +780,8 @@ object SourceDiscovery {
           descriptionValue = descVal,
           mode = modeValue,
           methods = discoveredMethods,
-          configFields = cfgFields
+          configFields = cfgFields,
+          kind = if (router) "http-router" else "regular"
         )
 
       case cls: Defn.Class if hasAgentImplementation(cls.mods) =>

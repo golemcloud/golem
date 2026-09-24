@@ -26,18 +26,32 @@ use super::schema_mapping::{
     arbitrary_binary_schema, render_input_schema, string_enum_schema, string_schema,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
-use golem_common::model::domain_registration::Domain;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use golem_common::schema::graph::SchemaGraph;
-use golem_service_base::custom_api::{AgentRouteMode, PathSegment};
+use golem_service_base::custom_api::{AgentRouteMode, PathSegment, RouteMatch};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashSet};
 
 mod durable_streams;
 
-pub struct HttpApiOpenApiSpec(pub Value);
+pub struct HttpApiOpenApiSpec;
 
 impl HttpApiOpenApiSpec {
-    pub fn from_routes(routes: &[RichCompiledRoute], domain: &Domain) -> Result<Self, String> {
+    #[cfg(test)]
+    pub fn from_routes(
+        routes: &[&RichCompiledRoute],
+        public_origin: &str,
+    ) -> Result<Value, String> {
+        let spec = Self::contribution_from_routes(routes, public_origin)?;
+        super::merge::merge(spec, vec![], public_origin)
+            .map_err(|error| format!("{:?} at {}", error.category, error.location))
+    }
+
+    pub(super) fn contribution_from_routes(
+        routes: &[&RichCompiledRoute],
+        public_origin: &str,
+    ) -> Result<Value, String> {
         let mut ds_only_paths: HashSet<_> = routes
             .iter()
             .filter_map(|route| match &route.behavior {
@@ -64,17 +78,20 @@ impl HttpApiOpenApiSpec {
             .filter(|route| match &route.behavior {
                 RichRouteBehaviour::CallAgent(inner) => {
                     inner.route_mode == AgentRouteMode::Rest
-                        || (route.method == http::Method::PUT
-                            && route
-                                .path
-                                .iter()
-                                .filter(|segment| !matches!(segment, PathSegment::Literal { .. }))
-                                .count()
-                                == inner.base_path_variables as usize)
+                        || (matches!(
+                            route.route_match.method(),
+                            Some(golem_common::model::agent::HttpMethod::Put(_))
+                        ) && route
+                            .path
+                            .iter()
+                            .filter(|segment| !matches!(segment, PathSegment::Literal { .. }))
+                            .count()
+                            == inner.base_path_variables as usize)
                 }
                 RichRouteBehaviour::CorsPreflight(_) => !ds_only_paths.contains(&route.path),
                 _ => true,
             })
+            .copied()
             .collect();
         let document = build_document_schema(&routes).map_err(|e| e.to_string())?;
         let graph = &document.graph;
@@ -82,6 +99,14 @@ impl HttpApiOpenApiSpec {
         let mut component_schemas: Map<String, Value> = Map::new();
         let mut security_schemes: Map<String, Value> = Map::new();
         let mut paths: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+        let mut binding_counts = BTreeMap::new();
+        for route in &routes {
+            if let RichRouteBehaviour::CallAgent(inner) = &route.behavior {
+                *binding_counts
+                    .entry((&inner.agent_type.0, &inner.method_name))
+                    .or_insert(0usize) += 1;
+            }
+        }
 
         // Emit synthesized DS paths first. Explicit literal routes take
         // precedence over the compiled DS slot wildcard in the HTTP router.
@@ -93,8 +118,13 @@ impl HttpApiOpenApiSpec {
                 .is_some_and(|call| call.stream_slots.is_some())
         });
         for (route, route_schema) in ordered {
-            collect_security_scheme(route, &mut security_schemes);
-
+            let Some(method) = route.route_match.method() else {
+                continue;
+            };
+            let method: http::Method = method
+                .clone()
+                .try_into()
+                .map_err(|e| format!("Invalid route method: {e}"))?;
             if route_schema
                 .call_agent
                 .as_ref()
@@ -105,30 +135,48 @@ impl HttpApiOpenApiSpec {
                     route_schema,
                     graph,
                     &mut component_schemas,
+                    &mut security_schemes,
                     &mut paths,
                 )?;
                 continue;
             }
+
             let mut operation =
                 build_operation(route, route_schema, graph, &mut component_schemas)?;
-            let rendered = render_full_path(&route.path);
+            if let RichRouteBehaviour::CallAgent(inner) = &route.behavior
+                && binding_counts[&(&inner.agent_type.0, &inner.method_name)] > 1
+            {
+                operation.as_object_mut().unwrap().remove("operationId");
+            }
+            operation["security"] = build_security(&route.security, &mut security_schemes)?;
+
+            let mut path = render_full_path(&route.path);
+            if matches!(
+                route.route_match,
+                RouteMatch::Method {
+                    trailing_slash: true,
+                    ..
+                }
+            ) {
+                path.push('/');
+            }
             let canonical = paths
                 .iter()
-                .find(|(path, item)| {
+                .find(|(candidate, item)| {
                     item.contains_key("x-golem-route-mode")
-                        && path
+                        && candidate
                             .split('/')
                             .map(template_segment)
-                            .eq(rendered.split('/').map(template_segment))
+                            .eq(path.split('/').map(template_segment))
                 })
-                .map(|(path, _)| path.clone())
-                .unwrap_or_else(|| rendered.clone());
-            if canonical != rendered
+                .map(|(candidate, _)| candidate.clone())
+                .unwrap_or_else(|| path.clone());
+            if canonical != path
                 && let Some(parameters) = operation["parameters"].as_array_mut()
             {
                 for parameter in parameters {
                     if parameter["in"] == "path" {
-                        for (from, to) in rendered.split('/').zip(canonical.split('/')) {
+                        for (from, to) in path.split('/').zip(canonical.split('/')) {
                             if let (Some(from), Some(to)) = (capture_name(from), capture_name(to))
                                 && parameter["name"] == from
                             {
@@ -143,7 +191,7 @@ impl HttpApiOpenApiSpec {
             if path_item.contains_key("x-golem-route-mode") {
                 operation["x-golem-route-mode"] = json!("rest");
             }
-            insert_operation(path_item, route.method.as_str(), operation);
+            insert_operation(path_item, method.as_str(), operation)?;
         }
 
         let mut components = Map::new();
@@ -162,21 +210,18 @@ impl HttpApiOpenApiSpec {
             .map(|(k, v)| (k, Value::Object(v)))
             .collect();
 
-        let spec = json!({
+        Ok(json!({
             "openapi": "3.1.0",
             "info": {
                 "title": "Managed api provided by Golem",
                 "version": "1.0.0",
             },
             "servers": [
-                { "url": format!("https://{}", domain.0) },
-                { "url": format!("http://{}", domain.0) },
+                { "url": public_origin },
             ],
             "paths": Value::Object(paths_value),
             "components": Value::Object(components),
-        });
-
-        Ok(HttpApiOpenApiSpec(spec))
+        }))
     }
 }
 
@@ -216,10 +261,6 @@ fn build_operation(
 
     let response_model = get_route_response_schema(route, route_schema, graph, components)?;
     operation.insert("responses".to_string(), build_responses(response_model));
-
-    if let Some(security) = build_security(route) {
-        operation.insert("security".to_string(), security);
-    }
 
     Ok(Value::Object(operation))
 }
@@ -392,37 +433,50 @@ fn build_response_headers(model: &RouteResponseOpenApiSchema) -> Option<Value> {
     Some(Value::Object(headers))
 }
 
-fn build_security(route: &RichCompiledRoute) -> Option<Value> {
-    if let RichRouteSecurity::SecurityScheme(inner) = &route.security {
-        let scopes: Vec<String> = inner
-            .security_scheme
-            .scopes
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let mut requirement = Map::new();
-        requirement.insert(inner.security_scheme.name.0.clone(), json!(scopes));
-        Some(json!([Value::Object(requirement)]))
+pub(super) fn build_security(
+    security: &RichRouteSecurity,
+    schemes: &mut Map<String, Value>,
+) -> Result<Value, String> {
+    let (name, scopes, definition) = match security {
+        RichRouteSecurity::None => return Ok(json!([])),
+        RichRouteSecurity::Unavailable => return Err("Unavailable route security".into()),
+        RichRouteSecurity::SessionFromHeader(inner) => (
+            format!(
+                "golem-session-header-{}",
+                URL_SAFE_NO_PAD.encode(inner.header_name.to_ascii_lowercase())
+            ),
+            vec![],
+            json!({"type":"apiKey", "in":"header", "name":inner.header_name.to_ascii_lowercase()}),
+        ),
+        RichRouteSecurity::SecurityScheme(inner) => {
+            let details = &inner.security_scheme;
+            let issuer_url = details
+                .provider_type
+                .issuer_url()
+                .map_err(|_| "Invalid OpenID issuer")?;
+            (
+                details.name.0.clone(),
+                details
+                    .scopes
+                    .iter()
+                    .map(|scope| scope.to_string())
+                    .collect::<Vec<_>>(),
+                json!({
+                    "type":"openIdConnect",
+                    "openIdConnectUrl":format!("{}/.well-known/openid-configuration", issuer_url.url().as_str().trim_end_matches('/')),
+                    "description":format!("OpenID Connect provider for {}", details.name),
+                }),
+            )
+        }
+    };
+    if let Some(previous) = schemes.get(&name) {
+        if previous != &definition {
+            return Err("Conflicting route security definitions".into());
+        }
     } else {
-        None
+        schemes.insert(name.clone(), definition);
     }
-}
-
-fn collect_security_scheme(route: &RichCompiledRoute, schemes: &mut Map<String, Value>) {
-    if let RichRouteSecurity::SecurityScheme(inner) = &route.security {
-        let details = &inner.security_scheme;
-        let issuer_url = match details.provider_type.issuer_url() {
-            Ok(url) => url,
-            Err(_) => return,
-        };
-        let openid_config_url = format!("{}/.well-known/openid-configuration", issuer_url.url());
-        let scheme = json!({
-            "type": "openIdConnect",
-            "openIdConnectUrl": openid_config_url,
-            "description": format!("OpenID Connect provider for {}", details.name),
-        });
-        schemes.insert(details.name.0.clone(), scheme);
-    }
+    Ok(json!([{name:scopes}]))
 }
 
 fn path_parameter(name: &str, schema: Value) -> Value {
@@ -468,11 +522,22 @@ fn set_schema_description(schema: &mut Value, description: &str) {
     }
 }
 
-fn render_full_path(path_segments: &[PathSegment]) -> String {
+pub(super) fn render_full_path(path_segments: &[PathSegment]) -> String {
     let suffix = path_segments
         .iter()
         .map(|ps| match ps {
-            PathSegment::Literal { value } => value.clone(),
+            PathSegment::Literal { value } => {
+                let mut result = String::new();
+                for byte in value.bytes() {
+                    if byte.is_ascii_alphanumeric() || b"-._~!$&'()+,;=:@".contains(&byte) {
+                        result.push(byte as char);
+                    } else {
+                        use std::fmt::Write;
+                        write!(result, "%{byte:02X}").unwrap();
+                    }
+                }
+                result
+            }
             PathSegment::Variable { display_name } => format!("{{{display_name}}}"),
             // Note: same rendering as Variable on purpose. The difference is
             // only communicated through the parameter type in OpenAPI.
@@ -495,17 +560,31 @@ fn template_segment(segment: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn insert_operation(path_item: &mut Map<String, Value>, method: &str, operation: Value) {
+pub(super) fn insert_operation(
+    path_item: &mut Map<String, Value>,
+    method: &str,
+    operation: Value,
+) -> Result<(), String> {
     let key = match method {
-        "GET" => "get",
-        "POST" => "post",
-        "PUT" => "put",
-        "DELETE" => "delete",
-        "PATCH" => "patch",
-        "OPTIONS" => "options",
-        "HEAD" => "head",
-        "TRACE" => "trace",
-        _ => return,
+        "GET" | "get" => "get",
+        "POST" | "post" => "post",
+        "PUT" | "put" => "put",
+        "DELETE" | "delete" => "delete",
+        "PATCH" | "patch" => "patch",
+        "OPTIONS" | "options" => "options",
+        "HEAD" | "head" => "head",
+        "TRACE" | "trace" => "trace",
+        _ => return Ok(()),
     };
+    if path_item.contains_key(key)
+        && !(path_item
+            .get("x-golem-route-mode")
+            .is_some_and(|mode| mode == "durable-streams")
+            && path_item[key]["x-golem-route-mode"] != "rest"
+            && operation["x-golem-route-mode"] == "rest")
+    {
+        return Err("Duplicate generated operation".into());
+    }
     path_item.insert(key.to_string(), operation);
+    Ok(())
 }

@@ -127,6 +127,8 @@ lazy val model = crossProject(JVMPlatform, JSPlatform)
     )
   )
   .jvmSettings(
+    Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
+      "golem-service-base" / "tests" / "fixtures" / "http-handlers",
     Compile / unmanagedSourceDirectories ++= Seq(
       (ThisBuild / baseDirectory).value / "model" / ".jvm" / "src" / "main" / "scala"
     ),
@@ -193,6 +195,8 @@ lazy val codegen = project
     // Scala 3. This is a build-tool implementation constraint, not SDK support
     // for Scala 2 applications.
     crossScalaVersions := Seq(Scala212, Scala3Golem),
+    Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
+      "golem-service-base" / "tests" / "fixtures" / "http-handlers",
     libraryDependencies ++= Seq(
       "org.scalameta" %% "scalameta" % scalametaVersion,
       "com.lihaoyi"   %% "ujson"     % ujsonVersion,

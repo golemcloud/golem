@@ -782,6 +782,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test integration ':tag:group10&db_postgres' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test http-handler-lifecycle -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group11]

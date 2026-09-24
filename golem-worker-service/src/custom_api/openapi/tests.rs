@@ -21,7 +21,6 @@ use golem_common::base_model::agent::{BinaryType, TextType};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::metadata::{MetadataEnvelope, TypeId};
 use golem_common::schema::schema_type::{
@@ -271,10 +270,10 @@ fn call_agent_route(
         account_id: AccountId::new(),
         account_email: AccountEmail::new("test@golem.cloud"),
         environment_id: EnvironmentId::new(),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 0,
-        method,
+        route_match: test_route_match(method),
         path,
-        body,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
             route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
             base_path_variables: 0,
@@ -293,6 +292,7 @@ fn call_agent_route(
                 graph: SchemaGraph::empty(),
                 input_schema: InputSchema::Parameters(vec![]),
             },
+            body,
             method_parameters,
             expected_agent_response: response,
             method_description,
@@ -307,16 +307,17 @@ fn call_agent_route(
 
 /// Build the OpenAPI document for a set of routes (panics on error).
 fn spec_for(routes: Vec<RichCompiledRoute>) -> Value {
-    HttpApiOpenApiSpec::from_routes(&routes, &Domain("example.com".to_string()))
+    HttpApiOpenApiSpec::from_routes(&routes.iter().collect::<Vec<_>>(), "https://example.com")
         .expect("spec generation succeeds")
-        .0
 }
 
 #[test]
-async fn durable_stream_cors_exposes_producer_outcomes_only_for_stream_routes() {
+fn durable_stream_cors_exposes_producer_outcomes_only_for_stream_routes() {
+    use crate::custom_api::RichRequest;
     use crate::custom_api::cors::apply_cors_outgoing_middleware;
     use crate::custom_api::route_resolver::ResolvedRouteEntry;
-    use crate::custom_api::{ResponseBody, RichRequest, RouteExecutionResult};
+    use golem_common::model::agent::http_files::HttpRequestTarget;
+    use golem_common::model::domain_registration::Domain;
     use golem_service_base::custom_api::{AgentRouteMode, OriginPattern};
     for mode in [AgentRouteMode::Rest, AgentRouteMode::DurableStreams] {
         for origin in ["https://allowed.example", "https://blocked.example"] {
@@ -335,33 +336,34 @@ async fn durable_stream_cors_exposes_producer_outcomes_only_for_stream_routes() 
             route.cors.allowed_patterns = vec![OriginPattern("https://allowed.example".into())];
             let resolved = ResolvedRouteEntry {
                 domain: Domain("example.com".into()),
+                public_scheme: "https".into(),
+                public_authority: "example.com".into(),
                 route: std::sync::Arc::new(route),
                 captured_path_parameters: vec![],
-                openapi_spec: None,
+                request_target: HttpRequestTarget::parse("/").unwrap(),
+                openapi_inputs: None,
             };
             let request = RichRequest::new(
                 poem::Request::builder()
                     .header("Origin", origin)
                     .body(poem::Body::empty()),
             );
-            let mut result = RouteExecutionResult {
-                status: http::StatusCode::CONFLICT,
-                headers: Default::default(),
-                body: ResponseBody::NoBody,
-            };
-            apply_cors_outgoing_middleware(&mut result, &request, &resolved)
-                .await
-                .unwrap();
+            let mut result = poem::Response::builder()
+                .status(http::StatusCode::CONFLICT)
+                .finish();
+            apply_cors_outgoing_middleware(&mut result, &request, &resolved).unwrap();
             assert_eq!(
                 result
-                    .headers
+                    .headers()
                     .contains_key(&http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
                 origin == "https://allowed.example"
             );
-            assert_eq!(result.headers.get(&http::header::VARY).unwrap(), "Origin");
+            assert_eq!(result.headers().get(&http::header::VARY).unwrap(), "Origin");
             if mode == AgentRouteMode::DurableStreams {
-                let exposed: std::collections::BTreeSet<_> = result.headers
+                let exposed: std::collections::BTreeSet<_> = result.headers()
                     [&http::header::ACCESS_CONTROL_EXPOSE_HEADERS]
+                    .to_str()
+                    .unwrap()
                     .split(", ")
                     .collect();
                 for name in [
@@ -380,7 +382,7 @@ async fn durable_stream_cors_exposes_producer_outcomes_only_for_stream_routes() 
             } else {
                 assert!(
                     !result
-                        .headers
+                        .headers()
                         .contains_key(&http::header::ACCESS_CONTROL_EXPOSE_HEADERS)
                 );
             }
@@ -648,7 +650,7 @@ fn durable_stream_operations_have_concrete_typed_slots() {
             Method::POST,
         ] {
             let mut generated = make_route();
-            generated.method = method;
+            generated.route_match = test_route_match(method);
             generated.path.extend(suffix.iter().map(|part| {
                 if ["session", "slot", "fork"].contains(part) {
                     PathSegment::Variable {
@@ -1108,6 +1110,12 @@ fn durable_stream_concrete_slot_yields_to_explicit_rest_route() {
             unit_response(),
             Some("Explicit REST route".into()),
         );
+        let duplicate_routes = [&stream, &rest, &rest];
+        assert!(
+            HttpApiOpenApiSpec::from_routes(&duplicate_routes, "https://api.example.com")
+                .unwrap_err()
+                .contains("Duplicate generated operation")
+        );
         let mut routes = vec![stream, rest];
         if reverse {
             routes.reverse();
@@ -1157,10 +1165,188 @@ fn document_is_openapi_3_1_with_servers() {
         spec["info"]["title"],
         json!("Managed api provided by Golem")
     );
-    assert_eq!(spec["servers"][0]["url"], json!("https://example.com"));
-    assert_eq!(spec["servers"][1]["url"], json!("http://example.com"));
+    assert_eq!(spec["servers"], json!([{"url":"https://example.com"}]));
     // No named types in these routes → components has no schemas.
     assert!(spec["components"].get("schemas").is_none());
+}
+
+#[test]
+fn multiple_rest_bindings_omit_generated_operation_ids_and_preserve_trailing_slashes() {
+    let route = || {
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "item".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        )
+    };
+    let plain = route();
+    let mut slash = route();
+    let golem_service_base::custom_api::RouteMatch::Method { trailing_slash, .. } =
+        &mut slash.route_match
+    else {
+        unreachable!()
+    };
+    *trailing_slash = true;
+    let spec = spec_for(vec![plain, slash]);
+    for path in ["/item", "/item/"] {
+        assert!(spec["paths"][path]["get"].is_object());
+        assert!(spec["paths"][path]["get"].get("operationId").is_none());
+        assert_eq!(spec["paths"][path]["get"]["security"], json!([]));
+    }
+}
+
+#[test]
+fn generated_security_never_treats_protected_routes_as_public() {
+    let route = || {
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "item".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        )
+    };
+    let mut protected = route();
+    protected.security = RichRouteSecurity::SessionFromHeader(
+        golem_service_base::custom_api::SessionFromHeaderRouteSecurity {
+            header_name: "X-Session".into(),
+        },
+    );
+    let mut other = route();
+    other.path = vec![PathSegment::Literal {
+        value: "other".into(),
+    }];
+    other.security = RichRouteSecurity::SessionFromHeader(
+        golem_service_base::custom_api::SessionFromHeaderRouteSecurity {
+            header_name: "x-session".into(),
+        },
+    );
+    let spec = spec_for(vec![protected, other]);
+    assert_eq!(
+        spec["paths"]["/item"]["get"]["security"],
+        json!([{"golem-session-header-eC1zZXNzaW9u":[]}])
+    );
+    assert_eq!(
+        spec["components"]["securitySchemes"]["golem-session-header-eC1zZXNzaW9u"],
+        json!({"type":"apiKey","in":"header","name":"x-session"})
+    );
+    let mut unavailable = route();
+    unavailable.security = RichRouteSecurity::Unavailable;
+    assert!(HttpApiOpenApiSpec::from_routes(&[&unavailable], "https://example.com").is_err());
+}
+
+#[test]
+fn generated_session_security_encodes_header_punctuation_in_component_keys() {
+    let mut route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "item".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    route.security = RichRouteSecurity::SessionFromHeader(
+        golem_service_base::custom_api::SessionFromHeaderRouteSecurity {
+            header_name: "X-Session+Id".into(),
+        },
+    );
+
+    let spec = spec_for(vec![route]);
+    assert_eq!(
+        spec["paths"]["/item"]["get"]["security"],
+        json!([{"golem-session-header-eC1zZXNzaW9uK2lk":[]}])
+    );
+    assert_eq!(
+        spec["components"]["securitySchemes"]["golem-session-header-eC1zZXNzaW9uK2lk"]["name"],
+        "x-session+id"
+    );
+    assert!(super::provider_document::parse("generated", &spec.to_string()).is_ok());
+}
+
+#[test]
+fn generated_duplicate_operations_fail_before_overwriting() {
+    let route = || {
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "item".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        )
+    };
+    assert!(HttpApiOpenApiSpec::from_routes(&[&route(), &route()], "https://example.com").is_err());
+}
+
+#[test]
+fn generated_literal_paths_do_not_turn_encoded_braces_into_templates() {
+    let route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "{literal}%".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let spec = spec_for(vec![route]);
+    assert!(spec["paths"].get("/%7Bliteral%7D%25").is_some());
+}
+
+#[test]
+fn generated_paths_preserve_safe_literal_punctuation() {
+    let route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "@me:a,b+c!".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let spec = spec_for(vec![route]);
+    assert!(spec["paths"].get("/@me:a,b+c!").is_some());
+}
+
+#[test]
+fn distinct_single_binding_methods_with_colliding_ids_fail_instead_of_losing_ids() {
+    let route = |path: &str, agent_type: &str, method_name: &str| {
+        let mut route = call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal { value: path.into() }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(inner) = &mut route.behavior else {
+            unreachable!()
+        };
+        inner.agent_type = agent_type_name(agent_type);
+        inner.method_name = method_name.into();
+        route
+    };
+    assert!(
+        HttpApiOpenApiSpec::from_routes(
+            &[&route("one", "a-b", "c"), &route("two", "a", "b-c")],
+            "https://example.com"
+        )
+        .is_err()
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -1737,22 +1923,39 @@ fn call_agent_operation_has_id_and_description() {
 fn raw_route(
     method: Method,
     path: Vec<PathSegment>,
-    body: RequestBodySchema,
     behavior: RichRouteBehaviour,
 ) -> RichCompiledRoute {
     RichCompiledRoute {
         account_id: AccountId::new(),
         account_email: AccountEmail::new("test@golem.cloud"),
         environment_id: EnvironmentId::new(),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 0,
-        method,
+        route_match: test_route_match(method),
         path,
-        body,
         behavior,
         security: RichRouteSecurity::None,
         cors: CorsOptions {
             allowed_patterns: vec![],
         },
+    }
+}
+
+fn test_route_match(method: Method) -> golem_service_base::custom_api::RouteMatch {
+    use golem_common::model::Empty;
+    use golem_common::model::agent::HttpMethod;
+    match method {
+        Method::GET => HttpMethod::Get(Empty {}).into(),
+        Method::POST => HttpMethod::Post(Empty {}).into(),
+        Method::PUT => HttpMethod::Put(Empty {}).into(),
+        Method::DELETE => HttpMethod::Delete(Empty {}).into(),
+        Method::PATCH => HttpMethod::Patch(Empty {}).into(),
+        Method::HEAD => HttpMethod::Head(Empty {}).into(),
+        Method::OPTIONS => HttpMethod::Options(Empty {}).into(),
+        other => HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
+            value: other.to_string(),
+        })
+        .into(),
     }
 }
 
@@ -1769,7 +1972,6 @@ fn webhook_route_emits_204_404_and_promise_id_param() {
                     display_name: "promise-id".to_string(),
                 },
             ],
-            unrestricted_binary(),
             RichRouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                 component_id: ComponentId::new(),
             }),
@@ -1779,6 +1981,21 @@ fn webhook_route_emits_204_404_and_promise_id_param() {
     );
     assert!(op["responses"]["204"].is_object());
     assert!(op["responses"]["404"].is_object());
+    assert_eq!(
+        op["requestBody"],
+        json!({
+            "description": "Unrestricted binary body",
+            "required": true,
+            "content": {
+                "*/*": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary"
+                    }
+                }
+            }
+        })
+    );
     let params = op["parameters"].as_array().expect("parameters");
     let promise = params
         .iter()
@@ -1798,9 +2015,9 @@ fn openapi_spec_route_returns_object_with_additional_properties() {
             vec![PathSegment::Literal {
                 value: "openapi.json".to_string(),
             }],
-            RequestBodySchema::Unused,
             RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format: OpenApiSpecFormat::Json,
+                scheme: Default::default(),
             }),
         ),
         "/openapi.json",
@@ -1999,7 +2216,6 @@ fn cors_preflight_emits_204_and_cors_headers() {
             vec![PathSegment::Literal {
                 value: "cors".to_string(),
             }],
-            RequestBodySchema::Unused,
             RichRouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
                 method_policies: vec![CorsPreflightMethodPolicy {
                     method: HttpMethod::Get(Empty {}),

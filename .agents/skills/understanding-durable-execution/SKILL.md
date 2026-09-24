@@ -13,7 +13,8 @@ and guide disagree, the code wins and the guide needs a fix. The scoped `AGENTS.
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong
 model), `streams.md` (durable streams and streaming invocations), `tools.md` (tool invocations
-and entity bodies) and `retries.md` (in-function versus trap-based retries).
+and entity bodies), `retries.md` (in-function versus trap-based retries), and
+`filesystem-inspection.md` (exact-path live reads, shared scheduling and generation-pinned production).
 
 ## Three axioms
 
@@ -606,6 +607,13 @@ so handles issued by the discarded generation cannot control the rebuilt streams
 are built in hidden staged oplogs and published atomically; matching retries trust the immutable
 target receipt while that target remains live. Do not model staging by adding provenance to stream
 records.
+
+The primary remains `ExecutionStatus::Running` after the guest returns while owned output
+streams drain and invocation/session completion runs. `materialize_streaming_result`
+(`worker/invocation.rs`) publishes the early result and preserves typed traps during production
+and settlement. Suspension belongs to the outer live invocation or replay boundary, not the
+guest-result boundary; interruption must still reach a producer that no longer writes to its
+stream. Snapshot calls retain their own settled suspension boundary.
 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.

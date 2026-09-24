@@ -17,13 +17,30 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::diff;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
-use crate::{declare_revision, declare_structs, declare_unions, newtype_uuid};
+use crate::{declare_enums, declare_revision, declare_structs, declare_unions, newtype_uuid};
 use chrono::DateTime;
 use std::collections::BTreeMap;
 
 newtype_uuid!(HttpApiDeploymentId);
 
 declare_revision!(HttpApiDeploymentRevision);
+
+declare_enums! {
+    #[derive(Default)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub enum HttpApiDeploymentScheme {
+        Http,
+        #[default]
+        Https,
+    }
+}
+
+impl HttpApiDeploymentScheme {
+    pub fn origin(self, domain: &Domain) -> String {
+        format!("{self}://{domain}")
+    }
+}
 
 declare_unions! {
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -62,6 +79,10 @@ declare_structs! {
 
     pub struct HttpApiDeploymentCreation {
         pub domain: Domain,
+        /// Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub scheme: HttpApiDeploymentScheme,
         pub webhooks_prefix: String,
         pub openapi_endpoint_prefix: String,
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>
@@ -69,6 +90,7 @@ declare_structs! {
 
     pub struct HttpApiDeploymentUpdate {
         pub current_revision: HttpApiDeploymentRevision,
+        pub scheme: Option<HttpApiDeploymentScheme>,
         pub webhook_prefix: Option<String>,
         pub openapi_endpoint_prefix: Option<String>,
         pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
@@ -79,6 +101,7 @@ declare_structs! {
         pub revision: HttpApiDeploymentRevision,
         pub environment_id: EnvironmentId,
         pub domain: Domain,
+        pub scheme: HttpApiDeploymentScheme,
         pub hash: diff::Hash,
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         pub webhooks_prefix: String,
@@ -119,8 +142,32 @@ impl HttpApiDeploymentCreation {
 
 #[cfg(test)]
 mod tests {
-    use super::HttpApiDeploymentCreation;
+    use super::{Domain, HttpApiDeploymentCreation, HttpApiDeploymentScheme};
     use test_r::test;
+
+    #[test]
+    fn http_api_deployment_scheme_defaults_and_validates() {
+        let mut json = serde_json::json!({
+            "domain": "example.com:8443", "webhooksPrefix": "/webhooks/",
+            "openapiEndpointPrefix": "/docs/", "agents": {}
+        });
+        let default: HttpApiDeploymentCreation = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(default.scheme, HttpApiDeploymentScheme::Https);
+        assert_eq!(
+            default.scheme.origin(&default.domain),
+            "https://example.com:8443"
+        );
+        json["scheme"] = "http".into();
+        let http: HttpApiDeploymentCreation = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            http.scheme.origin(&Domain("localhost:9006".into())),
+            "http://localhost:9006"
+        );
+        for invalid in ["ftp", "HTTP", "http://example.com"] {
+            json["scheme"] = invalid.into();
+            assert!(serde_json::from_value::<HttpApiDeploymentCreation>(json.clone()).is_err());
+        }
+    }
 
     #[test]
     fn normalize_openapi_endpoint_treats_root_variants_as_root_prefix() {

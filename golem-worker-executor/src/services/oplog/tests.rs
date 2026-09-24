@@ -1028,6 +1028,21 @@ impl BlobStorage for ReadCountingBlobStorage {
             .await
     }
 
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<golem_service_base::storage::blob::BlobRangeStream>, anyhow::Error> {
+        self.count_read();
+        self.inner
+            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+            .await
+    }
+
     async fn get_metadata(
         &self,
         target_label: &'static str,

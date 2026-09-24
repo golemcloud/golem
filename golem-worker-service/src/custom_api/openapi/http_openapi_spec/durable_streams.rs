@@ -18,6 +18,7 @@ pub(super) fn emit(
     schema: &RouteSchema,
     graph: &SchemaGraph,
     components: &mut Map<String, Value>,
+    security_schemes: &mut Map<String, Value>,
     paths: &mut BTreeMap<String, Map<String, Value>>,
 ) -> Result<(), String> {
     let RichRouteBehaviour::CallAgent(behaviour) = &route.behavior else {
@@ -99,9 +100,7 @@ pub(super) fn emit(
                 .trim()
             );
         }
-        if let Some(security) = build_security(route) {
-            op["security"] = security;
-        }
+        op["security"] = build_security(&route.security, security_schemes)?;
         if let Some(body) = body {
             op["requestBody"] = body;
         }
@@ -113,10 +112,7 @@ pub(super) fn emit(
                 "element-schema-ref": format!("#/components/schemas/{}", slot_component(&base, &slot.name)),
             }));
         }
-        if item.insert(method.into(), op).is_some() {
-            return Err(format!("duplicate OpenAPI operation {method} {path}"));
-        }
-        Ok(())
+        insert_operation(item, method, op)
     };
 
     let mut create_responses = responses(

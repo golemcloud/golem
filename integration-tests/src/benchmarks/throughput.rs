@@ -611,6 +611,7 @@ impl ThroughputBenchmark {
 
         async {
             let http_api_deployment_creation = HttpApiDeploymentCreation {
+                scheme: Default::default(),
                 domain: domain.clone(),
                 webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
                 openapi_endpoint_prefix: HttpApiDeploymentCreation::default_openapi_endpoint_prefix(

@@ -26,6 +26,8 @@ object AgentNameMacro {
     import quotes.reflect.*
     val sym = TypeRepr.of[T].typeSymbol
 
+    if (HttpDeclarationMacro.isRouter(sym)) return Expr(HttpDeclarationMacro.string(sym, "typeName", 0))
+
     def defaultTypeNameFromTrait(sym: Symbol): String =
       sym.name
 

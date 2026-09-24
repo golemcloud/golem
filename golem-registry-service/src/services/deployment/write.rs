@@ -15,6 +15,7 @@
 use super::DeployValidationError;
 use super::authorize_environment_permission;
 use super::deployment_context::DeploymentContext;
+use super::router_file_index::prepare_router_file_indexes;
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreationRecord};
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
@@ -72,6 +73,8 @@ pub enum DeploymentWriteError {
     EnvironmentNotYetDeployed,
     #[error("Concurrent deployment attempt")]
     ConcurrentDeployment,
+    #[error("Duplicate router initial-file target path")]
+    DuplicateRouterFileTarget,
     #[error("Requested deployment would not have any changes compared to current deployment")]
     NoOpDeployment,
     #[error("Provided deployment version {version} already exists in this environment")]
@@ -114,6 +117,7 @@ impl SafeDisplay for DeploymentWriteError {
             Self::DeploymentHashMismatch { .. } => self.to_string(),
             Self::DeploymentValidationFailed(_) => self.to_string(),
             Self::ConcurrentDeployment => self.to_string(),
+            Self::DuplicateRouterFileTarget => self.to_string(),
             Self::VersionAlreadyExists { .. } => self.to_string(),
             Self::NoOpDeployment => self.to_string(),
             Self::ToolReleaseImmutableConflict => self.to_string(),
@@ -412,14 +416,11 @@ impl DeploymentWriteService {
             errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }
 
-        let compiled_routes =
-            deployment_context.compile_http_api_routes(&mut errors, &mut warnings);
-
         let security_schemes_list = self
             .security_scheme_service
             .get_security_schemes_in_environment(environment_id, &AuthCtx::System)
             .await
-            .unwrap_or_default();
+            .map_err(anyhow::Error::new)?;
 
         let security_schemes_map: HashMap<
             SecuritySchemeName,
@@ -440,6 +441,11 @@ impl DeploymentWriteService {
             })
             .collect();
 
+        let mut compiled_routes = deployment_context.compile_http_api_routes(
+            &security_schemes_map,
+            &mut errors,
+            &mut warnings,
+        );
         for (index, import, _) in &mcp_imports {
             if let Some(security_scheme) = &import.security_scheme
                 && !security_schemes_map.contains_key(security_scheme)
@@ -725,6 +731,7 @@ impl DeploymentWriteService {
             return Err(DeploymentWriteError::NoOpDeployment);
         }
 
+        prepare_router_file_indexes(&deployment_context, &mut compiled_routes)?;
         warnings.extend(
             self.mcp_import_resolver
                 .deployment_warnings(
