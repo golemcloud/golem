@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 async-trait = "0.1.87"
+blake3 = "1.8.2"
 ctor = "0.4.0"
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 serde = { version = "1", features = ["derive"] }

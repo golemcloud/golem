@@ -24,6 +24,10 @@
       "import": "./dist/reflection.mjs",
       "types": "./dist/reflection.d.mts"
     },
+    "./http-router": {
+      "import": "./dist/http-router.mjs",
+      "types": "./dist/http-router.d.mts"
+    },
     "./middleware": {
       "import": "./dist/middleware.mjs",
       "types": "./dist/middleware.d.mts"
@@ -40,6 +44,9 @@
       "golem:agent/host@2.0.0": [
         "types/golem_agent_2_0_0_host.d.ts"
       ],
+      "golem:agent/durable-streams@2.0.0": [
+        "types/golem_agent_2_0_0_durable_streams.d.ts"
+      ],
       "golem:core/types@2.0.0": [
         "types/golem_core_2_0_0_types.d.ts"
       ],
@@ -55,6 +62,7 @@
     "lint:fix": "eslint . --ext .ts,.tsx,.mjs --fix",
     "generate-dts": "node ./scripts/generate-dts.mjs",
     "build": "pnpm run generate-dts && rollup --failAfterWarnings -c",
+    "build:http-router": "pnpm run generate-dts && rollup --failAfterWarnings -c --configHttpRouter",
     "clean": "node ./scripts/clean.mjs",
     "clean-test-data": "node ../../scripts/clean-test-data.mjs",
     "test": "pnpm run typecheck && pnpm run clean-test-data && vitest run",

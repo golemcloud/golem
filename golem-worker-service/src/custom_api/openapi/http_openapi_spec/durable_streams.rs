@@ -18,6 +18,7 @@ pub(super) fn emit(
     schema: &RouteSchema,
     graph: &SchemaGraph,
     components: &mut Map<String, Value>,
+    security_schemes: &mut Map<String, Value>,
     paths: &mut BTreeMap<String, Map<String, Value>>,
 ) -> Result<(), String> {
     let RichRouteBehaviour::CallAgent(behaviour) = &route.behavior else {
@@ -99,9 +100,7 @@ pub(super) fn emit(
                 .trim()
             );
         }
-        if let Some(security) = build_security(route) {
-            op["security"] = security;
-        }
+        op["security"] = build_security(&route.security, security_schemes)?;
         if let Some(body) = body {
             op["requestBody"] = body;
         }
@@ -113,10 +112,7 @@ pub(super) fn emit(
                 "element-schema-ref": format!("#/components/schemas/{}", slot_component(&base, &slot.name)),
             }));
         }
-        if item.insert(method.into(), op).is_some() {
-            return Err(format!("duplicate OpenAPI operation {method} {path}"));
-        }
-        Ok(())
+        insert_operation(item, method, op)
     };
 
     let mut create_responses = responses(
@@ -132,17 +128,20 @@ pub(super) fn emit(
         create_responses[code]["headers"] =
             json!({"Location": header("Created session URL", string_schema())});
     }
+    let mut create_parameters = creation_parameters.clone();
+    create_parameters.extend(expiry_parameters());
     operation(
         &base,
         "put",
         "create-session",
-        creation_parameters.clone(),
+        create_parameters,
         creation_body.clone(),
         create_responses,
         None,
     )?;
     let mut parameters = creation_parameters.clone();
     parameters.push(path_parameter(&session_name, reference(SESSION)));
+    parameters.extend(expiry_parameters());
     operation(
         &session_path,
         "put",
@@ -169,6 +168,9 @@ pub(super) fn emit(
             false,
         );
         r["200"]["headers"] = json!({"Stream-Closed": header("All slots closed or deleted", json!({"type":"boolean"})), "Cache-Control": header("Session metadata is not cached", string_schema())});
+        if method == "head" {
+            add_expiry_response_headers(&mut r["200"]["headers"]);
+        }
         if method == "get" {
             r["200"]["content"] = json!({"application/json":{"schema":reference(MANIFEST)}});
         }
@@ -215,6 +217,9 @@ pub(super) fn emit(
     for method in ["get", "head"] {
         let mut r = responses(&[("200", "Fork manifest and immutable fork point")], false);
         r["200"]["headers"] = json!({"Stream-Closed": header("All slots closed or deleted", json!({"type":"boolean"})), "Cache-Control": header("Session metadata is not cached", string_schema())});
+        if method == "head" {
+            add_expiry_response_headers(&mut r["200"]["headers"]);
+        }
         if method == "get" {
             r["200"]["content"] = json!({"application/json":{"schema":reference(MANIFEST)}});
         }
@@ -252,6 +257,7 @@ pub(super) fn emit(
             json!({"type":"array", "items": element})
         };
         let mut parameters = session_parameters.clone();
+        parameters.extend(expiry_parameters());
         if url_bound {
             parameters.extend(
                 creation_parameters
@@ -273,7 +279,7 @@ pub(super) fn emit(
             false,
         );
         for code in ["201", "200"] {
-            r[code]["headers"] = metadata_headers(false);
+            r[code]["headers"] = metadata_headers(false, true);
         }
         operation(
             &path,
@@ -288,7 +294,7 @@ pub(super) fn emit(
             &[("200", "Stream metadata"), ("410", "Slot deleted")],
             false,
         );
-        r["200"]["headers"] = metadata_headers(false);
+        r["200"]["headers"] = metadata_headers(false, true);
         for (path, parameters) in [(&path, &session_parameters), (&fork_path, &fork_parameters)] {
             operation(
                 path,
@@ -329,7 +335,7 @@ pub(super) fn emit(
         );
         r["200"]["content"] = json!({media: {"schema":data_schema}, "text/event-stream":{"schema":{"type":"string"}}});
         for code in ["200", "204", "304"] {
-            r[code]["headers"] = metadata_headers(true);
+            r[code]["headers"] = metadata_headers(true, false);
         }
         for path in [&path, &fork_path] {
             let mut parameters = parameters.clone();
@@ -365,6 +371,7 @@ pub(super) fn emit(
         }
         if slot.writable {
             let mut parameters = session_parameters.clone();
+            parameters.extend(expiry_parameters());
             if url_bound {
                 parameters.extend(creation_parameters.iter().filter(|p| p["in"] != "path").cloned().map(|mut p| {
                     p["required"] = json!(false);
@@ -460,6 +467,7 @@ pub(super) fn emit(
             }
         }
         let mut create_fork_parameters = fork_parameters.clone();
+        create_fork_parameters.extend(expiry_parameters());
         create_fork_parameters.extend([
             header_parameter("Stream-Forked-From", true, string_schema()),
             header_parameter("Stream-Fork-Offset", false, reference(OFFSET)),
@@ -489,7 +497,7 @@ pub(super) fn emit(
             false,
         );
         for code in ["201", "200"] {
-            fork_responses[code]["headers"] = metadata_headers(false);
+            fork_responses[code]["headers"] = metadata_headers(false, true);
             fork_responses[code]["headers"]["Location"] = header("Fork slot URL", string_schema());
         }
         fork_responses["429"]["headers"]["Retry-After"] =
@@ -522,7 +530,7 @@ fn header(description: &str, schema: Value) -> Value {
     json!({"description":description,"schema":schema})
 }
 
-fn metadata_headers(read: bool) -> Value {
+fn metadata_headers(read: bool, expiry: bool) -> Value {
     let mut headers = json!({
         "Stream-Next-Offset": header("Next read cursor", reference(OFFSET)),
         "Stream-Closed": header("Terminal state; on reads true only at EOF", json!({"type":"boolean"})),
@@ -531,6 +539,9 @@ fn metadata_headers(read: bool) -> Value {
         "Cache-Control": header("Caching policy", string_schema()),
         "ETag": header("Stream entity tag", string_schema()),
     });
+    if expiry {
+        add_expiry_response_headers(&mut headers);
+    }
     if read {
         headers["Stream-Cursor"] = header(
             "Long-poll collapsing cursor; SSE carries streamCursor in control events instead",
@@ -544,9 +555,35 @@ fn metadata_headers(read: bool) -> Value {
     headers
 }
 
+fn expiry_parameters() -> [Value; 2] {
+    [
+        header_parameter(
+            "Stream-TTL",
+            false,
+            json!({"type":"string","pattern":"^(0|[1-9][0-9]*)$","description":"Sliding idle timeout in whole seconds. Mutually exclusive with Stream-Expires-At."}),
+        ),
+        header_parameter(
+            "Stream-Expires-At",
+            false,
+            json!({"type":"string","format":"date-time","description":"Future absolute session expiry. Mutually exclusive with Stream-TTL."}),
+        ),
+    ]
+}
+
+fn add_expiry_response_headers(headers: &mut Value) {
+    headers["Stream-TTL"] = header(
+        "Configured sliding idle timeout in whole seconds",
+        json!({"type":"string","pattern":"^(0|[1-9][0-9]*)$"}),
+    );
+    headers["Stream-Expires-At"] = header(
+        "Configured absolute session expiry",
+        json!({"type":"string","format":"date-time"}),
+    );
+}
+
 fn responses(entries: &[(&str, &str)], problem: bool) -> Value {
     let mut result = json!({
-        "400":{"description":"Invalid request or unsupported TTL/expiry header"},
+        "400":{"description":"Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"},
         "404":{"description":"Session or slot not found"},
         "503":{"description":"Executor unavailable or live-reader limit exceeded","headers":{"Retry-After":header("Retry delay in seconds", string_schema())}},
     });

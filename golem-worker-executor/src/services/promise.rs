@@ -19,7 +19,9 @@ use crate::services::golem_config;
 use crate::services::oplog;
 use crate::services::worker;
 use crate::services::worker_activator::WorkerActivator;
-use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
+use crate::services::{
+    HasComponentService, HasConfig, HasOplogService, HasWorkerService, UsesAllDeps,
+};
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
@@ -580,7 +582,13 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
 
         // Check if worker is active first, otherwise fall back to stored metadata
         let metadata = if let Some(worker) = self.active_agents.try_get(&owned_agent_id).await {
-            worker.get_latest_worker_metadata().await
+            crate::worker::Worker::get_latest_metadata(worker.all(), &owned_agent_id)
+                .await?
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "worker disappeared while activating worker for promise",
+                    )
+                })?
         } else if let Some(worker::GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,

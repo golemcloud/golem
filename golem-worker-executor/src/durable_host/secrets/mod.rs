@@ -52,7 +52,7 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::durable_host::schema_value_stream::CoreTypesHost;
 
-fn secret_entry<'a, Ctx: WorkerCtx>(
+pub(super) fn secret_entry<'a, Ctx: WorkerCtx>(
     ctx: &'a mut DurableWorkerCtx<Ctx>,
     secret: &Resource<SecretHandleRep>,
 ) -> anyhow::Result<&'a SecretEntry> {
@@ -123,7 +123,7 @@ fn validate_expected_type(
     }
 }
 
-fn validate_secret_value(
+pub(super) fn validate_secret_value(
     secret: &AgentSecret,
     value: &SchemaValue,
 ) -> Result<(), SecretRevealError> {
@@ -133,7 +133,7 @@ fn validate_secret_value(
         .map_err(|_| SecretRevealError::Internal("stored secret value is invalid".to_string()))
 }
 
-fn canonical_config_key(
+pub(super) fn canonical_config_key(
     entry: &SecretEntry,
 ) -> Result<CanonicalAgentSecretPath, SecretRevealError> {
     entry
@@ -167,11 +167,13 @@ fn canonical_secret_resource_segments(
     Ok(segments.join("."))
 }
 
-fn canonical_secret_resource(entry: &SecretEntry) -> Result<String, SecretRevealError> {
+pub(super) fn canonical_secret_resource(entry: &SecretEntry) -> Result<String, SecretRevealError> {
     canonical_secret_resource_segments(entry.config_key.as_deref())
 }
 
-fn environment_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> EnvironmentOwnerPattern {
+pub(super) fn environment_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+) -> EnvironmentOwnerPattern {
     let component = ctx.owner_component_metadata();
     EnvironmentOwnerPattern::Environment {
         account: component.account_email.clone(),
@@ -257,6 +259,42 @@ pub(crate) fn secret_hold_targets_for_value<Ctx: WorkerCtx>(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    async fn secret_reveal_denial(
+        &mut self,
+        entry: &SecretEntry,
+    ) -> Result<Option<SecretRevealError>, WorkerExecutorError> {
+        let config_key = match canonical_config_key(entry) {
+            Ok(config_key) => config_key,
+            Err(error) => return Ok(Some(error)),
+        };
+        if self.entity_invocation_scope().is_some_and(|scope| {
+            !scope
+                .activation()
+                .policy()
+                .secret_keys_revealable()
+                .contains(&config_key)
+        }) {
+            return Ok(Some(SecretRevealError::Unavailable(format!(
+                "Entity invocation is not allowed to reveal secret config key {config_key}"
+            ))));
+        }
+
+        let denied = match canonical_secret_resource(entry) {
+            Ok(resource) => {
+                match secret_target(environment_owner(self), SecretVerb::Reveal, &resource) {
+                    Ok(target) => self
+                        .authorize_live_permission(&target)
+                        .await?
+                        .err()
+                        .map(|_| permission_denied()),
+                    Err(_) => Some(permission_denied()),
+                }
+            }
+            Err(_) => Some(permission_denied()),
+        };
+        Ok(denied)
+    }
+
     pub(crate) async fn secret_holds_allowed_for_value(
         &mut self,
         value: &SchemaValue,
@@ -383,37 +421,9 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
         )
         .await?;
 
-        let (mut handle, denied, mut expected_graph) = match begun.resolve(self).await? {
+        let (mut handle, mut denied, mut expected_graph) = match begun.resolve(self).await? {
             ResolvedCall::Live(begun) => {
-                let config_key = match canonical_config_key(&entry) {
-                    Ok(config_key) => config_key,
-                    Err(error) => return Ok(Err(reveal_error_to_wit(error))),
-                };
-                if self.entity_invocation_scope().is_some_and(|scope| {
-                    !scope
-                        .activation()
-                        .policy()
-                        .secret_keys_revealable()
-                        .contains(&config_key)
-                }) {
-                    return Ok(Err(SecretError::Unavailable(format!(
-                        "Entity invocation is not allowed to reveal secret config key {config_key}"
-                    ))));
-                }
-                let denied = match canonical_secret_resource(&entry) {
-                    Ok(resource) => {
-                        match secret_target(environment_owner(self), SecretVerb::Reveal, &resource)
-                        {
-                            Ok(target) => self
-                                .authorize_live_permission(&target)
-                                .await?
-                                .err()
-                                .map(|_| permission_denied()),
-                            Err(_) => Some(permission_denied()),
-                        }
-                    }
-                    Err(_) => Some(permission_denied()),
-                };
+                let denied = self.secret_reveal_denial(&entry).await?;
                 let expected_graph = match decode_graph(&expected) {
                     Ok(graph) => graph,
                     Err(error) => {
@@ -443,6 +453,10 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Replayed(replayed) => break 'reveal replayed,
                     CallReplayOutcome::Incomplete(live) => {
                         handle = live;
+                        denied = self
+                            .secret_reveal_denial(&entry)
+                            .await
+                            .map_err(|error| handle.trap(error))?;
                         expected_graph =
                             Some(decode_graph(&expected).map_err(|error| {
                                 anyhow!("invalid expected schema graph: {error}")

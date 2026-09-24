@@ -954,6 +954,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let (_, env) = user.app_and_env().await?;
 
     let agent_type_schema = AgentTypeSchema {
+        kind: golem_common::schema::agent::AgentTypeKind::Regular,
         type_name: AgentTypeName("CounterAgent".to_string()),
         description: "".to_string(),
         source_language: String::new(),

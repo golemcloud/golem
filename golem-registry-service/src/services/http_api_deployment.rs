@@ -221,6 +221,7 @@ impl HttpApiDeploymentService {
         let id = HttpApiDeploymentId::new();
         let record = HttpApiDeploymentRevisionRecord::creation(
             id,
+            data.scheme,
             HttpApiDeploymentCreation::normalize_webhooks_prefix(data.webhooks_prefix),
             HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(
                 data.openapi_endpoint_prefix,
@@ -285,6 +286,9 @@ impl HttpApiDeploymentService {
         };
 
         http_api_deployment.revision = http_api_deployment.revision.next()?;
+        if let Some(scheme) = update.scheme {
+            http_api_deployment.scheme = scheme;
+        }
         if let Some(webhooks_url) = update.webhook_prefix {
             http_api_deployment.webhooks_prefix =
                 HttpApiDeploymentCreation::normalize_webhooks_prefix(webhooks_url);

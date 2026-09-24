@@ -472,7 +472,7 @@ fn structural_inner_only_optional_and_defaulted_inputs_are_synthesized() {
     let expected = tool(SchemaType::string());
     let mut inner = expected.clone();
     body(&mut inner, 0).options.extend([
-        option("optional", SchemaType::option(SchemaType::string()), None),
+        option("optional", SchemaType::string(), None),
         option(
             "defaulted",
             SchemaType::string(),

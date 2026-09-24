@@ -407,6 +407,7 @@ impl AgentStatusFlushQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
     use async_trait::async_trait;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
@@ -475,6 +476,16 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for MockWorkerService {
+        async fn lookup_durable_stream_public_binding(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _public_session_id: &str,
+        ) -> Result<Option<golem_common::model::DurableStreamPublicBinding>, String> {
+            unimplemented!()
+        }
+
         async fn get(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -627,7 +638,7 @@ mod tests {
 
     /// One span per sweep, not one for the lifetime of the sweeper.
     #[test]
-    async fn sweep_records_one_closed_span_when_it_has_work() {
+    async fn sweep_records_one_closed_span_when_it_has_work(tracing: &Tracing) {
         let ws = MockWorkerService::arc();
         let queue = test_queue();
         let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
@@ -635,7 +646,7 @@ mod tests {
         current.store(Arc::new(status(AgentStatus::Running, 1)));
         flusher.mark_dirty();
 
-        let recorder = crate::span_test_support::record_spans();
+        let recorder = crate::span_test_support::record_spans(tracing);
         queue.sweep().await;
 
         recorder.assert_closed_span("agent_status_flush_sweep");
@@ -645,12 +656,12 @@ mod tests {
     /// An idle sweep is still spanned, so that every tick of the sweeper is
     /// represented the same way.
     #[test]
-    async fn sweep_records_one_closed_span_when_nothing_is_dirty() {
+    async fn sweep_records_one_closed_span_when_nothing_is_dirty(tracing: &Tracing) {
         let ws = MockWorkerService::arc();
         let queue = test_queue();
         let (_flusher, _current, _) = make_flusher(false, true, ws.clone(), queue.clone());
 
-        let recorder = crate::span_test_support::record_spans();
+        let recorder = crate::span_test_support::record_spans(tracing);
         queue.sweep().await;
 
         recorder.assert_closed_span("agent_status_flush_sweep");

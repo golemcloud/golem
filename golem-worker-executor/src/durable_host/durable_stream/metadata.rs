@@ -2095,22 +2095,23 @@ mod tests {
                 fingerprint: identity.fingerprint,
                 agent_mode: AgentMode::Durable,
             };
-            let create = OplogEntry::create(
-                identity.agent_id.clone(),
-                golem_common::model::agent::OwnerKind::ComponentAgent,
-                AgentMode::Durable,
-                golem_common::model::component::ComponentRevision::INITIAL,
-                vec![],
-                identity.environment_id,
-                account,
-                None,
-                100,
-                100,
-                HashSet::new(),
-                vec![],
-                None,
-                identity.fingerprint.0,
-            );
+            let create =
+                OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+                    agent_id: identity.agent_id.clone(),
+                    owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
+                    agent_mode: AgentMode::Durable,
+                    component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                    env: vec![],
+                    environment_id: identity.environment_id,
+                    created_by: account,
+                    parent: None,
+                    component_size: 100,
+                    initial_total_linear_memory_size: 100,
+                    initial_active_plugins: HashSet::new(),
+                    local_agent_config: vec![],
+                    original_phantom_id: None,
+                    instance_id: identity.fingerprint.0,
+                }));
             let service = Arc::new(DefaultWorkerService::new(
                 storage,
                 Arc::new(ShardServiceDefault::new()),
@@ -2248,6 +2249,7 @@ mod tests {
         drop(producer);
 
         let cold = fixture.producer().await;
+        assert!(cold.has_reconcilable_attachments().await);
         assert!(
             cold.has_active_attachment(&key.session_key, &handle)
                 .await
@@ -2256,6 +2258,7 @@ mod tests {
         assert!(cold.index.lock().await.attachments.is_empty());
         key.epoch += 1;
         cold.prepare_attachment(key.clone(), 120).await.unwrap();
+        assert!(cold.has_reconcilable_attachments().await);
         assert!(
             !cold
                 .has_active_attachment(&key.session_key, &handle)
@@ -2280,6 +2283,7 @@ mod tests {
         )
         .await
         .unwrap();
+        assert!(!cold.has_reconcilable_attachments().await);
         assert!(
             !cold
                 .has_active_attachment(&key.session_key, &handle)
@@ -2288,6 +2292,13 @@ mod tests {
         );
         fixture.persist().await;
         drop(cold);
+        assert!(
+            !fixture
+                .producer()
+                .await
+                .has_reconcilable_attachments()
+                .await
+        );
         assert!(
             !fixture
                 .producer()

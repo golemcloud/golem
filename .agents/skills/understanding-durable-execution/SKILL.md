@@ -13,7 +13,8 @@ and guide disagree, the code wins and the guide needs a fix. The scoped `AGENTS.
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong
 model), `streams.md` (durable streams and streaming invocations), `tools.md` (tool invocations
-and entity bodies) and `retries.md` (in-function versus trap-based retries).
+and entity bodies), `retries.md` (in-function versus trap-based retries), and
+`filesystem-inspection.md` (exact-path live reads, shared scheduling and generation-pinned production).
 
 ## Three axioms
 
@@ -95,23 +96,38 @@ incarnation and removes only an exact stale member.
 
 Two persistence steps matter for every crash window: **append** puts an entry in the oplog
 buffer; **commit** makes it recoverable (`commit_oplog_and_update_state(CommitLevel)`). The
-buffer is a performance trade-off (no storage round trip per append); where an entry must be
-recoverable before the executor proceeds — accepting remote work, `AgentInvocationFinished`
-before notifying waiters — the code commits explicitly. `CommitLevel` (`services/oplog/mod.rs`)
-says how strict that commit is: `Always` waits for durable storage; `DurableOnly` does so only
-for durable agents (`PrimaryOplog::commit` flushes everything; `EphemeralOplog` honours the
-level). Guarantees such as "accepted only after commit" refer to the commit, not the append.
+buffer is a performance trade-off (no storage round trip per append). `CommitLevel`
+(`services/oplog/mod.rs`) says how strict a commit is: `Always` waits for durable storage;
+`Deferred` still waits for durable oplogs but lets an ephemeral oplog return after ordered writer
+handoff (bounded queue backpressure may wait); `DurableOnly` waits only for durable agents and
+remains a no-op for ephemeral agents. Explicit protocol barriers and invocation acceptance still
+use their existing storage guarantees; this is not a global weakening of commit semantics.
+
+Successful invocation completion has a narrower contract. It appends
+`AgentInvocationFinished`, then waits for the state actor's commit receipt before notifying
+waiters. Durable completion uses `Always`, so that receipt follows storage. Ephemeral completion
+uses `Deferred`, so its receipt proves ordered writer handoff, not storage. Neither mode waits for
+the status fold: the actor retains that fold after acknowledging completion. A later actor-FIFO
+status read that requires freshness waits behind the queued fold; the separately persisted status
+cache remains asynchronous. Admission and authority jobs continue to await their complete folds,
+and the `RunningWorkers` recovery index remains synchronously flushed by the status actor.
+The unchanged synchronous `Create` write preserves an ephemeral agent's identity before execution;
+after executor loss, that identity reconstructs an observation-only owner, never a fresh execution.
 
 `worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
 threshold flushes and replica waits can commit outside the status actor, so even an empty receipt
-may hide a committed suffix. Unless the remaining receipt is exactly the contiguous suffix after
-the last published index, the status actor catches up with `status::try_fold_status_from`: committed
-storage is read in bounded chunks, external `StreamSession` payloads are hydrated, and the result
-is published once. This avoids retaining an unbounded auto-flushed tail and adds neither oplog
-entries nor a protocol change. Gap recovery conservatively invalidates authority snapshots after
-the fold. Ephemeral `DurableOnly` intentionally remains non-flushing and keeps its no-I/O fast
-path. This is status reconstruction, not replay tolerance.
+may hide a committed suffix. Ephemeral threshold flushes hand batches to a bounded asynchronous
+writer; read snapshots include both handed-off entries and the buffered tail after the persisted
+writer watermark. Up to 32 batch receipts are retained for status folding. If that cap creates a
+receipt gap, exceptional catch-up forces storage only after the completion receipt has already
+acknowledged the caller, then reads the missing range. Otherwise, unless the remaining receipt is
+exactly the contiguous suffix after the last published index, the status actor catches up with
+`status::try_fold_status_from`: committed storage is read in bounded chunks, external
+`StreamSession` payloads are hydrated, and the result is published once. This avoids retaining an
+unbounded auto-flushed tail and adds neither oplog entries nor a protocol change. Gap recovery
+conservatively invalidates authority snapshots after the fold. This is status reconstruction, not
+replay tolerance.
 
 ## Component map
 
@@ -178,6 +194,12 @@ Environment and application deletion invalidate component metadata, environment 
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
 of admitting requests against a retiring cached owner.
 
+External metadata observation uses a fallible FIFO status read. If the actor has stopped, the
+lookup takes the cold oplog lifecycle guard, verifies retirement, joins writer completion, and
+reconstructs from persisted metadata and the oplog. A failed deletion can therefore leave a
+cached but stopped worker observable until removal is retried. Missing storage means absence;
+failed reconstruction means an error, never a stale cached status or permission to restart work.
+
 Ephemeral response leases delay only normal archival, not Store unloading or explicit retirement.
 The shared gRPC owner lookup acquires the lease before reading session metadata or accepting work.
 If normal archival already fenced the owner, lookup joins archival through cache removal, then
@@ -201,9 +223,16 @@ retries by reloading persisted identity and pending initialization. Local succes
 resolved data and `Unloaded` state. Remote topology recovery and dependent finished-session recovery
 run together in the post-publication reconciler, preserving the deletion gate: attachment RPCs can
 acquire mutually referring cold workers on different executors, so awaiting them before publication
-would create a cycle. Local readiness does not authorize a merely prepared stream attachment.
+would create a cycle. Local readiness does not authorize a merely prepared stream attachment. The
+reconciler folds only through the committed `last_known_status.oplog_idx`. Once its topology cache
+has no dirty sessions and the producer has no active attachments, it parks on committed stream-state
+notifications instead of polling the oplog; active attachments retain the configured renewal
+deadline, and failed recovery retains periodic retry. Each reconciler uses a child of the executor
+shutdown token, so graph shutdown stops new periodic passes. Explicit owner retirement, revert, and
+deletion cancel and join the reconciler's in-flight pass; TTL cache retirement does not itself cancel
+or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
-existing-only acquisition, and reciprocal cold topologies.
+existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, and plugin changes never create an absent agent. Delete
@@ -422,8 +451,11 @@ without re-executing.
 `PendingAgentInvocation` and commit before the caller learns the invocation was accepted. The
 invocation loop appends `AgentInvocationStarted`, runs the guest, and
 `on_agent_invocation_success` (`durable_host/mod.rs`) appends `AgentInvocationFinished` with the
-result and commits with `CommitLevel::Always` *before* waiters are notified; failures go through
-`on_invocation_failure`. During replay the recorded result is compared with the recomputed one
+result and waits for the commit receipt before waiters are notified. Durable agents use
+`CommitLevel::Always` (storage first); ephemeral agents use `CommitLevel::Deferred` (ordered writer
+handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
+reads queued on the same state actor wait behind it. Failures go through `on_invocation_failure`.
+During replay the recorded result is compared with the recomputed one
 (`replay_equivalent`); a mismatch is an `unexpected_oplog_entry` determinism error. Tail work
 (`durable_host/tail_work.rs`) keeps the store loop running until no spawned task is still
 *active*, so a task's positional `Start`/`End` never lands after `AgentInvocationFinished`
@@ -576,15 +608,48 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   The persisted request also retains the original logical streaming origin, so retries and caller
   forks do not rewrite who originated the logical RPC.
 
-Forks copy ordinary oplog entries and append only the cut marker. That marker clips retained stream
-history, resets live controls, and stores the creation receipt; it does not carry handle aliases or
-authorship mappings. Revert raises the generation/epoch fence before reconstruction, so handles
-issued by the discarded generation cannot control the rebuilt streams. Hidden staged publication
-and immutable retry receipts remain the separately tracked GOL-609 work; do not model staging by
-adding provenance to stream records.
+Forks copy ordinary oplog entries and append a `ForkCut`. That marker clips retained stream history,
+resets live controls, and stores the creation receipt; it does not carry handle aliases or authorship
+mappings. Export forks also append `ExportForkInitialized`, which binds their new public session ID,
+fresh invocation key and expiry policy. Revert raises the generation/epoch fence before reconstruction,
+so handles issued by the discarded generation cannot control the rebuilt streams. Export targets
+are built in hidden staged oplogs and published atomically; matching retries trust the immutable
+target receipt while that target remains live. Do not model staging by adding provenance to stream
+records.
+
+The primary remains `ExecutionStatus::Running` after the guest returns while owned output
+streams drain and invocation/session completion runs. `materialize_streaming_result`
+(`worker/invocation.rs`) publishes the early result and preserves typed traps during production
+and settlement. Suspension belongs to the outer live invocation or replay boundary, not the
+guest-result boundary; interruption must still reach a producer that no longer writes to its
+stream. Snapshot calls retain their own settled suspension boundary.
 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.
+
+External Durable Streams use reader/writer resources in `durable_host/external_durable_stream/`,
+not a new native stream source or session journal. Serialized `ReadLocal` constructors record
+immutable descriptors and pinned secrets; replay validates and restores those descriptors.
+Content-based resource identities survive snapshot initialization and exclude diagnostic secret
+resolution timestamps, not pinned revisions. Resources own no cursor or producer progress.
+Finite async reads record a complete payload/checkpoint as `ReadRemote`; appends record the
+resource ID and immutable sequence/body/close as `WriteRemote`. SDKs own pending buffers,
+producer progress and durable retry timers. Methods use exact request claims and the existing
+cancellable completion-delivery boundary; dropping a resource only deletes its table entry.
+Completed replay performs no HTTP or secret fetch. Golem forks retain external URLs and producer
+identities; they do not issue DS-level forks. See `reference/streams.md` for protocol, auth and
+memory boundaries.
+
+The custom Durable Streams HTTP surface maps an opaque public session ID to a concrete invocation
+key through `DurableStreamPublicBinding::{Live, Retired}` in the independently persisted session
+index. A durable session creation uses a fresh UUID invocation key, so an expired public ID can be
+recreated without reusing the old invocation. Ephemeral sessions retain public ID = invocation key
+and are fail-stop, so recreation is rejected. `ExpiryRefreshed` and `Expired` are durable session
+records; expiry scheduling uses `ExpireDurableStreamSession` fenced by agent fingerprint, invocation
+key and expected deadline. Sliding refreshes are coalesced until they extend the deadline by at
+least 10% of the TTL. Only a new origin GET and an accepted or duplicate append count as sliding
+activity; HEAD, continuation reads (including long-poll/SSE), repeat PUT, and agent-side production
+do not.
 
 ## Tool invocations and entity bodies
 
@@ -593,6 +658,35 @@ are *entity bodies*: guest code in its own Wasmtime `Store` with **no oplog or c
 (`durable_host/entity.rs`). They record into the owner's oplog and share its `ReplayState`
 cursor (`OwnerExecution`, `worker/instance.rs`).
 
+- `get_all_tools_model` and `get_tool_model` durably record a
+  `SerializableToolDiscoverySnapshot`: the optional selected deployment revision plus ordered,
+  per-import projected MCP observations, including empty tool lists and exclusions. Live selection
+  chooses the latest deployment containing the running owner's component ID/revision, not the
+  environment current deployment and not a permanent worker pin. Replay exact-rehydrates fixed
+  definitions at the recorded revision (missing is terminal; transient registry failure retries
+  the same revision) and reuses dynamic observations without MCP/OAuth. `None` and a selected
+  revision with no dynamic observations are distinct. Native names, including unbound ones, are
+  reserved before dynamic names; earlier imports win dynamic collisions.
+- Dynamic MCP invocation is wired through a synthetic, filesystem-incapable native activation.
+  Admission freezes the complete projected tool, protocol version, exact deployment/import source,
+  binding and digest in the entity activation. The native body validates that projection, uses the
+  executor's shared MCP transport, and records `tools/call` as `WriteRemote` with the ordinary key
+  derived from its `Start`. Its encoded remote response is committed before result projection,
+  stdout publication, or best-effort 401 feedback; completed replay is therefore offline.
+- Dynamic discovery and admission use the shared middleware compiler with installations,
+  environment/agent bindings and compatibility mode from the exact deployment snapshot.
+  Discovery presents effective metadata without changing the lookup name. Admission pins the
+  chain and unchanged MCP leaf projection in the ordinary entity plan. Incompatible refreshed
+  definitions fail closed without selecting a later colliding import. Authority scopes intersect
+  across environment and agent, then revealable secrets narrow to readable secrets. Explicit
+  bindings, including all-keys bindings, are persisted and hashed; absent dynamic bindings deny
+  config/secret access. Missing required middleware records fail rather than produce an empty chain.
+- A remote `-32602` triggers a separate durable `ReadRemote` presence observation with a forced
+  exact-source refresh. Quota suspension or a crash can repair that read while preserving the
+  committed call (ordinary atomic-region rollback can still roll both back). Present or
+  observation-missing is `InvalidInput`; observed absence is `InvalidToolName`; MCP `isError`
+  becomes a custom tool error. Fixed discovery exact-rehydrates its recorded deployment revision,
+  while dynamic execution uses the source and full projection frozen at admission.
 - `dispatch_tool_call` claims (replay) or creates (live) an `EntityInvocationDurability`, a
   `DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>` in the owner's oplog. Its
   `Start` index is the entity invocation id; body host calls carry `parent_start_index`.

@@ -26,6 +26,7 @@ pub mod durability;
 pub mod durable_session;
 pub mod durable_stream;
 pub mod entity;
+pub mod external_durable_stream;
 pub mod golem;
 pub mod http;
 pub mod io;
@@ -68,8 +69,7 @@ use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, SnapshotSource,
-    TrapType,
+    AgentConfig, ExecutionStatus, InvocationContext, LastError, SnapshotSource, TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, update_initial_files};
@@ -107,9 +107,9 @@ use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, GuestCallSettlementError, InvocationMode, InvokeResult,
-    invocation_uses_streams, invoke_observed_and_traced, load_load_snapshot_guest,
-    lower_invocation, run_guest_call_settled,
+    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
+    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
@@ -2231,8 +2231,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::card_installed(
                     entity_parent_start_index,
                     queued_event_index,
-                    card,
-                    Some(self.state.wallet_generation),
+                    Box::new(card),
+                    self.state.wallet_generation,
                 ))
                 .await;
             Ok(Ok(()))
@@ -2244,7 +2244,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         entity_parent_start_index: Option<OplogIndex>,
         queued_event_index: OplogIndex,
         transfer_id: uuid::Uuid,
-        source_card_id: Option<CardId>,
+        source_card_id: CardId,
         card: StoredCard,
     ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
         let card_id = card.card_id();
@@ -2271,8 +2271,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 CardHolder::Agent(AgentCardHolder {
                     agent_id: self.owned_agent_id.agent_id.clone(),
                 }),
-                card,
-                Some(self.state.wallet_generation),
+                Box::new(card),
+                self.state.wallet_generation,
             ))
             .await;
         Ok(Ok(()))
@@ -2304,7 +2304,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                     queued_event_index,
                     card_id,
-                    Some(self.state.wallet_generation),
+                    self.state.wallet_generation,
                 ))
                 .await;
         }
@@ -2349,7 +2349,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             entity_parent_start_index,
             revoked_card_ids: card_ids,
             affected_wallets,
-            local_wallet_generation: Some(self.state.wallet_generation),
+            local_wallet_generation: self.state.wallet_generation,
         };
         if commit_immediately {
             self.public_state.worker().add_and_commit_oplog(entry).await;
@@ -2391,7 +2391,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::card_expired(
                     self.entity_parent_start_index(),
                     card_id,
-                    Some(wallet_generation),
+                    wallet_generation,
                 ))
                 .await;
         }
@@ -3915,6 +3915,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             InvocationMode::Replay,
                         )
                         .await;
+                        store.as_context_mut().data().set_suspended();
 
                         store
                             .as_context_mut()
@@ -4176,6 +4177,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let load_result =
             invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        store.as_context_mut().data().set_suspended();
 
         store
             .as_context_mut()
@@ -4622,9 +4624,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     source_wallet_generation,
                     ..
                 } => {
-                    if source_holder.as_ref().is_none_or(|source_holder| {
-                        card_holder_is_agent(source_holder, &self.owned_agent_id.agent_id)
-                    }) {
+                    if card_holder_is_agent(&source_holder, &self.owned_agent_id.agent_id) {
                         if transfer_started_removes_source_membership(
                             self.state.agent_wallet_cards.get(&card_id),
                             &source_holder,
@@ -5414,7 +5414,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 _ => None,
             };
 
-            self.public_state
+            let finished_index = self
+                .public_state
                 .worker()
                 .oplog()
                 .add_agent_invocation_finished(
@@ -5428,9 +5429,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     panic!("could not encode function result for {full_function_name}: {err}")
                 });
 
+            let commit_level = match self.public_state.worker().agent_mode() {
+                AgentMode::Durable => CommitLevel::Always,
+                AgentMode::Ephemeral => CommitLevel::Deferred,
+            };
             self.public_state
                 .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
+                .commit_oplog_before_status_update(commit_level)
                 .await;
 
             // Bump the read-only cache epoch after the
@@ -5449,13 +5454,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // worker's per-instance fingerprint, so the response carries
             // an unambiguous identification of the agent state it was
             // produced from.
-            output.oplog_index = Some(
-                self.public_state
-                    .worker()
-                    .oplog()
-                    .current_oplog_index()
-                    .await,
-            );
+            output.oplog_index = Some(finished_index);
             output.agent_fingerprint = Some(
                 self.public_state
                     .worker()
@@ -5894,7 +5893,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             ));
                         }
                         let scope_card = agent_invocation.scope_card().cloned();
-                        let recorded_scope_card_id = wallet_pin.and_then(|pin| pin.scope_card_id);
+                        let recorded_scope_card_id = wallet_pin.scope_card_id;
                         let payload_scope_card_id =
                             scope_card.as_ref().map(|card| card.scope_card_id);
                         if payload_scope_card_id != recorded_scope_card_id {
@@ -6006,76 +6005,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
 
+                        let invoke_result = if uses_streams {
+                            materialize_streaming_result(store, invoke_result, &full_function_name, &idempotency_key).await
+                        } else {
+                            invoke_result
+                        };
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                result: mut invocation_result,
+                                result: invocation_result,
                                 consumed_fuel,
                             }) => {
-                                if uses_streams
-                                    && let AgentInvocationResult::AgentMethod { output } =
-                                        &mut *invocation_result
-                                {
-                                    let (graph, root, component_revision) = {
-                                        let component = store.data().component_metadata();
-                                        let agent_id = store.data().parsed_agent_id();
-                                        let agent_type = agent_id
-                                            .as_ref()
-                                            .and_then(|agent_id| {
-                                                component
-                                                    .metadata
-                                                    .find_agent_type_by_name_ref(
-                                                        &agent_id.agent_type,
-                                                    )
-                                            })
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result schema is unavailable",
-                                                )
-                                            })?;
-                                        let method = agent_type
-                                            .methods
-                                            .iter()
-                                            .find(|method| method.name == full_function_name)
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result method schema is unavailable",
-                                                )
-                                            })?;
-                                        (
-                                            agent_type.schema.clone(),
-                                            method.output_schema.schema().cloned().unwrap_or_else(
-                                                || {
-                                                    golem_common::schema::SchemaType::tuple(
-                                                        Vec::new(),
-                                                    )
-                                                },
-                                            ),
-                                            component.revision,
-                                        )
-                                    };
-                                    let worker = worker.clone();
-                                    let result_value = output.clone();
-                                    let replay_idempotency_key = idempotency_key.clone();
-                                    *output = store.run_concurrent(async move |_accessor| {
-                                            worker
-                                                .materialize_durable_streaming_result(
-                                                    &replay_idempotency_key,
-                                                    result_value,
-                                                    &graph,
-                                                    &root,
-                                                    component_revision,
-                                                )
-                                                .await
-                                        })
-                                        .await
-                                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
-                                    run_guest_call_settled(&mut store.as_context_mut(), async |_accessor| ())
-                                        .await
-                                        .map_err(|error| match error {
-                                            GuestCallSettlementError::Infrastructure(error) => error,
-                                            GuestCallSettlementError::Trap(error) | GuestCallSettlementError::Interrupted(error) => WorkerExecutorError::runtime(error.to_string()),
-                                        })?;
-                                }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
                                 let mut output = AgentInvocationOutput {
@@ -6192,8 +6131,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             // Like the invocation loop, permanently fail the
                                             // durable Stream Session of an invocation that was
                                             // interrupted by a crash and cannot be retried.
+                                            // A fresh interrupt is authoritative even before live
+                                            // publication; already-finished sessions stay unchanged.
                                             if uses_streams
-                                                && store.as_context().data().durable_ctx().is_live()
+                                                && (matches!(trap_type, TrapType::Interrupt(_))
+                                                    || store.as_context().data().durable_ctx().is_live())
                                             {
                                                 let _ = worker
                                                     .fail_durable_streaming_session(
@@ -6264,6 +6206,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
         resume_result
         }.await;
+        store.data().set_suspended();
         // Result validation can consume the final recorded entry before detecting a mismatch.
         // Its typed replay error, rather than the resulting live cursor, identifies divergence.
         if let Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) = &result
@@ -6725,13 +6668,11 @@ fn live_scope_root_cards_from_states(
 
 fn transfer_started_removes_source_membership(
     source_card: Option<&StoredCard>,
-    source_holder: &Option<CardHolder>,
+    source_holder: &CardHolder,
     agent_id: &AgentId,
 ) -> bool {
     matches!(source_card, Some(StoredCard::Concrete(_)))
-        && source_holder
-            .as_ref()
-            .is_none_or(|holder| card_holder_is_agent(holder, agent_id))
+        && card_holder_is_agent(source_holder, agent_id)
 }
 
 fn next_drainable_card_events(
@@ -6886,20 +6827,18 @@ fn apply_invocation_wallet_pin(
 
 fn adopt_recorded_wallet_generation(
     generation: &mut u64,
-    recorded_generation: Option<u64>,
+    recorded_generation: u64,
 ) -> Result<(), WorkerExecutorError> {
-    if let Some(recorded_generation) = recorded_generation {
-        if recorded_generation < *generation {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "non-decreasing wallet generation",
-                format!(
-                    "recorded generation {recorded_generation} is behind replayed generation {}",
-                    *generation
-                ),
-            ));
-        }
-        *generation = recorded_generation;
+    if recorded_generation < *generation {
+        return Err(WorkerExecutorError::unexpected_oplog_entry(
+            "non-decreasing wallet generation",
+            format!(
+                "recorded generation {recorded_generation} is behind replayed generation {}",
+                *generation
+            ),
+        ));
     }
+    *generation = recorded_generation;
     Ok(())
 }
 
@@ -8304,7 +8243,7 @@ mod tests {
             )
             .unwrap()
         );
-        adopt_recorded_wallet_generation(&mut replayed_generation, Some(live_generation)).unwrap();
+        adopt_recorded_wallet_generation(&mut replayed_generation, live_generation).unwrap();
         let replayed_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
             replayed_wallet.values(),
@@ -8385,8 +8324,7 @@ mod tests {
         let recorded_expiry_generation = generation;
 
         assert!(!remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
-        adopt_recorded_wallet_generation(&mut generation, Some(recorded_expiry_generation))
-            .unwrap();
+        adopt_recorded_wallet_generation(&mut generation, recorded_expiry_generation).unwrap();
 
         assert!(wallet.is_empty());
         assert_eq!(generation, 8);
@@ -8453,7 +8391,7 @@ mod tests {
                 remove_wallet_card(&mut replayed_wallet, &mut replayed_generation, card_id)
                     .unwrap()
             );
-            adopt_recorded_wallet_generation(&mut replayed_generation, Some(recorded_generation))
+            adopt_recorded_wallet_generation(&mut replayed_generation, recorded_generation)
                 .unwrap();
         }
 
@@ -8521,16 +8459,13 @@ mod tests {
     }
 
     #[test]
-    fn replay_adopts_recorded_wallet_generation_and_defaults_legacy_entries() {
+    fn replay_adopts_recorded_wallet_generation() {
         let mut generation = 10;
 
-        adopt_recorded_wallet_generation(&mut generation, None).unwrap();
+        adopt_recorded_wallet_generation(&mut generation, 10).unwrap();
         assert_eq!(generation, 10);
 
-        adopt_recorded_wallet_generation(&mut generation, Some(10)).unwrap();
-        assert_eq!(generation, 10);
-
-        adopt_recorded_wallet_generation(&mut generation, Some(12)).unwrap();
+        adopt_recorded_wallet_generation(&mut generation, 12).unwrap();
         assert_eq!(generation, 12);
     }
 
@@ -8538,7 +8473,7 @@ mod tests {
     fn replay_rejects_decreasing_recorded_wallet_generation() {
         let mut generation = 10;
 
-        assert!(adopt_recorded_wallet_generation(&mut generation, Some(9)).is_err());
+        assert!(adopt_recorded_wallet_generation(&mut generation, 9).is_err());
         assert_eq!(generation, 10);
     }
 
@@ -8576,7 +8511,7 @@ mod tests {
         assert!(!wallet.contains_key(&derived_card.card_id()));
 
         assert!(add_wallet_card(&mut wallet, &mut generation, derived_card.clone()).unwrap());
-        adopt_recorded_wallet_generation(&mut generation, Some(2)).unwrap();
+        adopt_recorded_wallet_generation(&mut generation, 2).unwrap();
         assert_eq!(wallet.len(), 2);
         assert_eq!(wallet.get(&base_card.card_id()), Some(&base_card));
         assert_eq!(wallet.get(&derived_card.card_id()), Some(&derived_card));
@@ -8603,9 +8538,9 @@ mod tests {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "source-agent".to_string(),
         };
-        let source_holder = Some(CardHolder::Agent(AgentCardHolder {
+        let source_holder = CardHolder::Agent(AgentCardHolder {
             agent_id: agent_id.clone(),
-        }));
+        });
         let concrete = concrete_card(CardId::new());
         let polymorphic = polymorphic_card(CardId::new());
 
@@ -8619,36 +8554,15 @@ mod tests {
             &source_holder,
             &agent_id,
         ));
-        assert!(transfer_started_removes_source_membership(
-            Some(&concrete),
-            &None,
-            &agent_id,
-        ));
-
-        let different_source = Some(CardHolder::Agent(AgentCardHolder {
+        let different_source = CardHolder::Agent(AgentCardHolder {
             agent_id: AgentId {
                 component_id: ComponentId(Uuid::new_v4()),
                 agent_id: agent_id.agent_id.clone(),
             },
-        }));
+        });
         assert!(!transfer_started_removes_source_membership(
             Some(&concrete),
             &different_source,
-            &agent_id,
-        ));
-    }
-
-    #[test]
-    fn legacy_transfer_start_removes_concrete_source_membership() {
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "legacy-source-agent".to_string(),
-        };
-        let concrete = concrete_card(CardId::new());
-
-        assert!(transfer_started_removes_source_membership(
-            Some(&concrete),
-            &None,
             &agent_id,
         ));
     }
@@ -8707,7 +8621,7 @@ mod tests {
         assert!(matches!(
             &next[0].event,
             QueuedCardEvent::TransferReceived(event)
-                if event.source_card_id == Some(source_card_id)
+                if event.source_card_id == source_card_id
                     && event.card_id == card.card_id()
                     && event.card.as_ref() == Some(&card)
         ));
@@ -8794,7 +8708,7 @@ mod tests {
             queued_idx,
             &BTreeMap::from([(
                 queued_idx,
-                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(card_id))),
             )]),
         );
 
@@ -8805,7 +8719,7 @@ mod tests {
             terminal_idx,
             &BTreeMap::from([(
                 terminal_idx,
-                OplogEntry::card_revoked(None, queued_idx, card_id, None),
+                OplogEntry::card_revoked(None, queued_idx, card_id, 1),
             )]),
         );
 
@@ -9392,64 +9306,6 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
             )?);
         }
         Ok(GetFileSystemNodeResult::Ok(result))
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        use crate::services::agent_filesystem as agent_fs;
-
-        let generation_handle = self.filesystem_generation_handle();
-        let relative = PathBuf::from(path.to_rel_string());
-        let target = agent_fs::PathTarget::at_root(&generation_handle, relative)
-            .map_err(|error| filesystem_read_error(path, error))?;
-        let attributes = match agent_fs::attributes(
-            &generation_handle,
-            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        {
-            Ok(attributes) => attributes,
-            Err(error) if filesystem_error_is_not_found(&error) => {
-                return Ok(ReadFileResult::NotFound);
-            }
-            Err(error) => return Err(filesystem_read_error(path, error)),
-        };
-        if attributes.kind != agent_fs::ObjectKind::File {
-            return Ok(ReadFileResult::NotAFile);
-        }
-        let opened = agent_fs::open(
-            &generation_handle,
-            target,
-            agent_fs::OpenOptions::Existing {
-                expected: agent_fs::ObjectKind::File,
-                access: agent_fs::AccessMode::Read,
-                follow: agent_fs::Follow::Yes,
-            },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let agent_fs::OpenNode::File(file) = opened.node else {
-            unreachable!("file open returned a non-file node")
-        };
-        let length =
-            usize::try_from(attributes.size).map_err(|_| WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: "File is too large to read on this executor".to_string(),
-            })?;
-        let bytes = agent_fs::read_file(
-            &generation_handle,
-            &file,
-            agent_fs::ReadRange { offset: 0, length },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let stream = futures::stream::once(async move { Ok::<Bytes, WorkerExecutorError>(bytes) });
-        Ok(ReadFileResult::Ok(Box::pin(stream)))
     }
 }
 

@@ -12,20 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::OplogIndex;
+use crate::base_model::account::AccountId;
+use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::base_model::{AgentId, OplogIndex};
 use crate::model::Timestamp;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use crate::model::oplog::OplogPayload;
 use crate::model::quota::ResourceName;
+use crate::model::worker::UntypedAgentConfigEntry;
 use desert_rust::BinaryCodec;
 use nonempty_collections::NEVec;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use uuid::Uuid;
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct CreateParameters {
+    pub agent_id: AgentId,
+    pub owner_kind: OwnerKind,
+    pub agent_mode: AgentMode,
+    pub component_revision: ComponentRevision,
+    pub env: Vec<(String, String)>,
+    pub environment_id: EnvironmentId,
+    pub created_by: AccountId,
+    pub parent: Option<AgentId>,
+    pub component_size: u64,
+    pub initial_total_linear_memory_size: u64,
+    pub initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
+    pub local_agent_config: Vec<UntypedAgentConfigEntry>,
+    pub original_phantom_id: Option<Uuid>,
+    pub instance_id: Uuid,
+}
 
 /// A map of attributes, serialized as WIT `list<attribute>` where attribute is a record `{ key: string, value: attribute-value }`
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]

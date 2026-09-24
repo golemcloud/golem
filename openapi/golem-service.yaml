@@ -10468,6 +10468,912 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/envs/{environment_id}/mcp-imports/oauth/authorize:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: authorize_declared_mcp_import
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/DeclaredMcpImportOAuthRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeclaredMcpImportAuthorization'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/mcp-imports/oauth/complete:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: complete_declared_mcp_import_authorization
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CompleteDeclaredMcpImportOAuthRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeclaredMcpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/mcp-imports/oauth/status:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: get_declared_mcp_import_authorization_status
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/DeclaredMcpImportOAuthRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeclaredMcpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/mcp-imports/oauth/disconnect:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: disconnect_declared_mcp_import
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/DeclaredMcpImportOAuthRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeclaredMcpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth/authorize:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      operationId: authorize_mcp_import
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportAuthorization'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth/complete:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      operationId: complete_mcp_import_authorization
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/McpImportOAuthCallback'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      operationId: get_mcp_import_authorization_status
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      operationId: disconnect_mcp_import
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/mcp-imports/resolve:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: resolve_mcp_imports
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/McpImportResolutionRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportResolution'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/tools:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      summary: |-
+        Inspect projected tools from an import in a specific deployment.
+        Cache misses fetch upstream metadata on demand.
+        This is the individual import's projection, before native and earlier-import precedence.
+        Requires environment/deployment visibility and ViewTools; network requests use the owner's quota.
+      operationId: get_mcp_import_tools
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportTools'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/refresh:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      summary: |-
+        Refresh and inspect projected tools from an import in a specific deployment.
+        Uses the same permissions and owner quota as inspection, bypassing cached success.
+        Upstream failure is returned explicitly rather than serving stale metadata.
+      operationId: refresh_mcp_import_tools
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportTools'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/accounts/{account_id}/permission-shares:
     get:
       tags:
@@ -19187,18 +20093,7 @@ components:
       required:
       - snapshot
     ScanCursor:
-      title: ScanCursor
-      type: object
-      properties:
-        cursor:
-          type: integer
-          format: uint64
-        layer:
-          type: integer
-          format: uint64
-      required:
-      - cursor
-      - layer
+      type: string
     SchemaGraph:
       type: object
       properties:
@@ -21055,6 +21950,7 @@ components:
       required:
       - timestamp
       - invocation
+      - walletPin
     r#BeginAtomicRegionParams:
       title: r#BeginAtomicRegionParams
       type: object
@@ -21125,6 +22021,7 @@ components:
       - timestamp
       - cardId
       - parentIds
+      - walletGeneration
     r#CardEventQueuedParams:
       title: r#CardEventQueuedParams
       type: object
@@ -21153,6 +22050,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
     r#CardInstallFailedParams:
       title: r#CardInstallFailedParams
       type: object
@@ -21192,6 +22090,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
     r#CardRevokedCascadeParams:
       title: r#CardRevokedCascadeParams
       type: object
@@ -21211,6 +22110,7 @@ components:
       required:
       - timestamp
       - revokedCardIds
+      - localWalletGeneration
     r#CardRevokedParams:
       title: r#CardRevokedParams
       type: object
@@ -21231,6 +22131,7 @@ components:
       - timestamp
       - queuedEventIndex
       - cardId
+      - walletGeneration
     r#CardTransferConfirmedParams:
       title: r#CardTransferConfirmedParams
       type: object
@@ -21281,6 +22182,7 @@ components:
       - transferId
       - cardId
       - targetHolder
+      - sourceWalletGeneration
     r#CardTransferredParams:
       title: r#CardTransferredParams
       type: object
@@ -21293,7 +22195,7 @@ components:
           type: string
           format: uuid
         sourceCardId:
-          description: Source card identity, absent only on legacy entries.
+          description: Source card identity.
           type: string
           format: uuid
         installedCardId:
@@ -21308,8 +22210,10 @@ components:
       required:
       - timestamp
       - transferId
+      - sourceCardId
       - installedCardId
       - targetHolder
+      - targetWalletGeneration
     r#CommittedRemoteTransactionParams:
       title: r#CommittedRemoteTransactionParams
       type: object
@@ -22377,6 +23281,11 @@ components:
           type: array
           items:
             type: string
+    AgentTypeKind:
+      type: string
+      enum:
+      - regular
+      - http-router
     AgentTypeProvisionConfig:
       title: AgentTypeProvisionConfig
       description: |-
@@ -22479,6 +23388,8 @@ components:
       properties:
         type_name:
           type: string
+        kind:
+          $ref: '#/components/schemas/AgentTypeKind'
         description:
           type: string
         source_language:
@@ -22510,6 +23421,7 @@ components:
             $ref: '#/components/schemas/AgentConfigDeclarationSchema'
       required:
       - type_name
+      - kind
       - description
       - constructor
       - methods
@@ -22619,6 +23531,17 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    CompleteDeclaredMcpImportOAuthRequest:
+      title: CompleteDeclaredMcpImportOAuthRequest
+      type: object
+      properties:
+        import:
+          $ref: '#/components/schemas/McpImportDeployment'
+        callback:
+          $ref: '#/components/schemas/McpImportOAuthCallback'
+      required:
+      - import
+      - callback
     ComponentConfigSchema:
       type: object
       properties:
@@ -23013,6 +23936,37 @@ components:
       required:
       - name
       - issuerUrl
+    DeclaredMcpImportAuthorization:
+      title: DeclaredMcpImportAuthorization
+      type: object
+      properties:
+        authorizationUrl:
+          type: string
+      required:
+      - authorizationUrl
+    DeclaredMcpImportOAuthRequest:
+      title: DeclaredMcpImportOAuthRequest
+      type: object
+      properties:
+        import:
+          $ref: '#/components/schemas/McpImportDeployment'
+      required:
+      - import
+    DeclaredMcpImportOAuthStatus:
+      title: DeclaredMcpImportOAuthStatus
+      type: object
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        securityScheme:
+          type: string
+        status:
+          type: string
+      required:
+      - environmentId
+      - securityScheme
+      - status
     DeployValidationWarning:
       discriminator:
         propertyName: type
@@ -23020,12 +23974,14 @@ components:
           HttpApiReadOnlyMethodBoundToNonGetVerb: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
           HttpApiReadOnlyTtlBelowOneSecond: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
           ToolRevealableSecretKeysDropped: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
+          McpImportDiscovery: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
           ToolMiddleware: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
       type: object
       oneOf:
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
+      - $ref: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
     DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
       allOf:
@@ -23051,6 +24007,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_McpImportDiscovery:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: McpImportDiscovery
+            type: string
+            enum:
+            - McpImportDiscovery
+        required:
+        - type
+      - $ref: '#/components/schemas/McpImportDiscovery'
     DeployValidationWarning_ToolMiddlewareWarning:
       allOf:
       - type: object
@@ -23193,6 +24161,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RemoteToolDeployment'
+        mcpImports:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/McpImportDeployment'
         publishToolMiddlewares:
           default: []
           type: array
@@ -23208,6 +24181,20 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ToolMiddlewareInstallation'
+        environmentToolMiddlewareBindings:
+          description: Middleware-only bindings retained for tools whose implementation is discovered dynamically.
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+        agentToolMiddlewareBindings:
+          description: Agent-specific middleware-only bindings retained for dynamically discovered tools.
+          default: {}
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/ToolBindingInput'
         replaceIncompatibleAgentSecrets:
           default: false
           type: boolean
@@ -23240,6 +24227,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        mcpImports:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpImportEntry'
         remoteTools:
           type: array
           items:
@@ -23287,6 +24278,7 @@ components:
       - components
       - httpApiDeployments
       - mcpDeployments
+      - mcpImports
       - remoteTools
       - publishedTools
       - remoteToolMiddlewares
@@ -23398,6 +24390,19 @@ components:
       - revision
       - domain
       - hash
+    DeploymentPlanMcpImportEntry:
+      title: DeploymentPlanMcpImportEntry
+      type: object
+      properties:
+        index:
+          type: integer
+          format: uint32
+        hash:
+          type: string
+          format: hash
+      required:
+      - index
+      - hash
     DeploymentPlanRemoteToolEntry:
       title: DeploymentPlanRemoteToolEntry
       type: object
@@ -23477,6 +24482,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        mcpImports:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpImportEntry'
         remoteTools:
           type: array
           items:
@@ -23515,6 +24524,7 @@ components:
       - components
       - httpApiDeployments
       - mcpDeployments
+      - mcpImports
       - remoteTools
       - publishedTools
       - remoteToolMiddlewares
@@ -24021,6 +25031,19 @@ components:
       - environment
       - application
       - account
+    ExactFileMapping:
+      title: ExactFileMapping
+      type: object
+      properties:
+        publicPath:
+          type: array
+          items:
+            type: string
+        filePath:
+          type: string
+      required:
+      - publicPath
+      - filePath
     FieldSource:
       type: object
       oneOf:
@@ -24043,6 +25066,40 @@ components:
         required:
         - tag
         - value
+    FileMapping:
+      discriminator:
+        propertyName: type
+        mapping:
+          Exact: '#/components/schemas/FileMapping_ExactFileMapping'
+          Subtree: '#/components/schemas/FileMapping_SubtreeFileMapping'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/FileMapping_ExactFileMapping'
+      - $ref: '#/components/schemas/FileMapping_SubtreeFileMapping'
+    FileMapping_ExactFileMapping:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Exact
+            type: string
+            enum:
+            - Exact
+        required:
+        - type
+      - $ref: '#/components/schemas/ExactFileMapping'
+    FileMapping_SubtreeFileMapping:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Subtree
+            type: string
+            enum:
+            - Subtree
+        required:
+        - type
+      - $ref: '#/components/schemas/SubtreeFileMapping'
     HeaderVariable:
       title: HeaderVariable
       type: object
@@ -24069,6 +25126,8 @@ components:
           format: uuid
         domain:
           type: string
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         hash:
           type: string
           format: hash
@@ -24088,6 +25147,7 @@ components:
       - revision
       - environmentId
       - domain
+      - scheme
       - hash
       - agents
       - webhooksPrefix
@@ -24146,6 +25206,13 @@ components:
       properties:
         domain:
           type: string
+        scheme:
+          description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+          default: https
+          allOf:
+          - $ref: '#/components/schemas/HttpApiDeploymentScheme'
+          - description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+            default: https
         webhooksPrefix:
           type: string
         openapiEndpointPrefix:
@@ -24159,6 +25226,11 @@ components:
       - webhooksPrefix
       - openapiEndpointPrefix
       - agents
+    HttpApiDeploymentScheme:
+      type: string
+      enum:
+      - http
+      - https
     HttpApiDeploymentUpdate:
       title: HttpApiDeploymentUpdate
       type: object
@@ -24166,6 +25238,8 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         webhookPrefix:
           type: string
         openapiEndpointPrefix:
@@ -24258,6 +25332,7 @@ components:
           Trace: '#/components/schemas/HttpMethod_Empty'
           Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
+          Any: '#/components/schemas/HttpMethod_Empty'
       type: object
       oneOf:
       - $ref: '#/components/schemas/HttpMethod_Empty'
@@ -24270,6 +25345,7 @@ components:
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
     HttpMethod_CustomHttpMethod:
       allOf:
       - type: object
@@ -24287,10 +25363,10 @@ components:
       - type: object
         properties:
           type:
-            example: Patch
+            example: Any
             type: string
             enum:
-            - Patch
+            - Any
         required:
         - type
       - $ref: '#/components/schemas/Empty'
@@ -24312,11 +25388,24 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PathSegment'
+        staticBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        filesystemBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        openapiProviderMethod:
+          description: The name of a parameterless router method that returns the OpenAPI document as a string.
+          type: string
       required:
       - pathPrefix
       - phantomAgent
       - corsOptions
       - webhookSuffix
+      - staticBindings
+      - filesystemBindings
     InitialAgentFile:
       title: InitialAgentFile
       type: object
@@ -24552,6 +25641,238 @@ components:
             $ref: '#/components/schemas/McpDeploymentToolOptions'
       required:
       - currentRevision
+    McpImportAuthInput:
+      title: McpImportAuthInput
+      type: object
+      properties:
+        bearer:
+          type: string
+        basic:
+          $ref: '#/components/schemas/McpImportBasicAuth'
+    McpImportAuthorization:
+      title: McpImportAuthorization
+      type: object
+      properties:
+        authorizationUrl:
+          type: string
+        deploymentRevision:
+          type: integer
+          format: uint64
+        importIndex:
+          type: integer
+          format: uint32
+      required:
+      - authorizationUrl
+      - deploymentRevision
+      - importIndex
+    McpImportBasicAuth:
+      title: McpImportBasicAuth
+      type: object
+      properties:
+        user:
+          type: string
+        password:
+          type: string
+      required:
+      - user
+      - password
+    McpImportDeployment:
+      title: McpImportDeployment
+      type: object
+      properties:
+        url:
+          type: string
+        auth:
+          $ref: '#/components/schemas/McpImportAuthInput'
+        securityScheme:
+          type: string
+        prefix:
+          type: string
+        include:
+          type: array
+          items:
+            type: string
+        exclude:
+          type: array
+          items:
+            type: string
+        version:
+          type: string
+      required:
+      - url
+    McpImportDiagnostic:
+      title: McpImportDiagnostic
+      type: object
+      properties:
+        upstreamName:
+          type: string
+        reason:
+          type: string
+      required:
+      - upstreamName
+      - reason
+    McpImportDiscovery:
+      title: McpImportDiscovery
+      type: object
+      properties:
+        importIndex:
+          type: integer
+          format: uint32
+        upstreamToolName:
+          type: string
+        reason:
+          type: string
+      required:
+      - reason
+    McpImportOAuthCallback:
+      title: McpImportOAuthCallback
+      type: object
+      properties:
+        state:
+          type: string
+        issuer:
+          type: string
+        code:
+          type: string
+        error:
+          type: string
+      required:
+      - state
+    McpImportOAuthStatus:
+      title: McpImportOAuthStatus
+      type: object
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        deploymentRevision:
+          type: integer
+          format: uint64
+        importIndex:
+          type: integer
+          format: uint32
+        securityScheme:
+          type: string
+        status:
+          type: string
+      required:
+      - environmentId
+      - deploymentRevision
+      - importIndex
+      - securityScheme
+      - status
+    McpImportResolution:
+      title: McpImportResolution
+      type: object
+      properties:
+        protocolVersions:
+          type: array
+          items:
+            type: string
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpResolvedTool'
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpResolvedDiagnostic'
+      required:
+      - protocolVersions
+      - tools
+      - diagnostics
+    McpImportResolutionRequest:
+      title: McpImportResolutionRequest
+      type: object
+      properties:
+        imports:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpImportDeployment'
+        nativeToolNames:
+          type: array
+          items:
+            type: string
+      required:
+      - imports
+      - nativeToolNames
+    McpImportTools:
+      title: McpImportTools
+      type: object
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        deploymentRevision:
+          type: integer
+          format: uint64
+        importIndex:
+          type: integer
+          format: uint32
+        protocolVersion:
+          type: string
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpImportedTool'
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpImportDiagnostic'
+      required:
+      - environmentId
+      - deploymentRevision
+      - importIndex
+      - protocolVersion
+      - tools
+      - diagnostics
+    McpImportedTool:
+      title: McpImportedTool
+      type: object
+      properties:
+        upstreamName:
+          type: string
+        digest:
+          type: string
+        definition:
+          $ref: '#/components/schemas/Tool'
+      required:
+      - upstreamName
+      - digest
+      - definition
+    McpResolvedDiagnostic:
+      title: McpResolvedDiagnostic
+      type: object
+      properties:
+        importIndex:
+          type: integer
+          format: uint32
+        upstreamName:
+          type: string
+        reason:
+          type: string
+      required:
+      - importIndex
+      - upstreamName
+      - reason
+    McpResolvedTool:
+      title: McpResolvedTool
+      type: object
+      properties:
+        importIndex:
+          type: integer
+          format: uint32
+        upstreamName:
+          type: string
+        digest:
+          type: string
+        definition:
+          $ref: '#/components/schemas/Tool'
+      required:
+      - importIndex
+      - upstreamName
+      - digest
+      - definition
     MemoryLimit:
       title: MemoryLimit
       type: object
@@ -26121,6 +27442,19 @@ components:
       - planDefault
       - ceiling
       - userConfigurable
+    SubtreeFileMapping:
+      title: SubtreeFileMapping
+      type: object
+      properties:
+        publicPrefix:
+          type: array
+          items:
+            type: string
+        filesystemRoot:
+          type: string
+      required:
+      - publicPrefix
+      - filesystemRoot
     SystemToolAvailability:
       type: string
       enum:
@@ -26373,6 +27707,10 @@ components:
           $ref: '#/components/schemas/NormalizedJsonValue'
         account:
           type: string
+        secretKeysReadable:
+          $ref: '#/components/schemas/SecretKeyScope'
+        secretKeysRevealable:
+          $ref: '#/components/schemas/SecretKeyScope'
         filesystemAccess:
           default: unset
           allOf:
@@ -26986,7 +28324,6 @@ tags:
 - name: Application
 - name: Card
 - name: Component
-- name: Debugging
 - name: Deployment
 - name: Environment
 - name: EnvironmentPluginGrants

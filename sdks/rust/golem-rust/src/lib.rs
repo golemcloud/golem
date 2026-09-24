@@ -15,15 +15,6 @@
 #[cfg(test)]
 test_r::enable!();
 
-#[cfg(all(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-compile_error!(
-    "`export_golem_agentic` and `export_golem_tool_middleware` cannot be enabled together; use `export_golem_agentic_tool_middleware`"
-);
-
 pub use uuid::Uuid;
 pub use wasip3;
 
@@ -159,7 +150,7 @@ pub mod bindings {
         }
 
         pub mod agent {
-            pub use crate::raw_bindings::golem::agent::{common, host};
+            pub use crate::raw_bindings::golem::agent::{common, durable_streams, host};
         }
 
         pub mod permissions {
@@ -263,13 +254,7 @@ pub mod save_snapshot {
     pub use __export_golem_rust_save_snapshot_impl as export_save_snapshot;
 }
 
-#[cfg(all(
-    any(
-        feature = "export_golem_agentic",
-        feature = "export_golem_tool_middleware"
-    ),
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub mod golem_agentic {
     use wit_bindgen::generate;
 
@@ -280,6 +265,7 @@ pub mod golem_agentic {
             "export:golem:agent/guest@2.0.0#initialize",
             "export:golem:agent/guest@2.0.0#invoke",
             "export:golem:tool/guest@0.1.0#invoke",
+            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
         ],
         generate_all,
         generate_unused_types: true,
@@ -316,129 +302,13 @@ pub mod golem_agentic {
 
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
+#[cfg(feature = "export_golem_agentic")]
+pub(crate) use golem_agentic::golem::tool::underlying as tool_underlying_bindings;
 
-#[cfg(all(
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-pub mod golem_tool_middleware {
-    use wit_bindgen::generate;
-
-    generate!({
-        path: "wit",
-        world: "golem-tool-middleware",
-        async: [
-            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
-        ],
-        generate_all,
-        generate_unused_types: true,
-        pub_export_macro: true,
-        with: {
-            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "golem:agent/common@2.0.0": crate::golem_agentic::golem::agent::common,
-            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
-            "golem:tool/streams@0.1.0": crate::golem_agentic::golem::tool::streams,
-        }
-    });
-
-    pub use __export_golem_tool_middleware_impl as export_golem_tool_middleware;
-}
-
-#[cfg(feature = "export_golem_agentic_tool_middleware")]
-pub mod golem_agentic_tool_middleware {
-    use wit_bindgen::generate;
-
-    generate!({
-        path: "wit",
-        world: "golem-agentic-tool-middleware",
-        async: [
-            "export:golem:agent/guest@2.0.0#initialize",
-            "export:golem:agent/guest@2.0.0#invoke",
-            "export:golem:tool/guest@0.1.0#invoke",
-            "export:golem:tool/tool-middleware-guest@0.1.0#invoke-tool-middleware",
-        ],
-        generate_all,
-        generate_unused_types: true,
-        pub_export_macro: true,
-        with: {
-            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
-            "wasi:clocks/system-clock@0.3.0": crate::wasi_clocks_compat::system_clock,
-            "wasi:clocks/types@0.3.0": crate::wasi_clocks_compat::types,
-
-            "golem:api/host@1.5.0": crate::bindings::golem::api::host,
-            "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
-            "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
-            "golem:api/context@1.5.0": crate::bindings::golem::api::context,
-            "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
-            "golem:quota/types@1.5.0": crate::bindings::golem::quota::types,
-            "golem:secrets/types@0.1.0": crate::bindings::golem::secrets::types,
-            "golem:secrets/reveal@0.1.0": crate::bindings::golem::secrets::reveal,
-            "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
-            "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
-            "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
-            "wasi:blobstore/blobstore": crate::bindings::wasi::blobstore::blobstore,
-            "wasi:blobstore/container": crate::bindings::wasi::blobstore::container,
-            "wasi:blobstore/types": crate::bindings::wasi::blobstore::types,
-            "wasi:keyvalue/eventual-batch@0.1.0": crate::bindings::wasi::keyvalue::eventual_batch,
-            "wasi:keyvalue/eventual@0.1.0": crate::bindings::wasi::keyvalue::eventual,
-            "wasi:keyvalue/types@0.1.0": crate::bindings::wasi::keyvalue::types,
-            "wasi:keyvalue/wasi-keyvalue-error@0.1.0": crate::bindings::wasi::keyvalue::wasi_keyvalue_error,
-            "wasi:logging/logging": crate::bindings::wasi::logging::logging,
-            "wasi:config/store@0.2.0-draft": crate::bindings::wasi::config::store,
-        }
-    });
-
-    pub use __export_golem_agentic_tool_middleware_impl as export_golem_agentic_tool_middleware;
-}
-
-#[cfg(all(
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-pub(crate) use golem_tool_middleware::golem::tool::underlying as tool_underlying_bindings;
-
-#[cfg(all(
-    feature = "export_golem_agentic",
-    not(any(
-        feature = "export_golem_tool_middleware",
-        feature = "export_golem_agentic_tool_middleware"
-    ))
-))]
-pub(crate) mod tool_underlying_bindings {
-    use wit_bindgen::generate;
-
-    generate!({
-        path: "wit",
-        world: "golem-tool-underlying-types",
-        generate_all,
-        generate_unused_types: true,
-        with: {
-            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
-            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
-            "golem:tool/streams@0.1.0": crate::golem_agentic::golem::tool::streams,
-        }
-    });
-
-    pub(crate) use golem::tool::underlying::*;
-}
-
-#[cfg(feature = "export_golem_agentic_tool_middleware")]
-pub(crate) use golem_agentic_tool_middleware::golem::tool::underlying as tool_underlying_bindings;
-
-#[cfg(feature = "export_golem_agentic_tool_middleware")]
-pub use golem_agentic_tool_middleware as golem_agentic;
-
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub use ctor;
 
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub use async_trait;
 
 #[cfg(feature = "export_golem_agentic")]
@@ -493,11 +363,11 @@ pub mod oplog_processor {
     pub use __export_golem_rust_oplog_processor_impl as export_oplog_processor;
 }
 
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub mod agentic;
+
+#[cfg(feature = "export_golem_agentic")]
+pub use agentic::reflection::*;
 
 #[cfg(feature = "durability")]
 pub mod durability;
@@ -507,6 +377,9 @@ mod json;
 
 #[cfg(feature = "json")]
 pub use json::*;
+
+#[cfg(feature = "json")]
+pub mod durable_streams;
 
 mod checkpoint;
 pub mod quota;

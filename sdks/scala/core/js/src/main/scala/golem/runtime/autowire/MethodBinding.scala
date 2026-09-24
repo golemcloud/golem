@@ -20,6 +20,16 @@ import golem.Principal
 import golem.FutureInterop
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
 import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec}
+import golem.runtime.http.HttpMethod
+import golem.schema.{
+  AgentStream,
+  AgentStreamOutputTransaction,
+  FromSchema,
+  FromSchemaError,
+  GuestSchemaValueStreamHandle,
+  SchemaValue
+}
+import golem.schema.SchemaValue.*
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
@@ -58,24 +68,52 @@ object MethodBinding {
   )(handler: (Instance, In, Principal) => Future[Out]): MethodBinding[Instance] =
     new MethodBinding[Instance] {
       override val metadata: MethodMetadata = methodMetadata
+      private val rawHttp                   = metadata.httpEndpoints match {
+        case List(endpoint) => endpoint.httpMethod == HttpMethod.Any && endpoint.pathSuffix.isEmpty
+        case _              => false
+      }
+      private val decodedInput = new FromSchema[(In, Boolean)] {
+        def fromValue(value: SchemaValue): Either[FromSchemaError, (In, Boolean)] = {
+          val head = rawHttp && (value match {
+            case RecordValue(List(RecordValue(StringValue("HEAD") :: _))) => true
+            case _                                                        => false
+          })
+          inputCodec.fromValue(value).map(_ -> head)
+        }
+      }
 
       override def invoke(
         instance: Instance,
         input: JsSchemaValueTree,
         principal: Principal
       ): js.Promise[Option[JsSchemaValueTree]] = {
-        val future = SchemaPayload.withDecodedInput[In, Option[JsSchemaValueTree]](input) {
+        val future = SchemaPayload.withDecodedInput[(In, Boolean), Option[JsSchemaValueTree]](input) {
           case Left(err) =>
             Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err.toString)))
-          case Right(value) =>
+          case Right((value, head)) =>
             handler(instance, value, principal).flatMap { out =>
               outputCodec.into match {
-                case None       => Future.successful(None)
+                case None                  => Future.successful(None)
+                case Some(into) if rawHttp =>
+                  SchemaPayload.encodePreparedValueAsync(into.toValue(out))(suppressBody(_, head)).map(Some(_))
                 case Some(into) => SchemaPayload.encodeAsync(out)(into).map(Some(_))
               }
             }
-        }(inputCodec)
+        }(decodedInput)
         FutureInterop.toPromise(future)
       }
     }
+
+  // The component bridge may pull eagerly when wrapping a producer. Dispose forbidden
+  // HTTP bodies before that boundary, preserving the host's status/header validation.
+  private def suppressBody(value: SchemaValue, head: Boolean): Future[SchemaValue] = value match {
+    case RecordValue(List(status @ U16Value(code), headers, StreamValue(handle)))
+        if head || code == 204 || code == 205 || code == 304 =>
+      val endpoint = handle.take().getOrElse(throw new IllegalStateException("HTTP body was already transferred"))
+      AgentStreamOutputTransaction.track(endpoint)
+      val empty       = GuestSchemaValueStreamHandle.native(AgentStream.fromPull[SchemaValue](() => Future.successful(None)))
+      val replacement = RecordValue(List(status, headers, StreamValue(empty)))
+      endpoint.dispose().map(_ => replacement)
+    case _ => Future.successful(value)
+  }
 }

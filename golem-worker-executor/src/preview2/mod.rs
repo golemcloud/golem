@@ -34,6 +34,8 @@ wasmtime::component::bindgen!({
         "wasi:blobstore/container.[method]container.list-objects": store | async | trappable,
         "wasi:keyvalue/types.[drop]outgoing-value": store | async | trappable,
         "golem:agent/host.[drop]future-invoke-result": store | async | trappable,
+        "golem:agent/durable-streams.[method]durable-stream-reader.read": store | async | trappable,
+        "golem:agent/durable-streams.[method]durable-stream-writer.append": store | async | trappable,
         "golem:api/host.create-promise": store | async | trappable,
         "golem:websocket/client.[method]websocket-connection.receive": store | async | trappable,
         "golem:websocket/client.[method]websocket-connection.receive-with-timeout": store | async | trappable,
@@ -77,6 +79,8 @@ wasmtime::component::bindgen!({
         "golem:agent/host.wasm-rpc": super::durable_host::wasm_rpc::WasmRpcEntry,
         "golem:agent/host.future-invoke-result": super::durable_host::wasm_rpc::FutureInvokeResultEntry,
         "golem:agent/host.cancellation-token": super::durable_host::wasm_rpc::CancellationTokenEntry,
+        "golem:agent/durable-streams.durable-stream-reader": super::durable_host::external_durable_stream::DurableStreamReaderEntry,
+        "golem:agent/durable-streams.durable-stream-writer": super::durable_host::external_durable_stream::DurableStreamWriterEntry,
         "golem:tool/common": golem_schema::schema::tool::wit::wire,
         "golem:tool/host.tool-stdin-writer": super::durable_host::tool::ToolStdinWriterEntry,
         "golem:tool/host.tool-stdin": super::durable_host::tool::ToolStdinEntry,
@@ -172,12 +176,12 @@ pub mod tool_guest {
     });
 }
 
-/// Typed export accessor for pure tool-middleware components. Imported interfaces and resources
-/// are shared with the primary world so middleware executes against the owner's ordinary hosts.
+/// Typed export accessor for tool-middleware components. Imported interfaces and resources are
+/// shared with the primary world so middleware executes against the owner's ordinary hosts.
 pub mod tool_middleware_guest {
     wasmtime::component::bindgen!({
         path: r"../wit",
-        world: "golem:tool/tool-middleware",
+        world: "golem:tool/tool-middleware-runtime",
         imports: { default: async | trappable },
         exports: { default: async },
         require_store_data_send: true,
@@ -190,6 +194,7 @@ pub mod tool_middleware_guest {
             "golem:api/host@1.5.0": crate::preview2::golem::api1_5_0::host,
             "golem:tool/common": golem_schema::schema::tool::wit::wire,
             "golem:tool/streams": crate::preview2::golem::tool::streams,
+            "golem:tool/host": crate::preview2::golem::tool::host,
             "golem:tool/underlying": crate::preview2::golem::tool::underlying,
         },
     });

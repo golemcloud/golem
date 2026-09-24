@@ -3,7 +3,10 @@ use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
-use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
+use crate::services::{
+    HasComponentService, HasConfig, HasOplogService, HasWorkerService, UsesAllDeps,
+};
+use crate::worker::Worker;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -147,7 +150,13 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 
         let mut workers: Vec<AgentMetadata> = vec![];
         for (agent_id, worker) in active_agents {
-            let metadata = worker.get_latest_worker_metadata().await;
+            let initial = worker.get_initial_worker_metadata();
+            let owned_agent_id =
+                golem_common::model::OwnedAgentId::new(initial.environment_id, &agent_id);
+            let Some(metadata) = Worker::get_latest_metadata(worker.all(), &owned_agent_id).await?
+            else {
+                continue;
+            };
             if agent_id.component_id == *component_id
                 && (metadata.last_known_status.status == AgentStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))
@@ -177,6 +186,17 @@ pub trait WorkerEnumerationService: Send + Sync {
         count: u64,
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError>;
+}
+
+fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
+    if count == 0 || count > i64::MAX as u64 {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "Agent enumeration count must be between 1 and {}",
+            i64::MAX
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -302,6 +322,8 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         count: u64,
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
+        validate_agent_enumeration_count(count)?;
+
         info!(
             environment_id = %environment_id,
             component_id = %component_id,
@@ -342,11 +364,19 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
 #[cfg(test)]
 mod tests {
-    use super::modes_from_filter;
+    use super::{modes_from_filter, validate_agent_enumeration_count};
     use golem_common::base_model::worker_filter::{FilterComparator, StringFilterComparator};
     use golem_common::model::AgentFilter;
     use golem_common::model::agent::AgentMode;
     use test_r::test;
+
+    #[test]
+    fn agent_enumeration_count_bounds_are_validated() {
+        assert!(validate_agent_enumeration_count(1).is_ok());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64).is_ok());
+        assert!(validate_agent_enumeration_count(0).is_err());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64 + 1).is_err());
+    }
 
     #[test]
     fn no_filter_defaults_to_durable() {

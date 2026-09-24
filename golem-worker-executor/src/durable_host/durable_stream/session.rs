@@ -392,6 +392,37 @@ impl DurableStreamStore {
         lock
     }
 
+    pub(crate) async fn refresh_session_expiry_admitted(
+        self: &Arc<Self>,
+        admission: &Arc<StreamWriteAdmission>,
+        record: StreamSessionExpiryRefreshedRecord,
+    ) -> Result<(), StreamStoreError> {
+        admission
+            .submit(move |owner, context| async move {
+                owner.commit_expiry_refresh(&context, record).await
+            })
+            .await
+    }
+
+    pub(super) async fn commit_expiry_refresh(
+        &self,
+        context: &StreamWriteContext,
+        record: StreamSessionExpiryRefreshedRecord,
+    ) -> Result<(), StreamStoreError> {
+        self.oplog
+            .add_durable_stream_batch(Box::new(move |_| {
+                vec![DurableStreamOplogRecord::Session(
+                    None,
+                    Box::new(StreamSessionRecord::ExpiryRefreshed(record)),
+                )]
+            }))
+            .await
+            .map_err(StreamStoreError::Oplog)?;
+        self.commit(context).await;
+        self.notify_session_records_changed(Some(context));
+        Ok(())
+    }
+
     /// Rejects new records once the durable session has reached a terminal state.
     pub async fn ensure_session_accepts_new_events(
         &self,
@@ -613,7 +644,7 @@ impl DurableStreamStore {
                     });
                     result.push(DurableStreamOplogRecord::Registered(
                         entity_parent_start_index,
-                        record,
+                        Box::new(record),
                     ));
                 }
                 let prepared = prepared_without_registrations.unwrap_or_else(|| {

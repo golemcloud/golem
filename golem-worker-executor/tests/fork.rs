@@ -14,24 +14,25 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_response,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ResumeWorkerRequest, resume_worker_response, worker_executor_client::WorkerExecutorClient,
+    CreateStreamSessionRequest, ResumeWorkerRequest, StreamSessionCreationIntent,
+    resume_worker_response, worker_executor_client::WorkerExecutorClient,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
-    DurableStreamReadRequest, StreamAttachmentControlRequest,
+    DurableStreamReadRequest, StreamAttachmentControlRequest, StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, IdempotencyKey, InvocationStatus,
     OwnedAgentId, PromiseId,
 };
-use golem_common::schema::SchemaValue;
+use golem_common::schema::{FromSchema, SchemaValue};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::rpc::{
@@ -638,9 +639,10 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     use golem_api_grpc::proto::golem::worker::InvocationStart;
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AppendToStreamSlotRequest, ExternalStreamProducer, ForkStreamSlotRequest,
-        ReadStreamSlotRequest, TypedStreamSlotItems, append_to_stream_slot_request,
-        append_to_stream_slot_response, create_stream_session_response,
-        fork_stream_slot_rejection::Reason, fork_stream_slot_response, read_stream_slot_response,
+        ReadStreamSlotRequest, StreamSessionExpiryPolicy, StreamSlotReadAdmission,
+        TypedStreamSlotItems, append_to_stream_slot_request, append_to_stream_slot_response,
+        create_stream_session_response, fork_stream_slot_rejection::Reason,
+        fork_stream_slot_response, read_stream_slot_response, stream_session_expiry_policy,
         stream_slot_item,
     };
     use golem_common::schema::{schema_value_to_proto_with_streams, stream::SchemaValueStream};
@@ -673,10 +675,13 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         |stream| stream.take_host_endpoint::<u64>(),
     )
     .map_err(anyhow::Error::msg)?;
-    let created = executor
-        .client
-        .clone()
-        .create_stream_session(InvocationStart {
+    let create_request = CreateStreamSessionRequest {
+        public_session_id: session.clone(),
+        expiry_policy: Some(StreamSessionExpiryPolicy {
+            kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
+        }),
+        creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
+        invocation: Some(InvocationStart {
             agent_id: Some(source.clone().into()),
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(AuthCtx::System.into()),
@@ -685,16 +690,108 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             method_name: Some("echo".into()),
             input: Some(input),
             ..Default::default()
-        })
+        }),
+    };
+    let created = executor
+        .client
+        .clone()
+        .create_stream_session(create_request.clone())
         .await?
         .into_inner();
-    assert!(
-        matches!(
-            created.result,
-            Some(create_stream_session_response::Result::Success(_))
-        ),
-        "{created:?}"
+    let result = created.result;
+    let Some(create_stream_session_response::Result::Success(created)) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!(created.session, session);
+    assert_ne!(
+        created
+            .invocation_key
+            .as_ref()
+            .expect("creation returns the internal invocation key")
+            .value,
+        session,
+        "durable public session IDs must not become invocation idempotency keys"
     );
+    let replayed = executor
+        .client
+        .clone()
+        .create_stream_session(create_request)
+        .await?
+        .into_inner();
+    let result = replayed.result;
+    let Some(create_stream_session_response::Result::Success(replayed)) = result else {
+        panic!("{result:?}");
+    };
+    assert!(replayed.replayed);
+    assert_eq!(replayed.invocation_key, created.invocation_key);
+    assert_eq!(
+        replayed.expiry_deadline_millis,
+        created.expiry_deadline_millis
+    );
+    let initial_deadline = created
+        .expiry_deadline_millis
+        .expect("sliding session has a deadline");
+    let read_metadata = |admission, invocation_key| ReadStreamSlotRequest {
+        agent_id: Some(source.clone().into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(AuthCtx::System.into()),
+        session: session.clone(),
+        slot: "input".into(),
+        expected_method: "echo".into(),
+        max_items: 0,
+        max_bytes: 1_000_000,
+        admission,
+        invocation_key,
+        ..Default::default()
+    };
+    let head = executor
+        .client
+        .clone()
+        .read_stream_slot(read_metadata(StreamSlotReadAdmission::Head as i32, None))
+        .await?
+        .into_inner()
+        .message()
+        .await?
+        .unwrap();
+    let Some(read_stream_slot_response::Result::Success(head)) = head.result else {
+        anyhow::bail!("{head:?}");
+    };
+    assert_eq!(head.expiry_deadline_millis, Some(initial_deadline));
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let touched = executor
+        .client
+        .clone()
+        .read_stream_slot(read_metadata(
+            StreamSlotReadAdmission::TouchingOriginGet as i32,
+            None,
+        ))
+        .await?
+        .into_inner()
+        .message()
+        .await?
+        .unwrap();
+    let Some(read_stream_slot_response::Result::Success(touched)) = touched.result else {
+        anyhow::bail!("{touched:?}");
+    };
+    let touched_deadline = touched.expiry_deadline_millis.unwrap();
+    assert_eq!(touched_deadline, initial_deadline);
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let continuation = executor
+        .client
+        .clone()
+        .read_stream_slot(read_metadata(
+            StreamSlotReadAdmission::Continuation as i32,
+            touched.invocation_key.clone(),
+        ))
+        .await?
+        .into_inner()
+        .message()
+        .await?
+        .unwrap();
+    let Some(read_stream_slot_response::Result::Success(continuation)) = continuation.result else {
+        anyhow::bail!("{continuation:?}");
+    };
+    assert_eq!(continuation.expiry_deadline_millis, Some(touched_deadline));
     let append = |agent: &AgentId, value: &str| AppendToStreamSlotRequest {
         agent_id: Some(agent.clone().into()),
         environment_id: Some(component.environment_id.into()),
@@ -720,15 +817,45 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             sequence: 0,
         }),
     };
+    let initial_append = append(&source, "shared");
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let accepted = executor
         .client
         .clone()
-        .append_to_stream_slot(append(&source, "shared"))
+        .append_to_stream_slot(initial_append.clone())
         .await?
         .into_inner();
     let Some(append_to_stream_slot_response::Result::Accepted(prefix)) = accepted.result else {
         anyhow::bail!("{accepted:?}");
     };
+    let append_deadline = accepted.expiry_deadline_millis.unwrap();
+    assert_eq!(append_deadline, touched_deadline);
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let duplicate = executor
+        .client
+        .clone()
+        .append_to_stream_slot(initial_append)
+        .await?
+        .into_inner();
+    assert!(matches!(
+        duplicate.result,
+        Some(append_to_stream_slot_response::Result::Duplicate(_))
+    ));
+    let duplicate_deadline = duplicate.expiry_deadline_millis.unwrap();
+    assert_eq!(duplicate_deadline, append_deadline);
+    let mut gap = append(&source, "gap");
+    gap.producer.as_mut().unwrap().sequence = 3;
+    let gap = executor
+        .client
+        .clone()
+        .append_to_stream_slot(gap)
+        .await?
+        .into_inner();
+    assert!(matches!(
+        gap.result,
+        Some(append_to_stream_slot_response::Result::SequenceGap(_))
+    ));
+    assert_eq!(gap.expiry_deadline_millis, Some(duplicate_deadline));
     let request = ForkStreamSlotRequest {
         source_agent_id: Some(source.clone().into()),
         target_agent_id: Some(target.clone().into()),
@@ -825,6 +952,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         anyhow::bail!("{retried:?}");
     };
     assert!(receipt.replayed);
+    assert_ne!(receipt.invocation_key, created.invocation_key);
     assert_eq!(
         receipt.fork_offset, prefix.offset,
         "default tail must retain the first cut"
@@ -865,6 +993,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                 expected_method: "echo".into(),
                 max_items: 100,
                 max_bytes: 1_000_000,
+                admission: StreamSlotReadAdmission::Head as i32,
                 ..Default::default()
             })
             .await?
@@ -898,8 +1027,55 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         );
         if agent == &target {
             assert_eq!(read.fork, Some(receipt.clone()));
+            assert_eq!(read.invocation_key, receipt.invocation_key);
+            assert!(matches!(
+                read.expiry_policy.and_then(|policy| policy.kind),
+                Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600))
+            ));
+            assert!(read.expiry_deadline_millis.is_some());
         }
     }
+    let nested_target = AgentId::from_agent_id(
+        component.id,
+        &golem_common::phantom_agent_id!(
+            "DurableStreamAgent",
+            Uuid::new_v4(),
+            "export-fork-nested"
+        ),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let mut nested = request.clone();
+    nested.source_agent_id = Some(target.clone().into());
+    nested.target_agent_id = Some(nested_target.into());
+    nested.source_path = "/source/nested-input".into();
+    let nested_created = executor
+        .client
+        .clone()
+        .fork_stream_slot(nested.clone())
+        .await?
+        .into_inner();
+    let Some(fork_stream_slot_response::Result::Success(nested_created)) = nested_created.result
+    else {
+        anyhow::bail!("{nested_created:?}");
+    };
+    assert!(!nested_created.replayed);
+    assert_ne!(nested_created.invocation_key, receipt.invocation_key);
+    let nested_replayed = executor
+        .client
+        .clone()
+        .fork_stream_slot(nested)
+        .await?
+        .into_inner();
+    let Some(fork_stream_slot_response::Result::Success(nested_replayed)) = nested_replayed.result
+    else {
+        anyhow::bail!("{nested_replayed:?}");
+    };
+    assert!(nested_replayed.replayed);
+    assert_eq!(
+        nested_replayed.invocation_key,
+        nested_created.invocation_key
+    );
+
     let mut conflict = request.clone();
     conflict.sub_offset = 1;
     let rejected = executor
@@ -911,7 +1087,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     assert!(
         matches!(rejected.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::Conflict as i32)
     );
-    let mut over_count = request;
+    let mut over_count = request.clone();
     over_count.target_agent_id = Some(
         AgentId::from_agent_id(
             component.id,
@@ -947,6 +1123,207 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         "{rejected:?}"
     );
 
+    // Invalid expiry policies must not reserve the target or consume admission.
+    let overflow_target = AgentId::from_agent_id(
+        component.id,
+        &golem_common::phantom_agent_id!(
+            "DurableStreamAgent",
+            Uuid::new_v4(),
+            "export-fork-overflow-expiry"
+        ),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let mut overflowing = request.clone();
+    overflowing.target_agent_id = Some(overflow_target.clone().into());
+    overflowing.max_forks_per_session = 2;
+    overflowing.expiry_policy = Some(StreamSessionExpiryPolicy {
+        kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(
+            10_000_000_000_000_000,
+        )),
+    });
+    let rejected = executor
+        .client
+        .clone()
+        .fork_stream_slot(overflowing)
+        .await?
+        .into_inner();
+    assert!(matches!(
+        rejected.result,
+        Some(fork_stream_slot_response::Result::Rejected(_))
+    ));
+    let mut valid_after_rejection = request.clone();
+    valid_after_rejection.target_agent_id = Some(overflow_target.into());
+    valid_after_rejection.max_forks_per_session = 2;
+    valid_after_rejection.expiry_policy = Some(StreamSessionExpiryPolicy {
+        kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(60)),
+    });
+    let accepted = executor
+        .client
+        .clone()
+        .fork_stream_slot(valid_after_rejection)
+        .await?
+        .into_inner();
+    assert!(
+        matches!(
+            accepted.result,
+            Some(fork_stream_slot_response::Result::Success(_))
+        ),
+        "a rejected expiry policy consumed fork admission: {accepted:?}"
+    );
+
+    // Out-of-range absolute deadlines must not reserve the target or consume admission.
+    let out_of_range_target = AgentId::from_agent_id(
+        component.id,
+        &golem_common::phantom_agent_id!(
+            "DurableStreamAgent",
+            Uuid::new_v4(),
+            "export-fork-out-of-range-expiry"
+        ),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let mut out_of_range = request.clone();
+    out_of_range.target_agent_id = Some(out_of_range_target.clone().into());
+    out_of_range.max_forks_per_session = 4;
+    out_of_range.expiry_policy = Some(StreamSessionExpiryPolicy {
+        kind: Some(stream_session_expiry_policy::Kind::ExpiresAtMillis(
+            u64::MAX,
+        )),
+    });
+    let _rejected = executor.client.clone().fork_stream_slot(out_of_range).await;
+    let mut valid_after_rejection = request.clone();
+    valid_after_rejection.target_agent_id = Some(out_of_range_target.into());
+    valid_after_rejection.max_forks_per_session = 4;
+    valid_after_rejection.expiry_policy = Some(StreamSessionExpiryPolicy {
+        kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(60)),
+    });
+    let accepted = executor
+        .client
+        .clone()
+        .fork_stream_slot(valid_after_rejection)
+        .await?
+        .into_inner();
+    assert!(
+        matches!(
+            accepted.result,
+            Some(fork_stream_slot_response::Result::Success(_))
+        ),
+        "a rejected out-of-range absolute expiry consumed fork admission: {accepted:?}"
+    );
+
+    // An expiry that elapses during staging must not reserve the target or consume admission.
+    let expiring_during_publication_target = AgentId::from_agent_id(
+        component.id,
+        &golem_common::phantom_agent_id!(
+            "DurableStreamAgent",
+            Uuid::new_v4(),
+            "export-fork-expiring-during-publication"
+        ),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let now_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis() as u64;
+    let mut expires_during_publication = request.clone();
+    expires_during_publication.target_agent_id =
+        Some(expiring_during_publication_target.clone().into());
+    expires_during_publication.max_forks_per_session = 6;
+    expires_during_publication.expiry_policy = Some(StreamSessionExpiryPolicy {
+        kind: Some(stream_session_expiry_policy::Kind::ExpiresAtMillis(
+            now_millis + 1,
+        )),
+    });
+    let _rejected = executor
+        .client
+        .clone()
+        .fork_stream_slot(expires_during_publication)
+        .await;
+    let mut valid_after_rejection = request.clone();
+    valid_after_rejection.target_agent_id = Some(expiring_during_publication_target.into());
+    valid_after_rejection.max_forks_per_session = 6;
+    valid_after_rejection.expiry_policy = Some(StreamSessionExpiryPolicy {
+        kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(60)),
+    });
+    let accepted = executor
+        .client
+        .clone()
+        .fork_stream_slot(valid_after_rejection)
+        .await?
+        .into_inner();
+    assert!(
+        matches!(
+            accepted.result,
+            Some(fork_stream_slot_response::Result::Success(_))
+        ),
+        "an absolute expiry that elapsed during publication reserved the target: {accepted:?}"
+    );
+
+    let expiring_target = AgentId::from_agent_id(
+        component.id,
+        &golem_common::phantom_agent_id!(
+            "DurableStreamAgent",
+            Uuid::new_v4(),
+            "export-fork-expiring"
+        ),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let mut expiring_request = request.clone();
+    expiring_request.target_agent_id = Some(expiring_target.clone().into());
+    expiring_request.max_forks_per_session = 5;
+    expiring_request.expiry_policy = Some(StreamSessionExpiryPolicy {
+        kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(0)),
+    });
+    let expiring = executor
+        .client
+        .clone()
+        .fork_stream_slot(expiring_request.clone())
+        .await?
+        .into_inner();
+    let Some(fork_stream_slot_response::Result::Success(expiring)) = expiring.result else {
+        anyhow::bail!("{expiring:?}");
+    };
+    assert_ne!(expiring.invocation_key, created.invocation_key);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let read = executor
+                .client
+                .clone()
+                .read_stream_slot(ReadStreamSlotRequest {
+                    agent_id: Some(expiring_target.clone().into()),
+                    environment_id: Some(component.environment_id.into()),
+                    auth_ctx: Some(AuthCtx::System.into()),
+                    session: session.clone(),
+                    slot: "input".into(),
+                    expected_method: "echo".into(),
+                    admission: StreamSlotReadAdmission::Head as i32,
+                    ..Default::default()
+                })
+                .await?
+                .into_inner()
+                .message()
+                .await?
+                .unwrap();
+            if matches!(
+                read.result,
+                Some(read_stream_slot_response::Result::NotFound(_))
+            ) {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("fork target did not expire"))??;
+    let retry_after_target_expiry = executor
+        .client
+        .clone()
+        .fork_stream_slot(expiring_request)
+        .await?
+        .into_inner();
+    assert!(
+        matches!(retry_after_target_expiry.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::NotFound as i32),
+        "an expired target receipt must not be replayed: {retry_after_target_expiry:?}"
+    );
+
     let concurrent_session = Uuid::new_v4().to_string();
     let input = schema_value_to_proto_with_streams(
         SchemaValue::Record {
@@ -960,15 +1337,20 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     let created = executor
         .client
         .clone()
-        .create_stream_session(InvocationStart {
-            agent_id: Some(source.clone().into()),
-            environment_id: Some(component.environment_id.into()),
-            auth_ctx: Some(AuthCtx::System.into()),
-            component_owner_account_id: Some(component.account_id.into()),
-            idempotency_key: Some(IdempotencyKey::new(concurrent_session.clone()).into()),
-            method_name: Some("echo".into()),
-            input: Some(input),
-            ..Default::default()
+        .create_stream_session(CreateStreamSessionRequest {
+            public_session_id: concurrent_session.clone(),
+            expiry_policy: None,
+            creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
+            invocation: Some(InvocationStart {
+                agent_id: Some(source.clone().into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(AuthCtx::System.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                idempotency_key: Some(IdempotencyKey::new(concurrent_session.clone()).into()),
+                method_name: Some("echo".into()),
+                input: Some(input),
+                ..Default::default()
+            }),
         })
         .await?
         .into_inner();
@@ -1041,6 +1423,391 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         1,
         "{results:?}"
     );
+
+    let expired_session = Uuid::new_v4().to_string();
+    let input = schema_value_to_proto_with_streams(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                0u64,
+            ))],
+        },
+        |stream| stream.take_host_endpoint::<u64>(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let expired_request = CreateStreamSessionRequest {
+        public_session_id: expired_session.clone(),
+        expiry_policy: Some(StreamSessionExpiryPolicy {
+            kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(0)),
+        }),
+        creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
+        invocation: Some(InvocationStart {
+            agent_id: Some(source.clone().into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(AuthCtx::System.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            idempotency_key: Some(IdempotencyKey::new(expired_session.clone()).into()),
+            method_name: Some("echo".into()),
+            input: Some(input),
+            ..Default::default()
+        }),
+    };
+    let first = executor
+        .client
+        .clone()
+        .create_stream_session(expired_request.clone())
+        .await?
+        .into_inner();
+    let Some(create_stream_session_response::Result::Success(first)) = first.result else {
+        anyhow::bail!("{first:?}");
+    };
+    let first_key: IdempotencyKey = first.invocation_key.clone().unwrap().into();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let expired = executor
+                .get_oplog(&source, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
+                    if matches!(
+                        StreamSessionRecord::from_value(session.record.value()).unwrap(),
+                        StreamSessionRecord::Expired(ref record)
+                            if record.session_key == first_key
+                    ))
+                });
+            if expired {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("scheduled stream expiry was not committed"))??;
+    let expiry_records = executor
+        .get_oplog(&source, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter_map(|entry| {
+            let PublicOplogEntry::StreamSession(session) = &entry.entry else {
+                return None;
+            };
+            StreamSessionRecord::from_value(session.record.value()).ok()
+        })
+        .collect::<Vec<_>>();
+    assert!(expiry_records.iter().any(|record| {
+        matches!(record, StreamSessionRecord::CancelRequested(record)
+            if record.session_key.idempotency_key() == &first_key)
+    }));
+    assert!(expiry_records.iter().any(|record| {
+        matches!(record, StreamSessionRecord::ConsumerCancelIntent(record)
+            if record.consumer_invocation == first_key)
+    }));
+    let expired = executor
+        .client
+        .clone()
+        .read_stream_slot(ReadStreamSlotRequest {
+            agent_id: Some(source.clone().into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(AuthCtx::System.into()),
+            session: expired_session.clone(),
+            slot: "input".into(),
+            expected_method: "echo".into(),
+            admission: StreamSlotReadAdmission::Head as i32,
+            ..Default::default()
+        })
+        .await?
+        .into_inner()
+        .message()
+        .await?
+        .unwrap();
+    assert!(matches!(
+        expired.result,
+        Some(read_stream_slot_response::Result::NotFound(_))
+    ));
+    let recreated = executor
+        .client
+        .clone()
+        .create_stream_session(expired_request)
+        .await?
+        .into_inner();
+    let Some(create_stream_session_response::Result::Success(recreated)) = recreated.result else {
+        anyhow::bail!("{recreated:?}");
+    };
+    assert_ne!(recreated.invocation_key, first.invocation_key);
+
+    let restart_session = Uuid::new_v4().to_string();
+    let input = schema_value_to_proto_with_streams(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                0u64,
+            ))],
+        },
+        |stream| stream.take_host_endpoint::<u64>(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let created_before_restart = executor
+        .client
+        .clone()
+        .create_stream_session(CreateStreamSessionRequest {
+            public_session_id: restart_session.clone(),
+            expiry_policy: Some(StreamSessionExpiryPolicy {
+                kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(1)),
+            }),
+            creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
+            invocation: Some(InvocationStart {
+                agent_id: Some(source.clone().into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(AuthCtx::System.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                idempotency_key: Some(IdempotencyKey::new(restart_session).into()),
+                method_name: Some("echo".into()),
+                input: Some(input),
+                ..Default::default()
+            }),
+        })
+        .await?
+        .into_inner();
+    let Some(create_stream_session_response::Result::Success(created_before_restart)) =
+        created_before_restart.result
+    else {
+        anyhow::bail!("{created_before_restart:?}");
+    };
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    let executor = start_with_local_resume(deps, &context, false).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let expired = executor
+                .get_oplog(&source, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
+                    if matches!(
+                        StreamSessionRecord::from_value(session.record.value()).unwrap(),
+                        StreamSessionRecord::Expired(ref record)
+                            if Some(record.session_key.clone())
+                                == created_before_restart.invocation_key.clone().map(Into::into)
+                    ))
+                });
+            if expired {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("scheduled stream expiry did not recover after restart"))??;
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+async fn sliding_expiry_refreshes_are_coalesced(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::InvocationStart;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AppendToStreamSlotRequest, ExternalStreamProducer, ReadStreamSlotRequest,
+        StreamSessionExpiryPolicy, StreamSlotReadAdmission, TypedStreamSlotItems,
+        append_to_stream_slot_request, append_to_stream_slot_response,
+        create_stream_session_response, read_stream_slot_response, stream_session_expiry_policy,
+    };
+    use golem_common::schema::{schema_value_to_proto_with_streams, stream::SchemaValueStream};
+    use prost::Message;
+    use uuid::Uuid;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_local_resume(deps, &context, false).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let source = executor
+        .start_agent(
+            &component.id,
+            agent_id!("DurableStreamAgent", "expiry-refresh-coalescing"),
+        )
+        .await?;
+    let session = Uuid::new_v4().to_string();
+    let input = schema_value_to_proto_with_streams(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                0u64,
+            ))],
+        },
+        |stream| stream.take_host_endpoint::<u64>(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let created = executor
+        .client
+        .clone()
+        .create_stream_session(CreateStreamSessionRequest {
+            public_session_id: session.clone(),
+            expiry_policy: Some(StreamSessionExpiryPolicy {
+                kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(30)),
+            }),
+            creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
+            invocation: Some(InvocationStart {
+                agent_id: Some(source.clone().into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(AuthCtx::System.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
+                method_name: Some("echo".into()),
+                input: Some(input),
+                ..Default::default()
+            }),
+        })
+        .await?
+        .into_inner();
+    let Some(create_stream_session_response::Result::Success(created)) = created.result else {
+        anyhow::bail!("{created:?}");
+    };
+    let initial_deadline = created.expiry_deadline_millis.unwrap();
+    let session_key: IdempotencyKey = created.invocation_key.clone().unwrap().into();
+    let read = |admission, invocation_key| ReadStreamSlotRequest {
+        agent_id: Some(source.clone().into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(AuthCtx::System.into()),
+        session: session.clone(),
+        slot: "input".into(),
+        expected_method: "echo".into(),
+        max_items: 0,
+        max_bytes: 1_000_000,
+        admission,
+        invocation_key,
+        ..Default::default()
+    };
+
+    tokio::time::sleep(std::time::Duration::from_millis(3_100)).await;
+    for request in [
+        read(StreamSlotReadAdmission::Head as i32, None),
+        read(
+            StreamSlotReadAdmission::Continuation as i32,
+            created.invocation_key.clone(),
+        ),
+    ] {
+        let response = executor
+            .client
+            .clone()
+            .read_stream_slot(request)
+            .await?
+            .into_inner()
+            .message()
+            .await?
+            .unwrap();
+        let Some(read_stream_slot_response::Result::Success(response)) = response.result else {
+            anyhow::bail!("{response:?}");
+        };
+        assert_eq!(response.expiry_deadline_millis, Some(initial_deadline));
+    }
+
+    let touched = executor
+        .client
+        .clone()
+        .read_stream_slot(read(
+            StreamSlotReadAdmission::TouchingOriginGet as i32,
+            None,
+        ))
+        .await?
+        .into_inner()
+        .message()
+        .await?
+        .unwrap();
+    let Some(read_stream_slot_response::Result::Success(touched)) = touched.result else {
+        anyhow::bail!("{touched:?}");
+    };
+    let touched_deadline = touched.expiry_deadline_millis.unwrap();
+    assert!(touched_deadline > initial_deadline);
+    let suppressed = executor
+        .client
+        .clone()
+        .read_stream_slot(read(
+            StreamSlotReadAdmission::TouchingOriginGet as i32,
+            None,
+        ))
+        .await?
+        .into_inner()
+        .message()
+        .await?
+        .unwrap();
+    let Some(read_stream_slot_response::Result::Success(suppressed)) = suppressed.result else {
+        anyhow::bail!("{suppressed:?}");
+    };
+    assert_eq!(suppressed.expiry_deadline_millis, Some(touched_deadline));
+
+    let append = AppendToStreamSlotRequest {
+        agent_id: Some(source.clone().into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(AuthCtx::System.into()),
+        session,
+        slot: "input".into(),
+        expected_method: "echo".into(),
+        payload: Some(append_to_stream_slot_request::Payload::Values(
+            TypedStreamSlotItems {
+                values: vec![
+                    golem_api_grpc::proto::golem::schema::SchemaValue::try_from(
+                        SchemaValue::String("refresh".into()),
+                    )
+                    .unwrap()
+                    .encode_to_vec(),
+                ],
+            },
+        )),
+        producer: Some(ExternalStreamProducer {
+            id: "writer".into(),
+            epoch: 0,
+            sequence: 0,
+        }),
+        ..Default::default()
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(3_100)).await;
+    let accepted = executor
+        .client
+        .clone()
+        .append_to_stream_slot(append.clone())
+        .await?
+        .into_inner();
+    assert!(matches!(
+        accepted.result,
+        Some(append_to_stream_slot_response::Result::Accepted(_))
+    ));
+    let accepted_deadline = accepted.expiry_deadline_millis.unwrap();
+    assert!(accepted_deadline > touched_deadline);
+
+    tokio::time::sleep(std::time::Duration::from_millis(3_100)).await;
+    let duplicate = executor
+        .client
+        .clone()
+        .append_to_stream_slot(append)
+        .await?
+        .into_inner();
+    assert!(matches!(
+        duplicate.result,
+        Some(append_to_stream_slot_response::Result::Duplicate(_))
+    ));
+    assert!(duplicate.expiry_deadline_millis.unwrap() > accepted_deadline);
+    let refresh_count = executor
+        .get_oplog(&source, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
+            if matches!(
+                StreamSessionRecord::from_value(session.record.value()).unwrap(),
+                StreamSessionRecord::ExpiryRefreshed(ref record)
+                    if record.session_key == session_key
+            ))
+        })
+        .count();
+    assert_eq!(refresh_count, 3);
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     Ok(())
 }
 

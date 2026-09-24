@@ -122,7 +122,12 @@ async fn observations(agent: &HttpTestContext, id: &str) -> anyhow::Result<Vec<u
         .send()
         .await?;
     assert_eq!(response.status(), StatusCode::OK);
-    Ok(response.json().await?)
+    response
+        .json::<Vec<String>>()
+        .await?
+        .into_iter()
+        .map(|value| value.parse().map_err(Into::into))
+        .collect()
 }
 
 async fn wait_for_observations(
@@ -1389,6 +1394,119 @@ async fn generated_session_location_and_manifest(
 
 #[test]
 #[timeout("120s")]
+async fn expiry_headers_are_validated_and_reported(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let zero_session = Uuid::new_v4().to_string();
+    let zero_path = stream_path("echo", &zero_session, "input", 0);
+    let zero = agent
+        .client
+        .put(agent.base_url.join(&zero_path)?)
+        .header("stream-ttl", "0")
+        .send()
+        .await?;
+    assert_eq!(zero.status(), StatusCode::CREATED);
+    assert_eq!(header(&zero, "stream-ttl"), "0");
+    let expired = agent
+        .client
+        .head(agent.base_url.join(&zero_path)?)
+        .send()
+        .await?;
+    assert_eq!(expired.status(), StatusCode::NOT_FOUND);
+    assert_eq!(header(&expired, CACHE_CONTROL.as_str()), "no-store");
+
+    let session = Uuid::new_v4().to_string();
+    let path = stream_path("echo", &session, "input", 0);
+    let created = agent
+        .client
+        .put(agent.base_url.join(&path)?)
+        .header("stream-ttl", "2")
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(header(&created, "stream-ttl"), "2");
+    assert_eq!(header(&created, CACHE_CONTROL.as_str()), "no-store");
+
+    let head = agent
+        .client
+        .head(agent.base_url.join(&path)?)
+        .send()
+        .await?;
+    assert_eq!(head.status(), StatusCode::OK);
+    assert_eq!(header(&head, "stream-ttl"), "2");
+    assert_eq!(header(&head, CACHE_CONTROL.as_str()), "no-store");
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&path)?)
+            .header("stream-ttl", "2")
+            .send()
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&path)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    for invalid in ["01", "-1", "+1", "1 0"] {
+        let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+        assert_eq!(
+            agent
+                .client
+                .put(agent.base_url.join(&path)?)
+                .header("stream-ttl", invalid)
+                .send()
+                .await?
+                .status(),
+            StatusCode::BAD_REQUEST,
+            "{invalid:?}"
+        );
+    }
+    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&path)?)
+            .header("stream-ttl", "1")
+            .header("stream-expires-at", "2099-01-01T00:00:00Z")
+            .send()
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let absolute = "2099-01-01T00:00:00Z";
+    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+    let created = agent
+        .client
+        .put(agent.base_url.join(&path)?)
+        .header("stream-expires-at", "2099-01-01T01:00:00+01:00")
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(header(&created, "stream-expires-at"), absolute);
+    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&path)?)
+            .header("stream-expires-at", "2000-01-01T00:00:00Z")
+            .send()
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn scalar_argument_does_not_hide_named_output(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
@@ -1803,7 +1921,7 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
         .send()
         .await?;
     assert_eq!(marked.status(), StatusCode::OK);
-    assert_eq!(marked.json::<Value>().await?, serde_json::json!(37));
+    assert_eq!(marked.json::<Value>().await?, serde_json::json!("37"));
     assert_eq!(observations(agent, &id).await?, vec![0, 0, 2, 1, 1, 37, 0]);
 
     let component_id = agent

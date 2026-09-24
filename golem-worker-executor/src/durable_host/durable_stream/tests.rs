@@ -44,9 +44,10 @@ use golem_common::base_model::durable_stream::{
     StreamConsumerDeletingRecord, StreamConsumerItemValueRecord, StreamEndResult, StreamId,
     StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset, StreamRecordReference,
     StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamRootKind,
-    StreamSessionMapping, StreamSessionMappingRecord, StreamSessionMappingUpdateRecord,
-    StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind, StreamTerminalAuthor,
-    StreamTopologyActivatedRecord, StreamTopologyPreparedRecord, StreamValuePathStep,
+    StreamSessionExpiryPolicy, StreamSessionMapping, StreamSessionMappingRecord,
+    StreamSessionMappingUpdateRecord, StreamSessionPreparedRecord, StreamSessionRecord,
+    StreamSourceKind, StreamTerminalAuthor, StreamTopologyActivatedRecord,
+    StreamTopologyPreparedRecord, StreamValuePathStep,
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
@@ -2479,7 +2480,7 @@ async fn attachment_slots_are_isolated_by_consumer_identity() {
 async fn active_attachment_count_spans_distinct_consumer_slots() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
-    let live = producer(oplog, &identity, None).await;
+    let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
         .register(None, root_registration(&identity))
         .await
@@ -2504,7 +2505,9 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     second.consumer_invocation.callee = second.consumer.clone();
     second.consumer_invocation.callee_fingerprint = second.expected_consumer_fingerprint;
 
+    assert!(!live.has_reconcilable_attachments().await);
     live.prepare_attachment(first.clone(), 100).await.unwrap();
+    assert!(live.has_reconcilable_attachments().await);
     assert!(
         !live
             .has_active_attachment(&first.session_key, &handle)
@@ -2513,6 +2516,10 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     );
     live.activate_attachment(first.clone(), 110).await.unwrap();
     live.prepare_attachment(second.clone(), 100).await.unwrap();
+
+    drop(live);
+    let live = producer(oplog.clone(), &identity, None).await;
+    assert!(live.has_reconcilable_attachments().await);
     live.activate_attachment(second.clone(), 110).await.unwrap();
     assert!(
         live.has_active_attachment(&first.session_key, &handle)
@@ -2526,11 +2533,16 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     )
     .await
     .unwrap();
+    assert!(live.has_reconcilable_attachments().await);
     assert!(
         live.has_active_attachment(&first.session_key, &handle)
             .await
             .unwrap()
     );
+
+    drop(live);
+    let live = producer(oplog.clone(), &identity, None).await;
+    assert!(live.has_reconcilable_attachments().await);
     live.finalize_attachment(
         second,
         StreamAttachmentFinalizationReason::ConsumerFinalized,
@@ -2538,12 +2550,16 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     )
     .await
     .unwrap();
+    assert!(!live.has_reconcilable_attachments().await);
     assert!(
         !live
             .has_active_attachment(&first.session_key, &handle)
             .await
             .unwrap()
     );
+    drop(live);
+    let live = producer(oplog, &identity, None).await;
+    assert!(!live.has_reconcilable_attachments().await);
 }
 
 #[test]
@@ -4176,6 +4192,52 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
 
 #[test]
 #[test_r::timeout("30s")]
+async fn reconstructed_packed_u8_write_requires_original_host_batch_boundary() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let live = producer(oplog.clone(), &identity, None).await;
+    let handle = live
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    live.write_items(
+        None,
+        handle.stream_id,
+        0,
+        StreamItemsPayload::PackedU8(vec![13, 79]),
+    )
+    .await
+    .unwrap();
+
+    let reconstructed = producer(oplog, &identity, None).await;
+    assert!(
+        reconstructed
+            .write_items(
+                None,
+                handle.stream_id,
+                0,
+                StreamItemsPayload::PackedU8(vec![13, 79]),
+            )
+            .await
+            .unwrap()
+            .replayed
+    );
+    assert!(matches!(
+        reconstructed
+            .write_items(
+                None,
+                handle.stream_id,
+                0,
+                StreamItemsPayload::PackedU8(vec![13]),
+            )
+            .await,
+        Err(StreamStoreError::EventConflict)
+    ));
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
     use golem_common::model::durable_stream::StreamHandleReadRequest;
 
@@ -5438,7 +5500,10 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
                     committed,
                     move |bindings| StreamSessionPreparedRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        public_session_id: session_key.idempotency_key.value.clone(),
                         session_key: session_key.idempotency_key.clone(),
+                        expiry_policy: StreamSessionExpiryPolicy::None,
+                        expiry_deadline_millis: None,
                         attempt: StartAttemptDescriptor {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: session_key.clone(),
@@ -5583,7 +5648,10 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     };
     let prepared = StreamSessionPreparedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
+        public_session_id: identity.invocation.idempotency_key.value.clone(),
         session_key: identity.invocation.idempotency_key.clone(),
+        expiry_policy: StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: identity.invocation.clone(),
@@ -6369,7 +6437,7 @@ async fn history_rebuild_rejects_duplicate_nested_stream_ownership() {
             let nested_stream_id = LocalStreamId(registration_index);
             let item_index = OplogIndex::from_u64(registration_index.as_u64() + 1);
             vec![
-                DurableStreamOplogRecord::Registered(None, nested_record),
+                DurableStreamOplogRecord::Registered(None, Box::new(nested_record)),
                 DurableStreamOplogRecord::Items(
                     None,
                     StreamItemsRecord {
@@ -6432,14 +6500,14 @@ async fn history_rebuild_rejects_nested_registration_without_enclosing_item() {
         .add_durable_stream_batch(Box::new(move |registration_index| {
             vec![DurableStreamOplogRecord::Registered(
                 None,
-                registration_record(
+                Box::new(registration_record(
                     registration_index,
                     environment_id,
                     agent_id,
                     producer_fingerprint,
                     nested,
                     Some((parent.value.stream_id, parent_local_stream_id)),
-                ),
+                )),
             )]
         }))
         .await

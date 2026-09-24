@@ -10,7 +10,8 @@ use super::super::{RichRequest, RouteExecutionResult};
 use super::encoding::metadata_response;
 use super::{DurableStreamsHandler, response, route_method};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ForkStreamSlotRequest, fork_stream_slot_rejection, fork_stream_slot_response,
+    ForkStreamSlotRequest, StreamSessionExpiryPolicy, fork_stream_slot_rejection,
+    fork_stream_slot_response,
 };
 use golem_common::model::AgentId;
 use golem_common::model::durable_stream::StreamOffset;
@@ -33,6 +34,7 @@ impl DurableStreamsHandler {
         target_fork: &str,
         session: &str,
         slot: &str,
+        expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         if self.forks.max_forks_per_second == 0 {
             return Ok(response(StatusCode::CONFLICT));
@@ -59,9 +61,12 @@ impl DurableStreamsHandler {
             Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
         };
         let source_agent_id = match parsed.source_fork.as_deref() {
-            Some(fork) => self.call_agent.build_agent_id(
+            Some(fork) => super::CallAgentHandler::build_agent_id(
                 route,
-                behaviour,
+                behaviour.component_id,
+                &behaviour.agent_type,
+                &behaviour.constructor_input,
+                &behaviour.constructor_parameters,
                 Some(fork_phantom_id(root_agent_id, fork)),
             )?,
             None => root_agent_id.clone(),
@@ -123,13 +128,24 @@ impl DurableStreamsHandler {
                     max_copied_bytes: self.forks.max_copied_bytes,
                     initial_content,
                     closed,
+                    expiry_policy,
                 },
             )
             .await?;
         match result {
             fork_stream_slot_response::Result::Success(success) => {
                 let metadata = self
-                    .read_slot(route, target_agent_id, session, slot, Vec::new(), 0, 0)
+                    .read_slot_admitted(
+                        route,
+                        target_agent_id,
+                        session,
+                        slot,
+                        Vec::new(),
+                        0,
+                        0,
+                        golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission::Continuation,
+                        success.invocation_key.clone(),
+                    )
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("fork succeeded without stream metadata"))?;
                 if metadata.tombstoned {
@@ -143,7 +159,12 @@ impl DurableStreamsHandler {
                 };
                 out.headers.insert(
                     http::header::LOCATION,
-                    request.underlying.uri().path().to_owned(),
+                    request
+                        .underlying
+                        .uri()
+                        .path()
+                        .parse()
+                        .map_err(anyhow::Error::from)?,
                 );
                 Ok(out)
             }
@@ -167,7 +188,7 @@ impl DurableStreamsHandler {
                 if status == StatusCode::TOO_MANY_REQUESTS && rejected.retry_after_seconds > 0 {
                     out.headers.insert(
                         http::header::RETRY_AFTER,
-                        rejected.retry_after_seconds.to_string(),
+                        rejected.retry_after_seconds.into(),
                     );
                 }
                 Ok(out)

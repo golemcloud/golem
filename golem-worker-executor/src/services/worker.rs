@@ -36,9 +36,9 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
-    DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
-    OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId,
-    SuccessfulUpdateRecord,
+    DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey,
+    InvocationResultMembership, OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    ShardId, SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -414,6 +414,14 @@ pub trait WorkerService: Send + Sync {
         status: &AgentStatusRecord,
         key: &IdempotencyKey,
     ) -> Result<Option<DurableStreamSessionStatus>, String>;
+
+    async fn lookup_durable_stream_public_binding(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        fingerprint: AgentFingerprint,
+        public_session_id: &str,
+    ) -> Result<Option<DurableStreamPublicBinding>, String>;
 
     /// Reads per-session metadata through a captured persisted horizon, independently of status
     /// publication. Payloads remain in the oplog and are addressed by index.
@@ -1308,17 +1316,15 @@ impl DefaultWorkerService {
             .remove(&OplogIndex::INITIAL);
         match entry {
             None => Ok(None),
-            Some(
-                create_entry @ OplogEntry::Create {
-                    agent_mode: persisted_mode,
-                    instance_id,
-                    ..
-                },
-            ) if persisted_mode == agent_mode => Ok(Some(ResolvedAgentIdentity {
-                agent_mode,
-                fingerprint: AgentFingerprint(instance_id),
-                create_entry,
-            })),
+            Some(ref create_entry @ OplogEntry::Create { ref parameters, .. })
+                if parameters.agent_mode == agent_mode =>
+            {
+                Ok(Some(ResolvedAgentIdentity {
+                    agent_mode,
+                    fingerprint: AgentFingerprint(parameters.instance_id),
+                    create_entry: create_entry.clone(),
+                }))
+            }
             Some(OplogEntry::Create { .. }) => Err(WorkerExecutorError::runtime(format!(
                 "agent {owned_agent_id} has a Create entry in the wrong oplog namespace"
             ))),
@@ -1442,6 +1448,11 @@ impl WorkerService for DefaultWorkerService {
             Some((
                 _,
                 OplogEntry::Create {
+                    timestamp,
+                    parameters,
+                },
+            )) => {
+                let golem_common::model::oplog::CreateParameters {
                     agent_id,
                     owner_kind,
                     agent_mode: persisted_agent_mode,
@@ -1449,7 +1460,6 @@ impl WorkerService for DefaultWorkerService {
                     env,
                     environment_id,
                     created_by,
-                    timestamp,
                     parent,
                     component_size,
                     initial_total_linear_memory_size,
@@ -1457,8 +1467,7 @@ impl WorkerService for DefaultWorkerService {
                     local_agent_config,
                     original_phantom_id,
                     instance_id,
-                },
-            )) => {
+                } = *parameters;
                 owner_kind
                     .validate_instance_name(&agent_id.agent_id)
                     .unwrap_or_else(|error| {
@@ -1809,6 +1818,18 @@ impl WorkerService for DefaultWorkerService {
                 status.oplog_idx,
                 key,
             )
+            .await
+    }
+
+    async fn lookup_durable_stream_public_binding(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        fingerprint: AgentFingerprint,
+        public_session_id: &str,
+    ) -> Result<Option<DurableStreamPublicBinding>, String> {
+        self.stream_session_index
+            .lookup_public_binding(owned_agent_id, agent_mode, fingerprint, public_session_id)
             .await
     }
 
@@ -2346,7 +2367,9 @@ mod tests {
     use golem_common::model::Timestamp;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
-    use golem_common::model::card::{Card, CardId, StoredCard};
+    use golem_common::model::card::{
+        Card, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
+    };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::TraceId;
@@ -2406,6 +2429,15 @@ mod tests {
 
     #[async_trait]
     impl OplogService for IndexTestOplogService {
+        async fn staged_exists(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _stage_id: uuid::Uuid,
+        ) -> Result<bool, String> {
+            unimplemented!()
+        }
+
         async fn lock_lifecycle(&self, _: &AgentId) -> OplogLifecycleGuard {
             unreachable!()
         }
@@ -2614,7 +2646,14 @@ mod tests {
                 trace_id: TraceId::generate(),
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
-                wallet_pin: None,
+                wallet_pin: Box::new(InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 0,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
             },
         );
         entries.insert(
@@ -2701,20 +2740,22 @@ mod tests {
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
         let create = OplogEntry::Create {
             timestamp: Timestamp::now_utc(),
-            agent_id: agent_id.clone(),
-            owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
-            agent_mode: AgentMode::Durable,
-            component_revision: ComponentRevision::INITIAL,
-            env: Vec::new(),
-            environment_id,
-            created_by: AccountId::new(),
-            parent: None,
-            component_size: 1,
-            initial_total_linear_memory_size: 0,
-            initial_active_plugins: HashSet::new(),
-            local_agent_config: Vec::new(),
-            original_phantom_id: None,
-            instance_id: Uuid::new_v4(),
+            parameters: Box::new(golem_common::model::oplog::CreateParameters {
+                agent_id: agent_id.clone(),
+                owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
+                agent_mode: AgentMode::Durable,
+                component_revision: ComponentRevision::INITIAL,
+                env: Vec::new(),
+                environment_id,
+                created_by: AccountId::new(),
+                parent: None,
+                component_size: 1,
+                initial_total_linear_memory_size: 0,
+                initial_active_plugins: HashSet::new(),
+                local_agent_config: Vec::new(),
+                original_phantom_id: None,
+                instance_id: Uuid::new_v4(),
+            }),
         };
         let shard_service = Arc::new(ShardServiceDefault::new());
         shard_service.register(4, &HashMap::new(), None, ShardLeaseRevision::default());
@@ -3052,7 +3093,7 @@ mod tests {
         status.received_card_transfers.insert(
             transfer_id(1),
             ReceivedCardTransferState::Received {
-                source_card_id: Some(CardId::new()),
+                source_card_id: CardId::new(),
                 card: stored_card(CardId::new()),
             },
         );
@@ -3209,7 +3250,7 @@ mod tests {
         new.received_card_transfers.insert(
             transfer_id(2),
             ReceivedCardTransferState::Received {
-                source_card_id: Some(CardId::new()),
+                source_card_id: CardId::new(),
                 card: stored_card(CardId::new()),
             },
         );
@@ -4197,6 +4238,15 @@ mod tests {
 
     #[async_trait]
     impl OplogService for FakeOplogService {
+        async fn staged_exists(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _stage_id: uuid::Uuid,
+        ) -> Result<bool, String> {
+            unimplemented!()
+        }
+
         async fn lock_lifecycle(&self, _: &AgentId) -> OplogLifecycleGuard {
             unreachable!()
         }
@@ -4393,22 +4443,22 @@ mod tests {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
     ) -> OplogEntry {
-        OplogEntry::create(
-            owned_agent_id.agent_id.clone(),
-            golem_common::model::agent::OwnerKind::ComponentAgent,
+        OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            agent_id: owned_agent_id.agent_id.clone(),
+            owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_mode,
-            ComponentRevision::INITIAL,
-            Vec::new(),
-            owned_agent_id.environment_id,
-            AccountId::new(),
-            None,
-            0,
-            0,
-            HashSet::new(),
-            Vec::new(),
-            None,
-            fingerprint.0,
-        )
+            component_revision: ComponentRevision::INITIAL,
+            env: Vec::new(),
+            environment_id: owned_agent_id.environment_id,
+            created_by: AccountId::new(),
+            parent: None,
+            component_size: 0,
+            initial_total_linear_memory_size: 0,
+            initial_active_plugins: HashSet::new(),
+            local_agent_config: Vec::new(),
+            original_phantom_id: None,
+            instance_id: fingerprint.0,
+        }))
     }
 
     fn test_worker_service(

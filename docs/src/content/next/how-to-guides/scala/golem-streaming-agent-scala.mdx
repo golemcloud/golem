@@ -1,0 +1,116 @@
+# Streaming Agent Methods in Scala
+
+Use `golem.schema.AgentStream[A]` anywhere in an agent method's input or output graph. Streams may
+be direct values or nested in case classes, tuples, options, either/results, collections, and other
+stream items. Each endpoint travels with its containing value; do not model streams as fixed slots.
+
+```scala
+import golem.BaseAgent
+import golem.runtime.annotations.{agentDefinition, agentImplementation}
+import golem.schema.AgentStream
+import scala.concurrent.Future
+
+@agentDefinition()
+trait StreamingAgent extends BaseAgent:
+  class Id(val name: String)
+  def sum(values: AgentStream[Long]): Future[Long]
+  def doubled(values: AgentStream[Long]): Future[AgentStream[Long]]
+  def siblings(): Future[(AgentStream[String], AgentStream[Long])]
+```
+
+## Consume, Produce, and Forward
+
+`pull()` returns `Future[Option[A]]`: `None` is normal close and a failed future is an actual
+producer, decode, transport, or invocation failure.
+
+```scala
+import scala.concurrent.{ExecutionContext, Future}
+
+private given ExecutionContext = ExecutionContext.parasitic
+
+def collectSum(input: AgentStream[Long]): Future[Long] =
+  def loop(total: Long): Future[Long] = input.pull().flatMap:
+    case Some(value) => loop(total + value)
+    case None        => Future.successful(total)
+  loop(0L)
+
+def doubledStream(input: AgentStream[Long]): AgentStream[Long] =
+  input.map(_ * 2)
+```
+
+Build a demand-driven producer with `AgentStream.fromPull`. The pull function runs only after
+downstream demand, which provides back-pressure. Return `None` for normal close and fail the future
+for a producer failure. Supply `onFinalize` to release producer resources on completion, failure,
+or explicit close.
+
+```scala
+var next = 0L
+val output = AgentStream.fromPull(
+  () =>
+    if next == 3 then Future.successful(None)
+    else
+      val value = next
+      next += 1
+      Future.successful(Some(value)),
+  () => Future.successful(())
+)
+```
+
+Call and await `stream.close()` when stopping early. Closing fails an active pull promptly and
+awaits local finalization; cancellation of remote producer work is cooperative. Forward an unread
+input directly by returning it. Passing, returning, mapping, or forwarding a stream transfers
+ownership, so the original cannot be pulled, closed, or sent again.
+
+## Ordering and Errors
+
+- Items in one stream remain ordered. Separate sibling streams have no relative ordering
+  guarantee; consume them concurrently if either producer may block waiting for demand.
+- Normal `None`, explicit `close`, transport disconnect, producer failure, and fatal invocation
+  failure are distinct outcomes.
+- A bare stream has no recoverable terminal error payload. Put `Either[E, A]` (or another explicit
+  result type) in each item when callers must handle an application error and continue.
+- Closing cannot interrupt arbitrary producer work already running, and remote cleanup need not
+  complete before a later invocation.
+
+## Calling Through Agent RPC
+
+Definition-derived and generated guest clients accept and return `AgentStream` recursively:
+
+```scala
+val target = StreamingAgentClient.get("main")
+val input  = AgentStream.fromPull(/* demand-driven source */)
+val result: Future[AgentStream[Long]] = target.doubled(input)
+```
+
+Declare cross-component dependencies in `golem.yaml` and follow the
+[`golem-call-another-agent-scala`](/next/how-to-guides/scala/golem-call-another-agent-scala) guide. Streaming methods are awaited only; generated clients omit
+fire-and-forget and scheduling methods. A constructor containing a stream is rejected.
+
+For an external JVM application, declare `bridge.scala.external` as described by
+[`golem-call-from-external-scala`](/next/how-to-guides/scala/golem-call-from-external-scala). Generated methods return the external bridge runtime's
+`Future[AgentStream[A]]`. Claim it once with `consume()`, call `pull()` on the resulting consumer,
+and call `cancel()` or `drop()` on that consumer when stopping early. Keep the client/session alive
+until every returned stream is drained or cancelled.
+
+## CLI and MCP
+
+The [`golem-invoke-agent-scala`](/next/how-to-guides/scala/golem-invoke-agent-scala) guide documents direct CLI streaming. Stdin can feed exactly one
+direct stream parameter with `-`; nested or sibling input streams require an SDK client. Structured
+output is a lifecycle-document sequence. A CLI disconnect detaches rather than cancelling the
+durable invocation; save and resume the session to reconnect.
+
+MCP uses Streamable HTTP, but currently excludes every method whose schema recursively contains an
+agent stream. Add a bounded, stream-free adapter if the same capability must be exposed over MCP.
+
+## Start and Verify
+
+```shell
+golem new --yes --language scala streaming-agent
+golem build
+golem deploy --yes
+```
+
+The repository's
+[cross-language streaming RPC fixture](https://github.com/golemcloud/golem/tree/main/test-components/agent-rpc)
+exercises direct, nested, sibling, forwarding, cancellation, and failure behavior across the
+shared RPC contract.

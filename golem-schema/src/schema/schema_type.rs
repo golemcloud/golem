@@ -524,6 +524,22 @@ impl SchemaType {
             metadata: MetadataEnvelope::default(),
         }
     }
+    /// Convenience: build a record whose fields have no metadata.
+    pub fn record_from_fields<N>(fields: impl IntoIterator<Item = (N, SchemaType)>) -> Self
+    where
+        N: Into<String>,
+    {
+        Self::record(
+            fields
+                .into_iter()
+                .map(|(name, body)| NamedFieldType {
+                    name: name.into(),
+                    body,
+                    metadata: MetadataEnvelope::default(),
+                })
+                .collect(),
+        )
+    }
     pub fn variant(cases: Vec<VariantCaseType>) -> Self {
         Self::Variant {
             cases,
@@ -1249,23 +1265,6 @@ impl Default for SecretSpec {
     }
 }
 
-#[cfg(test)]
-mod secret_spec_tests {
-    use super::*;
-    use test_r::test;
-
-    #[test]
-    fn secret_spec_defaults_inner_to_string_when_absent() {
-        let decoded: SecretSpec = serde_json::from_value(serde_json::json!({
-            "category": "api-key"
-        }))
-        .expect("SecretSpec JSON without inner should deserialize");
-
-        assert_eq!(decoded.inner.as_ref(), &SchemaType::string());
-        assert_eq!(decoded.category.as_deref(), Some("api-key"));
-    }
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -1295,9 +1294,32 @@ pub struct PermissionCardSpec {
 }
 
 #[cfg(test)]
-mod numeric_restriction_tests {
+mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn record_from_fields_builds_fields_without_metadata() {
+        assert_eq!(
+            SchemaType::record_from_fields([("name", SchemaType::string())]),
+            SchemaType::record(vec![NamedFieldType {
+                name: "name".into(),
+                body: SchemaType::string(),
+                metadata: MetadataEnvelope::default(),
+            }])
+        );
+    }
+
+    #[test]
+    fn secret_spec_defaults_inner_to_string_when_absent() {
+        let decoded: SecretSpec = serde_json::from_value(serde_json::json!({
+            "category": "api-key"
+        }))
+        .expect("SecretSpec JSON without inner should deserialize");
+
+        assert_eq!(decoded.inner.as_ref(), &SchemaType::string());
+        assert_eq!(decoded.category.as_deref(), Some("api-key"));
+    }
 
     #[test]
     fn normalize_drops_empty_to_none() {

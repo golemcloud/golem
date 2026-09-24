@@ -3,10 +3,68 @@
 Detailed mechanics behind the "Tool invocations and entity bodies" section of `SKILL.md`. Paths
 are relative to `golem-worker-executor/src/` unless stated.
 
-`durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. Tool discovery is a durable read
-of environment state. The ambient invocation is authorized once against the outer tool surface;
-middleware descendants retain that original calling principal rather than authorizing their
-transformed inner surfaces again.
+`durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. The ambient invocation is
+authorized once against the outer tool surface; middleware descendants retain that original
+calling principal rather than authorizing their transformed inner surfaces again.
+
+### Durable discovery
+
+`get_all_tools_model` and `get_tool_model` record
+`SerializableToolDiscoverySnapshot { deployment_revision: Option<u64>, dynamic_tools:
+Vec<SerializableMcpImportDiscovery> }`. On a live call,
+`get_live_tool_deployment_state` selects the latest deployment containing the running owner's
+component ID and component revision. It does not simply use the environment's current deployment,
+and the selection does not permanently pin the worker.
+
+Each dynamic item is the projected discovery metadata for one MCP import consulted, retained in
+import order. Empty tool lists and exclusions are observations too. A named lookup visits imports
+in order and stops once an import reports the requested name. On replay, dynamic observations are
+used directly without MCP or OAuth. Fixed definitions are exact-rehydrated from the recorded
+deployment revision: a missing revision fails permanently, while a transient registry retrieval
+failure retries that same revision without making a fresh live selection. A snapshot with
+`deployment_revision: None` is distinct from a selected deployment whose `dynamic_tools` is empty.
+
+`SerializableDiscoveredTools` retains structured definitions in the binary durable payload.
+Its public-oplog schema representation is JSON text containing those complete definitions:
+encoding metadata's recursive schema trees as schema values would exceed Protobuf's depth limit.
+MCP call Starts instead expose their already-typed input directly, without wrapping its schema
+in another schema value.
+
+Merge precedence reserves all native registered names first, including names not bound to the
+agent. Dynamic tools cannot replace them, and an earlier import wins over a later import with the
+same name.
+
+### Dynamic MCP admission and execution
+
+`resolve_tool_activation` turns a discovered MCP tool into a synthetic native activation using the
+reserved MCP bridge identity. Admission freezes the complete projected tool JSON, protocol
+version, exact deployment revision/import index/upstream name, compiled binding and metadata digest
+in the entity activation. This full snapshot, not a later discovery result, drives execution.
+The activation is filesystem-incapable and bypasses the installed native catalog; `mcp::invoke`
+validates the frozen projection against its binding and runs it through the executor's shared MCP
+transport.
+
+The remote `tools/call` is a `WriteRemote` durable call. It consumes the ordinary derived
+idempotency-key position, including normal atomic-region semantics. The encoded remote response is
+committed before projection, stdout publication, or best-effort 401 authorization feedback.
+Consequently completed replay is offline: it decodes and projects the recorded response without
+MCP, registry credential lookup, or transport use.
+
+Cancelled responses reconstruct stdout with `ByteStreamFailure::Cancelled`, not clean EOF.
+The live cancellation observer is absent during completed replay, so the native bridge must
+select that attachment terminal from its durable response before finishing the writer.
+
+Because MCP `-32602` is ambiguous, projection performs a separate durable `ReadRemote` presence
+observation after the committed call. It forces refresh of the exact admitted deployment/import
+source. A crash or quota suspension can repair this read without resending the committed call;
+ordinary atomic rollback can still roll back both. Observed absence maps to `InvalidToolName`;
+presence or a missing observation maps to `InvalidInput`. MCP `isError` response content projects
+to a custom tool error. Fixed discovery exact-rehydrates the recorded deployment revision, whereas
+dynamic invocation uses the exact source and projection frozen at admission.
+
+Each live HTTP dispatch checks network authorization and the per-invocation limit before charging
+the owner's monthly HTTP budget. Exhausting the invocation limit traps; exhausting the monthly
+budget suspends the durable invocation without a remote request or an invented call terminal.
 
 ### Dispatch and ownership
 
@@ -95,6 +153,18 @@ with `parent_start_index` pointing at its enclosing scope — normally that enti
 belonging to one owner": entity Stores clone the primary's `ReplayState`, which shares the cursor
 rather than opening a second cursor over the same oplog, and `HostedInstance::invoke_scoped` runs
 one entity export and then destroys the body `Store`.
+
+Admission reserves the caller's ordinary physical/atomic logical position on both live and replay
+and derives an entity seed from the active caller key. `EntityInvocationRequest` records the
+caller's `assume_idempotence`; `EntityInvocationScope` installs this policy and seed in the body
+context. A child admitted under a logical caller uses its own counter starting at `INITIAL` so
+atomic rollback can move physical Starts without changing child keys. This counter is Store-local
+derivation state, not a copied or shared atomic lease. Every derived-key call consumes its slot on
+completed replay too, including `generate_idempotency_key` before its live-only closure.
+
+Tests: `tool_discovery::dynamic_tool_crash_obeys_caller_atomic_and_non_idempotent_policy` and
+`tool_streaming::entity_generated_key_replay_reserves_position_for_incomplete_http_retry` use real
+reconstruction and count upstream effects as well as attempts.
 
 ### Pinned middleware traversal
 

@@ -24,11 +24,18 @@ let instance
 let componentContext = 0
 let nextWaitableSet = 1
 let schemaValueStreamHostMode = 0
+let toolHostMode = 0
+let durableStreamHostMode = 0
+let nextDurableStreamHandle = 400
+const durableStreamResources = new Map()
+const durableStreamReplies = []
+const durableStreamConstructors = { reader: 0, writer: 0 }
 const resourceDrops = {
   secret: 0,
   "quota-token": 0,
   "permission-card": 0,
   "schema-value-stream": 0,
+  "future-invoke-result": 0,
 }
 
 const rootImports = new Proxy(
@@ -118,6 +125,8 @@ const importObject = {
           return resourceDrops["permission-card"]
         case 3:
           return resourceDrops["schema-value-stream"]
+        case 4:
+          return resourceDrops["future-invoke-result"]
         default:
           throw new Error(`unknown resource kind requested by test: ${kind}`)
       }
@@ -125,10 +134,158 @@ const importObject = {
     "set-schema-value-stream-host-mode"(mode) {
       schemaValueStreamHostMode = mode
     },
+    "set-tool-host-mode"(mode) {
+      toolHostMode = mode
+    },
+    "set-durable-stream-host-mode"(mode) {
+      durableStreamHostMode = mode
+    },
+    "durable-stream-reply-string"(pointer, length) {
+      durableStreamReplies.push([pointer, length])
+    },
+    "durable-stream-resource-stat"(handle, field) {
+      if (field === 0) return durableStreamConstructors.reader
+      if (field === 1) return durableStreamConstructors.writer
+      const resource = durableStreamResources.get(handle)
+      if (!resource) throw new Error("unknown DS resource")
+      if (field === 2) return resource.calls
+      if (field === 3) return resource.dropped ? 1 : 0
+      throw new Error("unknown DS resource statistic")
+    },
   },
 }
 
 for (const imported of WebAssembly.Module.imports(module)) {
+  if (imported.kind === "function" && imported.module === "golem:agent/durable-streams@2.0.0") {
+    importObject[imported.module] ??= {}
+    importObject[imported.module][imported.name] = (...args) => {
+      const memory = new DataView(instance.exports.memory.buffer)
+      const string = (pointer, length) => String.fromCharCode(
+        ...new Uint16Array(instance.exports.memory.buffer, pointer, length),
+      )
+      const writer = imported.name.includes("durable-stream-writer")
+      const kind = writer ? "writer" : "reader"
+      if (imported.name === `[constructor]durable-stream-${kind}`) {
+        const descriptor = writer ? {
+          url: string(args[0], args[1]), contentType: string(args[2], args[3]),
+          producerId: string(args[4], args[5]), epoch: args[6], timeout: args[7],
+          auth: args[8] ? args[9] : null,
+        } : {
+          url: string(args[0], args[1]), mode: args[2], timeout: args[3],
+          auth: args[4] ? args[5] : null,
+        }
+        if (durableStreamHostMode !== 0 &&
+            (descriptor.url !== "https://example.test/stream" ||
+             descriptor.auth !== 77 || descriptor.timeout !== 12345n ||
+             (writer && (descriptor.contentType !== "application/json" || descriptor.producerId !== "producer")))) {
+          throw new Error("incorrect immutable DS descriptor or borrowed secret lowering")
+        }
+        const handle = nextDurableStreamHandle++
+        durableStreamConstructors[kind]++
+        durableStreamResources.set(handle, {
+          kind, descriptor: Object.freeze(descriptor), calls: 0, dropped: false,
+          requests: new Map(),
+        })
+        return handle
+      }
+      const dropping = imported.name === `[resource-drop]durable-stream-${kind}`
+      const handle = dropping ? args[0] : memory.getInt32(args[0], true)
+      const resource = durableStreamResources.get(handle)
+      if (!resource || resource.kind !== kind || resource.dropped) {
+        throw new Error("invalid or dropped DS resource handle")
+      }
+      if (dropping) {
+        resource.dropped = true
+        return
+      }
+      const method = writer ? "append" : "read"
+      if (imported.name !== `[async-lower][method]durable-stream-${kind}.${method}` || durableStreamHostMode === 0) {
+        throw new Error(`unexpected live import in SDK state test: ${imported.name}`)
+      }
+      const [request, result] = args
+      resource.calls++
+      const sequence = writer ? memory.getBigUint64(request + 24, true) : null
+      if (writer) {
+        const tag = memory.getUint8(request + 8)
+        const pointer = memory.getInt32(request + 12, true)
+        const length = memory.getInt32(request + 16, true)
+        const payload = tag === 0 ? Array.from({ length }, (_, index) => {
+          const base = pointer + index * 8
+          return string(memory.getInt32(base, true), memory.getInt32(base + 4, true))
+        }) : Array.from(new Uint8Array(instance.exports.memory.buffer, pointer, length))
+        const body = JSON.stringify([tag, payload, memory.getUint8(request + 32)])
+        if (resource.requests.has(sequence) && resource.requests.get(sequence) !== body) {
+          throw new Error("uncertain append changed body or close flag on the same resource")
+        }
+        resource.requests.set(sequence, body)
+      }
+      const replyString = offset => {
+        const reply = durableStreamReplies.shift()
+        if (!reply) throw new Error("fixture reply string not supplied")
+        memory.setInt32(offset, reply[0], true)
+        memory.setInt32(offset + 4, reply[1], true)
+      }
+      new Uint8Array(instance.exports.memory.buffer, result, 72).fill(0)
+      if (!writer && durableStreamHostMode === 4) {
+        const offset = string(memory.getInt32(request + 4, true), memory.getInt32(request + 8, true))
+        const cursor = memory.getUint8(request + 12) ? string(memory.getInt32(request + 16, true), memory.getInt32(request + 20, true)) : null
+        const contentType = memory.getUint8(request + 28) ? string(memory.getInt32(request + 32, true), memory.getInt32(request + 36, true)) : null
+        const first = resource.calls === 1
+        if (offset !== (first ? "now" : "opaque:next") ||
+            cursor !== (first ? null : "independent:cursor") ||
+            contentType !== (first ? null : "application/json") ||
+            memory.getUint8(request + 24) !== (first ? 0 : 2)) {
+          throw new Error("incorrect compact read checkpoint, transport or pinned content type")
+        }
+        replyString(result + 8) // owned byte allocation
+        replyString(result + 16)
+        replyString(result + 24)
+        memory.setUint8(result + 32, 1)
+        replyString(result + 36)
+        memory.setUint8(result + 44, 1)
+        memory.setUint8(result + 45, first ? 0 : 1)
+      } else if (writer && (durableStreamHostMode === 2 || durableStreamHostMode === 3)) {
+        if (durableStreamHostMode === 3) {
+          memory.setUint8(result + 8, 1)
+          replyString(result + 12)
+        }
+        memory.setBigUint64(result + 24, resource.descriptor.epoch, true)
+        memory.setBigUint64(result + 32, sequence, true)
+        memory.setUint8(result + 40, memory.getUint8(request + 32))
+      } else {
+        memory.setUint8(result, 1)
+        memory.setUint8(result + 8, 13) // unavailable
+        replyString(result + 12)
+        memory.setUint8(result + 24, 1)
+        memory.setBigUint64(result + 32, 987n, true)
+        memory.setUint8(result + 40, 1)
+        memory.setBigUint64(result + 48, 9007199254740991n, true)
+        memory.setUint8(result + 56, 1)
+        memory.setBigUint64(result + 64, 9007199254740990n, true)
+      }
+      return 2
+    }
+    continue
+  }
+  if (
+    imported.kind === "function" &&
+    ((imported.module === "wasi:clocks/monotonic-clock@0.3.0" &&
+        imported.name === "[async-lower]wait-for") ||
+      (imported.module === "golem:core/types@2.0.0" &&
+        imported.name === "uuid-to-string") ||
+      (imported.module === "golem:api/host@1.5.0" &&
+        imported.name === "generate-idempotency-key"))
+  ) {
+    importObject[imported.module] ??= {}
+    importObject[imported.module][imported.name] = request => {
+      if (imported.name === "[async-lower]wait-for" && durableStreamHostMode === 1) {
+        if (request !== 1000000n) throw new Error("incorrect timer duration lowering")
+        return 2
+      }
+      throw new Error(`unexpected live import in SDK state test: ${imported.name}`)
+    }
+    continue
+  }
   if (
     imported.kind === "function" &&
     imported.module === "golem:tool/streams@0.1.0"
@@ -142,10 +299,42 @@ for (const imported of WebAssembly.Module.imports(module)) {
     imported.module === "golem:tool/host@0.1.0"
   ) {
     importObject[imported.module] ??= {}
-    importObject[imported.module][imported.name] = () => {
-      throw new Error(
-        `cancelled tool input unexpectedly reached the host: ${imported.name}`,
-      )
+    importObject[imported.module][imported.name] = (...args) => {
+      if (toolHostMode === 0) {
+        throw new Error(
+          `cancelled tool input unexpectedly reached the host: ${imported.name}`,
+        )
+      }
+      const memory = new DataView(instance.exports.memory.buffer)
+      switch (imported.name) {
+        case "[static]tool-rpc.create": {
+          const resultPtr = args[2]
+          memory.setUint8(resultPtr, 0)
+          memory.setInt32(resultPtr + 4, 1001, true)
+          return
+        }
+        case "[resource-drop]tool-rpc":
+          return
+        case "[method]tool-rpc.async-invoke-and-await":
+          return 2001
+        case "[async-lower][method]future-invoke-result.get": {
+          const resultPtr = args[1]
+          if (toolHostMode === 1) {
+            memory.setUint8(resultPtr, 1)
+            memory.setUint8(resultPtr + 4, 5)
+          } else {
+            memory.setUint8(resultPtr, 0)
+            memory.setUint8(resultPtr + 4, 0)
+            memory.setUint8(resultPtr + 40, 0)
+          }
+          return 2
+        }
+        case "[resource-drop]future-invoke-result":
+          resourceDrops["future-invoke-result"]++
+          return
+        default:
+          throw new Error(`unsupported tool test import: ${imported.name}`)
+      }
     }
     continue
   }

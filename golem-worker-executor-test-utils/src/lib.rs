@@ -99,9 +99,7 @@ use golem_worker_executor::durable_host::{
     DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
     SnapshotBoundaryBlocker,
 };
-use golem_worker_executor::model::{
-    AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
-};
+use golem_worker_executor::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use golem_worker_executor::native_tool::{
     NativeToolAdapter, NativeToolCatalog, NativeToolRegistration,
 };
@@ -689,12 +687,12 @@ impl TestWorkerExecutor {
             .await
             .remove(&OplogIndex::INITIAL)
             .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
-        let OplogEntry::Create { instance_id, .. } = create else {
+        let OplogEntry::Create { parameters, .. } = create else {
             return Err(anyhow!("first oplog entry is not create: {owned_agent_id}"));
         };
         services
             .worker_service()
-            .remove_cached_status(&owned_agent_id, AgentFingerprint(instance_id))
+            .remove_cached_status(&owned_agent_id, AgentFingerprint(parameters.instance_id))
             .await?;
         Ok(())
     }
@@ -1030,7 +1028,9 @@ impl TestWorkerExecutor {
         Ok(worker
             .add_to_oplog(OplogEntry::card_event_queued(
                 None,
-                golem_common::base_model::oplog::QueuedCardEvent::revoke(card_id),
+                Box::new(golem_common::base_model::oplog::QueuedCardEvent::revoke(
+                    card_id,
+                )),
             ))
             .await)
     }
@@ -1049,7 +1049,9 @@ impl TestWorkerExecutor {
         worker
             .add_and_commit_oplog(OplogEntry::card_event_queued(
                 None,
-                golem_common::base_model::oplog::QueuedCardEvent::install(card),
+                Box::new(golem_common::base_model::oplog::QueuedCardEvent::install(
+                    card,
+                )),
             ))
             .await;
         Ok(())
@@ -1064,6 +1066,22 @@ impl TestWorkerExecutor {
         self.additional_test_deps
             .active_agents
             .get()?
+            .try_get_active_agent(owned_agent_id)
+            .await
+    }
+
+    pub async fn production_active_agent(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<
+        Arc<
+            golem_worker_executor::services::active_agents::ActiveAgent<
+                golem_worker_executor::workerctx::default::Context,
+            >,
+        >,
+    > {
+        self.production_active_agents
+            .as_ref()?
             .try_get_active_agent(owned_agent_id)
             .await
     }
@@ -1813,6 +1831,8 @@ type WrapBlobStoreServiceFn =
 type WrapComponentServiceFn =
     dyn Fn(Arc<dyn ComponentService>) -> Arc<dyn ComponentService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
+type WrapWorkerEnumerationServiceFn =
+    dyn Fn(Arc<dyn WorkerEnumerationService>) -> Arc<dyn WorkerEnumerationService> + Send + Sync;
 type WrapWorkerProxyFn = dyn Fn(Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> + Send + Sync;
 type CreateCardServiceFn = dyn Fn() -> Arc<dyn CardService> + Send + Sync;
 type CreateDirectInvocationAuthFn = dyn Fn() -> Arc<dyn DirectInvocationAuthService> + Send + Sync;
@@ -1829,6 +1849,7 @@ pub struct TestExecutorOverrides {
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
+    pub wrap_worker_enumeration_service: Option<Arc<WrapWorkerEnumerationServiceFn>>,
     /// Wraps the executor's `ShardService`, so a test can observe or fake which
     /// agents this executor owns. Everything that gates on ownership reads it,
     /// including the periodic re-check a caller parked in
@@ -1838,6 +1859,8 @@ pub struct TestExecutorOverrides {
     pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     pub environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
+    /// Replaces configured account limits for the `TestWorkerCtx` bootstrap.
+    pub resource_limits: Option<Arc<dyn ResourceLimits>>,
     pub native_tool_metadata: Option<golem_common::schema::tool::Tool>,
     /// Named retry policies that the executor's `EnvironmentStateService`
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
@@ -2197,7 +2220,7 @@ pub fn native_streaming_tool_metadata() -> golem_common::schema::tool::Tool {
         .metadata()
 }
 
-fn native_test_helper_definition(
+pub fn native_test_helper_definition(
     effects: Arc<AtomicUsize>,
 ) -> golem_native_tool::NativeToolDefinition {
     use golem_native_tool::NativeToolInvoker;
@@ -2268,11 +2291,11 @@ impl CallCountManagement for TestWorkerCtx {
     }
 
     fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
-        Ok(()) // test context: monthly limits are always unlimited
+        self.durable_ctx.record_monthly_http_call()
     }
 
     fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
-        Ok(()) // test context: monthly limits are always unlimited
+        self.durable_ctx.record_monthly_rpc_call()
     }
 }
 
@@ -2621,7 +2644,7 @@ impl WorkerCtx for TestWorkerCtx {
             card_service,
             card_interest_index,
             component_service,
-            account_resource_limits,
+            account_resource_limits.clone(),
             config,
             filesystem,
             linear_memory,
@@ -2637,8 +2660,8 @@ impl WorkerCtx for TestWorkerCtx {
             websocket_connection_pool,
             pending_update,
             original_phantom_id,
-            u64::MAX,
-            u64::MAX,
+            account_resource_limits.per_invocation_http_call_limit(),
+            account_resource_limits.per_invocation_rpc_call_limit(),
             runtime,
             entity_execution_mode,
             owner_execution,
@@ -2839,13 +2862,6 @@ impl FileSystemReading for TestWorkerCtx {
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        self.durable_ctx.read_file(path).await
     }
 }
 
@@ -3117,6 +3133,22 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         }
     }
 
+    fn create_resource_limits(
+        &self,
+        golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> Arc<dyn ResourceLimits> {
+        self.overrides.resource_limits.clone().unwrap_or_else(|| {
+            golem_worker_executor::services::resource_limits::configured(
+                &golem_config.resource_limits,
+                golem_config.resource_usage_metering,
+                registry_service,
+                shutdown_token,
+            )
+        })
+    }
+
     fn create_component_service(
         &self,
         _golem_config: &GolemConfig,
@@ -3219,6 +3251,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             wrap(rpc)
         } else {
             rpc
+        }
+    }
+
+    fn wrap_worker_enumeration_service(
+        &self,
+        service: Arc<dyn WorkerEnumerationService>,
+    ) -> Arc<dyn WorkerEnumerationService> {
+        if let Some(wrap) = &self.overrides.wrap_worker_enumeration_service {
+            wrap(service)
+        } else {
+            service
         }
     }
 }
@@ -4369,6 +4412,14 @@ impl TestOplog {
 impl Oplog for TestOplog {
     fn retire(&self) {
         self.oplog.retire();
+    }
+
+    fn is_retired(&self) -> bool {
+        self.oplog.is_retired()
+    }
+
+    fn closed(&self) -> golem_worker_executor::services::oplog::OplogCloseCompletion {
+        self.oplog.closed()
     }
 
     fn task_owner(&self) -> Option<&golem_worker_executor::services::oplog::WorkerTasks> {

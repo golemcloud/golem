@@ -99,6 +99,7 @@ pub struct EnvBasedTestDependenciesConfig {
     pub quiet: bool,
     pub redis_host: String,
     pub redis_port: u16,
+    pub registry_http_port: u16,
     pub redis_key_prefix: String,
     pub golem_repo_root: PathBuf,
     pub unique_network_id: String,
@@ -116,6 +117,12 @@ impl EnvBasedTestDependenciesConfig {
 
         if let Some(redis_port) = opt_env_var("REDIS_PORT") {
             self.redis_port = redis_port.parse().expect("Failed to parse REDIS_PORT");
+        }
+
+        if let Some(registry_http_port) = opt_env_var("REGISTRY_HTTP_PORT") {
+            self.registry_http_port = registry_http_port
+                .parse()
+                .expect("Failed to parse REGISTRY_HTTP_PORT");
         }
 
         if let Some(redis_key_prefix) = opt_env_var("REDIS_KEY_PREFIX") {
@@ -243,6 +250,7 @@ impl Default for EnvBasedTestDependenciesConfig {
             quiet: false,
             redis_host: "localhost".to_string(),
             redis_port: 6379,
+            registry_http_port: 8081,
             redis_key_prefix: "".to_string(),
             golem_repo_root: PathBuf::from(".."),
             unique_network_id: Uuid::new_v4().to_string(),
@@ -322,7 +330,7 @@ impl EnvBasedTestDependencies {
             SpawnedRegistryService::new(
                 &config.debug_targets_dirs().join("golem-registry-service"),
                 &config.golem_repo_root.join("golem-registry-service"),
-                8081,
+                config.registry_http_port,
                 9091,
                 rdb,
                 Some(component_compilation_service),

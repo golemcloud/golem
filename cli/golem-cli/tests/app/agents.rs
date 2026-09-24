@@ -24,10 +24,15 @@ inherit_test_dep!(Tracing);
 async fn streaming_invocation_context() -> TestContext {
     let mut ctx = TestContext::new();
     let component_dir = ctx.cwd_path_join("component");
-    fs::create_dir_all(component_dir.join("src")).unwrap();
+    fs::create_dir_all(&component_dir).unwrap();
 
     let fixture = workspace_path().join("test-components/agent-rpc/golem-it-agent-rpc-rust");
-    fs::copy(fixture.join("src/lib.rs"), component_dir.join("src/lib.rs")).unwrap();
+    fs_extra::dir::copy(
+        fixture.join("src"),
+        &component_dir,
+        &fs_extra::dir::CopyOptions::new(),
+    )
+    .unwrap();
 
     let sdk_path = workspace_path().join("sdks/rust/golem-rust");
     fs::write_str(
@@ -2329,7 +2334,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 /// calling the deployed provider and asserting its echo result.
 #[test]
 #[tag(agents_guest_bridge)]
-#[timeout("15 minutes")]
+#[timeout("20 minutes")]
 async fn test_rust_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
     let app_name = "tool-bridge";

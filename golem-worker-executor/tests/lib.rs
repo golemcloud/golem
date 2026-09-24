@@ -32,6 +32,8 @@ pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
 pub mod durability;
+pub mod external_durable_stream;
+pub mod filesystem_inspection;
 pub mod fork;
 pub mod fuel;
 pub mod hot_update;
@@ -42,6 +44,7 @@ pub mod indexed_storage;
 pub mod instance_layer;
 pub mod key_value_storage;
 pub mod keyvalue;
+pub mod mcp_stdout;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
 pub mod oplog_archive_schedule;
@@ -101,6 +104,7 @@ tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(in_function_retry, in_function_retry);
 tag_suite!(http, group1);
+tag_suite!(external_durable_stream, group1);
 tag_suite!(rdbms, group1);
 
 tag_suite!(hot_update, group2);
@@ -112,6 +116,7 @@ tag_suite!(retry_policies, group2);
 
 tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
+tag_suite!(filesystem_inspection, group3);
 tag_suite!(revert, group3);
 
 tag_suite!(websocket, group4);
@@ -127,6 +132,7 @@ tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
 tag_suite!(tool_discovery, group1);
+tag_suite!(mcp_stdout, group1);
 tag_suite!(tool_streaming, group1);
 
 sequential_suite!(key_value_storage);
@@ -203,6 +209,12 @@ test_component!(
     "agent_rpc_rust",
     "golem_it_agent_rpc_rust_release",
     "golem-it:agent-rpc-rust"
+);
+test_component!(
+    external_durable_streams,
+    "external_durable_streams",
+    "golem_it_external_durable_streams_release",
+    "golem-it:external-durable-streams"
 );
 test_component!(
     agent_rpc_rust_as_resolve_target,

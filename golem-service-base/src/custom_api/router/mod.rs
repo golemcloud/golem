@@ -54,7 +54,112 @@ mod tests {
     use super::Router;
     use crate::custom_api::PathSegment;
     use http::Method;
+    use serde_json::Value;
     use test_r::test;
+
+    #[test]
+    fn shared_complete_typed_routes() {
+        assert_shared_typed_routes(&[
+            "route-typed-parameter-before-literal-mount",
+            "route-typed-404-terminal",
+        ]);
+    }
+
+    #[test]
+    fn typed_literal_dead_end_backtracks_to_parameter_route() {
+        assert_shared_typed_routes(&["route-literal-dead-end"]);
+    }
+
+    fn assert_shared_typed_routes(ids: &[&str]) {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+        for &id in ids {
+            let case = corpus["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["id"] == id)
+                .unwrap();
+            let mut router = Router::new();
+            for route in case["input"]["typed"].as_array().unwrap() {
+                let path = route["path"].as_str().unwrap();
+                let segments = path
+                    .strip_prefix('/')
+                    .unwrap()
+                    .split('/')
+                    .map(|segment| {
+                        if let Some(name) = segment
+                            .strip_prefix('{')
+                            .and_then(|segment| segment.strip_suffix('}'))
+                        {
+                            PathSegment::Variable {
+                                display_name: name.to_string(),
+                            }
+                        } else {
+                            PathSegment::Literal {
+                                value: segment.to_string(),
+                            }
+                        }
+                    })
+                    .collect();
+                assert!(
+                    router.add_route(
+                        Method::from_bytes(route["method"].as_str().unwrap().as_bytes()).unwrap(),
+                        segments,
+                        route["id"].as_str().unwrap(),
+                    ),
+                    "{id}"
+                );
+            }
+            let segments = case["input"]["target"]
+                .as_str()
+                .unwrap()
+                .strip_prefix('/')
+                .unwrap()
+                .split('/')
+                .collect::<Vec<_>>();
+            let method =
+                Method::from_bytes(case["input"]["method"].as_str().unwrap().as_bytes()).unwrap();
+            let selected = router.route(&method, &segments);
+            assert_eq!(
+                selected.as_ref().map(|(route, _)| **route),
+                case["expect"]["selected"].as_str(),
+                "{id}"
+            );
+            let expected_route = case["input"]["typed"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|route| route["id"] == case["expect"]["selected"])
+                .unwrap();
+            let expected_captures = expected_route["path"]
+                .as_str()
+                .unwrap()
+                .strip_prefix('/')
+                .unwrap()
+                .split('/')
+                .zip(&segments)
+                .filter_map(|(pattern, value)| pattern.starts_with('{').then_some(*value))
+                .collect::<Vec<_>>();
+            assert_eq!(selected.unwrap().1, expected_captures, "{id}");
+        }
+    }
+
+    #[test]
+    fn typed_root_and_concrete_methods_are_distinct() {
+        let mut router = Router::new();
+        assert!(router.add_route(Method::GET, vec![], "get-root"));
+        assert!(router.add_route(Method::from_bytes(b"ANY").unwrap(), vec![], "extension"));
+        assert_eq!(router.route(&Method::GET, &[]), Some((&"get-root", vec![])));
+        assert_eq!(router.route(&Method::HEAD, &[]), None);
+        assert_eq!(router.route(&Method::POST, &[]), None);
+        assert_eq!(
+            router.route(&Method::from_bytes(b"ANY").unwrap(), &[]),
+            Some((&"extension", vec![]))
+        );
+    }
 
     #[test]
     fn test_router() {

@@ -1,0 +1,19 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/clocks/monotonic-clock"
+
+// Values
+pub fn get_resolution() -> UInt64
+
+pub fn now() -> UInt64
+
+pub async fn wait_for(UInt64) -> Unit
+
+pub async fn wait_until(UInt64) -> Unit
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

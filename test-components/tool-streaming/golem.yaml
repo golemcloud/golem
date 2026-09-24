@@ -22,6 +22,7 @@ components:
       - golem-it:tool-streaming-rust-provider/streaming
       - golem-it:tool-streaming-rust-provider/capable-streaming
       - golem-it:tool-streaming-rust-provider/typed-output-stream
+      - golem-it:tool-streaming-rust-provider/secret-policy-probe
   golem-it:tool-streaming-rust-middleware:
     dir: rust-middleware
     templates: rust, rust-test-component
@@ -30,6 +31,7 @@ tools:
   streaming: {}
   capable-streaming: {}
   typed-output-stream: {}
+  secret-policy-probe: {}
 
 agents:
   ToolStreamingCaller:
@@ -37,6 +39,9 @@ agents:
       streaming: {}
       capable-streaming: {}
       typed-output-stream: {}
+  ToolSecretCaller:
+    tools:
+      secret-policy-probe: {}
 
 bridge:
   rust:
@@ -45,6 +50,7 @@ bridge:
       - streaming
       - capable-streaming
       - typed-output-stream
+      - secret-policy-probe
 
 environments:
   local:

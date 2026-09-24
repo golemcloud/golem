@@ -1,5 +1,16 @@
 import { Effect, Schema, Stream } from "effect"
-import { defineAgent, method, Quota, Reflection, Tool, WitTypes } from "@golemcloud/effect-golem"
+import {
+  AgentIdentity,
+  defineAgent,
+  defineAgentClient,
+  method,
+  Principal,
+  Quota,
+  Reflection,
+  Tool,
+  WitCodec,
+  WitTypes,
+} from "@golemcloud/effect-golem"
 import { TsCrossStreamingClient } from "ts-cross-streaming-tool-guest-client"
 import { TsPeer as GeneratedTsPeer } from "ts-peer-guest-client"
 
@@ -40,12 +51,19 @@ const RustPeer = defineAgent({
   methods: { echo: method({ input: { value: Schema.String }, success: Schema.String }) },
 })
 
+const TsPrincipalPeer = defineAgent({
+  name: "TsPrincipalPeer",
+  id: { tenant: Schema.String, caller: Principal.PrincipalSchema },
+  methods: { value: method({ input: {}, success: Schema.String }) },
+})
+
 defineAgent({
   name: "EffectConsumer",
   id: { name: Schema.String },
   methods: {
     roundTrip: method({ input: { value: Schema.String }, success: Schema.String }),
     reflectedRoundTrip: method({ input: { value: Schema.String }, success: Schema.String }),
+    principalIdentityRoundTrip: method({ input: {}, success: Schema.String }),
     ephemeralRoundTrip: method({ input: { value: Schema.String }, success: Schema.String }),
     nonfiniteReflection: method({ input: {}, success: Schema.String }),
     nestedStreamRoundTrip: method({
@@ -59,6 +77,8 @@ defineAgent({
     scheduledMetadata: method({ input: {}, success: Schema.String }),
     callTsTool: method({ input: { payload: Schema.String }, success: Schema.String }),
     toolRoundTrip: method({ input: { payload: Schema.String }, success: Schema.String }),
+    reflectedTsTool: method({ input: { payload: Schema.String }, success: Schema.String }),
+    reflectedTsOptionalTool: method({ input: {}, success: Schema.String }),
     quotaThroughTs: method({ input: {}, success: Schema.String }),
   },
 }).implement({
@@ -86,12 +106,50 @@ defineAgent({
           const method = yield* client.method("echo")
           const result = yield* method.invoke({ value })
           const output = result.value as { language: string; value: string }
-          const byId = yield* Reflection.getAgentTypeByAgentId(result.metadata.agentId)
+          const identity = yield* AgentIdentity.parse(result.metadata.agentId)
+          const byId = yield* Reflection.getAgentTypeByAgentId(identity)
           const all = yield* Reflection.getAllAgentTypes
           if (byId?.name !== "TsPeer" || !all.some((type) => type.name === "RustPeer")) {
             return "discovery-mismatch"
           }
-          return `${reflected.name}:${echo.name}:${output.language}:${output.value}`
+          const dynamic = yield* identity.dynamicClient()
+          const dynamicResult = yield* dynamic.method("echo").invoke(echo.input.packJson({ value }))
+          if (echo.output === undefined || dynamicResult.value === undefined) {
+            return "missing:dynamic-output"
+          }
+          const dynamicOutput = echo.output.unpackJson(dynamicResult.value) as {
+            language: string
+            value: string
+          }
+          return `${reflected.name}:${echo.name}:${output.language}:${output.value}|${dynamicOutput.language}:${dynamicOutput.value}`
+        }),
+      ),
+    principalIdentityRoundTrip: () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tenant = `principal-effect-${name}`
+          const reflected = yield* Reflection.getAgentType("TsPrincipalPeer")
+          if (reflected === undefined || reflected.mode !== "durable")
+            return "missing-principal-type"
+          const client = yield* reflected.client.get({ tenant })
+          const first = yield* (yield* client.method("value")).invoke({})
+          const identity = yield* AgentIdentity.parse(first.metadata.agentId)
+          if (
+            identity.typeName !== "TsPrincipalPeer" ||
+            identity.constructorValue.valueNodes.filter((node) => node.tag === "record-value")
+              .length !== 1
+          ) {
+            return "principal-in-id"
+          }
+          const localId = yield* TsPrincipalPeer.agentId({ tenant })
+          if (localId.encoded !== identity.encoded) return "identity-mismatch"
+          const full = yield* identity.client(TsPrincipalPeer)
+          const methodOnly = yield* identity.client(
+            defineAgentClient({ methods: TsPrincipalPeer.methods }),
+          )
+          const second = yield* full.value({})
+          const third = yield* methodOnly.value({})
+          return `${first.value}|${second}|${third}`
         }),
       ),
     ephemeralRoundTrip: ({ value }) =>
@@ -218,6 +276,66 @@ defineAgent({
           return `${result}|${stdout}`
         }),
       ).pipe(Effect.orDie),
+    reflectedTsTool: ({ payload }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tool = yield* Reflection.getToolType("ts-cross-streaming")
+          if (!tool) return "missing:ts-cross-streaming"
+          const command = tool.client.command([])
+          const started = yield* command.startJson(
+            { label: name },
+            Stream.succeed(new TextEncoder().encode(payload)),
+          )
+          const json = yield* started.collect
+          const nativeCall = yield* command.startValue(
+            command.inputSchema!.packJson({ label: name }),
+            Stream.succeed(new TextEncoder().encode(payload)),
+          )
+          const native = yield* nativeCall.collect
+          const codec = yield* WitCodec.compile(Schema.Struct({ label: Schema.String }))
+          const dynamicCall = yield* new Reflection.DynamicToolClient("ts-cross-streaming").start(
+            [],
+            { graph: codec.schemaGraph, value: yield* codec.encode({ label: name }) },
+            Stream.succeed(new TextEncoder().encode(payload)),
+            true,
+          )
+          const dynamic = yield* dynamicCall.collect
+          const invalidRejected = yield* command.startJson({ label: 7 }).pipe(
+            Effect.as(false),
+            Effect.catch((error) =>
+              Effect.succeed(
+                error instanceof Reflection.ToolReflectionError && error.phase === "input",
+              ),
+            ),
+          )
+          return `${json.result}|${new TextDecoder().decode(json.stdout)}|${command.result!.unpackJson(native.result!)}|${new TextDecoder().decode(native.stdout)}|${command.result!.unpackJson(dynamic.result!.value)}|${new TextDecoder().decode(dynamic.stdout)}|${invalidRejected}`
+        }),
+      ).pipe(Effect.orDie),
+    reflectedTsOptionalTool: () => {
+      let stage = "omitted JSON"
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const tool = yield* Reflection.getToolType("ts-optional-reflection")
+          if (!tool) return "missing:ts-optional-reflection"
+          const command = tool.client.command([])
+          const omitted = yield* command.invokeJson({ maybe: null })
+          stage = "supplied JSON"
+          const supplied = yield* command.invokeJson({ maybe: "supplied" })
+          stage = "omitted native"
+          const omittedNative = yield* command.invokeValue(
+            command.inputSchema!.packJson({ maybe: null }),
+          )
+          stage = "supplied native"
+          const suppliedNative = yield* command.invokeValue(
+            command.inputSchema!.packJson({ maybe: "supplied" }),
+          )
+          return `${omitted}|${supplied}|${command.result!.unpackJson(omittedNative!)}|${command.result!.unpackJson(suppliedNative!)}`
+        }),
+      ).pipe(
+        Effect.catch((error) => Effect.succeed(`${stage}: ${JSON.stringify(error)}`)),
+        Effect.orDie,
+      )
+    },
     quotaThroughTs: () =>
       Effect.scoped(
         Effect.gen(function* () {

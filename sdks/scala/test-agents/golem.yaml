@@ -27,6 +27,13 @@ components:
     outputWasm: .golem/agents/scala_examples.wasm
 
 agents:
+  ScalaWebsite:
+    config:
+      greeting: Hello from Scala
+    files:
+    - sourcePath: ./http-assets/index.html
+      targetPath: /site/index.html
+      permissions: read-only
   ConfigAgent:
     config:
       appName: "ManifestApp"
@@ -36,18 +43,30 @@ agents:
   ScalaToolStreamingCaller:
     tools:
       scala-streaming: { }
+  ScalaToolReflectionCaller:
+    tools:
+      scala-reflection-test: { }
 
 tools:
   git: { }
   grep: { }
   scala-streaming: { }
+  scala-reflection-test: { }
   tool-demo: { }
+  middleware:
+    middleware-fixture-transparent: { }
+    middleware-fixture-adapter: { }
+    middleware-fixture-universal: { }
+    middleware-fixture-typed-universal: { }
+    middleware-fixture-typed-monomorphic: { }
 
 httpApi:
   deployments:
     local:
     - domain: localhost:9006
       agents:
+        ScalaWebsite: { }
+        HttpDocuments: { }
         WeatherAgent: { }
         InventoryAgent: { }
         CatalogAgent: { }

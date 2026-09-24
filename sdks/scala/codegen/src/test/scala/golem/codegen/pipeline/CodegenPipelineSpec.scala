@@ -58,6 +58,66 @@ class CodegenPipelineSpec extends munit.FunSuite {
   private def discover(sources: SourceDiscovery.SourceInput*): SourceDiscovery.Result =
     SourceDiscovery.discover(sources)
 
+  private val httpCorpus = {
+    val input = getClass.getResourceAsStream("/corpus.json")
+    require(input != null, "shared HTTP corpus is missing")
+    try ujson.read(input)("cases").arr.toList
+    finally input.close()
+  }
+
+  httpCorpus
+    .filter(c =>
+      c("suite").str == "tooling" &&
+        Set("provisioning", "bridge-client").contains(c("input")("consumer").str)
+    )
+    .foreach { c =>
+      test(c("id").str) {
+        val input      = c("input")
+        val annotation =
+          if (input("kind").str == "http-router") "@httpRouter(\"Surface\", \"/\")"
+          else "@agentDefinition(mount = \"/\", exposeFiles = Array((\"/*\", \"/public/$1\")))"
+        val source = SourceDiscovery.SourceInput(
+          "Surface.scala",
+          s"""
+        package example
+        $annotation
+        trait Surface { class Id() }
+        @agentImplementation() final class SurfaceImpl() extends Surface
+      """
+        )
+        val generated = CodegenPipeline.run(discover(source), Some("example"), rpcEnabled = true)
+        val included  =
+          if (input("consumer").str == "provisioning") generated.autoRegister.exists(_.implCount == 1)
+          else generated.rpc.files.exists(_.content.contains("SurfaceClient"))
+        assertEquals(included, c("expect")("included").bool)
+      }
+    }
+
+  test("router registration is retained while only regular clients are generated") {
+    val router = SourceDiscovery.SourceInput(
+      "Website.scala",
+      """
+      package example
+      @httpRouter(typeName = "site", mount = "/")
+      trait Website { @httpHandler def serve(request: HttpRequest): Future[HttpResponse] }
+      @agentImplementation()
+      final class WebsiteImpl() extends Website {
+        def serve(request: HttpRequest): Future[HttpResponse] = ???
+      }
+    """
+    )
+    val discovered = discover(router, agentSource)
+    val site       = discovered.traits.find(_.name == "Website").get
+    assertEquals(site.kind, "http-router")
+    assertEquals(site.mode, Some("ephemeral"))
+    assertEquals(site.constructorParams, Nil)
+    val result = CodegenPipeline.run(discovered, Some("example"), rpcEnabled = true)
+    assertEquals(result.autoRegister.get.implCount, 2)
+    assert(result.autoRegister.get.files.exists(_.content.contains("WebsiteImpl")))
+    assertEquals(result.rpc.files.size, 1)
+    assert(result.rpc.files.head.content.contains("CounterAgentClient"))
+  }
+
   test("pipeline with both auto-register and rpc enabled") {
     val discovered = discover(agentSource)
     val result     = CodegenPipeline.run(discovered, Some("example"), rpcEnabled = true)
@@ -1720,12 +1780,29 @@ class CodegenPipelineSpec extends munit.FunSuite {
 
     assertEquals(
       result.rpc.files.map(_.relativePath),
-      Seq("example/GrepClient.scala", "example/GrepMiddleware.scala")
+      Seq("example/GrepCallProjection.scala", "example/GrepClient.scala", "example/GrepMiddleware.scala")
     )
     assert(result.rpc.files.last.content.contains("trait GrepUnderlying"))
     assert(
       result.rpc.files.last.content.contains("trait GrepMiddleware extends GrepMiddleware.Adapter[GrepUnderlying]")
     )
+  }
+
+  test("pipeline rejects an existing object that collides with the generated call projection") {
+    val source = SourceDiscovery.SourceInput(
+      "ProjectionCollision.scala",
+      """|package example
+         |import golem.runtime.annotations._
+         |@toolDefinition(name = "grep")
+         |trait Grep { def run(): String }
+         |object GrepCallProjection
+         |""".stripMargin
+    )
+
+    val error = intercept[CodegenPipeline.PipelineException] {
+      CodegenPipeline.run(discover(source), None, rpcEnabled = true)
+    }
+    assert(error.getMessage.contains("GrepCallProjection"), error.getMessage)
   }
 
   test("pipeline rejects ambiguous flattened middleware methods") {
@@ -1830,7 +1907,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assert(result.rpc.files.nonEmpty)
     val content = result.rpc.files.head.content
     assert(content.contains("newPhantom"), s"ephemeral agent should have newPhantom:\n$content")
-    assert(!content.contains("getPhantom"), s"ephemeral agent should not accept an explicit phantom ID:\n$content")
+    assert(content.contains("getPhantom"), s"ephemeral agent should accept an explicit phantom ID:\n$content")
     assert(!content.contains("def get("), s"ephemeral agent should not have get:\n$content")
   }
 

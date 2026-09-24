@@ -87,16 +87,25 @@ the selected stream's continuation starts open unless the create request closes 
 If the cut precedes execution, the export fork retains its selected queued invocation and any
 pending constructor. Unrelated queued invocations and updates are cancelled as in ordinary forks.
 
-Forks copy ordinary oplog history and append only `ForkCut`. The cut marker identifies the retained
-prefix and clips stream state at that boundary; it resets live controls and stores the creation receipt.
-It carries no handle aliases or terminal-authorship mappings. Copied item offsets remain ordinary
-copied history, while later source writes are never inherited. Revert appends an adjacent `Revert`
-and self-targeted `ForkCut`, raises the generation/epoch floor to fence every old handle, drains the
-old producer, then refolds and reconstructs through the ordinary worker lifecycle.
+Forks copy ordinary oplog history and append `ForkCut`. Export forks additionally append
+`ExportForkInitialized` before staged publication; it records the exported public ID, the fresh target
+invocation key, the source invocation, request hash and expiry policy/deadline. The cut marker identifies
+the retained prefix and clips stream state at that boundary; it resets live controls and stores the
+creation receipt. It carries no handle aliases or terminal-authorship mappings. Copied item offsets
+remain ordinary copied history, while later source writes are never inherited. Revert appends an
+adjacent `Revert` and self-targeted `ForkCut`, raises the generation/epoch floor to fence every old
+handle, drains the old producer, then refolds and reconstructs through the ordinary worker lifecycle.
 
 Session control and topology recovery caches that encounter a committed cut in their suffix reload
 the authoritative session index, discarding pre-cut cached state. An uncommitted marker fails closed
 instead of repeatedly loading an index that cannot yet cover it.
+
+The worker's post-publication stream reconciler uses the committed in-memory status tip as the
+topology suffix boundary. After recovery leaves no dirty topology and producer metadata reports no
+active attachment, the task parks on `DurableStreamStore::session_records_changed`; it does not
+periodically reopen an idle worker's oplog merely because historical stream records exist. A
+committed session mutation wakes it, active attachments keep the renewal deadline armed, and a
+failed pass keeps periodic retry armed.
 
 A repeated `Start` for a retained session reports the current epoch, even after a resume or revert.
 It does not reactivate foreign bindings when its original attempt no longer owns the attachment.
@@ -116,8 +125,9 @@ to reuse that start record, but publishes stderr and handles traps as live execu
 the guest makes no positional host call. Cursor exhaustion alone does not publish liveness.
 
 The export creation receipt also records the original request, resolved anchor and initial-body
-hash. Retries use that receipt before consulting the source, so a later append or tombstone cannot
-move a default-tail cut. Initial content is schema-validated and committed in the hidden stage.
+hash. Retries use that receipt before consulting the source, so source advancement, expiry, deletion
+or a later tombstone cannot hide an already-published target or move a default-tail cut. Initial
+content is schema-validated and committed in the hidden stage.
 Byte-limit failures precede quota reservation. The source commits `ExportForkAdmitted` under the
 existing worker instance lock before publishing the target. Its chosen cut and quota charge are
 folded into `AgentStatusRecord.export_fork_admissions`; losing cached status cannot erase them.
@@ -132,6 +142,36 @@ fork tests, and the CLI `reference_client_export_protocol_compatibility` scenari
 The target is pinned by `streaming_target_fingerprint`: `AgentFingerprint`
 (`golem-common/src/base_model/worker.rs`) is minted once at agent creation and stable across
 restarts, so a deleted-and-recreated agent with the same `AgentId` is a different producer.
+
+### Public session identity and expiry
+
+The custom HTTP API's public session ID is an opaque lookup key, not the invocation idempotency key.
+`StreamSessionIndexService` persists the independent `DurableStreamPublicBinding` projection:
+`Live` points to the concrete invocation key and its expiry policy/deadline, while `Retired` keeps
+the last key fenced after expiry. This unbounded mapping is not stored in the cached
+`AgentStatusRecord`. During projection rebuild, records inherited before the last ordinary
+non-revert `ForkCut` do not publish source public bindings. A concrete retained `Prepared` session
+keeps its invocation identity for continuation; a target-only export identity is replaced by
+`ExportForkInitialized`.
+
+Durable creation mints a fresh UUID invocation key. After `Expired` retires the old binding, an
+explicit PUT of the same public ID starts a new invocation and preserves no compatibility alias to
+the old key. Ephemeral sessions use the public ID as their invocation key and reject recreation,
+because an ephemeral invocation cannot resume or be started a second time.
+
+`ExpiryRefreshed` durably advances a sliding deadline; `Expired` retires exactly the expected live
+binding and triggers stream cancellation. Every scheduled
+`ScheduledAction::ExpireDurableStreamSession` carries the agent fingerprint, invocation key and
+expected deadline. Delivery is `Stale` if any fence changed, `Early` if the clock has not reached
+the expected deadline (and is rescheduled), `Applied` when it appends expiry, and `AlreadyApplied`
+for the matching retired binding. Lazy admission performs the same fenced transition, so scheduler
+delay does not let an expired binding admit work.
+
+To bound oplog and scheduler growth, a sliding touch is coalesced until it extends the current
+deadline by at least 10% of the TTL. A new origin GET and an accepted or duplicate external append
+are touches. HEAD, a repeated PUT of an already-live binding, continuation reads used by long-poll
+and SSE, and bytes produced by the agent are not touches. Consequently “idle” means no new touching
+request; bytes received on an already-open SSE connection do not keep the session alive.
 
 ### Two durable journals
 
@@ -294,6 +334,9 @@ detached operation across local writes and remote waits. The same task polls the
 independently of the serial local writer. Operations acquire the session lock before calling
 `admission.submit`; queued bodies never acquire that lock or wait for peer attachment RPCs.
 Finish keeps the lock through topology validation and the durable session terminal.
+Guest nested-output drains recover journaled mappings while holding this lock before allocating
+transport IDs. Independent session runtimes share the lock, but not their mapping tables or ID
+counters; locking alone cannot make a stale allocator see mappings committed by another runtime.
 
 Each submit receives a `StreamWriteContext` and returns after the durability receipt. The admitted
 operation joins status callbacks after releasing its session lock and before returning to its
@@ -345,6 +388,69 @@ the original intent remains available for authorization and replay. Remote retry
 writing share one lifecycle admission, with the remote call outside the local writer and without
 holding the session lock. A peer result observed after local retirement is discarded; recovery
 retries from the committed intent.
+
+### Consuming and appending to external Durable Streams
+
+`durable_host/external_durable_stream/mod.rs` implements `durable-stream-reader` and
+`durable-stream-writer` resources in `golem:agent/durable-streams@2.0.0`. Their serialized,
+non-cancellable `ReadLocal` constructors journal immutable options and a pinned secret snapshot,
+without HTTP or plaintext. Replay validates the guest descriptor and restores the recorded
+descriptor/secret into the resource table. Resource identity is a role-separated content hash,
+including the secret ID, pinned revision, config key and category but excluding diagnostic
+`resolved_at`. It does not depend on a table slot or constructor oplog index: snapshot initializers
+recreate resources with durability suppressed. Drop only deletes the table entry.
+
+The finite async `reader.read` (`ReadRemote`) and `writer.append` (`WriteRemote`) methods use
+cancellable `DurableCallSession`s with exact request-payload identity. Their compact requests
+contain the resource ID and operation-specific fields, not the immutable descriptor or auth.
+Resources hold no cursor or producer progress. There is no new session journal, background
+ingestion task, or top-level oplog entry. External reads are positional host inputs; forwarding
+their values into native agent streams uses the ordinary stream machinery above.
+
+`services/external_durable_stream/` owns the injected HTTP client and protocol codec. The
+`ExternalDurableStreamService` is propagated through `All` and `HasExternalDurableStreamService`
+to the worker context, including fork, direct RPC and debug construction. The host retains
+durability, authorization, secret resolution, quotas, memory admission and interruption handling.
+
+Read `End` records the complete payload together with the peer's opaque offset and transport
+cursor. HTTP reads consume a complete bounded body; SSE closes after its first complete
+data/control pair or control-only checkpoint. Partial bodies and SSE data without control do not
+advance the checkpoint. The SDK retains the pending batch and item/byte index and fetches again
+only after draining it. `now` is resolved once by catch-up. Up-to-date and empty results are not
+EOF; only the closed flag ends a stream, after delivering the final payload. HTTP 410 is an error.
+
+Append `Start` records the resource ID, exact sequence, payload and close flag; the writer
+descriptor supplies the producer ID and epoch. JSON values
+are individually encoded and framed by the host, preserving nested arrays and integer lexemes.
+The SDK assigns an immutable pending request before awaiting, advances the sequence only after
+acknowledgment, and retains uncertain requests across cancellation. Completed replay performs no
+HTTP. Incomplete writes repair with the same tuple under the existing idempotence policy;
+disabling idempotence retains fail-closed recovery. The host never changes that global mode.
+An acknowledgment ahead of the submitted sequence is a producer-diverged error for these
+non-pipelined writers, not permission to renumber data.
+
+Both methods resolve replay before current authorization, secret lookup or network I/O.
+Constructors retain the borrowed secret's pinned identity/metadata independently of the secret
+handle's lifetime. The live path requires
+network permission, secret Reveal permission and any entity `secret_keys_revealable` restriction;
+it fetches one pinned string secret and sends it as Bearer without exposing it to the SDK. HTTP
+is restricted to loopback/localhost; otherwise HTTPS is required. Redirects and automatic HTTP
+retries are disabled. Remote errors are typed durable results. SDK retry budgets/backoff use
+durable clocks and waits, outside custom durability wrappers.
+
+`durable_stream.external_batch_max_size` bounds payloads and accepts human-readable SI/IEC sizes
+(default `8 MiB`). Codec buffer reservation uses existing memory admission and is held through
+durable completion: ordinary batches reserve `6 * max_size + 2 MiB`, SSE reserves
+`32 * max_size + 2 MiB`. The codec documents retained buffers, allocation growth and raw-JSON
+nesting-stack accounting beside its limits. This is not a bound on imported DTOs or the HTTP/TLS
+implementation's buffers. Existing HTTP quotas apply. A long-poll remains resident
+until its bounded attempt finishes; durable SDK sleeps between attempts can unload normally.
+
+Fork/revert uses ordinary retained-prefix replay: a cut before read `End` repeats the read, an
+`End` without delivery waits for replay tail, and a delivered batch rebuilds its remaining guest
+buffer. Golem forks retain external URLs, checkpoints and producer tuples. They never create a
+DS-level fork or allocate a new producer identity/epoch. Deduplication depends on peer retention;
+divergent forks sharing a tuple are not independent external writers.
 
 ### Tests
 

@@ -247,6 +247,16 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for RecordingWorkerService {
+        async fn lookup_durable_stream_public_binding(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _public_session_id: &str,
+        ) -> Result<Option<golem_common::model::DurableStreamPublicBinding>, String> {
+            unimplemented!()
+        }
+
         async fn get(
             &self,
             _owned_agent_id: &OwnedAgentId,

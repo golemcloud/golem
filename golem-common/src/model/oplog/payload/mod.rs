@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod external_durable_stream;
 pub mod types;
 
 #[cfg(test)]
@@ -24,11 +25,17 @@ use crate::model::component::ComponentRevision;
 use crate::model::durable_stream::StreamInvocationId;
 use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
+use crate::model::oplog::payload::external_durable_stream::{
+    DurableStreamAppendPayload, DurableStreamAppendReceipt, DurableStreamBatch,
+    DurableStreamCheckpoint, DurableStreamError, DurableStreamReaderOptions,
+    DurableStreamTransport, DurableStreamWriterOptions,
+};
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
     SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
-    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
+    SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
+    SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -45,9 +52,10 @@ use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::worker::{ResolvedRevert, RevertWorkerTarget};
 use crate::model::{
     AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId,
+    ScanCursor,
 };
 use crate::oplog_payload;
-use crate::schema::tool::DiscoveredTool;
+use crate::schema::schema_value::SecretValuePayload;
 use crate::schema::{RegisteredAgentTypeSchema, SchemaGraph, SchemaValue, TypedSchemaValue};
 use crate::serialization::serialize;
 use desert_rust::{
@@ -64,7 +72,7 @@ pub type HttpTrailers = HashMap<String, Vec<Vec<u8>>>;
 pub type HttpTrailersResult = Result<Option<HttpTrailers>, SerializableHttpErrorCode>;
 pub type HttpFutureTrailersPoll = Result<HttpTrailersResult, ()>;
 pub type HttpFutureTrailersGetResult = Result<Option<HttpFutureTrailersPoll>, String>;
-pub type AgentsPage = (Option<(u64, u64)>, Vec<AgentMetadataForGuests>);
+pub type AgentsPage = (Option<ScanCursor>, Vec<AgentMetadataForGuests>);
 
 oplog_payload! {
     HostRequest => {
@@ -134,6 +142,26 @@ oplog_payload! {
         GolemAgentGetConfigValue {
             path: Vec<String>,
             expected_type: SchemaGraph
+        },
+        DurableStreamReaderNew {
+            options: DurableStreamReaderOptions,
+            auth: Option<SecretValuePayload>,
+        },
+        DurableStreamWriterNew {
+            options: DurableStreamWriterOptions,
+            auth: Option<SecretValuePayload>,
+        },
+        DurableStreamRead {
+            resource_id: String,
+            checkpoint: DurableStreamCheckpoint,
+            transport: DurableStreamTransport,
+            content_type: Option<String>,
+        },
+        DurableStreamAppend {
+            resource_id: String,
+            payload: DurableStreamAppendPayload,
+            sequence: u64,
+            close: bool,
         },
         GolemAgentGetAgentType {
             agent_type_name: AgentTypeName
@@ -299,6 +327,12 @@ oplog_payload! {
         GolemToolGetTool {
             name: String
         },
+        McpToolCall {
+            input: TypedSchemaValue
+        },
+        McpToolPresence {
+            upstream_tool_name: String
+        },
         GolemApiOplogRead {
             agent_id: AgentId,
             next_oplog_index: OplogIndex,
@@ -398,6 +432,15 @@ oplog_payload! {
         },
         GolemAgentGetConfigValue {
             result: Result<SchemaValue, String>,
+        },
+        DurableStreamResource {
+            resource_id: String,
+        },
+        DurableStreamRead {
+            result: Result<DurableStreamBatch, DurableStreamError>,
+        },
+        DurableStreamAppend {
+            result: Result<DurableStreamAppendReceipt, DurableStreamError>,
         },
         GolemAgentWebhookUrl {
             result: Result<String, String>
@@ -638,10 +681,16 @@ oplog_payload! {
             result: Result<(), CardInstallFailure>,
         },
         GolemToolTools {
-            result: Result<Vec<Arc<DiscoveredTool>>, String>
+            result: Result<SerializableToolDiscoverySnapshot, String>
         },
         GolemToolTool {
-            result: Result<Option<Arc<DiscoveredTool>>, String>
+            result: Result<SerializableToolDiscoverySnapshot, String>
+        },
+        McpToolCall {
+            result: Result<Vec<u8>, SerializableToolRpcError>
+        },
+        McpToolPresence {
+            result: Result<bool, SerializableToolRpcError>
         },
         GolemApiOplogChunk {
             result: Result<Option<Vec<u8>>, String>,
@@ -840,6 +889,10 @@ pub mod host_functions {
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
         (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl),
         (GolemAgentGetConfigValue => "golem::agent", "get_config_value", GolemAgentGetConfigValue, GolemAgentGetConfigValue),
+        (GolemAgentDurableStreamReaderNew => "golem::agent::durable-streams::durable-stream-reader", "new", DurableStreamReaderNew, DurableStreamResource),
+        (GolemAgentDurableStreamWriterNew => "golem::agent::durable-streams::durable-stream-writer", "new", DurableStreamWriterNew, DurableStreamResource),
+        (GolemAgentDurableStreamReaderRead => "golem::agent::durable-streams::durable-stream-reader", "read", DurableStreamRead, DurableStreamRead),
+        (GolemAgentDurableStreamWriterAppend => "golem::agent::durable-streams::durable-stream-writer", "append", DurableStreamAppend, DurableStreamAppend),
         (GolemApiCreatePromise => "golem::api", "create_promise", NoInput, GolemApiPromiseId),
         (GolemApiCompletePromise => "golem::api", "complete_promise", GolemApiPromiseId, GolemApiPromiseCompletion),
         (GolemApiGenerateIdempotencyKey => "golem::api", "generate_idempotency-key", NoInput, GolemApiIdempotencyKey),
@@ -929,6 +982,8 @@ pub mod host_functions {
         (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
         (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
+        (McpToolCall => "golem::tool::mcp", "call", McpToolCall, McpToolCall),
+        (McpToolPresence => "golem::tool::mcp", "presence", McpToolPresence, McpToolPresence),
         (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType)
     }
 }

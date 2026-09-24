@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk_example1/golem_moonbit_examples"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/config",
+  "golemcloud/golem_sdk/http",
   "golemcloud/golem_sdk/interface/golem/agent/common",
   "golemcloud/golem_sdk/interface/golem/agent/host",
   "golemcloud/golem_sdk/interface/golem/core/types",
@@ -30,6 +31,8 @@ pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
 
 pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
 
+pub fn wasmExportAsyncInvokeToolMiddleware(Int, Int, Int) -> Int
+
 pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
 
 pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
@@ -37,6 +40,10 @@ pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
 pub fn wasmExportDiscoverAgentTypes() -> Int
 
 pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
+
+pub fn wasmExportDiscoverToolMiddlewares() -> Int
+
+pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int) -> Unit
 
 pub fn wasmExportDiscoverTools() -> Int
 
@@ -48,6 +55,10 @@ pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
 
 pub fn wasmExportGetTool(Int, Int) -> Int
 
+pub fn wasmExportGetToolMiddleware(Int, Int) -> Int
+
+pub fn wasmExportGetToolMiddlewarePostReturn(Int) -> Unit
+
 pub fn wasmExportGetToolPostReturn(Int) -> Unit
 
 pub fn wasmExportInitialize(Int) -> Int
@@ -55,6 +66,8 @@ pub fn wasmExportInitialize(Int) -> Int
 pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
 
 pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
+
+pub fn wasmExportInvokeToolMiddleware(Int) -> Int
 
 pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
 
@@ -76,6 +89,7 @@ pub(all) struct AppConfigOverride {
   db : DatabaseConfigOverride?
 }
 pub fn AppConfigOverride::empty() -> Self
+pub impl @rpc.AgentConfigOverrides for AppConfigOverride
 
 type AuditLog
 pub fn AuditLog::add_entry(Self, String, @common.Principal) -> Unit
@@ -107,6 +121,12 @@ pub fn AuditLogClient::trigger_add_entry(Self, String) -> Unit raise @common.Age
 pub fn AuditLogClient::trigger_get_creator(Self) -> Unit raise @common.AgentError
 pub fn AuditLogClient::trigger_get_entries(Self) -> Unit raise @common.AgentError
 
+pub(all) struct AuditLogConstructor {
+  name : String
+}
+pub impl @schema.FromSchema for AuditLogConstructor
+pub impl @schema.IntoSchema for AuditLogConstructor
+
 type CanonicalBigBound
 pub fn CanonicalBigBound::canonical_big_bound(UInt64?) -> Result[Unit, CanonicalGrepError]
 
@@ -116,6 +136,7 @@ pub(all) struct CanonicalBigBoundClient {
 pub async fn CanonicalBigBoundClient::canonical_big_bound(Self, UInt64?) -> Result[Unit, @tool.ToolError[CanonicalGrepError]]
 pub fn CanonicalBigBoundClient::drop(Self) -> Unit
 pub fn CanonicalBigBoundClient::new() -> Self
+pub fn CanonicalBigBoundClient::new_for(String) -> Self
 
 type CanonicalCommitError
 pub impl @tool-core.ToolErrorSchema for CanonicalCommitError
@@ -142,6 +163,7 @@ pub async fn CanonicalGitClient::commit(Self, UInt, @schema.Path, Bool, Map[Stri
 pub fn CanonicalGitClient::drop(Self) -> Unit
 pub async fn CanonicalGitClient::log(Self, Int64?, @types.Datetime?, @types.Datetime?, Array[String], Array[String], Bool, Bool, Bool, Bool, Array[@schema.Path]) -> Result[Array[CanonicalLogEntry], @tool.ToolError[CanonicalLogError]]
 pub fn CanonicalGitClient::new() -> Self
+pub fn CanonicalGitClient::new_for(String) -> Self
 pub fn CanonicalGitClient::remote(Self, UInt, @schema.Path, Bool, Map[String, String]) -> CanonicalGitRemoteClient
 pub fn CanonicalGitClient::stash(Self, UInt, @schema.Path) -> CanonicalGitStashClient
 
@@ -181,6 +203,7 @@ pub(all) struct CanonicalGrepClient {
 pub fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[Array[CanonicalGrepHit], CanonicalGrepError], @tool.ToolError[CanonicalGrepError]]
 pub fn CanonicalGrepClient::drop(Self) -> Unit
 pub fn CanonicalGrepClient::new() -> Self
+pub fn CanonicalGrepClient::new_for(String) -> Self
 pub async fn CanonicalGrepClient::replace(Self, Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
 
 pub(all) enum CanonicalGrepColorMode {
@@ -306,9 +329,73 @@ pub(all) struct DatabaseConfigOverride {
   timeout : UInt64?
 }
 pub fn DatabaseConfigOverride::empty() -> Self
+pub impl @rpc.AgentConfigOverrides for DatabaseConfigOverride
+
+pub(all) struct EmptyAgentInput {
+}
+pub impl @schema.IntoSchema for EmptyAgentInput
+
+type FileOwner
+pub async fn FileOwner::update(Self, String) -> Unit
+
+pub(all) struct FileOwnerClient {
+  client : @rpc.AgentClient
+}
+pub fn FileOwnerClient::drop(Self) -> Unit
+pub fn FileOwnerClient::get(String) -> Self raise @common.AgentError
+pub fn FileOwnerClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn FileOwnerClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub fn FileOwnerClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn FileOwnerClient::phantom_id(Self) -> @types.Uuid?
+pub fn FileOwnerClient::schedule_cancelable_update(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
+pub fn FileOwnerClient::schedule_update(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
+pub async fn[T] FileOwnerClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] FileOwnerClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] FileOwnerClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub fn FileOwnerClient::trigger_update(Self, String) -> Unit raise @common.AgentError
+pub async fn FileOwnerClient::update(Self, String) -> Unit
+
+type MoonBitReflectionTest
+pub fn MoonBitReflectionTest::echo(String) -> String
+pub fn MoonBitReflectionTest::optional(String?) -> String
 
 type MoonBitStreaming
 pub async fn MoonBitStreaming::stream(String, @async-core.Stream[Byte], @tool.ProviderStdout) -> UInt64
+
+type MoonBitToolReflectionCaller
+pub async fn MoonBitToolReflectionCaller::agent_round_trip(Self) -> String
+pub async fn MoonBitToolReflectionCaller::optional_round_trip(Self) -> String
+pub async fn MoonBitToolReflectionCaller::principal_round_trip(Self) -> String
+pub async fn MoonBitToolReflectionCaller::round_trip(Self) -> String
+
+pub(all) struct MoonBitToolReflectionCallerClient {
+  client : @rpc.AgentClient
+}
+pub async fn MoonBitToolReflectionCallerClient::agent_round_trip(Self) -> String
+pub fn MoonBitToolReflectionCallerClient::drop(Self) -> Unit
+pub fn MoonBitToolReflectionCallerClient::get(String) -> Self raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::new_phantom(String) -> Self raise @common.AgentError
+pub async fn MoonBitToolReflectionCallerClient::optional_round_trip(Self) -> String
+pub fn MoonBitToolReflectionCallerClient::phantom_id(Self) -> @types.Uuid?
+pub async fn MoonBitToolReflectionCallerClient::principal_round_trip(Self) -> String
+pub async fn MoonBitToolReflectionCallerClient::round_trip(Self) -> String
+pub fn MoonBitToolReflectionCallerClient::schedule_agent_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_agent_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_optional_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_principal_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_optional_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_principal_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub async fn[T] MoonBitToolReflectionCallerClient::scoped(String, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolReflectionCallerClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolReflectionCallerClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub fn MoonBitToolReflectionCallerClient::trigger_agent_round_trip(Self) -> Unit raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::trigger_optional_round_trip(Self) -> Unit raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::trigger_principal_round_trip(Self) -> Unit raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::trigger_round_trip(Self) -> Unit raise @common.AgentError
 
 type MoonBitToolStreamingCaller
 pub async fn MoonBitToolStreamingCaller::marker_before_eof(Self, Bytes) -> UInt64
@@ -330,11 +417,21 @@ pub async fn[T] MoonBitToolStreamingCallerClient::scoped_get_phantom(String, @ty
 pub async fn[T] MoonBitToolStreamingCallerClient::scoped_new_phantom(String, async (Self) -> T) -> T
 pub fn MoonBitToolStreamingCallerClient::trigger_marker_before_eof(Self, Bytes) -> Unit raise @common.AgentError
 
+pub(all) struct MoonbitReflectionTestClient {
+  client : @tool.ToolClient
+}
+pub fn MoonbitReflectionTestClient::drop(Self) -> Unit
+pub async fn MoonbitReflectionTestClient::echo(Self, String) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
+pub fn MoonbitReflectionTestClient::new() -> Self
+pub fn MoonbitReflectionTestClient::new_for(String) -> Self
+pub async fn MoonbitReflectionTestClient::optional(Self, String?) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
+
 pub(all) struct MoonbitStreamingClient {
   client : @tool.ToolClient
 }
 pub fn MoonbitStreamingClient::drop(Self) -> Unit
 pub fn MoonbitStreamingClient::new() -> Self
+pub fn MoonbitStreamingClient::new_for(String) -> Self
 pub fn MoonbitStreamingClient::stream(Self, String, @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[UInt64, @tool-core.NoToolError], @tool.ToolError[@tool-core.NoToolError]]
 
 pub(all) enum Priority {
@@ -374,6 +471,12 @@ pub async fn RpcExampleAgentClient::task_rpc_example(Self) -> UInt64
 pub fn RpcExampleAgentClient::trigger_counter_rpc_example(Self) -> Unit raise @common.AgentError
 pub fn RpcExampleAgentClient::trigger_get_last_value(Self) -> Unit raise @common.AgentError
 pub fn RpcExampleAgentClient::trigger_task_rpc_example(Self) -> Unit raise @common.AgentError
+
+type Site
+pub fn Site::describe(Self) -> String raise @http.OpenApiJsonError
+pub fn Site::serve(Self, @http.HttpRequest) -> @http.HttpResponse
+
+type StaticSite
 
 pub(all) struct TaskInfo {
   title : String

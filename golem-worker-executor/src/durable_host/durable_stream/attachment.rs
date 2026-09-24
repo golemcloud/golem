@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::index::attachment_sort_key;
+use super::index::{attachment_slot, attachment_sort_key};
 use super::metadata::{IndexedAttachmentCandidate, IndexedAttachmentCandidateBatch};
 use super::*;
 
@@ -293,13 +293,21 @@ impl DurableStreamStore {
                 self.producer_fingerprint,
             ))
             .await?;
-        let stream_id = match &record {
-            StreamSessionRecord::AttachmentPrepared(record) => record.key.stream_id,
-            StreamSessionRecord::AttachmentActivated(record) => record.key.stream_id,
-            StreamSessionRecord::AttachmentRenewed(record) => record.key.stream_id,
-            StreamSessionRecord::AttachmentFinalized(record) => record.key.stream_id,
+        let key = match &record {
+            StreamSessionRecord::AttachmentPrepared(record) => &record.key,
+            StreamSessionRecord::AttachmentActivated(record) => &record.key,
+            StreamSessionRecord::AttachmentRenewed(record) => &record.key,
+            StreamSessionRecord::AttachmentFinalized(record) => &record.key,
             _ => unreachable!("attachment persistence received a non-attachment record"),
         };
+        let stream_id = key.stream_id;
+        let slot = attachment_slot(key);
+        let was_reconcilable = index.attachments.get(&slot).is_some_and(|attachment| {
+            !matches!(
+                attachment.state,
+                IndexedStreamAttachmentState::Finalized { .. }
+            )
+        });
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let mut updated = index.clone();
         updated.apply_session_references(
@@ -315,6 +323,12 @@ impl DurableStreamStore {
             &self.producer,
             self.producer_fingerprint,
         )?;
+        let is_reconcilable = updated.attachments.get(&slot).is_some_and(|attachment| {
+            !matches!(
+                attachment.state,
+                IndexedStreamAttachmentState::Finalized { .. }
+            )
+        });
         if outcome == AttachmentApplyOutcome::Changed {
             context.begin_durable_effect();
             self.oplog
@@ -324,6 +338,19 @@ impl DurableStreamStore {
                 ))
                 .await;
             self.commit(context).await;
+            match (was_reconcilable, is_reconcilable) {
+                (false, true) => {
+                    self.reconcilable_attachment_count
+                        .fetch_add(1, Ordering::Release);
+                }
+                (true, false) => {
+                    let previous = self
+                        .reconcilable_attachment_count
+                        .fetch_sub(1, Ordering::Release);
+                    assert!(previous != 0, "reconcilable attachment count underflow");
+                }
+                _ => {}
+            }
             *index = updated;
         }
         drop(index);
@@ -491,6 +518,11 @@ impl StreamAttachmentControl for DurableStreamStore {
 }
 
 impl DurableStreamStore {
+    /// Returns whether producer-side attachment state still needs periodic probing or renewal.
+    pub async fn has_reconcilable_attachments(&self) -> bool {
+        self.reconcilable_attachment_count.load(Ordering::Acquire) != 0
+    }
+
     /// Validates producer identity and checks whether this session has an active attachment to the stream.
     pub async fn has_active_attachment(
         &self,

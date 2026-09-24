@@ -12,46 +12,14 @@ import path from 'path';
 // the wasm runtime), plus generated guest worlds and `node:sqlite`. Externalize them
 // all so the SDK host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
 const external = (id) =>
-  id === 'agent-guest' ||
-  id === 'tool-middleware-guest' ||
-  id === 'node:sqlite' ||
-  id.startsWith('golem:') ||
-  id.startsWith('wasi:');
+  id === 'agent-guest' || id === 'node:sqlite' || id.startsWith('golem:') || id.startsWith('wasi:');
 
 function onwarn(warning, warn) {
   if (warning.code === 'CIRCULAR_DEPENDENCY') return;
   warn(warning);
 }
 
-function assertHostNeutralBundle() {
-  return {
-    name: 'assert-host-neutral-bundle',
-    generateBundle(_options, bundle) {
-      for (const output of Object.values(bundle)) {
-        if (output.type !== 'chunk') continue;
-        const forbiddenImports = [...output.imports, ...output.dynamicImports].filter((id) =>
-          id.startsWith('golem:tool/host'),
-        );
-        const forbiddenModules = Object.keys(output.modules).filter((id) => {
-          const normalized = id.replaceAll('\\', '/');
-          return (
-            normalized.endsWith('/src/bridge/tool.ts') || normalized.endsWith('/src/toolClient.ts')
-          );
-        });
-        if (forbiddenImports.length > 0 || forbiddenModules.length > 0) {
-          this.error(
-            `Host-neutral middleware bundle reached the ambient tool host:\n${[
-              ...forbiddenImports,
-              ...forbiddenModules,
-            ].join('\n')}`,
-          );
-        }
-      }
-    },
-  };
-}
-
-function javascript(input, output, { hostNeutral = false } = {}) {
+function javascript(input, output, isExternal = external) {
   return {
     input,
     output: {
@@ -59,7 +27,7 @@ function javascript(input, output, { hostNeutral = false } = {}) {
       format: 'esm',
       sourcemap: true,
     },
-    external,
+    external: isExternal,
     onwarn,
     plugins: [
       resolve({
@@ -73,7 +41,6 @@ function javascript(input, output, { hostNeutral = false } = {}) {
           compilerOptions: { declaration: false },
         },
       }),
-      ...(hostNeutral ? [assertHostNeutralBundle()] : []),
       terser(),
     ],
   };
@@ -106,14 +73,23 @@ function declarations(input, output) {
   };
 }
 
-export default defineConfig([
-  javascript('src/index.ts', 'dist/index.mjs'),
-  javascript('src/schema/public.ts', 'dist/schema.mjs'),
-  javascript('src/reflection.ts', 'dist/reflection.mjs'),
-  javascript('src/middleware.ts', 'dist/middleware.mjs', { hostNeutral: true }),
-  javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs', { hostNeutral: true }),
-  declarations('src/index.ts', 'dist/index.d.mts'),
-  declarations('src/schema/public.ts', 'dist/schema.d.mts'),
-  declarations('src/reflection.ts', 'dist/reflection.d.mts'),
-  declarations('src/middleware.ts', 'dist/middleware.d.mts'),
-]);
+export default (args) =>
+  defineConfig(
+    [
+      javascript('src/index.ts', 'dist/index.mjs'),
+      javascript('src/httpRouterContract.ts', 'dist/http-router.mjs'),
+      javascript('src/schema/public.ts', 'dist/schema.mjs'),
+      javascript('src/reflection.ts', 'dist/reflection.mjs'),
+      javascript(
+        'src/middleware-entry.mjs',
+        'dist/middleware.mjs',
+        (id) => id === '@golemcloud/golem-ts-sdk' || external(id),
+      ),
+      javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
+      declarations('src/index.ts', 'dist/index.d.mts'),
+      declarations('src/httpRouterContract.ts', 'dist/http-router.d.mts'),
+      declarations('src/schema/public.ts', 'dist/schema.d.mts'),
+      declarations('src/reflection.ts', 'dist/reflection.d.mts'),
+      declarations('src/middleware.ts', 'dist/middleware.d.mts'),
+    ].filter((config) => !args.configHttpRouter || config.input === 'src/httpRouterContract.ts'),
+  );

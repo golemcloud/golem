@@ -39,9 +39,15 @@ pub fn decode_qualified(name : String) -> (String, String)? {
 }
 
 ///|
+pub(all) enum HttpMethodMatcher {
+  Concrete(String)
+  Any
+} derive(Debug, Eq)
+
+///|
 /// HTTP endpoint information parsed from `#derive.endpoint` annotations on methods.
 pub(all) struct HttpEndpointInfo {
-  http_method : String
+  http_method : HttpMethodMatcher
   path : String
   headers : Array[(String, String)]
   auth : Bool?
@@ -56,6 +62,10 @@ pub(all) struct HttpMountInfo {
   phantom : Bool
   cors : Array[String]
   webhook_suffix : String?
+  router : Bool
+  static_bindings : Array[HttpFileMapping]
+  filesystem_bindings : Array[HttpFileMapping]
+  openapi_provider_method : String?
 } derive(Debug, Eq)
 
 ///|
@@ -860,7 +870,7 @@ fn extract_endpoint(
         } else {
           let (http_method, path) = found[0]
           result = Some({
-            http_method,
+            http_method: Concrete(http_method),
             path,
             headers: [],
             auth: None,
@@ -946,6 +956,21 @@ fn build_endpoint_info(
   attrs : @list.List[@attribute.Attribute],
 ) -> HttpEndpointInfo? raise AgentParseError {
   let endpoint = extract_endpoint(attrs)
+  if has_http_annotation(attrs, "http_handler") {
+    if endpoint is Some(_) ||
+      attrs.any(a => a.raw.has_prefix("#derive.endpoint")) {
+      raise AgentParseError(
+        "M01: HTTP handlers cannot have endpoint bindings or policy overrides",
+      )
+    }
+    return Some({
+      http_method: Any,
+      path: "/",
+      headers: [],
+      auth: None,
+      cors: [],
+    })
+  }
   match endpoint {
     Some(ep) => {
       let headers = extract_endpoint_headers(attrs)
@@ -1068,19 +1093,27 @@ pub fn parse_agents(
   let agent_json_derives : Map[String, Bool] = Map([])
   let agent_fields : Map[String, Array[(String, Bool)]] = Map([])
   let agent_mounts : Map[String, HttpMountInfo?] = Map([])
+  let agent_providers : Map[String, String] = Map([])
   let mut has_init = false
   // Parse all files first, then run passes over all AST nodes
   // to avoid file-ordering dependencies
   let all_impls : Array[@syntax.Impl] = []
   for pair in files {
-    let (_filename, content) = pair
-    let (impls, _reports) = @parser.parse_string(content)
+    let (filename, content) = pair
+    let (impls, reports) = @parser.parse_string(content)
+    if !reports.is_empty() {
+      raise AgentParseError(
+        "Invalid source in \{filename}: " +
+        reports.map(r => r.to_string()).join("; "),
+      )
+    }
     impls.each(fn(impl_) { all_impls.push(impl_) })
   }
   // First pass: find #derive.agent annotated structs
-  all_impls.each(fn(impl_) {
+  all_impls.each(impl_ => {
     match impl_ {
       TopTypeDef(type_decl) => {
+        let router = has_http_annotation(type_decl.attrs, "http_router")
         let mut is_agent = false
         type_decl.attrs.each(fn(attr) {
           if attr.raw == "#derive.agent" ||
@@ -1088,11 +1121,23 @@ pub fn parse_agents(
             is_agent = true
           }
         })
-        if is_agent {
+        if router && is_agent {
+          raise AgentParseError(
+            "M01: #derive.http_router cannot be combined with #derive.agent",
+          )
+        }
+        if is_agent || router {
           let name = type_decl.tycon
+          if agent_names.contains(name) {
+            raise AgentParseError("Duplicate agent type '\{name}'")
+          }
           let description = extract_doc_string(type_decl.doc)
           let desc = if description == "" { name } else { description }
-          let mode = extract_agent_mode(type_decl.attrs)
+          let mode = if router {
+            Ephemeral
+          } else {
+            extract_agent_mode(type_decl.attrs)
+          }
           let snapshotting = extract_agent_snapshotting(type_decl.attrs)
           agent_names[name] = desc
           agent_modes[name] = mode
@@ -1130,6 +1175,7 @@ pub fn parse_agents(
           agent_fields[name] = field_info
           // Extract HTTP mount info
           let mount_path = extract_mount_path(type_decl.attrs)
+          validate_http_type_annotations(type_decl.attrs, router, mount_path)
           let mount_info = match mount_path {
             Some(path) =>
               Some({
@@ -1138,6 +1184,16 @@ pub fn parse_agents(
                 phantom: extract_mount_phantom(type_decl.attrs),
                 cors: extract_mount_cors(type_decl.attrs),
                 webhook_suffix: extract_mount_webhook(type_decl.attrs),
+                router,
+                static_bindings: extract_file_mappings(
+                  type_decl.attrs,
+                  "static_file",
+                ),
+                filesystem_bindings: extract_file_mappings(
+                  type_decl.attrs,
+                  "expose_files",
+                ),
+                openapi_provider_method: None,
               })
             None => None
           }
@@ -1151,6 +1207,40 @@ pub fn parse_agents(
   all_impls.each(impl_ => {
     match impl_ {
       TopFuncDef(fun_decl~, ..) => {
+        for role in ["http_handler", "openapi_provider"] {
+          if has_http_annotation(fun_decl.attrs, role) {
+            let declarations = fun_decl.attrs
+              .filter(a => a.raw == "#derive.\{role}")
+              .length()
+            if declarations != 1 ||
+              fun_decl.attrs
+              .filter(a => a.raw.has_prefix("#derive.\{role}("))
+              .length() !=
+              0 {
+              http_fail(
+                "M01: role annotations must occur once without arguments",
+              )
+            }
+            let owner = match fun_decl.type_name {
+              Some({ name: Ident(name~), .. }) => agent_mounts.get(name)
+              _ => None
+            }
+            if !(owner is Some(Some({ router: true, .. }))) ||
+              !(fun_decl.vis is Pub(..)) ||
+              fun_decl.name.name == "new" ||
+              fun_decl.name.name == "load_snapshot" {
+              http_fail(
+                "M01: HTTP roles require public instance methods on an HTTP router",
+              )
+            }
+            let params = extract_method_params(fun_decl)
+            if params.is_empty() || params[0].1 != Simple("Self") {
+              http_fail(
+                "M01: HTTP roles require public instance methods on an HTTP router",
+              )
+            }
+          }
+        }
         // Check for fn init
         if fun_decl.type_name is None && fun_decl.name.name == "init" {
           has_init = true
@@ -1209,6 +1299,14 @@ pub fn parse_agents(
                   let desc = if doc == "" { method_name } else { doc }
                   let hint = extract_prompt_hint(fun_decl.attrs)
                   let endpoint = build_endpoint_info(fun_decl.attrs)
+                  if has_http_annotation(fun_decl.attrs, "openapi_provider") {
+                    if agent_providers.contains(name) {
+                      raise AgentParseError(
+                        "M01: multiple OpenAPI providers on '\{name}'",
+                      )
+                    }
+                    agent_providers[name] = method_name
+                  }
                   let read_only = extract_read_only(fun_decl.attrs)
                   match agent_methods.get(name) {
                     Some(methods) =>
@@ -1293,7 +1391,10 @@ pub fn parse_agents(
           has_snapshottable: has_snapshot_saver,
           has_json_derives,
           fields: agent_fields.get(name).unwrap_or([]),
-          http_mount: agent_mounts.get(name).unwrap_or(None),
+          http_mount: agent_mounts
+          .get(name)
+          .unwrap_or(None)
+          .map(m => { ..m, openapi_provider_method: agent_providers.get(name), }),
           config_type,
         })
       }
