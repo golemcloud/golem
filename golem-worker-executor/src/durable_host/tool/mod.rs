@@ -822,6 +822,14 @@ fn option_args(
     };
     match &option.shape {
         OptionShape::Scalar(type_) | OptionShape::OptionalScalar(type_) => {
+            let type_ = if !option.required && option.default.is_none() {
+                match type_ {
+                    SchemaType::Option { inner, .. } => inner,
+                    _ => type_,
+                }
+            } else {
+                type_
+            };
             Ok(vec![argument(render_tool_value(tool, type_, value)?)])
         }
         OptionShape::RepeatableList(shape) => {
@@ -7010,6 +7018,82 @@ mod tests {
                 .subsumes(&target)
         );
         assert!(ToolResourcePattern::AnyInvocation.subsumes(&target));
+    }
+
+    #[test]
+    fn present_optional_option_value_renders_its_inner_type() {
+        let (registered, _) = registered_tool();
+        let option = OptionSpec {
+            long: "limit".to_string(),
+            short: None,
+            aliases: vec![],
+            doc: Doc::default(),
+            value_name: None,
+            default: None,
+            required: false,
+            env_var: None,
+            shape: OptionShape::Scalar(SchemaType::option(SchemaType::s64())),
+        };
+        assert!(
+            option_args(
+                &registered.definition,
+                &option,
+                &SchemaValue::Option { inner: None }
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(
+            option_args(
+                &registered.definition,
+                &option,
+                &SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::S64(3)))
+                }
+            )
+            .unwrap(),
+            vec![ToolArgPattern::LongFlag {
+                name: ToolIdentifier("limit".to_string()),
+                value: Some(ToolValuePattern::Literal(ToolValueLiteral("3".to_string())))
+            }]
+        );
+    }
+
+    #[test]
+    fn present_optional_option_with_referenced_option_type_preserves_inner_option() {
+        let (mut registered, _) = registered_tool();
+        let optional_limit = TypeId::new("optional-limit");
+        registered.definition.schema.defs.push(SchemaTypeDef {
+            id: optional_limit.clone(),
+            name: Some("OptionalLimit".to_string()),
+            body: SchemaType::option(SchemaType::s64()),
+        });
+        let option = OptionSpec {
+            long: "limit".to_string(),
+            short: None,
+            aliases: vec![],
+            doc: Doc::default(),
+            value_name: None,
+            default: None,
+            required: false,
+            env_var: None,
+            shape: OptionShape::Scalar(SchemaType::ref_to(optional_limit)),
+        };
+        let value = SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::S64(3))),
+            })),
+        };
+
+        assert_eq!(
+            option_args(&registered.definition, &option, &value).unwrap(),
+            vec![ToolArgPattern::LongFlag {
+                name: ToolIdentifier("limit".to_string()),
+                value: Some(ToolValuePattern::Literal(ToolValueLiteral(
+                    "some(3)".to_string()
+                )))
+            }]
+        );
     }
 
     #[test]
