@@ -124,10 +124,9 @@ pub(crate) struct SnapshotInfo {
 /// How a save with a parent finds the files that did not change since the parent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ChangeDetection {
-    /// A file whose size and modification time equal those of the same path in the parent keeps
-    /// the content of the parent, and the save does not read it.
+    /// Compares each file with the parent by size and modification time.
     SizeMtime,
-    /// The save reads every file.
+    /// Reads every file.
     Full,
 }
 

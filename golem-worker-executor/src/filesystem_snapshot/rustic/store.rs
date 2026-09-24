@@ -101,24 +101,24 @@ impl StorePolicy {
     }
 }
 
-/// The options of a save of the store: the options of the bridge, and a save that cannot read an
-/// entry fails before it writes the snapshot file. A save records no device id, so a restore gives
-/// each name of a hard-linked file as its own file.
-///
-/// With a parent and `SizeMtime`, rustic compares each file with the parent that the id names, by
-/// size and modification time. Without a parent, or with `Full`, rustic uses no parent and reads
+/// The options of a save of the store: a failed read of an entry fails the save, and no device id
+/// is kept. `SizeMtime` compares with the parent that the id names, and each other case reads
 /// every file.
 fn store_backup_options(
     policy: &StorePolicy,
     parent: Option<(SnapshotId, ChangeDetection)>,
 ) -> BackupOptions {
-    let settings = |detection| SaveSettings {
-        threads: policy.save_threads,
-        detection,
+    let base = |detection| {
+        backup_options(&SaveSettings {
+            threads: policy.save_threads,
+            detection,
+        })
+        .fail_on_read_error(true)
+        .ignore_save_opts(LocalSourceSaveOptions::default().set_devid(DevIdOption::No))
     };
-    let options = match parent {
+    match parent {
         Some((id, ChangeDetection::SizeMtime)) => {
-            let options = backup_options(&settings(RusticChangeDetection::SizeMtime));
+            let options = base(RusticChangeDetection::SizeMtime);
             let parent_opts = options
                 .parent_opts
                 .clone()
@@ -126,14 +126,11 @@ fn store_backup_options(
             options.parent_opts(parent_opts)
         }
         None | Some((_, ChangeDetection::Full)) => {
-            let options = backup_options(&settings(RusticChangeDetection::Ctime));
+            let options = base(RusticChangeDetection::Ctime);
             let parent_opts = options.parent_opts.clone().force(true);
             options.parent_opts(parent_opts)
         }
-    };
-    options
-        .fail_on_read_error(true)
-        .ignore_save_opts(LocalSourceSaveOptions::default().set_devid(DevIdOption::No))
+    }
 }
 
 /// The options of a restore of the store. A metadata error fails the restore. The restore does not
