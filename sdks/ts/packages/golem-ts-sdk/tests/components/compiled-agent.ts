@@ -2,6 +2,7 @@ import { AgentStream, defineAgent, method, s } from '@golemcloud/golem-ts-sdk';
 import { z } from 'zod';
 
 const item = z.object({ count: s.u32(), labels: z.array(z.string().optional()) });
+const suffix = z.string();
 const counter = defineAgent({
   name: 'Counter',
   id: {},
@@ -11,7 +12,7 @@ const counter = defineAgent({
     remote: method({ input: { value: s.u32() }, returns: s.u32() }),
     principal: method({ input: { who: s.principal() }, returns: s.principal() }),
     stream: method({
-      input: { values: s.stream(item), suffix: z.string() },
+      input: { values: s.stream(item), suffix },
       returns: s.stream(item),
     }),
     configured: method({ input: {}, returns: z.string() }),

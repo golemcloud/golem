@@ -55,10 +55,12 @@ async function build(name) {
       nodeResolve({ extensions: ['.ts', '.mjs', '.js'] }),
       {
         name: 'fixture-typescript',
-        transform(code, id) {
+        load(id) {
           if (id.endsWith('.ts'))
             return {
-              code: ts.transpileModule(code, { compilerOptions: config.options }).outputText,
+              code: ts.transpileModule(fs.readFileSync(id, 'utf8'), {
+                compilerOptions: config.options,
+              }).outputText,
               map: null,
             };
         },

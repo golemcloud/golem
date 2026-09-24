@@ -148,7 +148,9 @@ export function staticTools(config, runtime) {
     if (ts.isIdentifier(node)) {
       if (locals.has(node.text)) return locals.get(node.text);
       if (node.text === 'undefined') return undefined;
-      let symbol = checker.getSymbolAtLocation(node);
+      let symbol = ts.isShorthandPropertyAssignment(node.parent)
+        ? checker.getShorthandAssignmentValueSymbol(node.parent)
+        : checker.getSymbolAtLocation(node);
       const declaration = symbol?.declarations?.[0];
       if (
         declaration &&
@@ -604,10 +606,19 @@ export function staticTools(config, runtime) {
         ts.forEachChild(node, annotate);
       };
       annotate(source);
+      // Metadata spans belong to the original source, even when a Rollup load
+      // hook has already transpiled the input module.
+      code = source.text;
       for (const [start, end, replacement] of edits.sort((a, b) => b[0] - a[0]))
         code = code.slice(0, start) + replacement + code.slice(end);
       return {
-        code: `import { compiledTool as __compiledTool } from ${literal(path.join(runtime, 'internal/tool/compiled.mjs'))};\nimport { compiledToolClient as __compiledToolClient } from ${literal(path.join(runtime, 'toolClient.mjs'))};\nimport { compiledAgent as __compiledAgent, concretePrincipal as __concretePrincipal } from ${literal(path.join(runtime, 'internal/compiledAgent.mjs'))};\n${code}`,
+        code: ts.transpileModule(
+          `import { compiledTool as __compiledTool } from ${literal(path.join(runtime, 'internal/tool/compiled.mjs'))};\nimport { compiledToolClient as __compiledToolClient } from ${literal(path.join(runtime, 'toolClient.mjs'))};\nimport { compiledAgent as __compiledAgent, concretePrincipal as __concretePrincipal } from ${literal(path.join(runtime, 'internal/compiledAgent.mjs'))};\n${code}`,
+          {
+            fileName: id,
+            compilerOptions: { ...config.options, module: ts.ModuleKind.ESNext, noEmit: false },
+          },
+        ).outputText,
         map: null,
       };
     },
