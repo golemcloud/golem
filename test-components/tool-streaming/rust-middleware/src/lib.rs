@@ -9,7 +9,8 @@ use golem_rust::tool::{
     ToolMiddlewareInvokeFuture, ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
 };
 use golem_rust::{
-    FromSchema, FromWire, IntoSchema, IntoWire, TypedSchemaValue, WireSchema, tool_definition,
+    FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaType, SchemaValue,
+    TypedSchemaValue, WireSchema, decode_schema_value, encode_schema_graph, tool_definition,
     tool_middleware, universal_tool_middleware,
 };
 use std::convert::Infallible;
@@ -19,7 +20,7 @@ pub trait MiddlewareProbe {
     async fn apply(&self, value: String) -> String;
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyObservation {
     pub label: String,
     pub config_resolved: bool,
@@ -27,7 +28,7 @@ pub struct SecretPolicyObservation {
     pub input_secret_revealed: bool,
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyEvidence {
     pub middleware: Vec<SecretPolicyObservation>,
     pub leaf_revealed: bool,
@@ -108,7 +109,7 @@ impl SecretPolicyProbeMiddleware for SecretPolicyAudit {
 mod expected_mcp_probe {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
     pub struct Evidence {
         pub evidence: String,
     }
@@ -405,9 +406,9 @@ async fn universal_secret_policy_audit(
         .as_ref()
         .is_ok_and(|configured| reveal_string(configured).is_ok());
     let input_secret_revealed = match input.value() {
-        SchemaValue::Record { fields } => fields.first().is_some_and(|value| {
-            matches!(value, SchemaValue::Secret(handle) if reveal_string(handle).is_ok())
-        }),
+        SchemaValue::Record { fields } => fields.first().is_some_and(
+            |value| matches!(value, SchemaValue::Secret(handle) if reveal_string(handle).is_ok()),
+        ),
         _ => false,
     };
     let mut result = underlying
