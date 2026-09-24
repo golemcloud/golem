@@ -2838,11 +2838,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             None => RetryDecision::None,
         };
 
-        if self.uses_streams && decision == RetryDecision::None {
-            let _ = self
+        if self.uses_streams
+            && decision == RetryDecision::None
+            && self
                 .parent
                 .fail_durable_streaming_session(idempotency_key, details)
-                .await;
+                .await
+                .is_err()
+        {
+            self.parent
+                .durable_stream_producer
+                .changed()
+                .notify_waiters();
         }
 
         failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
