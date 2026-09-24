@@ -1678,12 +1678,13 @@ mod tests {
         ReflectedTransport, SchemaRef, TestReflectedTransport, validate_declared_output,
     };
     use crate::bindings::golem::agent::common as wire_common;
+    use crate::schema::render::from_json_value;
     use crate::schema::schema_type::{NumericBound, NumericRestrictions};
-    use crate::schema::validation::{is_equivalent_cross_graph, validate_graph};
+    use crate::schema::validation::{is_equivalent_cross_graph, validate_graph, validate_value};
     use crate::schema::{
         BinaryRestrictions, MetadataEnvelope, NamedFieldType, PermissionCardSpec, QuantitySpec,
-        QuotaTokenSpec, ResultSpec, SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId,
-        VariantCaseType, VariantValuePayload,
+        QuotaTokenSpec, ResultSpec, SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue,
+        TextRestrictions, TypeId, VariantCaseType, VariantValuePayload,
     };
     use serde_json::{Value, json};
     use std::collections::HashSet;
@@ -1789,12 +1790,34 @@ mod tests {
             ]),
             "constrained-u32" => SchemaType::U32 {
                 restrictions: Some(NumericRestrictions {
-                    min: None,
+                    min: Some(NumericBound::Unsigned(2)),
                     max: Some(NumericBound::Unsigned(10)),
                     unit: None,
                 }),
                 metadata: MetadataEnvelope::default(),
             },
+            "constrained-f64" => SchemaType::F64 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::float(-1.5).unwrap()),
+                    max: Some(NumericBound::float(2.5).unwrap()),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+            "constrained-text" => SchemaType::text(TextRestrictions {
+                languages: Some(vec!["en".to_string(), "de".to_string()]),
+                min_length: Some(2),
+                max_length: Some(8),
+                regex: Some("^[a-z]+$".to_string()),
+            }),
+            "constrained-binary" => SchemaType::binary(BinaryRestrictions {
+                mime_types: Some(vec![
+                    "image/png".to_string(),
+                    "application/octet-stream".to_string(),
+                ]),
+                min_bytes: Some(2),
+                max_bytes: Some(4),
+            }),
             "result" => SchemaType::result(ResultSpec {
                 ok: Some(Box::new(SchemaType::string())),
                 err: Some(Box::new(SchemaType::u32())),
@@ -1995,7 +2018,21 @@ mod tests {
                         .cloned()
                         .unwrap_or_else(|| vec![case["input"].clone()]);
                     for input in inputs {
-                        assert!(schema.pack_json(&input).is_err(), "{id} accepted {input}");
+                        let actual = match from_json_value(schema.graph(), schema.root(), &input) {
+                            Err(_) => "invalid-json",
+                            Ok(value)
+                                if validate_value(schema.graph(), schema.root(), &value)
+                                    .is_err() =>
+                            {
+                                "constraint-violation"
+                            }
+                            Ok(value) => panic!("{id} accepted {input} as {value:?}"),
+                        };
+                        assert_eq!(
+                            actual,
+                            expected["kind"].as_str().expect("reject kind"),
+                            "{id}"
+                        );
                     }
                 }
                 "json-schema" => {

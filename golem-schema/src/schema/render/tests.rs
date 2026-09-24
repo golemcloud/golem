@@ -347,6 +347,131 @@ fn reflection_json_schema_rejects_unrepresentable_leaves() {
 }
 
 #[test]
+fn numeric_json_schemas_apply_every_narrow_and_float_bound() {
+    let signed = |min, max| {
+        Some(NumericRestrictions {
+            min: Some(NumericBound::Signed(min)),
+            max: Some(NumericBound::Signed(max)),
+            unit: None,
+        })
+    };
+    let unsigned = |min, max| {
+        Some(NumericRestrictions {
+            min: Some(NumericBound::Unsigned(min)),
+            max: Some(NumericBound::Unsigned(max)),
+            unit: None,
+        })
+    };
+    let cases = [
+        SchemaType::S8 {
+            restrictions: signed(-12, 12),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::S16 {
+            restrictions: signed(-1_200, 1_200),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::S32 {
+            restrictions: signed(-120_000, 120_000),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::U8 {
+            restrictions: unsigned(12, 120),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::U16 {
+            restrictions: unsigned(1_200, 12_000),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::U32 {
+            restrictions: unsigned(120_000, 1_200_000),
+            metadata: MetadataEnvelope::default(),
+        },
+    ];
+    let expected = [
+        (-12, 12),
+        (-1_200, 1_200),
+        (-120_000, 120_000),
+        (12, 120),
+        (1_200, 12_000),
+        (120_000, 1_200_000),
+    ];
+    for (ty, (min, max)) in cases.into_iter().zip(expected) {
+        let schema = to_json_schema(&SchemaGraph::anonymous(ty.clone()), &ty);
+        assert_eq!(schema["minimum"], min);
+        assert_eq!(schema["maximum"], max);
+    }
+
+    for (ty, min, max) in [
+        (
+            SchemaType::F32 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::float(-1.5).unwrap()),
+                    max: Some(NumericBound::float(2.5).unwrap()),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+            -1.5,
+            2.5,
+        ),
+        (
+            SchemaType::F64 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::float(-3.5).unwrap()),
+                    max: Some(NumericBound::float(4.5).unwrap()),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+            -3.5,
+            4.5,
+        ),
+    ] {
+        let schema = to_json_schema(&SchemaGraph::anonymous(ty.clone()), &ty);
+        assert_eq!(schema["minimum"], min);
+        assert_eq!(schema["maximum"], max);
+    }
+}
+
+#[test]
+fn rich_json_schemas_enforce_allowlists_and_canonical_base64url() {
+    let text = SchemaType::text(TextRestrictions {
+        languages: Some(vec!["en".to_string(), "de".to_string()]),
+        ..Default::default()
+    });
+    let text_schema = to_json_schema(&SchemaGraph::anonymous(text.clone()), &text);
+    assert_eq!(
+        text_schema["properties"]["language"]["enum"],
+        json!(["en", "de"])
+    );
+
+    let binary = SchemaType::binary(BinaryRestrictions {
+        mime_types: Some(vec!["image/png".to_string()]),
+        ..Default::default()
+    });
+    let binary_schema = to_json_schema(&SchemaGraph::anonymous(binary.clone()), &binary);
+    assert_eq!(
+        binary_schema["properties"]["mimeType"]["enum"],
+        json!(["image/png"])
+    );
+    let pattern = binary_schema["properties"]["bytes"]["pattern"]
+        .as_str()
+        .expect("binary bytes pattern");
+    assert_eq!(
+        pattern,
+        "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$"
+    );
+    let regex = regex::Regex::new(pattern).expect("canonical base64url regex");
+    for valid in ["", "AQ", "AQI", "AQID", "-_8"] {
+        assert!(regex.is_match(valid), "{valid} must match");
+    }
+    for invalid in ["+/8", "AQ==", "-_9", "A"] {
+        assert!(!regex.is_match(invalid), "{invalid} must not match");
+    }
+}
+
+#[test]
 fn malformed_json_and_schema_values_are_typed_errors() {
     let ty = SchemaType::record(vec![NamedFieldType {
         name: "id".to_string(),
@@ -395,12 +520,34 @@ fn conformance_fixture(name: &str) -> SchemaGraph {
         ]),
         "constrained-u32" => SchemaType::U32 {
             restrictions: Some(NumericRestrictions {
-                min: None,
+                min: Some(NumericBound::Unsigned(2)),
                 max: Some(NumericBound::Unsigned(10)),
                 unit: None,
             }),
             metadata: MetadataEnvelope::default(),
         },
+        "constrained-f64" => SchemaType::F64 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::float(-1.5).unwrap()),
+                max: Some(NumericBound::float(2.5).unwrap()),
+                unit: None,
+            }),
+            metadata: MetadataEnvelope::default(),
+        },
+        "constrained-text" => SchemaType::text(TextRestrictions {
+            languages: Some(vec!["en".to_string(), "de".to_string()]),
+            min_length: Some(2),
+            max_length: Some(8),
+            regex: Some("^[a-z]+$".to_string()),
+        }),
+        "constrained-binary" => SchemaType::binary(BinaryRestrictions {
+            mime_types: Some(vec![
+                "image/png".to_string(),
+                "application/octet-stream".to_string(),
+            ]),
+            min_bytes: Some(2),
+            max_bytes: Some(4),
+        }),
         "result" => SchemaType::result(ResultSpec {
             ok: Some(Box::new(SchemaType::string())),
             err: Some(Box::new(SchemaType::u32())),
@@ -608,14 +755,18 @@ fn reflection_conformance_corpus() {
                     .cloned()
                     .unwrap_or_else(|| vec![case["input"].clone()]);
                 for input in inputs {
-                    let decoded = from_json_value(&graph, &graph.root, &input);
-                    let rejected = match fixture {
-                        "constrained-u32" => decoded
-                            .as_ref()
-                            .is_ok_and(|value| validate_value(&graph, &graph.root, value).is_err()),
-                        _ => decoded.is_err(),
+                    let actual = match from_json_value(&graph, &graph.root, &input) {
+                        Err(_) => "invalid-json",
+                        Ok(value) if validate_value(&graph, &graph.root, &value).is_err() => {
+                            "constraint-violation"
+                        }
+                        Ok(value) => panic!("{id} accepted {input} as {value:?}"),
                     };
-                    assert!(rejected, "{id} accepted {input}");
+                    assert_eq!(
+                        actual,
+                        expected["kind"].as_str().expect("reject kind"),
+                        "{id}"
+                    );
                 }
             }
             "json-schema" => {

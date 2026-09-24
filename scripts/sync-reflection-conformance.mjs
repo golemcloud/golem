@@ -32,6 +32,14 @@ for (const testCase of corpus.cases) {
   for (const field of ['id', 'operation', 'fixture', 'expected']) {
     if (!(field in testCase)) throw new Error(`${testCase.id ?? '<unknown>'} is missing ${field}`);
   }
+  if (testCase.operation === 'reject') {
+    const kind = testCase.expected?.kind;
+    if (kind !== 'invalid-json' && kind !== 'constraint-violation') {
+      throw new Error(
+        `${testCase.id} has missing or unknown reject kind ${JSON.stringify(kind)}`,
+      );
+    }
+  }
 }
 
 const scala = `/*

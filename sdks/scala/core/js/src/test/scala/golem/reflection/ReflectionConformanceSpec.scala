@@ -85,7 +85,48 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
           )
         )
       case "constrained-u32" =>
-        SchemaType(U32Type(Some(NumericRestrictions(max = Some(NumericBound.Unsigned(10))))))
+        SchemaType(
+          U32Type(
+            Some(
+              NumericRestrictions(
+                min = Some(NumericBound.Unsigned(2)),
+                max = Some(NumericBound.Unsigned(10))
+              )
+            )
+          )
+        )
+      case "constrained-f64" =>
+        SchemaType(
+          F64Type(
+            Some(
+              NumericRestrictions(
+                min = Some(NumericBound.FloatBits(java.lang.Double.doubleToRawLongBits(-1.5))),
+                max = Some(NumericBound.FloatBits(java.lang.Double.doubleToRawLongBits(2.5)))
+              )
+            )
+          )
+        )
+      case "constrained-text" =>
+        SchemaType(
+          TextType(
+            TextRestrictions(
+              languages = Some(List("en", "de")),
+              minLength = Some(2),
+              maxLength = Some(8),
+              regex = Some("^[a-z]+$")
+            )
+          )
+        )
+      case "constrained-binary" =>
+        SchemaType(
+          BinaryType(
+            BinaryRestrictions(
+              mimeTypes = Some(List("image/png", "application/octet-stream")),
+              minBytes = Some(2),
+              maxBytes = Some(4)
+            )
+          )
+        )
       case "result" =>
         SchemaType(ResultType(Some(SchemaType(StringType)), Some(SchemaType(U32Type()))))
       case "custom-error" =>
@@ -280,7 +321,15 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
             Predef.assert(schema.unpackJson(packed) == Right(testCase("expected")), id)
           case "reject" =>
             val inputs = testCase.get("inputs").map(elements).getOrElse(List(testCase("input")))
-            inputs.foreach(input => Predef.assert(fixture(name).validateJson(input).isLeft, s"$id accepted $input"))
+            inputs.foreach { input =>
+              val schema = fixture(name)
+              val actual = schema.packJson(input) match {
+                case Left(_)                                            => "invalid-json"
+                case Right(value) if schema.validateValue(value).isLeft => "constraint-violation"
+                case Right(value)                                       => throw new AssertionError(s"$id accepted $input as $value")
+              }
+              Predef.assert(actual == string(fields(testCase("expected"))("kind")), id)
+            }
           case "json-schema" =>
             assertSubset(
               atPointer(fixture(name).toJsonSchema(false), string(testCase("path"))),

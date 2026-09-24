@@ -97,7 +97,40 @@ fn conformance_fixture(name : String) -> SchemaRef raise {
       )
     "constrained-u32" =>
       @model.schema_type(
-        U32(Some({ min: None, max: Some(@types.Unsigned(10UL)), unit: None, })),
+        U32(
+          Some({
+            min: Some(@types.Unsigned(2UL)),
+            max: Some(@types.Unsigned(10UL)),
+            unit: None,
+          }),
+        ),
+      )
+    "constrained-f64" =>
+      @model.schema_type(
+        F64(
+          Some({
+            min: Some(@types.FloatBits((-1.5).reinterpret_as_uint64())),
+            max: Some(@types.FloatBits(2.5.reinterpret_as_uint64())),
+            unit: None,
+          }),
+        ),
+      )
+    "constrained-text" =>
+      @model.schema_type(
+        Text({
+          languages: Some(["en", "de"]),
+          min_length: Some(2U),
+          max_length: Some(8U),
+          regex: Some("^[a-z]+$"),
+        }),
+      )
+    "constrained-binary" =>
+      @model.schema_type(
+        Binary({
+          mime_types: Some(["image/png", "application/octet-stream"]),
+          min_bytes: Some(2U),
+          max_bytes: Some(4U),
+        }),
       )
     "result" =>
       @model.schema_type(
@@ -274,6 +307,28 @@ fn assert_conformance_semantic(
 }
 
 ///|
+fn conformance_reject_kind(
+  schema : SchemaRef,
+  input : Json,
+  id : String,
+) -> String raise {
+  let packed = try schema.pack(schema.resolve(schema.root), input) catch {
+    _ => None
+  } noraise {
+    value => Some(value)
+  }
+  match packed {
+    None => "invalid-json"
+    Some(value) =>
+      try schema.validate_value(value) catch {
+        _ => "constraint-violation"
+      } noraise {
+        _ => fail("conformance case was accepted: " + id)
+      }
+  }
+}
+
+///|
 test "reflection conformance corpus executes the complete case-ID set" {
   let corpus = @json.parse(reflection_conformance_corpus_json)
   let root = corpus_object(corpus)
@@ -303,11 +358,14 @@ test "reflection conformance corpus executes the complete case-ID set" {
           None => [test_case.get("input").unwrap()]
         }
         for input in inputs {
-          try schema.pack_json(input) catch {
-            _ => ()
-          } noraise {
-            _ => fail("conformance case was accepted: " + id)
-          }
+          assert_eq(
+            conformance_reject_kind(schema, input, id),
+            corpus_string(
+              corpus_object(test_case.get("expected").unwrap())
+              .get("kind")
+              .unwrap(),
+            ),
+          )
         }
       }
       "json-schema" =>

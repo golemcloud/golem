@@ -153,7 +153,42 @@ function fixture(name: string): SchemaRef {
     case 'config-entry':
       return schema(t.record([field('path', t.list(t.string())), field('value', t.s64())]));
     case 'constrained-u32':
-      return schema(t.u32({ max: { tag: 'unsigned', val: 10n } }));
+      return schema(
+        t.u32({
+          min: { tag: 'unsigned', val: 2n },
+          max: { tag: 'unsigned', val: 10n },
+        }),
+      );
+    case 'constrained-f64':
+      return schema(
+        t.f64({
+          min: { tag: 'float-bits', val: 0xbff8000000000000n },
+          max: { tag: 'float-bits', val: 0x4004000000000000n },
+        }),
+      );
+    case 'constrained-text':
+      return schema(
+        schemaType({
+          tag: 'text',
+          restrictions: {
+            languages: ['en', 'de'],
+            minLength: 2,
+            maxLength: 8,
+            regex: '^[a-z]+$',
+          },
+        }),
+      );
+    case 'constrained-binary':
+      return schema(
+        schemaType({
+          tag: 'binary',
+          restrictions: {
+            mimeTypes: ['image/png', 'application/octet-stream'],
+            minBytes: 2,
+            maxBytes: 4,
+          },
+        }),
+      );
     case 'result':
       return schema(t.result(t.string(), t.u32()));
     case 'custom-error':
@@ -253,7 +288,21 @@ describe('reflection conformance corpus', () => {
         case 'reject': {
           const ref = fixture(testCase.fixture);
           for (const input of testCase.inputs ?? [testCase.input!]) {
-            expect(ref.validateJson(input).success, testCase.id).toBe(false);
+            let packed: ReturnType<typeof ref.packJson>;
+            try {
+              packed = ref.packJson(input);
+            } catch {
+              expect('invalid-json', testCase.id).toBe(
+                (testCase.expected as { readonly kind: string }).kind,
+              );
+              continue;
+            }
+            if (ref.validateValue(packed).success) {
+              throw new Error(`${testCase.id} accepted ${JSON.stringify(input)}`);
+            }
+            expect('constraint-violation', testCase.id).toBe(
+              (testCase.expected as { readonly kind: string }).kind,
+            );
           }
           break;
         }

@@ -101,6 +101,10 @@ private[reflection] object ReflectionConformanceCorpus {
     "errors/binary-noncanonical-base64",
     "json-schema/s64",
     "json-schema/s64-restrictions",
+    "json-schema/u32-restrictions",
+    "json-schema/f64-restrictions",
+    "json-schema/text-restrictions",
+    "json-schema/binary-restrictions",
     "json-schema/u64",
     "json-schema/duration-nanoseconds",
     "json-schema/quantity-mantissa",
@@ -363,6 +367,85 @@ private[reflection] object ReflectionConformanceCorpus {
         "pattern": "^(?:0|[1-9][0-9]*)$",
         "x-golem-minimum": "0",
         "x-golem-maximum": "18446744073709551615"
+      }
+    },
+    {
+      "id": "json-schema/u32-restrictions",
+      "operation": "json-schema",
+      "fixture": "constrained-u32",
+      "path": "",
+      "expected": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 10
+      }
+    },
+    {
+      "id": "json-schema/f64-restrictions",
+      "operation": "json-schema",
+      "fixture": "constrained-f64",
+      "path": "",
+      "expected": {
+        "type": "number",
+        "minimum": -1.5,
+        "maximum": 2.5
+      }
+    },
+    {
+      "id": "json-schema/text-restrictions",
+      "operation": "json-schema",
+      "fixture": "constrained-text",
+      "path": "",
+      "expected": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 8,
+            "pattern": "^[a-z]+$"
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "en",
+              "de"
+            ]
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "json-schema/binary-restrictions",
+      "operation": "json-schema",
+      "fixture": "constrained-binary",
+      "path": "",
+      "expected": {
+        "type": "object",
+        "properties": {
+          "bytes": {
+            "type": "string",
+            "contentEncoding": "base64url",
+            "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+            "minLength": 3,
+            "maxLength": 6
+          },
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "application/octet-stream"
+            ]
+          }
+        },
+        "required": [
+          "bytes"
+        ],
+        "additionalProperties": false
       }
     },
     {
