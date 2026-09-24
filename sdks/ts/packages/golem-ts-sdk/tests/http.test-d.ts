@@ -94,6 +94,59 @@ void http.connect('/items');
 void http.custom('PURGE', '/items/{id}');
 void http.get('/files/{*rest}');
 
+void http.post('/events', {
+  durableStreams: {
+    slots: [
+      { source: 'input', slot: 'input', name: 'messages' },
+      {
+        source: 'output',
+        slot: '$result',
+        name: 'results',
+        contentType: 'application/vnd.golem.events',
+      },
+    ],
+    allowExternalWrites: true,
+    allowStreamDelete: false,
+    allowInvocationDelete: false,
+    load: {
+      maxConcurrentReadersPerStream: 8,
+      maxAppendRequestsPerSecondPerStream: 25,
+    },
+  },
+});
+void http.custom('SUBSCRIBE', '/events', {
+  durableStreams: { slots: [{ source: 'output', slot: '$result' }] },
+});
+
+// @ts-expect-error durable stream source must be input or output
+void http.post('/events', {
+  durableStreams: {
+    slots: [{ source: 'external', slot: 'input' }],
+  },
+});
+// @ts-expect-error durable stream slots require a slot name
+void http.post('/events', {
+  durableStreams: {
+    slots: [{ source: 'input' }],
+  },
+});
+// @ts-expect-error deletion flags are booleans
+void http.post('/events', {
+  durableStreams: {
+    slots: [],
+    allowStreamDelete: 'false',
+  },
+});
+// @ts-expect-error load limits are numbers
+void http.post('/events', {
+  durableStreams: {
+    slots: [],
+    load: {
+      maxConcurrentReadersPerStream: '8',
+    },
+  },
+});
+
 // @ts-expect-error missing leading '/'
 void http.get('items');
 // @ts-expect-error trailing slash
