@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 type Call = (&'static str, &'static str, &'static str);
 
@@ -45,8 +46,10 @@ macro_rules! counting_methods {
 
 counting_methods! {
     fn set(entity_name: &'static str, namespace: KeyValueStorageNamespace, key: &str, value: &[u8]) -> ();
+    fn set_with_expiry(entity_name: &'static str, namespace: KeyValueStorageNamespace, key: &str, value: &[u8], expiry: Duration) -> ();
     fn set_many(entity_name: &'static str, namespace: KeyValueStorageNamespace, pairs: &[(&str, &[u8])]) -> ();
     fn compare_and_set_many(entity_name: &'static str, namespace: KeyValueStorageNamespace, key: &str, expected: Option<&[u8]>, deletes: &[&str], pairs: &[(&str, &[u8])]) -> bool;
+    fn compare_and_mutate_many(entity_name: &'static str, namespace: KeyValueStorageNamespace, key: &str, expected: Option<&[u8]>, sets: &[(&str, &[u8])], deletions: &[&str], expiry: Duration) -> bool;
     fn set_if_not_exists(entity_name: &'static str, namespace: KeyValueStorageNamespace, key: &str, value: &[u8]) -> bool;
     fn get(entity_name: &'static str, namespace: KeyValueStorageNamespace, key: &str) -> Option<Bytes>;
     fn get_many(entity_name: &'static str, namespace: KeyValueStorageNamespace, keys: Arc<[String]>) -> Vec<Option<Bytes>>;

@@ -283,10 +283,7 @@ impl AgentId {
         format!("agent:durable_stream_session_index:{}", self.to_redis_key())
     }
 
-    pub fn durable_stream_session_index_namespace(
-        &self,
-        fingerprint: AgentFingerprint,
-    ) -> String {
+    pub fn durable_stream_session_index_namespace(&self, fingerprint: AgentFingerprint) -> String {
         format!(
             "{}:{fingerprint}",
             self.durable_stream_session_index_namespace_prefix()

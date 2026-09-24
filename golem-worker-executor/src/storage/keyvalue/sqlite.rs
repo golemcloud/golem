@@ -106,9 +106,7 @@ impl SqliteKeyValueStorage {
             KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
                 agent_id,
                 fingerprint,
-            } => {
-                agent_id.durable_stream_session_index_namespace(fingerprint)
-            }
+            } => agent_id.durable_stream_session_index_namespace(fingerprint),
             KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => {
                 format!(
                     "agent:rejected_periodic_snapshots:{}",

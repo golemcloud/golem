@@ -1541,13 +1541,14 @@ async fn assert_stream_index_operation_bounds(missing: bool) {
         oplog.commit(CommitLevel::Always).await;
         let horizon = oplog.current_oplog_index().await;
         let recovery = service
-            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable, test_fingerprint())
             .await
             .unwrap();
         assert_eq!(recovery.sessions.len(), 1);
         assert_eq!(recovery.sessions[0].0, session_key(&id, &active));
         let namespace = KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
             agent_id: id.agent_id.clone(),
+            fingerprint: test_fingerprint(),
         };
         if missing {
             let keys = kv
@@ -1566,7 +1567,7 @@ async fn assert_stream_index_operation_bounds(missing: bool) {
         kv.reset();
         blob.reset();
         let recovery = cold
-            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable, test_fingerprint())
             .await
             .unwrap();
         assert_eq!(recovery.sessions.len(), 1);
@@ -1585,7 +1586,13 @@ async fn assert_stream_index_operation_bounds(missing: bool) {
         kv.reset();
         let offsets = cold
             .stream_session_index
-            .lookup_persisted_offsets(&id, AgentMode::Durable, horizon, &active)
+            .lookup_persisted_offsets(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                horizon,
+                &active,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -1623,7 +1630,7 @@ async fn assert_stream_index_operation_bounds(missing: bool) {
         kv.reset();
         blob.reset();
         let recovery = cold
-            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+            .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable, test_fingerprint())
             .await
             .unwrap();
         assert_eq!(recovery.sessions.len(), 1);
@@ -1654,11 +1661,15 @@ async fn assert_stream_index_operation_bounds(missing: bool) {
         .await;
         oplog.commit(CommitLevel::Always).await;
         assert!(
-            cold.lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
-                .await
-                .unwrap()
-                .sessions
-                .is_empty()
+            cold.lookup_durable_stream_recovery_metadata(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+            )
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
         );
         drop(cold);
         for _ in 0..2 {
@@ -1668,7 +1679,11 @@ async fn assert_stream_index_operation_bounds(missing: bool) {
             blob.reset();
             assert!(
                 restarted
-                    .lookup_durable_stream_recovery_metadata(&id, AgentMode::Durable)
+                    .lookup_durable_stream_recovery_metadata(
+                        &id,
+                        AgentMode::Durable,
+                        test_fingerprint(),
+                    )
                     .await
                     .unwrap()
                     .sessions

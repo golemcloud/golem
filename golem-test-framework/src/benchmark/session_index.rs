@@ -36,19 +36,21 @@ pub async fn inspect_live_session_index(
     })?;
     tokio::time::timeout(Duration::from_secs(30), async {
         let mut connection = PgConnection::connect_with(&info.to_connect_options()).await?;
+        let namespace = index_namespace(&mut connection, id).await?;
+        let status_namespace = related_namespace(id, &namespace, "agent-status")?;
         let mut keys = vec!["coverage".to_string()];
         keys.extend(sessions.iter().map(|key| format!("session:{}", key.value)));
         let rows: IndexRows = sqlx::query_as(
             "SELECT key, value FROM golem_worker_executor.kv_storage WHERE namespace = $1 AND key = ANY($2)",
         )
-        .bind(id.agent_id.durable_stream_session_index_namespace())
+        .bind(namespace)
         .bind(keys)
         .fetch_all(&mut connection)
         .await?;
         let status: Option<(Vec<u8>,)> = sqlx::query_as(
             "SELECT value FROM golem_worker_executor.kv_storage WHERE namespace = $1 AND key = $2",
         )
-        .bind(format!("agent-status:{}", id.agent_id.to_redis_key()))
+        .bind(status_namespace)
         .bind("core")
         .fetch_optional(&mut connection)
         .await?;
@@ -139,11 +141,8 @@ impl<'a> SpawnedSessionIndexControl<'a> {
         sessions: &[IdempotencyKey],
     ) -> anyhow::Result<usize> {
         tokio::time::timeout(Duration::from_secs(30), async {
-            let rows = index_rows(
-                &mut self.connection,
-                &id.agent_id.durable_stream_session_index_namespace(),
-            )
-            .await?;
+            let namespace = index_namespace(&mut self.connection, id).await?;
+            let rows = index_rows(&mut self.connection, &namespace).await?;
             validate_rows(&rows, sessions)?;
             Ok(rows.len())
         })
@@ -159,16 +158,16 @@ impl<'a> SpawnedSessionIndexControl<'a> {
         sessions: &[IdempotencyKey],
     ) -> anyhow::Result<usize> {
         tokio::time::timeout(Duration::from_secs(120), async {
-            let namespace = id.agent_id.durable_stream_session_index_namespace();
             let payloads = payload_snapshot(self.deps, id).await?;
             let mut tx = self.connection.begin().await?;
             sqlx::query("LOCK TABLE golem_worker_executor.kv_storage IN EXCLUSIVE MODE")
                 .execute(&mut *tx)
                 .await?;
+            let namespace = index_namespace(&mut tx, id).await?;
+            let status_namespace = related_namespace(id, &namespace, "agent-status")?;
             let rows = index_rows(&mut tx, &namespace).await?;
             validate_rows(&rows, sessions)?;
             let unrelated = unrelated_rows(&mut tx, &namespace).await?;
-            let status_namespace = format!("agent-status:{}", id.agent_id.to_redis_key());
             ensure!(
                 unrelated.iter().any(
                     |(namespace, _, value)| namespace == &status_namespace && !value.is_empty()
@@ -205,6 +204,54 @@ impl<'a> SpawnedSessionIndexControl<'a> {
         })
         .await?
     }
+}
+
+async fn index_namespace(
+    connection: &mut PgConnection,
+    id: &OwnedAgentId,
+) -> anyhow::Result<String> {
+    let prefix = format!(
+        "{}:",
+        id.agent_id.durable_stream_session_index_namespace_prefix()
+    );
+    let namespaces: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT namespace FROM golem_worker_executor.kv_storage WHERE left(namespace, length($1)) = $1 ORDER BY namespace",
+    )
+    .bind(&prefix)
+    .fetch_all(connection)
+    .await?;
+    ensure!(
+        namespaces.len() == 1,
+        "expected exactly one fingerprint-scoped stream-session index namespace, found {}",
+        namespaces.len()
+    );
+    Ok(namespaces
+        .into_iter()
+        .next()
+        .context("stream-session index namespace is absent")?
+        .0)
+}
+
+fn related_namespace(
+    id: &OwnedAgentId,
+    index_namespace: &str,
+    service: &str,
+) -> anyhow::Result<String> {
+    let prefix = format!(
+        "{}:",
+        id.agent_id.durable_stream_session_index_namespace_prefix()
+    );
+    let fingerprint = index_namespace
+        .strip_prefix(&prefix)
+        .context("stream-session index namespace has an unexpected prefix")?;
+    ensure!(
+        !fingerprint.is_empty(),
+        "stream-session index fingerprint is empty"
+    );
+    Ok(format!(
+        "{service}:{}:{fingerprint}",
+        id.agent_id.to_redis_key()
+    ))
 }
 
 async fn index_rows(connection: &mut PgConnection, namespace: &str) -> anyhow::Result<IndexRows> {
