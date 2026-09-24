@@ -238,7 +238,13 @@ private object CanonicalJson {
         typed(
           "object",
           "properties" -> Json.Object(
-            "bytes"    -> typed("string", ("contentEncoding" -> Json.String("base64url")) +: byteRestrictions: _*),
+            "bytes" -> typed(
+              "string",
+              ("contentEncoding" -> Json.String("base64url")) +:
+                ("pattern"       -> Json.String(
+                  "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$"
+                )) +: byteRestrictions: _*
+            ),
             "mimeType" -> mimeType
           ),
           "required"             -> Json.Array(Json.String("bytes")),

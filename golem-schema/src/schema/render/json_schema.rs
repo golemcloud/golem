@@ -27,6 +27,8 @@ use std::collections::{HashMap, HashSet};
 
 const JSON_SCHEMA_DRAFT: &str = "https://json-schema.org/draft/2020-12/schema";
 const MIME_TYPE_PATTERN: &str = "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$";
+const BASE64URL_PATTERN: &str =
+    "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$";
 
 /// Configuration for the JSON Schema renderer.
 ///
@@ -666,16 +668,31 @@ pub(super) fn render_type(
         SchemaType::Ref { id, .. } => obj([("$ref", Value::String(ref_pointer(id, root)))]),
 
         SchemaType::Bool { .. } => obj([("type", Value::String("boolean".to_string()))]),
-        SchemaType::S8 { .. } => integer_schema(i8::MIN as i64, i8::MAX as i64),
-        SchemaType::S16 { .. } => integer_schema(i16::MIN as i64, i16::MAX as i64),
-        SchemaType::S32 { .. } => integer_schema(i32::MIN as i64, i32::MAX as i64),
+        SchemaType::S8 { restrictions, .. } => {
+            signed_integer_schema(i8::MIN as i64, i8::MAX as i64, restrictions.as_ref())
+        }
+        SchemaType::S16 { restrictions, .. } => {
+            signed_integer_schema(i16::MIN as i64, i16::MAX as i64, restrictions.as_ref())
+        }
+        SchemaType::S32 { restrictions, .. } => {
+            signed_integer_schema(i32::MIN as i64, i32::MAX as i64, restrictions.as_ref())
+        }
         SchemaType::S64 { restrictions, .. } => signed_64_schema(restrictions.as_ref()),
-        SchemaType::U8 { .. } => integer_schema(0, u8::MAX as i64),
-        SchemaType::U16 { .. } => integer_schema(0, u16::MAX as i64),
-        SchemaType::U32 { .. } => integer_schema(0, u32::MAX as i64),
+        SchemaType::U8 { restrictions, .. } => {
+            unsigned_integer_schema(0, u8::MAX as u64, restrictions.as_ref())
+        }
+        SchemaType::U16 { restrictions, .. } => {
+            unsigned_integer_schema(0, u16::MAX as u64, restrictions.as_ref())
+        }
+        SchemaType::U32 { restrictions, .. } => {
+            unsigned_integer_schema(0, u32::MAX as u64, restrictions.as_ref())
+        }
         SchemaType::U64 { restrictions, .. } => unsigned_64_schema(restrictions.as_ref()),
-        SchemaType::F32 { .. } | SchemaType::F64 { .. } => {
-            obj([("type", Value::String("number".to_string()))])
+        SchemaType::F32 { restrictions, .. } => {
+            float_schema(-(f32::MAX as f64), f32::MAX as f64, restrictions.as_ref())
+        }
+        SchemaType::F64 { restrictions, .. } => {
+            float_schema(-f64::MAX, f64::MAX, restrictions.as_ref())
         }
         SchemaType::Char { .. } => obj([
             ("type", Value::String("string".to_string())),
@@ -907,12 +924,72 @@ pub(super) fn ref_to_def_key(key: &str) -> String {
     format!("#/$defs/{}", escape_pointer_token(key))
 }
 
-fn integer_schema(min: i64, max: i64) -> Value {
+fn signed_integer_schema(min: i64, max: i64, restrictions: Option<&NumericRestrictions>) -> Value {
+    let minimum = restrictions
+        .and_then(|value| value.min)
+        .and_then(|bound| match bound {
+            NumericBound::Signed(value) => Some(value),
+            _ => None,
+        })
+        .unwrap_or(min)
+        .max(min);
+    let maximum = restrictions
+        .and_then(|value| value.max)
+        .and_then(|bound| match bound {
+            NumericBound::Signed(value) => Some(value),
+            _ => None,
+        })
+        .unwrap_or(max)
+        .min(max);
     obj([
         ("type", Value::String("integer".to_string())),
-        ("minimum", Value::Number(Number::from(min))),
-        ("maximum", Value::Number(Number::from(max))),
+        ("minimum", Value::Number(Number::from(minimum))),
+        ("maximum", Value::Number(Number::from(maximum))),
     ])
+}
+
+fn unsigned_integer_schema(
+    min: u64,
+    max: u64,
+    restrictions: Option<&NumericRestrictions>,
+) -> Value {
+    let minimum = restrictions
+        .and_then(|value| value.min)
+        .and_then(|bound| match bound {
+            NumericBound::Unsigned(value) => Some(value),
+            _ => None,
+        })
+        .unwrap_or(min)
+        .max(min);
+    let maximum = restrictions
+        .and_then(|value| value.max)
+        .and_then(|bound| match bound {
+            NumericBound::Unsigned(value) => Some(value),
+            _ => None,
+        })
+        .unwrap_or(max)
+        .min(max);
+    obj([
+        ("type", Value::String("integer".to_string())),
+        ("minimum", Value::Number(Number::from(minimum))),
+        ("maximum", Value::Number(Number::from(maximum))),
+    ])
+}
+
+fn float_schema(min: f64, max: f64, restrictions: Option<&NumericRestrictions>) -> Value {
+    let mut schema = Map::new();
+    schema.insert("type".to_string(), Value::String("number".to_string()));
+    if let Some(NumericBound::FloatBits(bits)) = restrictions.and_then(|value| value.min)
+        && let Some(value) = Number::from_f64(f64::from_bits(bits).max(min))
+    {
+        schema.insert("minimum".to_string(), Value::Number(value));
+    }
+    if let Some(NumericBound::FloatBits(bits)) = restrictions.and_then(|value| value.max)
+        && let Some(value) = Number::from_f64(f64::from_bits(bits).min(max))
+    {
+        schema.insert("maximum".to_string(), Value::Number(value));
+    }
+    Value::Object(schema)
 }
 
 fn unsigned_64_schema(restrictions: Option<&NumericRestrictions>) -> Value {
@@ -1064,10 +1141,15 @@ fn text_schema(restrictions: &TextRestrictions) -> Map<String, Value> {
     }
     let mut properties = Map::new();
     properties.insert("text".to_string(), Value::Object(text_field));
-    properties.insert(
-        "language".to_string(),
-        obj([("type", Value::String("string".to_string()))]),
-    );
+    let mut language_field = Map::new();
+    language_field.insert("type".to_string(), Value::String("string".to_string()));
+    if let Some(langs) = &restrictions.languages {
+        language_field.insert(
+            "enum".to_string(),
+            Value::Array(langs.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    properties.insert("language".to_string(), Value::Object(language_field));
     let mut m = Map::new();
     m.insert("type".to_string(), Value::String("object".to_string()));
     m.insert("properties".to_string(), Value::Object(properties));
@@ -1076,12 +1158,6 @@ fn text_schema(restrictions: &TextRestrictions) -> Map<String, Value> {
         Value::Array(vec![Value::String("text".to_string())]),
     );
     m.insert("additionalProperties".to_string(), Value::Bool(false));
-    if let Some(langs) = &restrictions.languages {
-        m.insert(
-            "description".to_string(),
-            Value::String(format!("Allowed languages: {}", langs.join(", "))),
-        );
-    }
     m
 }
 
@@ -1095,6 +1171,10 @@ fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
     bytes_field.insert(
         "contentEncoding".to_string(),
         Value::String("base64url".to_string()),
+    );
+    bytes_field.insert(
+        "pattern".to_string(),
+        Value::String(BASE64URL_PATTERN.to_string()),
     );
     if let Some(min) = restrictions.min_bytes {
         bytes_field.insert(
@@ -1114,6 +1194,12 @@ fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
         "pattern".to_string(),
         Value::String(MIME_TYPE_PATTERN.to_string()),
     );
+    if let Some(mimes) = &restrictions.mime_types {
+        mime_field.insert(
+            "enum".to_string(),
+            Value::Array(mimes.iter().cloned().map(Value::String).collect()),
+        );
+    }
     let mut properties = Map::new();
     properties.insert("bytes".to_string(), Value::Object(bytes_field));
     properties.insert("mimeType".to_string(), Value::Object(mime_field));
@@ -1125,12 +1211,6 @@ fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
         Value::Array(vec![Value::String("bytes".to_string())]),
     );
     m.insert("additionalProperties".to_string(), Value::Bool(false));
-    if let Some(mimes) = &restrictions.mime_types {
-        m.insert(
-            "description".to_string(),
-            Value::String(format!("Allowed MIME types: {}", mimes.join(", "))),
-        );
-    }
     m
 }
 

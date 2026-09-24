@@ -63,6 +63,32 @@ describe("SchemaRef", () => {
     }
   })
 
+  it("renders enforceable rich-value allowlists and canonical base64url bytes", () => {
+    const rendered = ref(
+      t.record([
+        field("text", t.text({ languages: ["en", "de"] })),
+        field("binary", t.binary({ mimeTypes: ["image/png"] })),
+      ]),
+    ).toJsonSchema()
+    expect(rendered).toMatchObject({
+      properties: {
+        text: { properties: { language: { enum: ["en", "de"] } } },
+        binary: { properties: { mimeType: { enum: ["image/png"] } } },
+      },
+    })
+    const pattern = (
+      rendered as {
+        properties: { binary: { properties: { bytes: { pattern: string } } } }
+      }
+    ).properties.binary.properties.bytes.pattern
+    expect(pattern).toBe(
+      "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+    )
+    const regex = new RegExp(pattern, "u")
+    for (const valid of ["", "AQ", "AQI", "AQID", "-_8"]) expect(regex.test(valid)).toBe(true)
+    for (const invalid of ["+/8", "AQ==", "-_9", "A"]) expect(regex.test(invalid)).toBe(false)
+  })
+
   it("matches canonical rich JSON forms, restrictions, and lossless integer ranges", () => {
     const schema = ref(
       t.record([

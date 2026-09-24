@@ -483,6 +483,9 @@ fn schema_json(graph : @model.SchemaGraph, schema : @model.SchemaType) -> Json {
       let bytes : Map[String, Json] = {
         "type": Json::string("string"),
         "contentEncoding": Json::string("base64url"),
+        "pattern": Json::string(
+          "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+        ),
       }
       match restrictions.min_bytes {
         Some(value) =>

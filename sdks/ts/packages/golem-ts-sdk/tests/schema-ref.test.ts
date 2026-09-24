@@ -227,6 +227,61 @@ describe('SchemaRef JSON Schema', () => {
     });
   });
 
+  it('renders declared bounds for every narrow integer and float family', () => {
+    for (const type of [
+      t.s8({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
+      t.s16({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
+      t.s32({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
+      t.u8({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
+      t.u16({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
+      t.u32({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
+    ]) {
+      expect(schema(type).toJsonSchema()).toMatchObject({
+        minimum: type.body.tag.startsWith('s') ? -12 : 2,
+        maximum: 12,
+      });
+    }
+
+    for (const type of [
+      t.f32({
+        min: { tag: 'float-bits', val: 0xbff0000000000000n },
+        max: { tag: 'float-bits', val: 0x3fe0000000000000n },
+      }),
+      t.f64({
+        min: { tag: 'float-bits', val: 0xbff0000000000000n },
+        max: { tag: 'float-bits', val: 0x3fe0000000000000n },
+      }),
+    ]) {
+      expect(schema(type).toJsonSchema()).toMatchObject({ minimum: -1, maximum: 0.5 });
+    }
+  });
+
+  it('renders enforceable rich-value allowlists and canonical base64url bytes', () => {
+    const rendered = schema(
+      t.record([
+        field('text', schemaType({ tag: 'text', restrictions: { languages: ['en', 'de'] } })),
+        field('binary', schemaType({ tag: 'binary', restrictions: { mimeTypes: ['image/png'] } })),
+      ]),
+    ).toJsonSchema();
+    expect(rendered).toMatchObject({
+      properties: {
+        text: { properties: { language: { enum: ['en', 'de'] } } },
+        binary: { properties: { mimeType: { enum: ['image/png'] } } },
+      },
+    });
+    const pattern = (
+      rendered as {
+        properties: { binary: { properties: { bytes: { pattern: string } } } };
+      }
+    ).properties.binary.properties.bytes.pattern;
+    expect(pattern).toBe(
+      '^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$',
+    );
+    const regex = new RegExp(pattern, 'u');
+    for (const valid of ['', 'AQ', 'AQI', 'AQID', '-_8']) expect(regex.test(valid)).toBe(true);
+    for (const invalid of ['+/8', 'AQ==', '-_9', 'A']) expect(regex.test(invalid)).toBe(false);
+  });
+
   it('makes reflection-only unsupported leaves unsatisfiable', () => {
     for (const type of [
       t.secret(t.string()),

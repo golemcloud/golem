@@ -622,12 +622,17 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       if (body.restrictions.regex !== undefined) text.pattern = body.restrictions.regex
       rendered = {
         type: "object",
-        properties: { text, language: { type: "string" } },
+        properties: {
+          text,
+          language: {
+            type: "string",
+            ...(body.restrictions.languages === undefined
+              ? {}
+              : { enum: body.restrictions.languages }),
+          },
+        },
         required: ["text"],
         additionalProperties: false,
-        ...(body.restrictions.languages === undefined
-          ? {}
-          : { description: `Allowed languages: ${body.restrictions.languages.join(", ")}` }),
       }
       break
     }
@@ -639,6 +644,7 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
           bytes: {
             type: "string",
             contentEncoding: "base64url",
+            pattern: BASE64URL_PATTERN,
             ...(body.restrictions.minBytes === undefined
               ? {}
               : { minLength: base64UrlLength(body.restrictions.minBytes) }),
@@ -646,12 +652,15 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
               ? {}
               : { maxLength: base64UrlLength(body.restrictions.maxBytes) }),
           },
-          mimeType: { type: "string", pattern: MIME_TYPE_PATTERN.source },
+          mimeType: {
+            type: "string",
+            pattern: MIME_TYPE_PATTERN.source,
+            ...(body.restrictions.mimeTypes === undefined
+              ? {}
+              : { enum: body.restrictions.mimeTypes }),
+          },
         },
         additionalProperties: false,
-        ...(body.restrictions.mimeTypes === undefined
-          ? {}
-          : { description: `Allowed MIME types: ${body.restrictions.mimeTypes.join(", ")}` }),
       }
       break
     case "path": {
@@ -1037,6 +1046,8 @@ function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonV
   return false
 }
 const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/u
+const BASE64URL_PATTERN =
+  "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$"
 
 function bytesToBase64(bytes: Uint8Array): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"

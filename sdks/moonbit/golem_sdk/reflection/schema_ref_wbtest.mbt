@@ -113,6 +113,9 @@ test "JSON Schema retains text and binary constraints" {
         "bytes": Json::object({
           "type": Json::string("string"),
           "contentEncoding": Json::string("base64url"),
+          "pattern": Json::string(
+            "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+          ),
           "minLength": Json::number(4.0),
           "maxLength": Json::number(8.0),
         }),
@@ -125,6 +128,29 @@ test "JSON Schema retains text and binary constraints" {
       "additionalProperties": Json::boolean(false),
     }),
   )
+  let pattern = match rendered {
+    Object(fields) =>
+      match fields.get("properties") {
+        Some(Object(properties)) =>
+          match properties.get("bytes") {
+            Some(Object(bytes)) =>
+              match bytes.get("pattern") {
+                Some(String(value)) => value
+                _ => fail("expected binary pattern string")
+              }
+            _ => fail("expected binary bytes schema")
+          }
+        _ => fail("expected binary properties")
+      }
+    _ => fail("expected binary JSON Schema object")
+  }
+  let regex = @string.Regex::Regex(pattern.replace_all(old="_-]", new="_\\-]"))
+  for valid in ["", "AQ", "AQI", "AQID", "-_8"] {
+    assert_true(regex.execute(valid) is Some(_))
+  }
+  for invalid in ["+/8", "AQ==", "-_9", "A"] {
+    assert_true(regex.execute(invalid) is None)
+  }
 }
 
 ///|

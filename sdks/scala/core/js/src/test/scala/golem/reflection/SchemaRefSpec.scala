@@ -113,28 +113,59 @@ object SchemaRefSpec extends ZIOSpecDefault {
                 ),
                 NamedFieldType(
                   "message",
-                  SchemaType(TextType(TextRestrictions(minLength = Some(12), regex = Some("^https://"))))
+                  SchemaType(
+                    TextType(
+                      TextRestrictions(
+                        languages = Some(List("en", "de")),
+                        minLength = Some(12),
+                        regex = Some("^https://")
+                      )
+                    )
+                  )
                 ),
                 NamedFieldType(
                   "content",
-                  SchemaType(BinaryType(BinaryRestrictions(minBytes = Some(3), maxBytes = Some(6))))
+                  SchemaType(
+                    BinaryType(
+                      BinaryRestrictions(
+                        mimeTypes = Some(List("image/png")),
+                        minBytes = Some(3),
+                        maxBytes = Some(6)
+                      )
+                    )
+                  )
                 )
               )
             )
           )
         )
       )
-      val rendered   = restricted.toJsonSchema()
-      val properties = rendered.get("properties").one.toOption.get
-      val count      = properties.get("count").one.toOption.get
-      val text       = properties.get("message").one.toOption.get.get("properties").one.toOption.get.get("text").one
-      val bytes      = properties.get("content").one.toOption.get.get("properties").one.toOption.get.get("bytes").one
+      val rendered         = restricted.toJsonSchema()
+      val properties       = rendered.get("properties").one.toOption.get
+      val count            = properties.get("count").one.toOption.get
+      val textProperties   = properties.get("message").one.toOption.get.get("properties").one.toOption.get
+      val text             = textProperties.get("text").one
+      val binaryProperties = properties.get("content").one.toOption.get.get("properties").one.toOption.get
+      val bytes            = binaryProperties.get("bytes").one
+      val pattern          = bytes.flatMap(_.get("pattern").one) match {
+        case Right(Json.String(value)) => value
+        case other                     => throw new AssertionError(s"expected binary pattern, got $other")
+      }
+      val canonical    = List("", "AQ", "AQI", "AQID", "-_8").forall(value => pattern.r.pattern.matcher(value).matches())
+      val nonCanonical = List("+/8", "AQ==", "-_9", "A").forall(value => !pattern.r.pattern.matcher(value).matches())
       assertTrue(
         count.get("maximum").one == Right(Json.Number(BigDecimal(3))),
         text.flatMap(_.get("minLength").one) == Right(Json.Number(BigDecimal(12))),
         text.flatMap(_.get("pattern").one) == Right(Json.String("^https://")),
+        textProperties.get("language").one.flatMap(_.get("enum").one) ==
+          Right(Json.Array(Json.String("en"), Json.String("de"))),
         bytes.flatMap(_.get("minLength").one) == Right(Json.Number(BigDecimal(4))),
-        bytes.flatMap(_.get("maxLength").one) == Right(Json.Number(BigDecimal(8)))
+        bytes.flatMap(_.get("maxLength").one) == Right(Json.Number(BigDecimal(8))),
+        pattern == "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+        canonical,
+        nonCanonical,
+        binaryProperties.get("mimeType").one.flatMap(_.get("enum").one) ==
+          Right(Json.Array(Json.String("image/png")))
       )
     },
     test("union export keeps discriminator and branch body while packing enforces the rule") {
