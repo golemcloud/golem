@@ -37,8 +37,8 @@ use golem_common::schema::multimodal::is_multimodal_schema_type;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::unstructured::{binary_body_restrictions, text_body_restrictions};
 use golem_service_base::custom_api::{
-    AgentRouteMode, CallAgentBehaviour, CompiledOutputSchema, PathSegment, QueryOrHeaderType,
-    RequestBodySchema,
+    AgentRouteMode, CallAgentBehaviour, CompiledOutputSchema, DurableStreamRepresentation,
+    PathSegment, QueryOrHeaderType, RequestBodySchema,
 };
 
 /// Schema-model view of an entire set of compiled routes, ready for the
@@ -72,9 +72,13 @@ pub struct CallAgentRouteSchema {
 
 /// A public slot's message schema, independent of ordinary REST response policy.
 pub struct StreamSlotSchema {
-    pub name: String,
+    pub canonical_name: String,
+    pub public_name: String,
+    pub content_type: String,
+    pub representation: DurableStreamRepresentation,
     pub writable: bool,
-    pub binary: bool,
+    pub allow_external_writes: bool,
+    pub allow_stream_delete: bool,
     pub element: SchemaType,
 }
 
@@ -257,6 +261,11 @@ fn lower_call_agent(
 fn lower_stream_slots(inner: &CallAgentBehaviour) -> Result<Vec<StreamSlotSchema>, String> {
     use golem_common::schema::FieldSource;
 
+    let policy = inner
+        .durable_streams
+        .as_ref()
+        .ok_or("Durable Streams route has no compiled policy")?;
+
     fn stream_element(graph: &SchemaGraph, ty: &SchemaType) -> Result<Option<SchemaType>, String> {
         match graph.resolve_ref(ty).map_err(|e| e.to_string())? {
             SchemaType::Stream {
@@ -270,24 +279,17 @@ fn lower_stream_slots(inner: &CallAgentBehaviour) -> Result<Vec<StreamSlotSchema
         }
     }
 
-    fn slot(
-        graph: &SchemaGraph,
-        name: &str,
-        writable: bool,
-        element: SchemaType,
-        stream: bool,
-    ) -> Result<StreamSlotSchema, String> {
-        let binary = stream
-            && matches!(
-                graph.resolve_ref(&element).map_err(|e| e.to_string())?,
-                SchemaType::U8 { .. }
-            );
-        Ok(StreamSlotSchema {
-            name: name.into(),
+    fn slot(name: &str, writable: bool, element: SchemaType) -> StreamSlotSchema {
+        StreamSlotSchema {
+            canonical_name: name.into(),
+            public_name: name.into(),
+            content_type: String::new(),
+            representation: DurableStreamRepresentation::Json,
             writable,
-            binary,
+            allow_external_writes: false,
+            allow_stream_delete: false,
             element,
-        })
+        }
     }
 
     let mut slots = Vec::new();
@@ -296,13 +298,13 @@ fn lower_stream_slots(inner: &CallAgentBehaviour) -> Result<Vec<StreamSlotSchema
         if matches!(field.source, FieldSource::UserSupplied)
             && let Some(element) = stream_element(graph, &field.schema)?
         {
-            slots.push(slot(graph, &field.name, true, element, true)?);
+            slots.push(slot(&field.name, true, element));
         }
     }
     let graph = &inner.expected_agent_response.graph;
     if let OutputSchema::Single(output) = &inner.expected_agent_response.output_schema {
         if let Some(element) = stream_element(graph, output)? {
-            slots.push(slot(graph, "$result", false, element, true)?);
+            slots.push(slot("$result", false, element));
         } else if golem_common::schema::agent::contains_stream_in_graph(graph, output) {
             let SchemaType::Record { fields, .. } =
                 graph.resolve_ref(output).map_err(|e| e.to_string())?
@@ -312,11 +314,27 @@ fn lower_stream_slots(inner: &CallAgentBehaviour) -> Result<Vec<StreamSlotSchema
             for field in fields {
                 let element = stream_element(graph, &field.body)?
                     .ok_or("public output record field is not a stream")?;
-                slots.push(slot(graph, &field.name, false, element, true)?);
+                slots.push(slot(&field.name, false, element));
             }
         } else {
-            slots.push(slot(graph, "$result", false, (**output).clone(), false)?);
+            slots.push(slot("$result", false, (**output).clone()));
         }
+    }
+    for slot in &mut slots {
+        let compiled = policy
+            .slot_by_canonical_name(&slot.canonical_name)
+            .ok_or_else(|| {
+                format!(
+                    "compiled Durable Streams slot '{}' is missing",
+                    slot.canonical_name
+                )
+            })?;
+        slot.public_name.clone_from(&compiled.public_name);
+        slot.content_type.clone_from(&compiled.content_type);
+        slot.representation = compiled.representation;
+        slot.writable = compiled.writable();
+        slot.allow_external_writes = policy.allow_external_writes;
+        slot.allow_stream_delete = policy.allow_stream_delete;
     }
     Ok(slots)
 }

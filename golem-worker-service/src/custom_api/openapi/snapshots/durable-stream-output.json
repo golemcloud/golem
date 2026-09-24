@@ -182,7 +182,7 @@
             "description": "Invocation arguments conflict"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -256,7 +256,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -334,7 +334,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -390,7 +390,7 @@
             "description": "Slot already deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -676,10 +676,10 @@
             "description": "Slot deleted"
           },
           "429": {
-            "description": "Catch-up rate limit exceeded"
+            "description": "Gateway live-reader admission or catch-up rate limit exceeded"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -784,7 +784,7 @@
             "description": "Slot deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1058,7 +1058,7 @@
             }
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1073,9 +1073,11 @@
       },
       "x-golem-route-mode": "durable-streams",
       "x-golem-stream-slot": {
+        "content-type": "application/json",
         "direction": "output",
         "element-schema-ref": "#/components/schemas/GolemDSSlot_2f73747265616d_24726573756c74",
-        "name": "$result"
+        "name": "$result",
+        "representation": "json"
       }
     },
     "/stream/invocations/{session}": {
@@ -1105,7 +1107,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1165,7 +1167,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1232,7 +1234,7 @@
             "description": "Session or slot not found"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1303,7 +1305,7 @@
             "description": "Invocation arguments conflict"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1348,7 +1350,7 @@
             "description": "Slot already deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1623,10 +1625,10 @@
             "description": "Slot deleted"
           },
           "429": {
-            "description": "Catch-up rate limit exceeded"
+            "description": "Gateway live-reader admission or catch-up rate limit exceeded"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1720,7 +1722,7 @@
             "description": "Slot deleted"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1896,7 +1898,7 @@
             "description": "Content type mismatch or tombstoned slot"
           },
           "503": {
-            "description": "Executor unavailable or live-reader limit exceeded",
+            "description": "Executor unavailable",
             "headers": {
               "Retry-After": {
                 "description": "Retry delay in seconds",
@@ -1911,9 +1913,11 @@
       },
       "x-golem-route-mode": "durable-streams",
       "x-golem-stream-slot": {
+        "content-type": "application/json",
         "direction": "output",
         "element-schema-ref": "#/components/schemas/GolemDSSlot_2f73747265616d_24726573756c74",
-        "name": "$result"
+        "name": "$result",
+        "representation": "json"
       }
     }
   },

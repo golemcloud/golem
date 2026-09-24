@@ -38,15 +38,36 @@ pub struct HttpApiOpenApiSpec(pub Value);
 
 impl HttpApiOpenApiSpec {
     pub fn from_routes(routes: &[RichCompiledRoute], domain: &Domain) -> Result<Self, String> {
-        let mut ds_only_paths: HashSet<_> = routes
+        let mut ds_only_paths: HashSet<Vec<PathSegment>> = routes
             .iter()
-            .filter_map(|route| match &route.behavior {
+            .flat_map(|route| match &route.behavior {
                 RichRouteBehaviour::CallAgent(inner)
                     if inner.route_mode == AgentRouteMode::DurableStreams =>
                 {
-                    Some(&route.path)
+                    let mut paths = vec![route.path.clone()];
+                    let path_variables = route
+                        .path
+                        .iter()
+                        .filter(|segment| !matches!(segment, PathSegment::Literal { .. }))
+                        .count();
+                    if matches!(
+                        route.path.as_slice(),
+                        [.., PathSegment::Literal { value }, PathSegment::Variable { .. }]
+                            if value == "streams"
+                    ) && path_variables > inner.base_path_variables as usize
+                        && let Some(policy) = &inner.durable_streams
+                    {
+                        paths.extend(policy.slots.iter().map(|slot| {
+                            let mut path = route.path[..route.path.len() - 1].to_vec();
+                            path.push(PathSegment::Literal {
+                                value: slot.public_name.clone(),
+                            });
+                            path
+                        }));
+                    }
+                    paths
                 }
-                _ => None,
+                _ => Vec::new(),
             })
             .collect();
         for route in routes {

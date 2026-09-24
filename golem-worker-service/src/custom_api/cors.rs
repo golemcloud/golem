@@ -96,12 +96,95 @@ pub async fn apply_cors_outgoing_middleware(
 ) -> Result<(), RequestHandlerError> {
     debug!("Begin executing SetCorsResponseHeadersMiddleware");
 
-    if matches!(&resolved_route.route.behavior, super::RichRouteBehaviour::CallAgent(behaviour)
-        if behaviour.route_mode == golem_service_base::custom_api::AgentRouteMode::DurableStreams)
+    if let super::RichRouteBehaviour::CallAgent(behaviour) = &resolved_route.route.behavior
+        && behaviour.route_mode == golem_service_base::custom_api::AgentRouteMode::DurableStreams
     {
+        let path = &resolved_route.route.path;
+        let path_variables = path
+            .iter()
+            .filter(|segment| {
+                !matches!(
+                    segment,
+                    golem_service_base::custom_api::PathSegment::Literal { .. }
+                )
+            })
+            .count();
+        let is_base = path_variables == behaviour.base_path_variables as usize;
+        let is_slot = matches!(
+            path.as_slice(),
+            [.., golem_service_base::custom_api::PathSegment::Literal { value }, _]
+                if value == "streams"
+        );
+        let is_fork_slot = is_slot && path_variables == behaviour.base_path_variables as usize + 3;
+        let is_writable_slot = is_slot
+            && resolved_route
+                .captured_path_parameters
+                .last()
+                .and_then(|slot| {
+                    behaviour
+                        .durable_streams
+                        .as_ref()?
+                        .slot_by_public_name(slot)
+                })
+                .is_some_and(|slot| slot.writable());
+        let mut exposed = vec!["Allow", "Retry-After"];
+        match resolved_route.route.method {
+            Method::PUT if is_base => exposed.push("Location"),
+            Method::PUT if is_slot => {
+                exposed.extend([
+                    "Stream-Next-Offset",
+                    "Stream-Closed",
+                    "Stream-Cancelled",
+                    "Stream-Up-To-Date",
+                    "Stream-TTL",
+                    "Stream-Expires-At",
+                    "ETag",
+                ]);
+                if is_fork_slot {
+                    exposed.push("Location");
+                }
+            }
+            Method::HEAD if is_slot => exposed.extend([
+                "Stream-Next-Offset",
+                "Stream-Closed",
+                "Stream-Cancelled",
+                "Stream-Up-To-Date",
+                "Stream-TTL",
+                "Stream-Expires-At",
+                "ETag",
+            ]),
+            Method::HEAD => exposed.extend(["Stream-Closed", "Stream-TTL", "Stream-Expires-At"]),
+            Method::GET if is_slot => exposed.extend([
+                "Stream-Next-Offset",
+                "Stream-Closed",
+                "Stream-Cancelled",
+                "Stream-Up-To-Date",
+                "Stream-Cursor",
+                "Stream-SSE-Data-Encoding",
+                "ETag",
+            ]),
+            Method::GET => exposed.push("Stream-Closed"),
+            Method::POST
+                if behaviour
+                    .durable_streams
+                    .as_ref()
+                    .is_some_and(|policy| policy.allow_external_writes)
+                    && is_writable_slot =>
+            {
+                exposed.extend([
+                    "Stream-Next-Offset",
+                    "Stream-Closed",
+                    "Producer-Epoch",
+                    "Producer-Seq",
+                    "Producer-Expected-Seq",
+                    "Producer-Received-Seq",
+                ])
+            }
+            _ => {}
+        }
         result.headers.insert(
             http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
-            "Stream-Next-Offset, Stream-Closed, Stream-Cancelled, Stream-Up-To-Date, Stream-Cursor, Stream-SSE-Data-Encoding, Stream-TTL, Stream-Expires-At, Producer-Epoch, Producer-Seq, Producer-Expected-Seq, Producer-Received-Seq, ETag, Location, Retry-After".into(),
+            exposed.join(", "),
         );
     }
     let cors = &resolved_route.route.cors;
@@ -404,6 +487,7 @@ mod tests {
                 account_id: AccountId(uuid::Uuid::nil()),
                 account_email: golem_common::model::account::AccountEmail::new("test@golem"),
                 environment_id: EnvironmentId(uuid::Uuid::nil()),
+                deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
                 route_id: 1,
                 method: Method::GET,
                 path: vec![PathSegment::Literal {

@@ -5,7 +5,7 @@
 use super::super::route_schema::StreamSlotSchema;
 use super::super::schema_mapping::render_output_schema;
 use super::*;
-use golem_service_base::custom_api::MethodParameter;
+use golem_service_base::custom_api::{DurableStreamRepresentation, MethodParameter};
 
 const OFFSET: &str = "GolemDSOffset";
 const READ_OFFSET: &str = "GolemDSReadOffset";
@@ -28,6 +28,10 @@ pub(super) fn emit(
         .as_ref()
         .ok_or("DS route schema missing")?;
     let slots = call.stream_slots.as_ref().ok_or("DS slots missing")?;
+    let policy = behaviour
+        .durable_streams
+        .as_ref()
+        .ok_or("Durable Streams route policy missing")?;
     add_components(components)?;
     let base = render_full_path(&route.path);
     let mut session_name = "session".to_string();
@@ -77,11 +81,7 @@ pub(super) fn emit(
             op["description"] = json!(description);
         }
         if let Some(slot) = slot.filter(|_| method == "put") {
-            let media = if slot.binary {
-                "application/octet-stream"
-            } else {
-                "application/json"
-            };
+            let media = &slot.content_type;
             let contract = if body.is_some() {
                 format!(
                     "Stream-Forked-From must be a same-server path in this route family. The optional initial body must be {media}."
@@ -109,8 +109,11 @@ pub(super) fn emit(
         item.insert("x-golem-route-mode".into(), json!("durable-streams"));
         if let Some(slot) = slot {
             item.insert("x-golem-stream-slot".into(), json!({
-                "name": slot.name, "direction": if slot.writable { "input" } else { "output" },
-                "element-schema-ref": format!("#/components/schemas/{}", slot_component(&base, &slot.name)),
+                "name": slot.public_name,
+                "content-type": slot.content_type,
+                "representation": if slot.representation == DurableStreamRepresentation::Bytes { "bytes" } else { "json" },
+                "direction": if slot.writable { "input" } else { "output" },
+                "element-schema-ref": format!("#/components/schemas/{}", slot_component(&base, &slot.public_name)),
             }));
         }
         if item.insert(method.into(), op).is_some() {
@@ -188,25 +191,27 @@ pub(super) fn emit(
             None,
         )?;
     }
-    let mut cancel = responses(
-        &[(
-            "204",
-            "Open streams cooperatively cancelled; history retained. Does not interrupt agent execution.",
-        )],
-        false,
-    );
-    cancel["204"]["description"] = json!(
-        "Open streams cooperatively cancelled; repeated cancellation succeeds. Does not interrupt agent execution."
-    );
-    operation(
-        &session_path,
-        "delete",
-        "cancel-session",
-        session_parameters.clone(),
-        None,
-        cancel,
-        None,
-    )?;
+    if policy.allow_invocation_delete {
+        let mut cancel = responses(
+            &[(
+                "204",
+                "Open streams cooperatively cancelled; history retained. Does not interrupt agent execution.",
+            )],
+            false,
+        );
+        cancel["204"]["description"] = json!(
+            "Open streams cooperatively cancelled; repeated cancellation succeeds. Does not interrupt agent execution."
+        );
+        operation(
+            &session_path,
+            "delete",
+            "cancel-session",
+            session_parameters.clone(),
+            None,
+            cancel,
+            None,
+        )?;
+    }
 
     let mut fork_name = "fork".to_string();
     while call.path_params.iter().any(|p| p.name == fork_name) {
@@ -242,20 +247,19 @@ pub(super) fn emit(
         let element = render_output_schema(graph, &slot.element, components)?;
         insert_component(
             components,
-            &slot_component(&base, &slot.name),
+            &slot_component(&base, &slot.public_name),
             element.clone(),
         )?;
-        let path = format!("{session_path}/streams/{}", slot.name.replace('$', "%24"));
+        let path = format!(
+            "{session_path}/streams/{}",
+            slot.public_name.replace('$', "%24")
+        );
         let fork_path = format!(
             "{fork_session_path}/streams/{}",
-            slot.name.replace('$', "%24")
+            slot.public_name.replace('$', "%24")
         );
-        let media = if slot.binary {
-            "application/octet-stream"
-        } else {
-            "application/json"
-        };
-        let data_schema = if slot.binary {
+        let media = &slot.content_type;
+        let data_schema = if slot.representation == DurableStreamRepresentation::Bytes {
             arbitrary_binary_schema()
         } else {
             json!({"type":"array", "items": element})
@@ -288,7 +292,7 @@ pub(super) fn emit(
         operation(
             &path,
             "put",
-            &format!("ensure-{}", slot.name),
+            &format!("ensure-{}", slot.public_name),
             parameters,
             None,
             r,
@@ -303,7 +307,7 @@ pub(super) fn emit(
             operation(
                 path,
                 "head",
-                &format!("head-{}", slot.name),
+                &format!("head-{}", slot.public_name),
                 parameters.clone(),
                 None,
                 r.clone(),
@@ -333,7 +337,10 @@ pub(super) fn emit(
                 ("304", "Closed stream matches If-None-Match"),
                 ("400", "Invalid offset, live mode or cursor"),
                 ("410", "Slot deleted"),
-                ("429", "Catch-up rate limit exceeded"),
+                (
+                    "429",
+                    "Gateway live-reader admission or catch-up rate limit exceeded",
+                ),
             ],
             false,
         );
@@ -349,31 +356,34 @@ pub(super) fn emit(
             operation(
                 path,
                 "get",
-                &format!("read-{}", slot.name),
+                &format!("read-{}", slot.public_name),
                 parameters,
                 None,
                 r.clone(),
                 Some(slot),
             )?;
         }
-        for (path, parameters) in [(&path, &session_parameters), (&fork_path, &fork_parameters)] {
-            operation(
-                path,
-                "delete",
-                &format!("delete-{}", slot.name),
-                parameters.clone(),
-                None,
-                responses(
-                    &[
-                        ("204", "Slot cancelled and tombstoned"),
-                        ("410", "Slot already deleted"),
-                    ],
-                    false,
-                ),
-                Some(slot),
-            )?;
+        if slot.allow_stream_delete {
+            for (path, parameters) in [(&path, &session_parameters), (&fork_path, &fork_parameters)]
+            {
+                operation(
+                    path,
+                    "delete",
+                    &format!("delete-{}", slot.public_name),
+                    parameters.clone(),
+                    None,
+                    responses(
+                        &[
+                            ("204", "Slot cancelled and tombstoned"),
+                            ("410", "Slot already deleted"),
+                        ],
+                        false,
+                    ),
+                    Some(slot),
+                )?;
+            }
         }
-        if slot.writable {
+        if slot.writable && slot.allow_external_writes {
             let mut parameters = session_parameters.clone();
             parameters.extend(expiry_parameters());
             if url_bound {
@@ -403,7 +413,7 @@ pub(super) fn emit(
                 parameters.push(p);
             }
             let input = render_input_schema(graph, &slot.element, components)?;
-            let append_schema = if slot.binary {
+            let append_schema = if slot.representation == DurableStreamRepresentation::Bytes {
                 arbitrary_binary_schema()
             } else {
                 json!({"anyOf":[{"allOf":[input.clone(), {"not":{"type":"array"}}]}, {"type":"array","minItems":1,"maxItems":4096,"items":input}]})
@@ -462,7 +472,7 @@ pub(super) fn emit(
                 operation(
                     path,
                     "post",
-                    &format!("append-{}", slot.name),
+                    &format!("append-{}", slot.public_name),
                     parameters,
                     Some(body.clone()),
                     r.clone(),
@@ -482,7 +492,7 @@ pub(super) fn emit(
             ),
             header_parameter("Stream-Closed", false, json!({"type":"boolean"})),
         ]);
-        let fork_body = json!({"required":false,"content":{media:{"schema":if slot.binary { arbitrary_binary_schema() } else { json!({"type":"array","items":element}) }}}});
+        let fork_body = json!({"required":false,"content":{media:{"schema":if slot.representation == DurableStreamRepresentation::Bytes { arbitrary_binary_schema() } else { json!({"type":"array","items":element}) }}}});
         let mut fork_responses = responses(
             &[
                 ("201", "Fork created"),
@@ -509,7 +519,7 @@ pub(super) fn emit(
         operation(
             &fork_path,
             "put",
-            &format!("fork-{}", slot.name),
+            &format!("fork-{}", slot.public_name),
             create_fork_parameters,
             Some(fork_body),
             fork_responses,
@@ -589,7 +599,7 @@ fn responses(entries: &[(&str, &str)], problem: bool) -> Value {
     let mut result = json!({
         "400":{"description":"Invalid request, malformed expiry policy, or conflicting Stream-TTL and Stream-Expires-At headers"},
         "404":{"description":"Session or slot not found"},
-        "503":{"description":"Executor unavailable or live-reader limit exceeded","headers":{"Retry-After":header("Retry delay in seconds", string_schema())}},
+        "503":{"description":"Executor unavailable","headers":{"Retry-After":header("Retry delay in seconds", string_schema())}},
     });
     for (code, description) in entries {
         result[*code] = json!({"description":description});
