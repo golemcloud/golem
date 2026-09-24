@@ -9,6 +9,7 @@ const counter = defineAgent({
   methods: {
     scalar: method({ input: { value: s.u32() }, returns: s.u32() }),
     remote: method({ input: { value: s.u32() }, returns: s.u32() }),
+    principal: method({ input: { who: s.principal() }, returns: s.principal() }),
     stream: method({
       input: { values: s.stream(item), suffix: z.string() },
       returns: s.stream(item),
@@ -22,6 +23,7 @@ counter.implement({
   methods: {
     scalar: ({ value }) => value + 1,
     remote: ({ value }) => counter.client.get({}).scalar({ value }),
+    principal: ({ who }) => who,
     configured() {
       return `${this.config.group?.title ?? 'absent'}:${this.config.key.get()}`;
     },

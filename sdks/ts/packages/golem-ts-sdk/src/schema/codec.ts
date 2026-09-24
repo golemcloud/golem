@@ -74,6 +74,8 @@ export interface SchemaCodec {
   readonly fromValue: (value: SchemaValue) => unknown;
   /** Direct flat-wire conversion. Absent when this codec can contain owned resources. */
   readonly direct?: DirectSchemaCodec;
+  /** Source-shape information consumed by the static component codec emitter. */
+  readonly concrete?: ConcreteCodecMetadata;
   /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
   readonly sourceSchema?: StandardSchemaV1;
   /**
@@ -134,6 +136,21 @@ export interface SchemaCodec {
    */
   readonly autoInjected?: 'principal';
 }
+
+export type ConcreteCodecMetadata =
+  | { readonly tag: 'typed-array'; readonly constructor: string }
+  | {
+      readonly tag: 'variant';
+      readonly cases: ReadonlyArray<{ readonly codec?: SchemaCodec; readonly value?: unknown }>;
+      readonly discriminator?: string;
+      readonly sourceTag?: string;
+    }
+  | {
+      readonly tag: 'multimodal';
+      readonly cases: ReadonlyArray<{ name: string; codec: SchemaCodec }>;
+    }
+  | { readonly tag: 'unstructured-text' | 'unstructured-binary' }
+  | { readonly tag: 'principal' };
 
 /** Shared flat-value arena used while directly encoding child codecs. */
 export class SchemaValueWriter {
@@ -434,6 +451,14 @@ function freezeCodec(
       if (child) freezeCodec(child, seenCodecs, seenGraphValues);
     },
   );
+  if (codec.concrete?.tag === 'variant' || codec.concrete?.tag === 'multimodal') {
+    codec.concrete.cases.forEach((entry) => {
+      if (entry.codec) freezeCodec(entry.codec, seenCodecs, seenGraphValues);
+      Object.freeze(entry);
+    });
+    Object.freeze(codec.concrete.cases);
+  }
+  if (codec.concrete) Object.freeze(codec.concrete);
   Object.freeze(codec);
 }
 

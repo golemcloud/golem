@@ -165,6 +165,22 @@ describe('static component exports', () => {
     });
     expect(runtime.guest.discoverAgentTypes()).toHaveLength(1);
     await runtime.guest.initialize('Counter', structuredClone(unit), { tag: 'anonymous' });
+    expect(
+      await runtime.guest.invoke('principal', structuredClone(unit), {
+        tag: 'golem-user',
+        val: { accountId: { uuid: { highBits: 17n, lowBits: 31n } } },
+      }),
+    ).toEqual({
+      root: 5,
+      valueNodes: [
+        { tag: 'u64-value', val: 17n },
+        { tag: 'u64-value', val: 31n },
+        { tag: 'record-value', val: [0, 1] },
+        { tag: 'record-value', val: [2] },
+        { tag: 'record-value', val: [3] },
+        { tag: 'variant-value', val: { case_: 2, payload: 4 } },
+      ],
+    });
     expect(configReads).toBe(0);
     expect(
       await runtime.guest.invoke('configured', structuredClone(unit), { tag: 'anonymous' }),
@@ -260,7 +276,7 @@ describe('static component exports', () => {
       runtime.guest.invoke('stream', input({ tag: 'bool-value', val: true }), { tag: 'anonymous' }),
     ).rejects.toMatchObject({ tag: 'invalid-input' });
     expect(closes).toBe(2);
-  });
+  }, 30000);
 
   it('emits descriptors and concrete codecs for nested variants, recursive records and resources', async () => {
     const output = await build('compiled-tools');
@@ -362,6 +378,37 @@ describe('static component exports', () => {
           elements: [{ tag: 'record', fields: [{ value: 'leaf' }, { tag: 'list', elements: [] }] }],
         },
       ],
+    });
+    const concrete = await invoke(['concrete'], {
+      valueNodes: [
+        { tag: 'u16-value', val: 7 },
+        { tag: 'u16-value', val: 8 },
+        { tag: 'list-value', val: [0, 1] },
+        { tag: 'record-value', val: [2] },
+      ],
+      root: 3,
+    });
+    expect(concrete.result.value).toEqual({
+      valueNodes: [
+        {
+          tag: 'binary-value',
+          val: { bytes: new Uint8Array([7, 2]), mimeType: 'application/test' },
+        },
+        { tag: 'variant-value', val: { case_: 0, payload: 0 } },
+      ],
+      root: 1,
+    });
+    await expect(invoke(['restricted-binary'], unit)).rejects.toMatchObject({
+      tag: 'invalid-result',
+    });
+    expect((await invoke(['valibot'], unit)).result.value).toEqual({
+      valueNodes: [
+        { tag: 'string-value', val: 'label' },
+        { tag: 'string-value', val: 'four' },
+        { tag: 'record-value', val: [0, 1] },
+        { tag: 'variant-value', val: { case_: 1, payload: 2 } },
+      ],
+      root: 3,
     });
     let drops = 0;
     const raw = {

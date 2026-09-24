@@ -288,13 +288,21 @@ export function staticTools(config, runtime) {
             `${body.tag === 'record' ? literal(f.name) + ':' : ''}${children[i]}.read(r,n.val[${i}])`,
         )
         .join(',');
-      read = `if(n.val.length!==${fields.length})throw new TypeError("wrong field count");return ${body.tag === 'record' ? '{' : '['}${fieldsRead}${body.tag === 'record' ? '}' : ']'};`;
+      read = `if(!Array.isArray(n.val)||n.val.length!==${fields.length})throw new TypeError("wrong field count");return ${body.tag === 'record' ? '{' : '['}${fieldsRead}${body.tag === 'record' ? '}' : ']'};`;
     } else if (body.tag === 'list' || body.tag === 'fixed-list') {
-      tag = 'list-value';
-      const c = emit(codec.listItem ?? child(body.element));
+      const multimodal = codec.concrete?.tag === 'multimodal' ? codec.concrete : undefined;
+      const c = multimodal ? undefined : emit(codec.listItem ?? child(body.element));
       const length = body.tag === 'fixed-list' ? `||v.length!==${body.length}` : '';
-      write = `if(!Array.isArray(v)${length})throw new TypeError("expected list");return w.add({tag:"list-value",val:v.map(x=>${c}.write(x,w))});`;
-      read = `${body.tag === 'fixed-list' ? `if(n.val.length!==${body.length})throw new TypeError("wrong list length");` : ''}return n.val.map(i=>${c}.read(r,i));`;
+      const ctor = codec.concrete?.tag === 'typed-array' ? codec.concrete.constructor : undefined;
+      if (multimodal) {
+        const cases = multimodal.cases.map((entry) => emit(entry.codec));
+        const names = multimodal.cases.map((entry) => entry.name);
+        write = `if(!Array.isArray(v))throw new TypeError("expected multimodal list");return w.add({tag:"list-value",val:v.map(x=>{const i=${literal(names)}.indexOf(x?.tag);if(i<0)throw new TypeError("unknown multimodal case");return w.add({tag:"variant-value",val:{case_:i,payload:[${cases.join(',')}][i].write(x.value,w)}})});`;
+        read = `if(!Array.isArray(n.val))throw new TypeError("invalid multimodal list");return n.val.map(i=>r.node(i,"variant-value",x=>{const c=x.val.case_;if(!Number.isInteger(c)||c<0||c>=${cases.length}||x.val.payload===undefined)throw new TypeError("invalid multimodal case");return {tag:${literal(names)}[c],value:[${cases.join(',')}][c].read(r,x.val.payload)}}));`;
+      } else {
+        write = `if(${ctor ? `!(v instanceof ${ctor})` : '!Array.isArray(v)'}${length})throw new TypeError("expected list");return w.add({tag:${literal(tag)},val:Array.from(v,x=>${c}.write(x,w))});`;
+        read = `if(!Array.isArray(n.val)${body.tag === 'fixed-list' ? `||n.val.length!==${body.length}` : ''})throw new TypeError("invalid list");const v=n.val.map(i=>${c}.read(r,i));return ${ctor ? `new ${ctor}(v)` : 'v'};`;
+      }
     } else if (body.tag === 'option') {
       const c = emit(codec.optionInner ?? child(body.element));
       const absent = codec.optionKind === 'nullable' ? 'null' : 'undefined';
@@ -330,16 +338,57 @@ export function staticTools(config, runtime) {
       write = `return w.stream(v,${item});`;
       read = `return r.stream(n,${item});`;
     } else if (body.tag === 'variant') {
-      const options = codec.sourceSchema?._def?.options;
-      if (!Array.isArray(options))
-        throw new Error('Static variants require explicit source alternatives');
-      const cases = options.map((option) => emit(metadata().compile(option)));
-      write = `${cases.map((c, i) => `{const result=w.trial(()=>${c}.write(v,w));if(result!==undefined)return w.add({tag:"variant-value",val:{case_:${i},payload:result}});}`).join('')}throw new TypeError("no matching variant case");`;
-      read = `switch(n.val.case_){${cases.map((c, i) => `case ${i}:return ${c}.read(r,n.val.payload);`).join('')}default:throw new TypeError("unknown variant case");}`;
+      const meta = codec.concrete;
+      if (meta?.tag === 'unstructured-text' || meta?.tag === 'unstructured-binary') {
+        const binary = meta.tag === 'unstructured-binary';
+        const allowed =
+          body.cases[0].payload.body.restrictions?.[binary ? 'mimeTypes' : 'languages'];
+        const check = (expr) =>
+          allowed?.length
+            ? `if(${expr}!==undefined&&!${literal(allowed)}.includes(${expr}))throw new TypeError("unstructured restriction mismatch");`
+            : '';
+        write = `if(v?.tag==="url"){if(typeof v.val!=="string")throw new TypeError("invalid URL");return w.add({tag:"variant-value",val:{case_:1,payload:w.add({tag:"url-value",val:v.val})}});}if(v?.tag!=="inline"${binary ? '||!(v.val instanceof Uint8Array)' : '||typeof v.val!=="string"'})throw new TypeError("invalid unstructured value");${check(binary ? 'v.mimeType' : 'v.languageCode')}return w.add({tag:"variant-value",val:{case_:0,payload:w.add({tag:${binary ? '"binary-value"' : '"text-value"'},val:{${binary ? 'bytes:v.val,mimeType:v.mimeType' : 'text:v.val,language:v.languageCode'}}})}});`;
+        read = `if(n.val.case_===1)return {tag:"url",val:r.node(n.val.payload,"url-value",x=>{if(typeof x.val!=="string")throw new TypeError("invalid URL");return x.val;})};if(n.val.case_!==0)throw new TypeError("unknown unstructured case");return r.node(n.val.payload,${binary ? '"binary-value"' : '"text-value"'},x=>{${check(binary ? 'x.val.mimeType' : 'x.val.language')}return {tag:"inline",val:x.val.${binary ? 'bytes' : 'text'},...(${binary ? 'x.val.mimeType===undefined?{}:{mimeType:x.val.mimeType}' : 'x.val.language===undefined?{}:{languageCode:x.val.language}'})};});`;
+      } else if (meta?.tag === 'principal') {
+        const cases = body.cases.map((entry) => entry.payload && emit(child(entry.payload)));
+        write = `const names=["oidc","agent","golem-user","anonymous"];const i=names.indexOf(v?.tag);if(i<0)throw new TypeError("invalid principal");return w.add({tag:"variant-value",val:{case_:i,payload:i===3?undefined:[${cases.join(',')}][i].write(v.inner,w)}});`;
+        read = `const i=n.val.case_;if(!Number.isInteger(i)||i<0||i>3)throw new TypeError("invalid principal");return __concretePrincipal.fromHost(i===3?{tag:"anonymous"}:{tag:["oidc","agent","golem-user"][i],val:[${cases.join(',')}][i].read(r,n.val.payload)});`;
+      } else {
+        const options = meta?.tag === 'variant' ? meta.cases : undefined;
+        if (!Array.isArray(options))
+          throw new Error('Static variants require explicit source alternatives');
+        const cases = options.map((option) => option.codec && emit(option.codec));
+        const payload = (c, value = 'v') => (c ? `${c}.write(${value},w)` : 'undefined');
+        if (meta.sourceTag) {
+          write = `const i=${literal(options.map((c) => c.value))}.indexOf(v?.[${literal(meta.sourceTag)}]);switch(i){${cases.map((c, i) => `case ${i}:{const {${meta.sourceTag}:_,...p}=v;return w.add({tag:"variant-value",val:{case_:${i},payload:${payload(c, 'p')}}});}`).join('')}default:throw new TypeError("unknown variant case");}`;
+          read = `switch(n.val.case_){${cases.map((c, i) => `case ${i}:return {${literal(meta.sourceTag)}:${literal(options[i].value)}${c ? `,...${c}.read(r,n.val.payload)` : ''}};`).join('')}default:throw new TypeError("unknown variant case");}`;
+        } else if (meta.discriminator) {
+          write = `switch(v?.[${literal(meta.discriminator)}]){${cases.map((c, i) => `case ${literal(options[i].value)}:return w.add({tag:"variant-value",val:{case_:${i},payload:${payload(c)}}});`).join('')}default:throw new TypeError("unknown variant case");}`;
+          read = `switch(n.val.case_){${cases.map((c, i) => `case ${i}:return ${c}.read(r,n.val.payload);`).join('')}default:throw new TypeError("unknown variant case");}`;
+        } else {
+          write = `${cases.map((c, i) => `{const result=w.trial(()=>${payload(c)});if(result!==undefined)return w.add({tag:"variant-value",val:{case_:${i},payload:result}});}`).join('')}throw new TypeError("no matching variant case");`;
+          read = `switch(n.val.case_){${cases.map((c, i) => `case ${i}:return ${c}.read(r,n.val.payload);`).join('')}default:throw new TypeError("unknown variant case");}`;
+        }
+      }
     } else if (body.tag === 'enum') {
       const cases = literal(body.cases);
       write = `const i=${cases}.indexOf(v);if(i<0)throw new TypeError("unknown enum case");return w.add({tag:"enum-value",val:i});`;
       read = `if(!Number.isInteger(n.val)||n.val<0||n.val>=${body.cases.length})throw new TypeError("unknown enum case");return ${cases}[n.val];`;
+    } else if (body.tag === 'datetime') {
+      write = `if(!v||typeof v.seconds!=="bigint"||!Number.isInteger(v.nanoseconds)||v.nanoseconds<0||v.nanoseconds>=1000000000)throw new TypeError("invalid datetime");return w.add({tag:"datetime-value",val:v});`;
+      read = `const v=n.val;if(!v||typeof v.seconds!=="bigint"||!Number.isInteger(v.nanoseconds)||v.nanoseconds<0||v.nanoseconds>=1000000000)throw new TypeError("invalid datetime");return v;`;
+    } else if (body.tag === 'duration') {
+      write = `if(typeof v!=="bigint")throw new TypeError("invalid duration");return w.add({tag:"duration-value",val:{nanoseconds:v}});`;
+      read = `if(!n.val||typeof n.val.nanoseconds!=="bigint")throw new TypeError("invalid duration");return n.val.nanoseconds;`;
+    } else if (body.tag === 'url' || body.tag === 'path') {
+      write = `if(typeof v!=="string")throw new TypeError("invalid ${body.tag}");return w.add({tag:${literal(tag)},val:v});`;
+      read = `if(typeof n.val!=="string")throw new TypeError("invalid ${body.tag}");return n.val;`;
+    } else if (body.tag === 'text') {
+      write = `if(!v||typeof v.text!=="string")throw new TypeError("invalid text");return w.add({tag:"text-value",val:v});`;
+      read = `if(!n.val||typeof n.val.text!=="string")throw new TypeError("invalid text");return n.val;`;
+    } else if (body.tag === 'binary') {
+      write = `if(!v||!(v.bytes instanceof Uint8Array))throw new TypeError("invalid binary");return w.add({tag:"binary-value",val:v});`;
+      read = `if(!n.val||!(n.val.bytes instanceof Uint8Array))throw new TypeError("invalid binary");return n.val;`;
     } else if (
       [
         'string',
@@ -543,7 +592,7 @@ export function staticTools(config, runtime) {
       for (const [start, end, replacement] of edits.sort((a, b) => b[0] - a[0]))
         code = code.slice(0, start) + replacement + code.slice(end);
       return {
-        code: `import { compiledTool as __compiledTool } from ${literal(path.join(runtime, 'internal/tool/compiled.mjs'))};\nimport { compiledAgent as __compiledAgent } from ${literal(path.join(runtime, 'internal/compiledAgent.mjs'))};\n${code}`,
+        code: `import { compiledTool as __compiledTool } from ${literal(path.join(runtime, 'internal/tool/compiled.mjs'))};\nimport { compiledAgent as __compiledAgent, concretePrincipal as __concretePrincipal } from ${literal(path.join(runtime, 'internal/compiledAgent.mjs'))};\n${code}`,
         map: null,
       };
     },

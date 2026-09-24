@@ -444,13 +444,20 @@ const zodWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
       );
       // Map each branch's discriminator literal value → case index, for encode.
       const discToIndex = new Map<unknown, number>();
+      const discValues: unknown[] = [];
       opts.forEach((o, i) => {
         const litSchema = normalize(o).shape?.[disc];
         const lit = litSchema ? normalize(litSchema).literalValues?.[0] : undefined;
+        discValues.push(lit);
         if (lit !== undefined) discToIndex.set(lit, i);
       });
       return {
         graph: { defs, root: t.variant(cases) },
+        concrete: {
+          tag: 'variant',
+          discriminator: disc,
+          cases: optCodecs.map((codec, i) => ({ codec, value: discValues[i] })),
+        },
         toValue: (value) => {
           const i = discToIndex.get((value as Record<string, unknown>)[disc]);
           if (i === undefined) {

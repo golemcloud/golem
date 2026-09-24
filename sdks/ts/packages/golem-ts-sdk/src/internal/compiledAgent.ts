@@ -21,6 +21,8 @@ import { makeAgentId, type Datetime } from 'golem:agent/host@2.0.0';
 import { resolveWireRemoteAgent, RemoteOutputError } from '../bridge/agent';
 import { compiledConfig, type ConfigNode } from './compiledConfig';
 
+export const concretePrincipal = { fromHost: sdkPrincipalFromHost };
+
 interface Input {
   codec: ConcreteCodec;
   principals: string[];
