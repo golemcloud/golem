@@ -15,14 +15,11 @@ services:
       GOLEM_REGISTRY_SERVICE_PORT: ${REGISTRY_SERVICE_HTTP_PORT}
       GOLEM_WORKER_SERVICE_HOST: golem-worker-service
       GOLEM_WORKER_SERVICE_PORT: ${WORKER_SERVICE_HTTP_PORT}
-      GOLEM_DEBUGGING_SERVICE_HOST: golem-debugging-service
-      GOLEM_DEBUGGING_SERVICE_PORT: ${DEBUGGING_SERVICE_HTTP_PORT}
     depends_on:
       - golem-worker-service
       - golem-shard-manager
       - golem-component-compilation-service
       - golem-registry-service
-      - golem-debugging-service
     volumes:
         - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
 
@@ -229,61 +226,6 @@ services:
       nofile:
         soft: 65536
         hard: 65536
-    volumes:
-      - blob_storage:/blob_storage
-    depends_on:
-      postgres:
-        condition: service_healthy
-      golem-shard-manager:
-        condition: service_started
-      golem-registry-service:
-        condition: service_started
-
-  golem-debugging-service:
-    image: golemservices/golem-debugging-service:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
-    restart: on-failure
-    environment:
-      <<: [*blob-storage-env-vars]
-      WASMTIME_BACKTRACE_DETAILS: 1
-      RUST_BACKTRACE: 1
-      RUST_LOG: info
-
-      GOLEM__COMPILED_COMPONENT_SERVICE__TYPE: "Enabled"
-      GOLEM__HTTP_PORT: ${DEBUGGING_SERVICE_HTTP_PORT}
-
-      GOLEM__KEY_VALUE_STORAGE__TYPE: "Postgres"
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__DATABASE: golem_db
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__MAX_CONNECTIONS: 10
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST: postgres
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT: 5432
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__USERNAME: golem_user
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__PASSWORD: golem_password
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__SCHEMA: golem_worker_executor
-
-      GOLEM__INDEXED_STORAGE__TYPE: "Postgres"
-      GOLEM__INDEXED_STORAGE__CONFIG__DATABASE: golem_db
-      GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS: 10
-      GOLEM__INDEXED_STORAGE__CONFIG__HOST: postgres
-      GOLEM__INDEXED_STORAGE__CONFIG__PORT: 5432
-      GOLEM__INDEXED_STORAGE__CONFIG__USERNAME: golem_user
-      GOLEM__INDEXED_STORAGE__CONFIG__PASSWORD: golem_password
-      GOLEM__INDEXED_STORAGE__CONFIG__SCHEMA: golem_worker_executor_indexed
-
-      GOLEM__SCHEDULER_STORAGE__TYPE: "Postgres"
-      GOLEM__SCHEDULER_STORAGE__CONFIG__DATABASE: golem_db
-      GOLEM__SCHEDULER_STORAGE__CONFIG__MAX_CONNECTIONS: 10
-      GOLEM__SCHEDULER_STORAGE__CONFIG__HOST: postgres
-      GOLEM__SCHEDULER_STORAGE__CONFIG__PORT: 5432
-      GOLEM__SCHEDULER_STORAGE__CONFIG__USERNAME: golem_user
-      GOLEM__SCHEDULER_STORAGE__CONFIG__PASSWORD: golem_password
-      GOLEM__SCHEDULER_STORAGE__CONFIG__SCHEMA: golem_worker_executor_scheduler
-
-      GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
-      GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
-
-      GOLEM__PUBLIC_WORKER_API__HOST: golem-worker-service
-      GOLEM__PUBLIC_WORKER_API__PORT: ${WORKER_SERVICE_GRPC_PORT}
     volumes:
       - blob_storage:/blob_storage
     depends_on:

@@ -1001,20 +1001,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-jrpc"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "971e8b8715d28ffcbe7146f45b9463b537878740f1046b0981e597a865d572a8"
-dependencies = [
- "axum",
- "cfg-if",
- "mime",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "backoff"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3987,49 +3973,6 @@ dependencies = [
  "tracing",
  "uuid",
  "wasmtime",
-]
-
-[[package]]
-name = "golem-debugging-service"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "axum-jrpc",
- "chrono",
- "futures",
- "golem-api-grpc",
- "golem-common",
- "golem-schema",
- "golem-service-base",
- "golem-test-framework",
- "golem-worker-executor",
- "golem-worker-executor-test-utils",
- "humansize",
- "log",
- "poem",
- "poem-openapi",
- "prometheus",
- "rustls 0.23.43",
- "serde",
- "serde_json",
- "tempfile",
- "test-r",
- "thiserror 2.0.20",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tokio-util",
- "tonic 0.14.6",
- "tonic-tracing-opentelemetry",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "wasmtime",
- "wasmtime-wasi",
- "wasmtime-wasi-http",
 ]
 
 [[package]]

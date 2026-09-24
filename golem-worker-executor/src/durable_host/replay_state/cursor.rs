@@ -858,14 +858,6 @@ impl CursorTx<'_> {
         if was_replay && self.cursor.is_live() {
             self.record_replay_event(ReplayEvent::ReplayFinished);
         }
-        // Publish the committed cursor position to replay-progress observers (see
-        // `Oplog::on_replay_progress`). This chokepoint is only reached by committed advances —
-        // speculative reads return before calling it — so observers never see a position that is
-        // later rolled back.
-        self.cursor
-            .oplog
-            .on_replay_progress(self.cursor.last_replayed_index())
-            .await;
     }
 
     pub(super) async fn get_out_of_skipped_region(&mut self) {
@@ -1968,13 +1960,6 @@ impl ReplayState {
                     Ok(replay_target)
                 })
                 .await?;
-            // `CursorTx::switch_to_live` publishes the cursor position directly (not via
-            // `move_replay_idx`), so replay-progress observers are notified here.
-            state
-                .cursor
-                .oplog
-                .on_replay_progress(state.cursor.last_replayed_index())
-                .await;
             Ok(replay_target)
         })
         .await
@@ -2614,8 +2599,8 @@ impl ReplayState {
     ///
     /// - Growing the target makes a previously invisible oplog range visible, so the newly
     ///   visible range `(old_target, new_target]` is scanned for completion-delivery markers
-    ///   *before* the new target is published — a debug session constructed with a target before
-    ///   a marker and later grown past it must park the marked `End` instead of delivering it.
+    ///   *before* the new target is published. A cursor whose target grows past a marker must park
+    ///   the marked `End` instead of delivering it.
     ///   The merged additions are validated (duplicate markers for the same `Start` are oplog
     ///   corruption) before anything is mutated.
     /// - Shrinking the target hides part of the oplog, so markers beyond the new target are

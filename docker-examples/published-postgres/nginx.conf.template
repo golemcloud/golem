@@ -11,10 +11,6 @@ upstream worker-service {
     server ${GOLEM_WORKER_SERVICE_HOST}:${GOLEM_WORKER_SERVICE_PORT} fail_timeout=0 max_fails=0;
 }
 
-upstream debugging-service {
-    server ${GOLEM_DEBUGGING_SERVICE_HOST}:${GOLEM_DEBUGGING_SERVICE_PORT} fail_timeout=0 max_fails=0;
-}
-
 server {
     listen 80;
     server_name localhost;
@@ -51,16 +47,6 @@ server {
 
     location /v1/agents {
         proxy_pass http://worker-service;
-    }
-
-    location /v1/debugger {
-        proxy_pass http://debugging-service;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade "websocket";
-        proxy_set_header Connection "upgrade";
-
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
     }
 
     location / {

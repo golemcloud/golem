@@ -605,8 +605,7 @@ pub struct ShardAssignment {
     /// or renewal - and the grant is anchored where that request was sent, so
     /// the shard manager's copy of the lease is never earlier than this one.
     /// A push carries no lease. `None` means the lease never expires
-    /// (single-shard mode, the debugging service, and the pre-registration
-    /// placeholder).
+    /// (single-shard mode and the pre-registration placeholder).
     pub expires_at: Option<Instant>,
     /// The revision of the delivery this set came from. A delivery older than
     /// this is ignored; see [`ShardLeaseRevision`].
@@ -3166,8 +3165,8 @@ mod shard_assignment_tests {
         assert!(!assignment.lease_is_live(now + Duration::from_secs(1)));
     }
 
-    /// The single-shard implementations and the debugging service run with no
-    /// expiry at all and must never fence themselves.
+    /// The single-shard implementations run with no expiry at all and must
+    /// never fence themselves.
     #[test]
     fn a_lease_without_an_expiry_is_always_live() {
         let assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);

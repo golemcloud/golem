@@ -58,7 +58,6 @@ COMPONENT_COMPILATION_SERVICE_HTTP_PORT=8081
 SHARD_MANAGER_HTTP_PORT=8082
 WORKER_EXECUTOR_HTTP_PORT=8083
 WORKER_SERVICE_HTTP_PORT=8084
-DEBUGGING_SERVICE_HTTP_PORT=8085
 
 REGISTRY_SERVICE_GRPC_PORT=9090
 COMPONENT_COMPILATION_SERVICE_GRPC_PORT=9091
@@ -169,22 +168,6 @@ GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
 worker_service_pid=$!
 popd || exit
 
-# start debugging service
-pushd golem-debugging-service || exit
-
-RUST_LOG=info \
-GOLEM__HTTP_PORT=${DEBUGGING_SERVICE_HTTP_PORT} \
-GOLEM__PUBLIC_WORKER_API__PORT=${WORKER_SERVICE_GRPC_PORT} \
-GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem" \
-GOLEM__BLOB_STORAGE__CONFIG__ROOT="${FS_BLOB_STORAGE_DIR}" \
-GOLEM__REGISTRY_SERVICE__HOST="localhost" \
-GOLEM__REGISTRY_SERVICE__PORT=${REGISTRY_SERVICE_GRPC_PORT} \
-GOLEM__CORS_ORIGIN_REGEX="http://localhost:3000" \
-../target/debug/golem-debugging-service &
-
-debugging_service_pid=$!
-popd || exit
-
 nginx -e /dev/stdout -p "${LOCAL_RUN_DIR}" -c "${LOCAL_RUN_DIR}/nginx.conf" &> "${LOCAL_RUN_DIR}/logs/nginx.log" &
 router_pid=$!
 
@@ -194,7 +177,6 @@ echo " - worker executor:               $worker_executor_pid"
 echo " - worker service:                $worker_service_pid"
 echo " - component compilation service: $component_compilation_service_pid"
 echo " - shard manager:                 $shard_manager_pid"
-echo " - debugging service:             $debugging_service_pid"
 echo " - router:                        $router_pid"
 echo " - redis:                         $redis_pid"
 echo ""
@@ -217,6 +199,5 @@ kill $worker_executor_pid || true
 kill $worker_service_pid || true
 kill $component_compilation_service_pid || true
 kill $shard_manager_pid || true
-kill $debugging_service_pid || true
 kill $router_pid || true
 kill $redis_pid || true
