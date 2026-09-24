@@ -1,6 +1,7 @@
 import { dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { sharedEffectRuntime } from "./shared-effect.mjs"
+import { staticContracts } from "./static-contracts.mjs"
 
 const sdkSource = resolve(dirname(fileURLToPath(import.meta.url)), "../dist/src")
 const entry = "\0golem-effect-component"
@@ -27,6 +28,7 @@ export async function componentConfiguration(rollup, options) {
     resolveId(source) {
       const path = publicEntries.get(source)
       if (path) return { id: join(sdkSource, path), moduleSideEffects: false }
+      if (source.startsWith(sdkSource + sep)) return { id: source, moduleSideEffects: false }
       return null
     },
     transform(code, id) {
@@ -34,7 +36,12 @@ export async function componentConfiguration(rollup, options) {
       return null
     },
   }
-  const plugins = [sdk, sharedEffectRuntime(input), ...(options.plugins ?? [])]
+  const plugins = [
+    staticContracts(sdkSource, publicEntries),
+    sdk,
+    sharedEffectRuntime(input),
+    ...(options.plugins ?? []),
+  ]
   const probe = await rollup({ ...options, input, plugins })
   let modules
   try {

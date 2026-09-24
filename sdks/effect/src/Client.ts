@@ -19,7 +19,6 @@ import {
   compileMethodSpec,
   compileParamBindings,
   type CompiledInputCodec,
-  type MethodCodec,
   type MethodInput,
   type MethodParams,
   type MethodSpec,
@@ -156,27 +155,33 @@ export type AgentClient<
   F extends ConfigFields = never,
 > = "ephemeral" extends Mode ? EphemeralClient<C, Methods, F> : DurableClient<C, Methods, F>
 
-interface CompiledClient<C extends MethodParams = MethodParams> {
-  readonly constructorCodec: CompiledInputCodec<C>
-  readonly methods: ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
+interface WireMethod {
+  readonly name: string
+  readonly inputCodec: Pick<CompiledInputCodec, "encodeAsync">
+  readonly decodeOutput?: (tree: CoreTypes.SchemaValueTree) => Effect.Effect<unknown, unknown, any>
+  readonly streaming: boolean
+  readonly errorWrapped: boolean
+  readonly successVoid: boolean
 }
 
-const decodeOutput = (
-  mc: MethodCodec<MethodParams, MethodSuccess, Schema.Top>,
-  tree: CoreTypes.SchemaValueTree | undefined,
-) => {
-  if (mc.outputCodec === undefined) {
+interface CompiledClient<C extends MethodParams = MethodParams> {
+  readonly constructorCodec: Pick<CompiledInputCodec<C>, "encodeAsync">
+  readonly methods: ReadonlyMap<string, WireMethod>
+}
+
+const decodeOutput = (mc: WireMethod, tree: CoreTypes.SchemaValueTree | undefined) => {
+  if (mc.decodeOutput === undefined) {
     return tree === undefined
       ? Effect.succeed(undefined)
       : Effect.fail(responseError(`${mc.name}: expected unit output`))
   }
   if (tree === undefined) return Effect.fail(responseError(`${mc.name}: expected a result value`))
-  return Effect.mapError(decodeFromWire(mc.outputCodec.codec, tree), (error) =>
+  return Effect.mapError(mc.decodeOutput(tree), (error) =>
     responseError(`${mc.name}: failed to decode output: ${String(error)}`),
   )
 }
 
-const finishOutput = (mc: MethodCodec<MethodParams, MethodSuccess, Schema.Top>, value: unknown) => {
+const finishOutput = (mc: WireMethod, value: unknown) => {
   if (!mc.errorWrapped) return Effect.succeed(value)
   const result = value as Result.Result<unknown, unknown>
   return Result.isSuccess(result)
@@ -231,9 +236,7 @@ const buildRemote = (
 ) => {
   const remote: Record<string, unknown> = {}
   for (const [name, mc] of compiled.methods) {
-    const streaming =
-      graphUsesStreams(mc.inputCodec.graph) ||
-      (mc.outputCodec !== undefined && graphUsesStreams(mc.outputCodec.graph))
+    const streaming = mc.streaming
     const rejectNonAwaitedStream = () =>
       Effect.fail(responseError(`${name}: live streams require invoke-and-await`))
     const encode = (input: Record<string, unknown>) =>
@@ -292,9 +295,21 @@ export const clientFor = <
       ? Effect.succeed(cached)
       : Effect.gen(function* () {
           const constructorCodec = yield* compileParamBindings(`${def.name} constructor`, def.id)
-          const methods = new Map<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>()
-          for (const [name, spec] of Object.entries(def.methods))
-            methods.set(name, (yield* compileMethodSpec(name, spec)) as never)
+          const methods = new Map<string, WireMethod>()
+          for (const [name, spec] of Object.entries(def.methods)) {
+            const mc = yield* compileMethodSpec(name, spec)
+            const output = mc.outputCodec
+            methods.set(name, {
+              name,
+              inputCodec: mc.inputCodec,
+              decodeOutput: output ? (tree) => decodeFromWire(output.codec, tree) : undefined,
+              streaming:
+                graphUsesStreams(mc.inputCodec.graph) ||
+                (output !== undefined && graphUsesStreams(output.graph)),
+              errorWrapped: mc.errorWrapped,
+              successVoid: mc.successVoid,
+            })
+          }
           return (cached = { constructorCodec, methods })
         }),
   )
@@ -323,6 +338,34 @@ export const clientFor = <
       }
       return values
     })
+  return clientForCompiled(def, compile, config)
+}
+
+/** @internal RPC transport shared by generated and reflective clients. */
+export const clientForCompiled = <
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  Mode extends AgentCommon.AgentMode,
+  F extends ConfigFields = never,
+>(
+  def: AgentMetadata<C, Methods, Mode, F>,
+  compile: Effect.Effect<CompiledClient<C>, UnsupportedSchemaError>,
+  config: (
+    options?: GetOptions<F>,
+  ) => Effect.Effect<
+    AgentCommon.TypedAgentConfigValue[],
+    UnsupportedSchemaError | ConfigError | RemoteCallError,
+    any
+  > = (options) =>
+    options?.overrides === undefined
+      ? Effect.succeed([])
+      : Effect.fail(
+          new ConfigError([], {
+            _tag: "Unsupported",
+            reason: `agent '${def.name}' has no config; cannot apply overrides`,
+          }),
+        ),
+): AgentClient<C, Methods, Mode, F> => {
   const construct = (
     input: MethodInput<C>,
     phantom: CoreTypes.Uuid | undefined,

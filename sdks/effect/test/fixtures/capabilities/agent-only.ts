@@ -1,6 +1,10 @@
 import { Effect, Schema } from "effect"
 import { defineAgent, method, Snapshot } from "@golemcloud/effect-golem"
 
+interface CounterState {
+  readonly value: number
+}
+
 defineAgent({
   name: "CapabilityCounter",
   id: { initial: Schema.Number },
@@ -9,7 +13,7 @@ defineAgent({
     policy: Snapshot.policy.everyN(5),
   }),
   methods: { get: method({ input: {}, success: Schema.Number }) },
-}).implement({
-  init: ({ initial }) => Effect.succeed({ value: initial }),
+}).implement<CounterState>({
+  init: ({ initial }): Effect.Effect<CounterState> => Effect.succeed({ value: initial }),
   methods: (state) => ({ get: () => Effect.succeed(state.value) }),
 })

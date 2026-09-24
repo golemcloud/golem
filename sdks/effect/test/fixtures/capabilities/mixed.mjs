@@ -1,3 +1,3 @@
-import "./agent-only.mjs"
+import "./agent-only.ts"
 import "./tool-only.mjs"
 import "./middleware-only.mjs"

@@ -141,7 +141,8 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",
-    "effect": "4.0.0-beta.98"
+    "effect": "4.0.0-beta.98",
+    "typescript": "^5.7.2"
   },
   "devDependencies": {
     "@effect/vitest": "4.0.0-beta.98",
@@ -157,7 +158,6 @@
     "prettier": "^3.4.2",
     "rollup": "^4.60.2",
     "rollup-plugin-typescript2": "^0.37.0",
-    "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.0",
     "vitest": "^3.2.4"
   }

@@ -18,6 +18,11 @@ import { schemaValueToWitAsync } from "./schema-model/wit.js"
 
 type ItemCodec<T> = Schema.Codec<T, import("./schema-model/model.js").SchemaValue, any, any>
 
+export interface DirectItemCodec<T> {
+  readonly encode: (value: T) => Effect.Effect<SchemaValueTree, unknown, any>
+  readonly decode: (value: SchemaValueTree) => Effect.Effect<T, unknown, any>
+}
+
 interface ReceivedState {
   endpoint?: GuestSchemaValueStream
   iterator?: AsyncIterator<SchemaValueTree>
@@ -32,6 +37,30 @@ export function agentStreamToHandle<T, E, R>(
   stream: Stream.Stream<T, E, R>,
   itemCodec: ItemCodec<T>,
   encodingContext: Context.Context<R> = Context.empty() as Context.Context<R>,
+): GuestSchemaValueStreamHandle {
+  return directAgentStreamToHandle(
+    stream,
+    {
+      decode: (tree) => decodeFromWire(itemCodec, tree),
+      encode: (item) =>
+        Schema.encodeEffect(itemCodec)(item).pipe(
+          Effect.flatMap((value) =>
+            Effect.tryPromise({
+              try: (signal) => schemaValueToWitAsync(value, signal),
+              catch: (error) => error,
+            }),
+          ),
+        ),
+    },
+    encodingContext,
+  )
+}
+
+/** @internal Move a stream using a compiler-emitted concrete item codec. */
+export function directAgentStreamToHandle<T, E, R>(
+  stream: Stream.Stream<T, E, R>,
+  itemCodec: DirectItemCodec<T>,
+  context: Context.Context<R> = Context.empty() as Context.Context<R>,
 ): GuestSchemaValueStreamHandle {
   if (!Stream.isStream(stream)) throw new Error("expected an Effect Stream")
   const state = received.get(stream)
@@ -49,24 +78,12 @@ export function agentStreamToHandle<T, E, R>(
       state.ownership,
     )
   }
-
   const encoded = stream.pipe(
-    Stream.mapEffect((item) =>
-      Schema.encodeEffect(itemCodec)(item).pipe(
-        Effect.provide(encodingContext),
-        Effect.flatMap((value) =>
-          Effect.tryPromise({
-            try: (signal) => schemaValueToWitAsync(value, signal),
-            catch: (error) => error,
-          }),
-        ),
-      ),
-    ),
+    Stream.mapEffect((item) => itemCodec.encode(item).pipe(Effect.provide(context))),
   )
-  const source = new AbortableStreamIterable(encoded, encodingContext)
   return new GuestSchemaValueStreamHandle(STREAM_INTERNAL, {
     kind: "native",
-    value: source,
+    value: new AbortableStreamIterable(encoded, context),
   })
 }
 
@@ -75,6 +92,30 @@ export function agentStreamFromHandle<T>(
   handle: GuestSchemaValueStreamHandle,
   itemCodec: ItemCodec<T>,
   decodingContext: Context.Context<any> = Context.empty() as Context.Context<any>,
+): Stream.Stream<T, unknown> {
+  return directAgentStreamFromHandle(
+    handle,
+    {
+      decode: (tree) => decodeFromWire(itemCodec, tree),
+      encode: (item) =>
+        Schema.encodeEffect(itemCodec)(item).pipe(
+          Effect.flatMap((value) =>
+            Effect.tryPromise({
+              try: (signal) => schemaValueToWitAsync(value, signal),
+              catch: (error) => error,
+            }),
+          ),
+        ),
+    },
+    decodingContext,
+  )
+}
+
+/** @internal Lift a wire stream using a compiler-emitted concrete item codec. */
+export function directAgentStreamFromHandle<T>(
+  handle: GuestSchemaValueStreamHandle,
+  itemCodec: DirectItemCodec<T>,
+  context: Context.Context<any> = Context.empty() as Context.Context<any>,
 ): Stream.Stream<T, unknown> {
   const endpoint = handle.peek()
   if (!endpoint) throw new Error("schema value stream was already transferred")
@@ -106,8 +147,8 @@ export function agentStreamFromHandle<T>(
             Effect.flatMap((item) =>
               item.done
                 ? Effect.succeed(undefined)
-                : decodeFromWire(itemCodec, item.value).pipe(
-                    Effect.provide(decodingContext),
+                : itemCodec.decode(item.value).pipe(
+                    Effect.provide(context),
                     Effect.map((value) => [value, undefined] as const),
                   ),
             ),

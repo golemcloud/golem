@@ -3,9 +3,6 @@ import type * as Host from "golem:tool/host@0.1.0"
 import type * as Streams from "golem:tool/streams@0.1.0"
 import { Effect, Layer, Stream } from "effect"
 import { HostLive } from "../../host/HostLive.js"
-import { schemaShapesMatch } from "../schema-model/model.js"
-import { validateSchemaGraph } from "../schema-model/validation.js"
-import { schemaGraphFromWit } from "../schema-model/wit.js"
 import { findCommand, implementationAt, registeredTools, ToolInvokeError } from "./model.js"
 
 const asError = (cause: Common.ToolError) => new ToolInvokeError(cause)
@@ -49,17 +46,6 @@ export async function invokeRegistered(
     if (!body) throw { tag: "invalid-command-path", val: path } satisfies Common.ToolError
     const handler = implementationAt(registered.implementation, toolName, path)
     if (!handler) throw { tag: "invalid-command-path", val: path } satisfies Common.ToolError
-
-    try {
-      const graph = schemaGraphFromWit(input.graph)
-      const invalid = validateSchemaGraph(graph)[0]
-      if (invalid) throw new Error(invalid.message)
-      if (!schemaShapesMatch(graph, body.input.graph)) {
-        throw new Error("tool input schema does not match the command canonical input schema")
-      }
-    } catch (error) {
-      throw { tag: "invalid-input", val: String(error) } satisfies Common.ToolError
-    }
 
     const encodeFailure = (failure: { readonly name: string; readonly value: unknown }) => {
       const declared = body.errors.find((x) => x.spec.name === failure.name)
@@ -116,8 +102,8 @@ export async function invokeRegistered(
           }),
         )
 
-      const decoded = yield* body.input
-        .decode(input.value)
+      const decoded = yield* body
+        .decodeInput(input)
         .pipe(Effect.mapError((cause) => asError({ tag: "invalid-input", val: String(cause) })))
       const invocation = handler(decoded, {
         principal,

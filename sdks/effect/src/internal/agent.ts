@@ -22,7 +22,7 @@ import { isMultimodal } from "../Multimodal.js"
 import {
   compileMethodSpec,
   compileParamBindings,
-  invokeSchemaValue,
+  invokeWireValue,
   type CompiledInputCodec,
   type Handler,
   type MethodCodec,
@@ -604,17 +604,38 @@ interface CompiledAgent {
    * {@link dispatchLoadSnapshot} with the decoded constructor input.
    */
   readonly impl: AgentImpl<MethodParams, Record<string, AnyMethodSpec>, unknown, never, SnapshotDef>
-  readonly constructorCodec: CompiledInputCodec
-  readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, MethodSuccess, Schema.Top>>
+  readonly constructorCodec: Pick<CompiledInputCodec, "decode">
+  readonly methodCodecs: ReadonlyMap<
+    string,
+    Pick<
+      MethodCodec<MethodParams, MethodSuccess, Schema.Top>,
+      "encodeOutput" | "errorWrapped" | "successVoid" | "readOnly"
+    > & { readonly inputCodec: Pick<CompiledInputCodec, "decode"> }
+  >
   readonly agentType: AgentCommon.AgentType
   /** Compiled config bundle when `metadata.config` is set; `null` otherwise. */
-  readonly compiledConfig: CompiledConfig | null
+  readonly compiledConfig: Pick<CompiledConfig, "buildShape"> | null
   /** Compiled snapshot bundle when `metadata.snapshot` is set; `null` otherwise. */
   readonly compiledSnapshot: CompiledSnapshot | null
 }
 
 /** Module-level registry of compiled agents, keyed by `typeName`. */
 const registry = new Map<string, CompiledAgent>()
+
+/** Register compiler-emitted metadata and concrete codecs without schema compilation. */
+export function registerCompiledAgent(
+  compiled: Omit<CompiledAgent, "impl">,
+  impl: CompiledAgent["impl"],
+): void {
+  if (registry.has(compiled.name)) {
+    pendingRegistrationErrors.push({
+      agentName: compiled.name,
+      cause: Cause.fail(new DuplicateAgentNameError(compiled.name)),
+    })
+    return
+  }
+  registry.set(compiled.name, { ...compiled, impl })
+}
 
 /**
  * Validation failures captured by {@link defineAgent} (i.e. typed
@@ -1102,9 +1123,9 @@ export const dispatchInvoke = async (
   // `activeAgent`). The optional config service is rebuilt fresh per
   // invocation: regular fields are memoized for the duration of THIS
   // call only; secret fields are never cached.
-  let program = invokeSchemaValue(
+  let program = invokeWireValue(
     mc.inputCodec,
-    mc.outputCodec,
+    mc.encodeOutput,
     { errorWrapped: mc.errorWrapped, successVoid: mc.successVoid },
     handler,
     input,

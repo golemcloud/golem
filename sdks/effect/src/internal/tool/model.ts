@@ -1,7 +1,9 @@
 import type * as ToolCommon from "golem:tool/common@0.1.0"
 import type * as Core from "golem:core/types@2.0.0"
 import { Effect, Layer, Schema, Stream } from "effect"
-import { GraphEncoder } from "../schema-model/wit.js"
+import { GraphEncoder, schemaGraphFromWit } from "../schema-model/wit.js"
+import { schemaShapesMatch } from "../schema-model/model.js"
+import { validateSchemaGraph } from "../schema-model/validation.js"
 import { composeSchemaGraphs } from "../schema-model/builder.js"
 import { compile, type CompiledWitCodec } from "../../WitCodec.js"
 import { Uint32 } from "../../WitTypes.js"
@@ -404,6 +406,9 @@ export interface CompiledBody {
   readonly model: BodyModel
   readonly args: readonly ArgumentSpec[]
   readonly input: CompiledWitCodec<any>
+  readonly decodeInput: (
+    input: ToolCommon.TypedSchemaValue,
+  ) => Effect.Effect<any, Schema.SchemaError | ToolInvokeError, any>
   readonly output?: CompiledWitCodec<any>
   readonly errors: readonly { spec: ToolErrorCase; codec: CompiledWitCodec<any> }[]
 }
@@ -506,7 +511,29 @@ export function compileDefinition(
         const codec = compileOnce(spec.schema)
         return { spec, codec }
       })
-      cb = { model: m.body, args, input, output, errors }
+      cb = {
+        model: m.body,
+        args,
+        input,
+        output,
+        errors,
+        decodeInput: (value) =>
+          Effect.gen(function* () {
+            yield* Effect.try({
+              try: () => {
+                const graph = schemaGraphFromWit(value.graph)
+                const invalid = validateSchemaGraph(graph)[0]
+                if (invalid) throw new Error(invalid.message)
+                if (!schemaShapesMatch(graph, input.graph))
+                  throw new Error(
+                    "tool input schema does not match the command canonical input schema",
+                  )
+              },
+              catch: (error) => new ToolInvokeError({ tag: "invalid-input", val: String(error) }),
+            })
+            return yield* input.decode(value.value)
+          }),
+      }
       bodies.set(path.join("/"), cb)
     }
     const children = Object.values(m.children).map((c) =>
@@ -522,7 +549,7 @@ export function compileDefinition(
     }
     return index
   }
-  const bodyWire = (b: CompiledBody): ToolCommon.CommandBody => {
+  const bodyWire = (b: Omit<CompiledBody, "decodeInput">): ToolCommon.CommandBody => {
     const positionals: ToolCommon.Positional[] = []
     const options: ToolCommon.OptionSpec[] = []
     const flags: ToolCommon.FlagSpec[] = []
