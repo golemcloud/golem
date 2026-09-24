@@ -1127,9 +1127,9 @@ object AgentDefinitionMacro {
           case Right(p)  => p
         }
 
-        val selected      = EndpointSelector(methodStr, pathStr)
-        val endpointSlots = slots.filter(_.selector == selected)
-        val options       = routeOptions.find(_.selector == selected)
+        val selected       = EndpointSelector(methodStr, pathStr)
+        val endpointSlots  = slots.filter(_.selector == selected)
+        val options        = routeOptions.find(_.selector == selected)
         val durableStreams =
           if (endpointSlots.isEmpty && options.isEmpty) None
           else
