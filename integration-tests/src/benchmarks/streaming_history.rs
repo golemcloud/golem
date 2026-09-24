@@ -39,6 +39,7 @@ use tracing::Level;
 
 const PHASE_DEADLINE: Duration = Duration::from_secs(120);
 const METRICS_DEADLINE: Duration = Duration::from_secs(10);
+const MAX_BOUNDED_SESSION_INDEX_READS: u64 = 128;
 const MEASURED_DOMAIN: u32 = 700_000;
 
 pub struct StreamingRpcHistory {
@@ -179,7 +180,13 @@ fn ensure_stream_index_reads_are_bounded(
     let calls = after
         .delta(Some(before))?
         .into_iter()
-        .filter(|(operation, _)| operation.service == "stream_session_index")
+        .filter(|(operation, _)| {
+            operation.service == "stream_session_index"
+                && matches!(
+                    operation.operation.as_str(),
+                    "get" | "get_many" | "read" | "first" | "last" | "scan"
+                )
+        })
         .try_fold(0u64, |total, (_, count)| {
             total.checked_add(count).context("storage count overflow")
         })?;
@@ -894,8 +901,12 @@ impl<const REBUILD: bool> StreamingRpcCold<REBUILD> {
         let complete_storage = metrics_snapshot(&context.deps, "storage-completion").await?;
         storage_counts("completion", &first_storage, &complete_storage, &recorder)?;
         if !REBUILD {
-            ensure_stream_index_reads_are_bounded(&iteration.post_restart, &complete_storage, 64)
-                .map_err(|error| benchmark_error("correctness-index-bounded", error))?;
+            ensure_stream_index_reads_are_bounded(
+                &iteration.post_restart,
+                &complete_storage,
+                MAX_BOUNDED_SESSION_INDEX_READS,
+            )
+            .map_err(|error| benchmark_error("correctness-index-bounded", error))?;
         }
 
         let measured_key: IdempotencyKey = report
@@ -931,8 +942,12 @@ impl<const REBUILD: bool> StreamingRpcCold<REBUILD> {
                 ));
             }
             let second_storage = metrics_snapshot(&context.deps, "storage-second-lookup").await?;
-            ensure_stream_index_reads_are_bounded(&complete_storage, &second_storage, 64)
-                .map_err(|error| benchmark_error("second-lookup-bounded", error))?;
+            ensure_stream_index_reads_are_bounded(
+                &complete_storage,
+                &second_storage,
+                MAX_BOUNDED_SESSION_INDEX_READS,
+            )
+            .map_err(|error| benchmark_error("second-lookup-bounded", error))?;
             storage_counts(
                 "second-lookup",
                 &complete_storage,

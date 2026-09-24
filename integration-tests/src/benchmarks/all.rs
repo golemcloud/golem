@@ -259,14 +259,17 @@ fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<Be
     } = mode
     {
         let build_root = Path::new(workspace_root).join(build_target);
-        for name in [
-            "golem-component-compilation-service",
-            "golem-worker-service",
-            "golem-worker-executor",
-            "golem-shard-manager",
-            "golem-registry-service",
+        for (name, executable) in [
+            (
+                "golem-component-compilation-service",
+                "golem-component-compilation-service",
+            ),
+            ("golem-worker-service", "golem-worker-service"),
+            ("golem-worker-executor", "worker-executor"),
+            ("golem-shard-manager", "golem-shard-manager"),
+            ("golem-registry-service", "golem-registry-service"),
         ] {
-            services.insert(name.to_string(), build_root.join(name));
+            services.insert(name.to_string(), build_root.join(executable));
         }
     }
 
