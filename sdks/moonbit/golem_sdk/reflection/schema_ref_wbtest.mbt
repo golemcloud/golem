@@ -51,6 +51,23 @@ test "JSON Schema projects records and recursive definitions" {
 }
 
 ///|
+test "canonical JSON rejects cyclic alias references" {
+  let schema = SchemaRef::new({
+    defs: [
+      { id: "alias-a", name: None, body: @model.schema_type(Ref("alias-b")), },
+      { id: "alias-b", name: None, body: @model.schema_type(Ref("alias-a")), },
+    ],
+    root: @model.schema_type(Ref("alias-a")),
+  })
+  try schema.pack_json(Json::null()) catch {
+    Schema(message) => assert_eq(message, "cyclic schema reference 'alias-a'")
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected cyclic alias rejection")
+  }
+}
+
+///|
 test "JSON Schema retains text and binary constraints" {
   let text = test_schema(
     Text({

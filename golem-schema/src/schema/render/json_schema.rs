@@ -18,9 +18,9 @@
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::{
-    BinaryRestrictions, DiscriminatorRule, PathSpec, PermissionCardSpec, QuantitySpec,
-    QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType, SecretSpec, TextRestrictions,
-    UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
+    BinaryRestrictions, DiscriminatorRule, NumericBound, NumericRestrictions, PathSpec,
+    PermissionCardSpec, QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaType,
+    SecretSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions, VariantCaseType,
 };
 use serde_json::{Map, Number, Value};
 use std::collections::{HashMap, HashSet};
@@ -669,11 +669,11 @@ pub(super) fn render_type(
         SchemaType::S8 { .. } => integer_schema(i8::MIN as i64, i8::MAX as i64),
         SchemaType::S16 { .. } => integer_schema(i16::MIN as i64, i16::MAX as i64),
         SchemaType::S32 { .. } => integer_schema(i32::MIN as i64, i32::MAX as i64),
-        SchemaType::S64 { .. } => signed_64_schema(),
+        SchemaType::S64 { restrictions, .. } => signed_64_schema(restrictions.as_ref()),
         SchemaType::U8 { .. } => integer_schema(0, u8::MAX as i64),
         SchemaType::U16 { .. } => integer_schema(0, u16::MAX as i64),
         SchemaType::U32 { .. } => integer_schema(0, u32::MAX as i64),
-        SchemaType::U64 { .. } => unsigned_64_schema(),
+        SchemaType::U64 { restrictions, .. } => unsigned_64_schema(restrictions.as_ref()),
         SchemaType::F32 { .. } | SchemaType::F64 { .. } => {
             obj([("type", Value::String("number".to_string()))])
         }
@@ -815,7 +815,7 @@ pub(super) fn render_type(
         ]),
         SchemaType::Duration { .. } => obj([
             ("type", Value::String("object".to_string())),
-            ("properties", obj([("nanoseconds", signed_64_schema())])),
+            ("properties", obj([("nanoseconds", signed_64_schema(None))])),
             (
                 "required",
                 Value::Array(vec![Value::String("nanoseconds".to_string())]),
@@ -915,17 +915,45 @@ fn integer_schema(min: i64, max: i64) -> Value {
     ])
 }
 
-fn unsigned_64_schema() -> Value {
+fn unsigned_64_schema(restrictions: Option<&NumericRestrictions>) -> Value {
+    let minimum = restrictions
+        .and_then(|value| value.min)
+        .and_then(|bound| match bound {
+            NumericBound::Unsigned(value) => Some(value),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let maximum = restrictions
+        .and_then(|value| value.max)
+        .and_then(|bound| match bound {
+            NumericBound::Unsigned(value) => Some(value),
+            _ => None,
+        })
+        .unwrap_or(u64::MAX);
     obj([
         ("type", Value::String("string".to_string())),
         ("format", Value::String("uint64".to_string())),
         ("pattern", Value::String("^(?:0|[1-9][0-9]*)$".to_string())),
-        ("x-golem-minimum", Value::String("0".to_string())),
-        ("x-golem-maximum", Value::String(u64::MAX.to_string())),
+        ("x-golem-minimum", Value::String(minimum.to_string())),
+        ("x-golem-maximum", Value::String(maximum.to_string())),
     ])
 }
 
-fn signed_64_schema() -> Value {
+fn signed_64_schema(restrictions: Option<&NumericRestrictions>) -> Value {
+    let minimum = restrictions
+        .and_then(|value| value.min)
+        .and_then(|bound| match bound {
+            NumericBound::Signed(value) => Some(value),
+            _ => None,
+        })
+        .unwrap_or(i64::MIN);
+    let maximum = restrictions
+        .and_then(|value| value.max)
+        .and_then(|bound| match bound {
+            NumericBound::Signed(value) => Some(value),
+            _ => None,
+        })
+        .unwrap_or(i64::MAX);
     obj([
         ("type", Value::String("string".to_string())),
         ("format", Value::String("int64".to_string())),
@@ -933,8 +961,8 @@ fn signed_64_schema() -> Value {
             "pattern",
             Value::String("^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$".to_string()),
         ),
-        ("x-golem-minimum", Value::String(i64::MIN.to_string())),
-        ("x-golem-maximum", Value::String(i64::MAX.to_string())),
+        ("x-golem-minimum", Value::String(minimum.to_string())),
+        ("x-golem-maximum", Value::String(maximum.to_string())),
     ])
 }
 
@@ -1163,7 +1191,7 @@ fn url_schema(restrictions: &UrlRestrictions) -> Map<String, Value> {
 
 fn quantity_schema(spec: &QuantitySpec) -> Map<String, Value> {
     let mut props = Map::new();
-    props.insert("mantissa".to_string(), signed_64_schema());
+    props.insert("mantissa".to_string(), signed_64_schema(None));
     props.insert(
         "scale".to_string(),
         obj([("type", Value::String("integer".to_string()))]),

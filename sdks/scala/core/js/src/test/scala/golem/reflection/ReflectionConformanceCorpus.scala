@@ -97,8 +97,10 @@ private[reflection] object ReflectionConformanceCorpus {
     "errors/wide-wrong-json-type",
     "errors/duration-legacy-string",
     "errors/quantity-negative-zero",
+    "errors/quantity-extra-field",
     "errors/binary-noncanonical-base64",
     "json-schema/s64",
+    "json-schema/s64-restrictions",
     "json-schema/u64",
     "json-schema/duration-nanoseconds",
     "json-schema/quantity-mantissa",
@@ -281,6 +283,20 @@ private[reflection] object ReflectionConformanceCorpus {
       }
     },
     {
+      "id": "errors/quantity-extra-field",
+      "operation": "reject",
+      "fixture": "quantity",
+      "input": {
+        "mantissa": "1",
+        "scale": 0,
+        "unit": "m",
+        "extra": true
+      },
+      "expected": {
+        "kind": "invalid-json"
+      }
+    },
+    {
       "id": "errors/binary-noncanonical-base64",
       "operation": "reject",
       "fixture": "binary",
@@ -292,6 +308,18 @@ private[reflection] object ReflectionConformanceCorpus {
         {
           "bytes": "-_8=",
           "mimeType": "application/octet-stream"
+        },
+        {
+          "bytes": "-_9",
+          "mimeType": "application/octet-stream"
+        },
+        {
+          "bytes": "A",
+          "mimeType": "application/octet-stream"
+        },
+        {
+          "bytes": "-_8",
+          "mime_type": "application/octet-stream"
         }
       ],
       "expected": {
@@ -309,6 +337,19 @@ private[reflection] object ReflectionConformanceCorpus {
         "pattern": "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$",
         "x-golem-minimum": "-9223372036854775808",
         "x-golem-maximum": "9223372036854775807"
+      }
+    },
+    {
+      "id": "json-schema/s64-restrictions",
+      "operation": "json-schema",
+      "fixture": "constrained-s64",
+      "path": "",
+      "expected": {
+        "type": "string",
+        "format": "int64",
+        "pattern": "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$",
+        "x-golem-minimum": "-9007199254740993",
+        "x-golem-maximum": "9007199254740993"
       }
     },
     {

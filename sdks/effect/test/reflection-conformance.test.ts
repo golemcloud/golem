@@ -102,6 +102,13 @@ function fixture(name: string): SchemaRef {
   switch (name) {
     case "s64":
       return ref(t.s64())
+    case "constrained-s64":
+      return ref(
+        t.s64({
+          min: { tag: "signed", val: -9_007_199_254_740_993n },
+          max: { tag: "signed", val: 9_007_199_254_740_993n },
+        }),
+      )
     case "u64":
       return ref(t.u64())
     case "binary":
@@ -162,8 +169,10 @@ function atPointer(value: JsonValue, pointer: string): JsonValue {
 function expectSubset(actual: JsonValue, expected: JsonValue): void {
   if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
     expect(actual).not.toBeNull()
+    expect(typeof actual).toBe("object")
     expect(Array.isArray(actual)).toBe(false)
     for (const [key, value] of Object.entries(expected)) {
+      expect(Object.prototype.hasOwnProperty.call(actual, key)).toBe(true)
       expectSubset((actual as Record<string, JsonValue>)[key], value)
     }
   } else {

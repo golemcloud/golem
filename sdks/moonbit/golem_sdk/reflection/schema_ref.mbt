@@ -557,12 +557,26 @@ fn SchemaRef::resolve(
   self : SchemaRef,
   schema : @model.SchemaType,
 ) -> @model.SchemaType raise ReflectError {
+  self.resolve_with(schema, {})
+}
+
+///|
+fn SchemaRef::resolve_with(
+  self : SchemaRef,
+  schema : @model.SchemaType,
+  visited : Map[String, Unit],
+) -> @model.SchemaType raise ReflectError {
   match schema.body {
-    Ref(id) =>
+    Ref(id) => {
+      guard !visited.contains(id) else {
+        raise Schema("cyclic schema reference '" + id + "'")
+      }
+      visited[id] = ()
       match self.graph.defs.iter().find_first(def => def.id == id) {
-        Some(def) => self.resolve(def.body)
+        Some(def) => self.resolve_with(def.body, visited)
         None => raise Schema("dangling schema reference '" + id + "'")
       }
+    }
     _ => schema
   }
 }

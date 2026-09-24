@@ -1067,7 +1067,9 @@ function base64UrlToBytes(value: string, path: Path): Uint8Array {
     if (value[index + 2] !== undefined) bytes.push(((b & 15) << 4) | (c >> 2))
     if (value[index + 3] !== undefined) bytes.push(((c & 3) << 6) | d)
   }
-  return Uint8Array.from(bytes)
+  const result = Uint8Array.from(bytes)
+  if (bytesToBase64(result) !== value) fail(path, "invalid base64url without padding")
+  return result
 }
 
 function rejectUnknownFields(

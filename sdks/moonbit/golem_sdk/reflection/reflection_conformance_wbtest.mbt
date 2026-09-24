@@ -31,6 +31,15 @@ fn corpus_count(value : Json) -> Int raise {
 }
 
 ///|
+fn corpus_bool(value : Json) -> Bool raise {
+  match value {
+    True => true
+    False => false
+    _ => fail("expected conformance JSON boolean")
+  }
+}
+
+///|
 fn corpus_field(
   name : String,
   body : @model.SchemaType,
@@ -42,6 +51,16 @@ fn corpus_field(
 fn conformance_fixture(name : String) -> SchemaRef raise {
   let root = match name {
     "s64" => @model.schema_type(S64(None))
+    "constrained-s64" =>
+      @model.schema_type(
+        S64(
+          Some({
+            min: Some(@types.Signed(-9007199254740993L)),
+            max: Some(@types.Signed(9007199254740993L)),
+            unit: None,
+          }),
+        ),
+      )
     "u64" => @model.schema_type(U64(None))
     "binary" =>
       @model.schema_type(
@@ -227,6 +246,8 @@ fn assert_conformance_semantic(
       )
     }
     "graph" => {
+      let expected_fields = corpus_object(expected)
+      let referenced = conformance_fixture("optional-record")
       let inline = test_schema(
         Record([
           corpus_field(
@@ -239,9 +260,13 @@ fn assert_conformance_semantic(
           ),
         ]),
       )
+      let valid = @model.validate_graph(referenced.graph()).length() == 0
+      let equivalent = referenced.pack_json(Json::object({})) ==
+        inline.pack_json(Json::object({}))
+      assert_eq(valid, corpus_bool(expected_fields.get("valid").unwrap()))
       assert_eq(
-        conformance_fixture("optional-record").pack_json(Json::object({})),
-        inline.pack_json(Json::object({})),
+        equivalent,
+        corpus_bool(expected_fields.get("equivalent").unwrap()),
       )
     }
     other => fail("unknown semantic conformance fixture " + other)
@@ -272,12 +297,13 @@ test "reflection conformance corpus executes the complete case-ID set" {
         )
       }
       "reject" => {
+        let schema = conformance_fixture(name)
         let inputs = match test_case.get("inputs") {
           Some(values) => corpus_array(values)
           None => [test_case.get("input").unwrap()]
         }
         for input in inputs {
-          try conformance_fixture(name).pack_json(input) catch {
+          try schema.pack_json(input) catch {
             _ => ()
           } noraise {
             _ => fail("conformance case was accepted: " + id)

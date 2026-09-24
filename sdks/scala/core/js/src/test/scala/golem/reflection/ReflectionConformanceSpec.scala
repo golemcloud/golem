@@ -12,6 +12,7 @@ package golem.reflection
 
 import golem.schema.*
 import golem.schema.SchemaTypeBody.*
+import golem.schema.validation.WellFormedness
 import zio.blocks.schema.json.Json
 import zio.test.*
 
@@ -39,11 +40,27 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
     case other              => throw new AssertionError(s"expected JSON number, got $other")
   }
 
+  private def boolean(value: Json): Boolean = value match {
+    case Json.Boolean(value) => value
+    case other               => throw new AssertionError(s"expected JSON boolean, got $other")
+  }
+
   private def field(name: String, body: SchemaType): NamedFieldType = NamedFieldType(name, body)
 
   private def fixture(name: String): SchemaRef = {
     val root = name match {
-      case "s64"        => SchemaType(S64Type())
+      case "s64"             => SchemaType(S64Type())
+      case "constrained-s64" =>
+        SchemaType(
+          S64Type(
+            Some(
+              NumericRestrictions(
+                min = Some(NumericBound.Signed(-9007199254740993L)),
+                max = Some(NumericBound.Signed(9007199254740993L))
+              )
+            )
+          )
+        )
       case "u64"        => SchemaType(U64Type())
       case "binary"     => SchemaType(BinaryType(BinaryRestrictions.empty))
       case "duration"   => SchemaType(DurationType)
@@ -222,7 +239,9 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
       Predef.assert(supported == expectedNames)
       Predef.assert(elements(fields(corpus)("restrictionKinds")).map(string) == expectedNames)
     case "graph" =>
-      val inline = SchemaRef(
+      val expectedFields = fields(expected)
+      val referenced     = fixture("optional-record")
+      val inline         = SchemaRef(
         SchemaGraph(
           ListMap.empty,
           SchemaType(
@@ -235,7 +254,10 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
           )
         )
       )
-      Predef.assert(fixture("optional-record").packJson(Json.Object()) == inline.packJson(Json.Object()))
+      val valid      = WellFormedness.validateGraph(referenced.graph).isRight
+      val equivalent = referenced.packJson(Json.Object()) == inline.packJson(Json.Object())
+      Predef.assert(valid == boolean(expectedFields("valid")))
+      Predef.assert(equivalent == boolean(expectedFields("equivalent")))
     case other => throw new AssertionError(s"unknown semantic conformance fixture $other")
   }
 

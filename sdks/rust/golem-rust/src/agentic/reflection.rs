@@ -1761,6 +1761,14 @@ mod tests {
     fn conformance_schema(name: &str) -> SchemaRef {
         let root = match name {
             "s64" => SchemaType::s64(),
+            "constrained-s64" => SchemaType::S64 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::Signed(-9_007_199_254_740_993)),
+                    max: Some(NumericBound::Signed(9_007_199_254_740_993)),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
             "u64" => SchemaType::u64(),
             "binary" => SchemaType::binary(BinaryRestrictions::default()),
             "duration" => SchemaType::duration(),

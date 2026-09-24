@@ -99,16 +99,35 @@ private object CanonicalJson {
       }
       typed("number", limits: _*)
     }
-    def wideInteger(unsigned: Boolean): Json =
+    def restrictedWideBound(
+      bound: Option[NumericBound],
+      fallback: BigInt,
+      minimum: Boolean
+    ): BigInt = {
+      val value = bound.flatMap {
+        case NumericBound.Signed(value)   => Some(BigInt(value))
+        case NumericBound.Unsigned(value) => Some(BigInt(java.lang.Long.toUnsignedString(value)))
+        case NumericBound.FloatBits(_)    => None
+      }.getOrElse(fallback)
+      if (minimum) value.max(fallback) else value.min(fallback)
+    }
+    def wideInteger(unsigned: Boolean, restrictions: Option[NumericRestrictions]): Json = {
+      val baseMinimum = if (unsigned) BigInt(0) else BigInt(Long.MinValue)
+      val baseMaximum = if (unsigned) U64Max else BigInt(Long.MaxValue)
       typed(
         "string",
         "format"  -> Json.String(if (unsigned) "uint64" else "int64"),
         "pattern" -> Json.String(
           if (unsigned) "^(?:0|[1-9][0-9]*)$" else "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$"
         ),
-        "x-golem-minimum" -> Json.String(if (unsigned) "0" else Long.MinValue.toString),
-        "x-golem-maximum" -> Json.String(if (unsigned) U64Max.toString else Long.MaxValue.toString)
+        "x-golem-minimum" -> Json.String(
+          restrictedWideBound(restrictions.flatMap(_.min), baseMinimum, minimum = true).toString
+        ),
+        "x-golem-maximum" -> Json.String(
+          restrictedWideBound(restrictions.flatMap(_.max), baseMaximum, minimum = false).toString
+        )
       )
+    }
     def isOption(schema: SchemaType): Boolean = resolve(graph, schema).body match {
       case OptionType(_) => true
       case _             => false
@@ -119,11 +138,11 @@ private object CanonicalJson {
       case S8Type(r)                => integer(-128, 127, r)
       case S16Type(r)               => integer(-32768, 32767, r)
       case S32Type(r)               => integer(Int.MinValue, Int.MaxValue, r)
-      case S64Type(_)               => wideInteger(unsigned = false)
+      case S64Type(r)               => wideInteger(unsigned = false, restrictions = r)
       case U8Type(r)                => integer(0, 255, r)
       case U16Type(r)               => integer(0, 65535, r)
       case U32Type(r)               => integer(0, BigInt("4294967295"), r)
-      case U64Type(_)               => wideInteger(unsigned = true)
+      case U64Type(r)               => wideInteger(unsigned = true, restrictions = r)
       case F32Type(r)               => decimal(r)
       case F64Type(r)               => decimal(r)
       case CharType                 => typed("string", "minLength" -> number(1), "maxLength" -> number(1))
@@ -231,7 +250,7 @@ private object CanonicalJson {
       case DurationType =>
         typed(
           "object",
-          "properties"           -> Json.Object("nanoseconds" -> wideInteger(unsigned = false)),
+          "properties"           -> Json.Object("nanoseconds" -> wideInteger(unsigned = false, restrictions = None)),
           "required"             -> Json.Array(Json.String("nanoseconds")),
           "additionalProperties" -> Json.Boolean(false),
           "title"                -> Json.String("Duration in nanoseconds")
@@ -240,7 +259,7 @@ private object CanonicalJson {
         typed(
           "object",
           "properties" -> Json.Object(
-            "mantissa" -> wideInteger(unsigned = false),
+            "mantissa" -> wideInteger(unsigned = false, restrictions = None),
             "scale"    -> typed("integer"),
             "unit"     -> typed("string")
           ),
@@ -431,12 +450,14 @@ private object CanonicalJson {
         ResultValue(if (side == "ok") SchemaResult.Ok(packed) else SchemaResult.Err(packed))
       case TextType(_) =>
         val jsonFields = fields(json)
+        if (!jsonFields.keySet.subsetOf(Set("text", "language"))) fail("text JSON contains unknown fields")
         TextValue(
           string(jsonFields.getOrElse("text", fail("missing field 'text'"))),
           jsonFields.get("language").map(string)
         )
       case BinaryType(_) =>
         val jsonFields = fields(json)
+        if (!jsonFields.keySet.subsetOf(Set("bytes", "mimeType"))) fail("binary JSON contains unknown fields")
         BinaryValue(
           decodeBase64Url(string(jsonFields.getOrElse("bytes", fail("missing field 'bytes'")))),
           jsonFields.get("mimeType").map(string)
@@ -452,6 +473,8 @@ private object CanonicalJson {
         DurationValue(canonicalLong(jsonFields("nanoseconds"), unsigned = false))
       case QuantityType(_) =>
         val jsonFields = fields(json)
+        if (jsonFields.keySet != Set("mantissa", "scale", "unit"))
+          fail("quantity JSON requires exactly 'mantissa', 'scale', and 'unit'")
         QuantityValueNode(
           QuantityValue(
             canonicalLong(jsonFields("mantissa"), unsigned = false),
@@ -636,7 +659,9 @@ private object CanonicalJson {
       if (index + 3 < value.length) result += (((c & 3) << 6) | d).toByte
       index += 4
     }
-    result.result()
+    val decoded = result.result()
+    if (encodeBase64Url(decoded) != value) fail("invalid base64url without padding")
+    decoded
   }
 
 }

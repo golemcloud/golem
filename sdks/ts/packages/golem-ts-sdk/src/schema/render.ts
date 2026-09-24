@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type {
+  NumericRestrictions,
   SchemaGraph,
   SchemaType,
   SchemaTypeBody,
@@ -440,7 +441,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       rendered = integerSchema(-(2 ** 31), 2 ** 31 - 1);
       break;
     case 's64':
-      rendered = integerStringSchema(I64_MIN, I64_MAX, true, 'int64');
+      rendered = integerStringSchema(
+        restrictedIntegerBound(body.restrictions?.min, I64_MIN, 'min'),
+        restrictedIntegerBound(body.restrictions?.max, I64_MAX, 'max'),
+        true,
+        'int64',
+      );
       break;
     case 'u8':
       rendered = integerSchema(0, 255);
@@ -452,7 +458,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       rendered = integerSchema(0, 2 ** 32 - 1);
       break;
     case 'u64':
-      rendered = integerStringSchema(0n, U64_MAX, false, 'uint64');
+      rendered = integerStringSchema(
+        restrictedIntegerBound(body.restrictions?.min, 0n, 'min'),
+        restrictedIntegerBound(body.restrictions?.max, U64_MAX, 'max'),
+        false,
+        'uint64',
+      );
       break;
     case 'f32':
     case 'f64':
@@ -905,7 +916,9 @@ function base64UrlToBytes(value: string, path: Path): Uint8Array {
     if (value[index + 2] !== undefined) bytes.push(((b & 15) << 4) | (c >> 2));
     if (value[index + 3] !== undefined) bytes.push(((c & 3) << 6) | d);
   }
-  return Uint8Array.from(bytes);
+  const result = Uint8Array.from(bytes);
+  if (bytesToBase64(result) !== value) fail(path, 'invalid base64url without padding');
+  return result;
 }
 
 function rejectUnknownFields(
@@ -958,4 +971,20 @@ function integerStringSchema(
     'x-golem-minimum': min.toString(),
     'x-golem-maximum': max.toString(),
   };
+}
+
+function restrictedIntegerBound(
+  bound: NumericRestrictions['min'] | undefined,
+  fallback: bigint,
+  side: 'min' | 'max',
+): bigint {
+  if (bound === undefined || bound.tag === 'float-bits') return fallback;
+  const value = bound.val;
+  return side === 'min'
+    ? value > fallback
+      ? value
+      : fallback
+    : value < fallback
+      ? value
+      : fallback;
 }
