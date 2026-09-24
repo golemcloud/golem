@@ -101,8 +101,20 @@ impl ScriptedBlobStorage {
         path: &Path,
         call: impl Future<Output = anyhow::Result<T>>,
     ) -> anyhow::Result<T> {
+        self.follow((self.rule)(op_label, path), op_label, path, call)
+            .await
+    }
+
+    /// Records the call and does what the script says. The rule runs one time for each call.
+    async fn follow<T>(
+        &self,
+        script: Script,
+        op_label: &'static str,
+        path: &Path,
+        call: impl Future<Output = anyhow::Result<T>>,
+    ) -> anyhow::Result<T> {
         self.record(op_label, path);
-        match (self.rule)(op_label, path) {
+        match script {
             Script::Pass => call.await,
             Script::Refuse => Err(anyhow::anyhow!("the storage refused the call")),
             Script::LoseTheAnswer => {
@@ -137,16 +149,21 @@ impl BlobStorage for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        if (self.rule)(op_label, path) == Script::Vanish {
-            self.record(op_label, path);
-            return Ok(None);
+        match (self.rule)(op_label, path) {
+            Script::Vanish => {
+                self.record(op_label, path);
+                Ok(None)
+            }
+            script => {
+                self.follow(
+                    script,
+                    op_label,
+                    path,
+                    self.inner.get_raw(target_label, op_label, namespace, path),
+                )
+                .await
+            }
         }
-        self.answer(
-            op_label,
-            path,
-            self.inner.get_raw(target_label, op_label, namespace, path),
-        )
-        .await
     }
 
     async fn get_stream(
