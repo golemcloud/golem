@@ -103,6 +103,22 @@ pub static DOC_DEPENDENCIES: LazyLock<Vec<DocDependencyGroup>> = LazyLock::new(|
                     golem_ai("golem_llm_openrouter"),
                 ),
                 dep(
+                    "OrcaRouter",
+                    vec![
+                        env(
+                            "OPENAI_API_KEY",
+                            "<KEY>",
+                            "OrcaRouter API key (sk-orca-...)",
+                        ),
+                        env(
+                            "OPENAI_BASE_URL",
+                            "https://api.orcarouter.ai/v1",
+                            "OrcaRouter OpenAI-compatible endpoint",
+                        ),
+                    ],
+                    golem_ai("golem_llm_openai"),
+                ),
+                dep(
                     "Amazon Bedrock",
                     vec![
                         env("AWS_ACCESS_KEY_ID", "<KEY>", ""),
