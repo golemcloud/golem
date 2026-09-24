@@ -547,6 +547,7 @@ export function staticTools(config, runtime) {
           const declaration = checker.getResolvedSignature(node)?.declaration;
           if (
             declaration?.name?.text === 'client' &&
+            declaration.parent?.name?.text === 'CommandBuilder' &&
             declaration.getSourceFile().fileName.endsWith('/dist/index.d.mts')
           ) {
             edits.push([
