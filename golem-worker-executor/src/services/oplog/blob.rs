@@ -28,7 +28,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
-    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult, join_blob_path,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -409,10 +409,7 @@ impl BlobOplogArchive {
     }
 
     pub(crate) fn oplog_index_to_path(&self, idx: OplogIndex) -> PathBuf {
-        let mut path = PathBuf::new();
-        path.push(self.owned_agent_id.agent_name());
-        path.push(idx.to_string());
-        path
+        join_blob_path(&self.owned_agent_id.agent_name(), &idx.to_string())
     }
 
     // Fetch a range of entries from the storage. At most one chunk of data will be returned,
@@ -677,12 +674,7 @@ impl OplogArchive for BlobOplogArchive {
         let drop_count = idx_to_drop.len();
         let to_drop = idx_to_drop
             .iter()
-            .map(|idx| {
-                let mut path = PathBuf::new();
-                path.push(self.owned_agent_id.agent_name());
-                path.push(idx.to_string());
-                path
-            })
+            .map(|idx| join_blob_path(&self.owned_agent_id.agent_name(), &idx.to_string()))
             .collect::<Vec<_>>();
 
         let ns = BlobStorageNamespace::CompressedOplog {

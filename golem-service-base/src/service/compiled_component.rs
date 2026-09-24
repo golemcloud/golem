@@ -16,14 +16,16 @@ use crate::error::worker_executor::WorkerExecutorError;
 use crate::metrics::storage::{
     record_compilation_cache_bytes_written, record_compilation_cache_objects_written,
 };
-use crate::storage::blob::{BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace};
+use crate::storage::blob::{
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, join_blob_path,
+};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::wasmtime_config::wasmtime_artifact_fingerprint;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::Instant;
 use tracing::{debug, info_span};
@@ -115,9 +117,10 @@ impl DefaultCompiledComponentService {
         component_revision: ComponentRevision,
         artifact_fingerprint: &str,
     ) -> PathBuf {
-        Path::new(&component_id.to_string())
-            .join(component_revision.to_string())
-            .join(format!("{artifact_fingerprint}.cwasm"))
+        join_blob_path(
+            &format!("{component_id}/{component_revision}"),
+            &format!("{artifact_fingerprint}.cwasm"),
+        )
     }
 }
 
@@ -263,6 +266,21 @@ mod tests {
         let mut config = create_wasmtime_config_without_fs_cache();
         config.cranelift_opt_level(opt_level);
         Ok(Engine::new(&config)?)
+    }
+
+    #[test]
+    fn compiled_component_key_uses_contract_separator() {
+        let component_id = ComponentId::new();
+        let expected = format!("{component_id}/0/fingerprint.cwasm");
+        assert_eq!(
+            DefaultCompiledComponentService::key(
+                component_id,
+                ComponentRevision::INITIAL,
+                "fingerprint"
+            )
+            .to_str(),
+            Some(expected.as_str())
+        );
     }
 
     #[test]
