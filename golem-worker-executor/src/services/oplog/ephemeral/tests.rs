@@ -155,7 +155,9 @@ impl OplogArchiveService for SingletonArchiveService {
     ) -> Arc<dyn OplogArchive + Send + Sync> {
         self.0.clone()
     }
-    async fn delete(&self, _: &OwnedAgentId, _: AgentMode) {}
+    async fn delete(&self, _: &OwnedAgentId, _: AgentMode) -> OplogArchiveResult<()> {
+        Ok(())
+    }
     async fn read_source(
         &self,
         _: &OwnedAgentId,

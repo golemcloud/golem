@@ -88,8 +88,12 @@ pub trait OplogArchiveService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> Arc<dyn OplogArchive + Send + Sync>;
 
-    /// Deletes the oplog archive for a worker completely
-    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode);
+    /// Deletes the oplog archive for a worker completely.
+    async fn delete(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogArchiveResult<()>;
 
     /// Reads the entries physically present in this archive within the requested range.
     async fn read_source(
@@ -316,7 +320,11 @@ impl MultiLayerOplogService {
         for id in unfiltered_ids {
             let mut exists_in_lower = false;
             for lower_layer in &self.lower.iter().as_slice()[from..] {
-                if lower_layer.exists(&id, agent_mode).await {
+                if lower_layer
+                    .try_exists(&id, agent_mode)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?
+                {
                     exists_in_lower = true;
                     break;
                 }
@@ -813,15 +821,16 @@ impl OplogService for MultiLayerOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) {
+    ) -> Result<(), String> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         self.abort_transfer(&owned_agent_id.agent_id).await;
         self.primary
             .delete(lifecycle, owned_agent_id, agent_mode)
-            .await;
+            .await?;
         for layer in &self.lower {
-            layer.delete(owned_agent_id, agent_mode).await
+            layer.delete(owned_agent_id, agent_mode).await?;
         }
+        Ok(())
     }
 
     async fn read_exact(
@@ -1112,6 +1121,9 @@ impl MultiLayerOplog {
                                 let _ = done.send(result.clone());
                             }
                             if let Err(error) = result {
+                                crate::metrics::oplog::record_archive_maintenance_failure(
+                                    "primary_transfer",
+                                );
                                 warn!(error = %error, "Failed to archive oplog; the source entries remain available for retry");
                             }
                         }
@@ -1152,6 +1164,9 @@ impl MultiLayerOplog {
                             let _ = done.send(result.clone());
                         }
                         if let Err(error) = result {
+                            crate::metrics::oplog::record_archive_maintenance_failure(
+                                "lower_layer_transfer",
+                            );
                             warn!(error = %error, "Failed to archive oplog; the source entries remain available for retry");
                         }
                     }
@@ -1213,8 +1228,8 @@ impl MultiLayerOplog {
                 this.lower.len().get() > 1
                     || this.primary.try_current_oplog_index().await? > last_transferred_idx
             } else {
-                // A queued transfer may fail after this call returns. Scheduling one follow-up
-                // guarantees a later retry while leaving the authoritative source untouched.
+                // The scheduled follow-up rechecks the authoritative source after `next_after`;
+                // failed transfers leave that source intact and are retried on that later pass.
                 true
             }
         } else {

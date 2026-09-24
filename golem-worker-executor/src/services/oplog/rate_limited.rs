@@ -583,7 +583,7 @@ impl OplogService for RateLimitedOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) {
+    ) -> Result<(), String> {
         self.inner
             .delete(lifecycle, owned_agent_id, agent_mode)
             .await

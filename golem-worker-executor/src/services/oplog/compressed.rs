@@ -135,7 +135,11 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         ))
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+    async fn delete(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogArchiveResult<()> {
         let is = self.indexed_storage.clone();
         let agent_id = owned_agent_id.agent_id();
         let level = self.level;
@@ -151,9 +155,9 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             async move { is.with("compressed_oplog", "delete").delete(ns, &key).await }
         })
         .await
-        .unwrap_or_else(|error| {
-            panic!("Failed to delete compressed oplog archive for {agent_id}: {error}")
-        });
+        .map_err(|error| {
+            format!("Failed to delete compressed oplog archive for {agent_id}: {error}")
+        })
     }
 
     async fn read_source(
@@ -508,16 +512,6 @@ impl OplogArchive for CompressedOplogArchive {
             return Ok(0);
         }
 
-        // The cache lock must not be held across the storage writes below: `append` can be
-        // reached from host-call contexts (through ephemeral oplogs), and an async lock held
-        // across IO by a store-polled future can deadlock the store (wasmtime#11869/#11870).
-        {
-            let mut cache = self.cache.lock().unwrap();
-            for (idx, entry) in chunk {
-                cache.insert(*idx, entry.clone());
-            }
-        }
-
         let mut total_bytes = 0u64;
 
         for sub_chunk in chunk.chunks(CompressedOplogArchiveService::MAX_CHUNK_SIZE) {
@@ -585,6 +579,13 @@ impl OplogArchive for CompressedOplogArchive {
                         )
                     })?;
                 }
+            }
+
+            // Publish only data that was persisted or reconciled as persisted. The cache lock is
+            // deliberately acquired after storage IO so host-call polling cannot deadlock the store.
+            let mut cache = self.cache.lock().unwrap();
+            for (idx, entry) in sub_chunk {
+                cache.insert(*idx, entry.clone());
             }
         }
 

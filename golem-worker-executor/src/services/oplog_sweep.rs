@@ -27,15 +27,15 @@
 //!
 //! Durable oplogs are not swept. An archive step interrupted between its append and its
 //! `drop_prefix` leaves that prefix to be appended again, and in an indexed layer the repeated
-//! `INSERT` hits a unique violation, which `retry_storage_op` turns into a panic. A blob target, which the ephemeral hop
-//! uses in the default stack, appends with a `put` keyed by the chunk's last index, so a repeat is
-//! harmless. A stack with more than one indexed archive layer gives ephemeral agents the same
-//! hazard, which a re-invocation racing the teardown drain can hit with or without the sweep.
+//! `INSERT` hits a unique violation. A blob target, which the ephemeral hop uses in the default
+//! stack, appends with a `put` keyed by the chunk's last index, so a repeat is harmless. A stack
+//! with more than one indexed archive layer gives ephemeral agents the same hazard, which a
+//! re-invocation racing the teardown drain can hit with or without the sweep.
 //!
 //! # Failure
 //!
-//! A non-transient indexed-storage error panics through `retry_storage_op`, and under
-//! `panic = "abort"` that takes the process down, as it does for every other oplog operation.
+//! Storage failures fail that agent's maintenance attempt and produce an `archive_failed`
+//! outcome. Its authoritative source remains available for a later sweep.
 //!
 //! # Memory
 //!
@@ -3166,7 +3166,8 @@ mod tests {
                 &OwnedAgentId::new(environment_id, &transient),
                 AgentMode::Ephemeral,
             )
-            .await;
+            .await
+            .unwrap();
 
         // The other agent keeps working, so every pass sees it and it stays tracked.
         keep_moving(&layers, &staying, environment_id).await;
@@ -3474,7 +3475,11 @@ mod tests {
             })
         }
 
-        async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        async fn delete(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            agent_mode: AgentMode,
+        ) -> Result<(), String> {
             self.inner.delete(owned_agent_id, agent_mode).await
         }
 

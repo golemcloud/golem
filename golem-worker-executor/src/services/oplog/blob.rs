@@ -99,7 +99,11 @@ impl OplogArchiveService for BlobOplogArchiveService {
         ))
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+    async fn delete(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogArchiveResult<()> {
         self.blob_storage
             .delete_dir(
                 "blob_oplog",
@@ -113,12 +117,13 @@ impl OplogArchiveService for BlobOplogArchiveService {
                 Path::new(&owned_agent_id.agent_name()),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to drop compressed oplog for worker {} in blob storage: {err}",
+            .map(|_| ())
+            .map_err(|error| {
+                format!(
+                    "failed to drop compressed oplog for worker {} in blob storage: {error}",
                     owned_agent_id.agent_id
                 )
-            });
+            })
     }
 
     async fn read_source(
@@ -485,21 +490,18 @@ impl BlobOplogArchive {
             .await
             .map_err(|error| format!("failed to list entries of compressed oplog for worker {} in blob storage: {error}", owned_agent_id.agent_id))?;
 
-        Ok(paths
+        paths
             .into_iter()
-            .map(|path| {
-                let idx = Self::path_to_oplog_index(&path);
-                (idx, path)
-            })
-            .collect::<BTreeMap<OplogIndex, PathBuf>>())
+            .map(|path| Self::path_to_oplog_index(&path).map(|idx| (idx, path)))
+            .collect::<OplogArchiveResult<BTreeMap<OplogIndex, PathBuf>>>()
     }
 
-    pub(crate) fn path_to_oplog_index(path: &Path) -> OplogIndex {
+    pub(crate) fn path_to_oplog_index(path: &Path) -> OplogArchiveResult<OplogIndex> {
         path.file_name()
             .and_then(|s| s.to_str())
             .and_then(|s| s.parse::<u64>().ok())
             .map(OplogIndex::from_u64)
-            .unwrap_or_else(|| panic!("failed to parse oplog index from path: {path:?}"))
+            .ok_or_else(|| format!("failed to parse oplog index from path: {path:?}"))
     }
 
     pub(crate) fn oplog_index_to_path(&self, idx: OplogIndex) -> PathBuf {

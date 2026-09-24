@@ -798,7 +798,7 @@ impl OplogService for PrimaryOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) {
+    ) -> Result<(), String> {
         record_oplog_call("delete");
         lifecycle.assert_agent(&owned_agent_id.agent_id);
 
@@ -806,7 +806,7 @@ impl OplogService for PrimaryOplogService {
             let is = self.indexed_storage.clone();
             let agent_id = owned_agent_id.agent_id();
             let key = Self::oplog_key(&owned_agent_id.agent_id);
-            retry_storage_op(&self.retry_config, "delete", &key, || {
+            retry_storage_op_result(&self.retry_config, "delete", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
@@ -815,8 +815,11 @@ impl OplogService for PrimaryOplogService {
                 let key = key.clone();
                 async move { is.with("oplog", "delete").delete(ns, &key).await }
             })
-            .await;
+            .await
+            .map_err(|error| format!("Failed to delete primary oplog for {agent_id}: {error}"))?;
         }
+
+        Ok(())
     }
 
     async fn read_exact(
