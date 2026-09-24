@@ -3494,6 +3494,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ok(response)
     }
 
+    /// Checks for a terminal or replay tail without waiting on positional entries owned by this
+    /// call's continuation. A ready call still needs `replay` to validate and settle its outcome.
+    pub(crate) async fn replay_ready<Ctx: WorkerCtx>(
+        &self,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> Result<bool, WorkerExecutorError> {
+        ctx.state
+            .replay_state
+            .resolution_ready(self.replay.as_ref().expect("replay_ready on a live handle"))
+            .await
+    }
+
     /// Replays a call: drive the cursor until the call resolves, decode its response, then close the
     /// durable scope / commit via `end_durable_function`.
     ///
