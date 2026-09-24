@@ -511,19 +511,136 @@ impl BlobStoreService for DefaultBlobStoreService {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::blob_store::{
-        BlobStoreError, BlobStoreService, DefaultBlobStoreService, object_names,
-    };
+    use crate::services::blob_store::{BlobStoreError, BlobStoreService, DefaultBlobStoreService};
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures::stream::BoxStream;
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::db::sqlite::SqlitePool;
+    use golem_service_base::replayable_stream::ErasedReplayableStream;
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+    use golem_service_base::storage::blob::{
+        BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult,
+    };
     use sqlx::sqlite::SqlitePoolOptions;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tempfile::TempDir;
     use test_r::test;
+
+    #[derive(Debug)]
+    struct NamelessListBlobStorage;
+
+    #[async_trait]
+    impl BlobStorage for NamelessListBlobStorage {
+        async fn get_raw(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+            unreachable!()
+        }
+
+        async fn get_stream(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Option<BoxStream<'static, Result<Bytes, anyhow::Error>>>, anyhow::Error>
+        {
+            unreachable!()
+        }
+
+        async fn get_metadata(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Option<BlobMetadata>, anyhow::Error> {
+            unreachable!()
+        }
+
+        async fn put_raw(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+            _data: &[u8],
+        ) -> Result<(), anyhow::Error> {
+            unreachable!()
+        }
+
+        async fn put_stream(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+            _stream: &dyn ErasedReplayableStream<
+                Item = Result<Vec<u8>, anyhow::Error>,
+                Error = anyhow::Error,
+            >,
+        ) -> Result<(), anyhow::Error> {
+            unreachable!()
+        }
+
+        async fn delete(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            unreachable!()
+        }
+
+        async fn create_dir(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            unreachable!()
+        }
+
+        async fn list_dir(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Vec<PathBuf>, anyhow::Error> {
+            Ok(vec![PathBuf::new()])
+        }
+
+        async fn delete_dir(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<bool, anyhow::Error> {
+            unreachable!()
+        }
+
+        async fn exists(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<ExistsResult, anyhow::Error> {
+            unreachable!()
+        }
+    }
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new();
@@ -831,8 +948,11 @@ mod tests {
     }
 
     #[test]
-    fn object_names_rejects_a_path_without_a_name() {
-        let result = object_names(vec![PathBuf::new()]);
+    async fn list_objects_rejects_a_backend_path_without_a_name() {
+        let blob_store = DefaultBlobStoreService::new(Arc::new(NamelessListBlobStorage));
+        let result = blob_store
+            .list_objects(EnvironmentId::new(), "container".to_string())
+            .await;
 
         assert!(matches!(result, Err(BlobStoreError::Other(_))));
     }
