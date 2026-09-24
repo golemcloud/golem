@@ -37,6 +37,7 @@ pub mod latency;
 pub mod registry;
 pub mod sleep;
 pub mod streaming;
+pub mod streaming_history;
 pub mod throughput;
 
 // Re-export cleanup helpers so callers can use the flat `benchmarks::*` path.

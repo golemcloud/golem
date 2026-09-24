@@ -162,6 +162,30 @@ pub fn benchmark_registry() -> BenchmarkRegistry {
             ))
         }),
     );
+    benchmarks_by_name.insert(
+        "streaming-rpc-history",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_history::StreamingRpcHistory,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-cold-indexed",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_history::StreamingRpcColdIndexed,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-cold-rebuild",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_history::StreamingRpcColdRebuild,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
     benchmarks_by_name
 }
 
