@@ -20,6 +20,7 @@
 use super::super::files::SnapshotFiles;
 use super::super::prune::{PruneLedger, read_ledger};
 use super::super::scripted::{Script, ScriptedBlobStorage};
+use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
 use super::{
     RusticSnapshotStore, StorePolicy, leaves_marked_packs, scope_snapshots, store_backup_options,
@@ -30,13 +31,15 @@ use crate::filesystem_snapshot::contract_tests::fixture::{
 };
 use crate::filesystem_snapshot::contract_tests::{self, OpenStore, new_scope};
 use crate::filesystem_snapshot::{
-    FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,
+    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    SnapshotStoreError,
 };
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
 use futures::{FutureExt, StreamExt};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use pretty_assertions::assert_eq;
+use rustic_core::repofile::SnapshotId;
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -201,13 +204,13 @@ fn rustic_store_keeps_the_contract(r: &mut DynamicTestRegistration) {
 #[test]
 fn the_policy_takes_the_configured_values_and_the_options_are_strict() {
     let policy = StorePolicy::from_config(&config());
-    let backup = store_backup_options(&policy);
+    let backup = store_backup_options(&policy, None);
     let restore = store_restore_options(&policy);
 
     assert_eq!(
         (
             policy.deadline,
-            policy.save.threads.map(NonZeroUsize::get),
+            policy.save_threads.map(NonZeroUsize::get),
             policy.restore_reader_threads.get(),
             policy.prune.keep_delete,
             policy.prune.fast_repack,
@@ -276,7 +279,7 @@ async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
     let through_fd = format!("/proc/self/fd/{}", directory.as_raw_fd());
 
     store
-        .save(&scope, &name("p-fd"), Path::new(&through_fd))
+        .save(&scope, &name("p-fd"), Path::new(&through_fd), None)
         .await
         .unwrap();
     let namespace = scope.0.clone();
@@ -326,12 +329,12 @@ async fn a_save_whose_index_write_fails_publishes_nothing_and_leaves_the_name_fr
     let scope = new_scope();
     let tree = fixture_tree();
 
-    let failed = store.save(&scope, &name("p-1"), tree.path()).await;
+    let failed = store.save(&scope, &name("p-1"), tree.path(), None).await;
     let stat = store.stat(&scope, &name("p-1")).await.unwrap();
     let names = listed_names(&store, &scope).await;
     let restore = restored_listing(&store, &scope, &name("p-1")).await;
     refuse.store(false, Ordering::SeqCst);
-    let saved_again = store.save(&scope, &name("p-1"), tree.path()).await;
+    let saved_again = store.save(&scope, &name("p-1"), tree.path(), None).await;
 
     assert!(
         failed.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -374,11 +377,11 @@ async fn a_publish_that_reaches_the_deadline_and_lands_late_publishes_nothing() 
     let scope = new_scope();
     let tree = one_file_tree("late");
 
-    let failed = store.save(&scope, &name("p-late"), tree.path()).await;
+    let failed = store.save(&scope, &name("p-late"), tree.path(), None).await;
     hang.store(false, Ordering::SeqCst);
     let stat = store.stat(&scope, &name("p-late")).await.unwrap();
     let names = listed_names(&store, &scope).await;
-    let saved_again = store.save(&scope, &name("p-late"), tree.path()).await;
+    let saved_again = store.save(&scope, &name("p-late"), tree.path(), None).await;
 
     assert!(
         failed.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -410,9 +413,15 @@ async fn a_second_save_of_an_unchanged_tree_writes_no_pack() {
     let scope = new_scope();
     let tree = fixture_tree();
 
-    store.save(&scope, &name("p-1"), tree.path()).await.unwrap();
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
     let first = storage.calls().len();
-    store.save(&scope, &name("p-2"), tree.path()).await.unwrap();
+    store
+        .save(&scope, &name("p-2"), tree.path(), None)
+        .await
+        .unwrap();
     let writes = storage.calls()[first..]
         .iter()
         .filter(|(op_label, _)| *op_label == "write" || *op_label == "publish")
@@ -462,8 +471,8 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
 
     let (first_name, second_name) = (name("p-first"), name("p-second"));
     let (first_saved, second_saved, both_waited) = tokio::join!(
-        first.save(&scope, &first_name, first_tree.path()),
-        second.save(&scope, &second_name, second_tree.path()),
+        first.save(&scope, &first_name, first_tree.path(), None),
+        second.save(&scope, &second_name, second_tree.path(), None),
         async {
             let both = eventually(|| config_writes() == 2).await;
             storage.open_gate();
@@ -519,7 +528,7 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     let scope = new_scope();
     let (old_tree, new_tree) = (one_file_tree("old"), fixture_tree());
     store
-        .save(&scope, &name("p-old"), old_tree.path())
+        .save(&scope, &name("p-old"), old_tree.path(), None)
         .await
         .unwrap();
     hold_next_index.store(true, Ordering::SeqCst);
@@ -536,7 +545,7 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
         let store = store.clone();
         let scope = scope.clone();
         let path = new_tree.path().to_path_buf();
-        async move { store.save(&scope, &name("p-new"), &path).await }
+        async move { store.save(&scope, &name("p-new"), &path, None).await }
     });
     let held = eventually(|| index_writes() > before).await;
     let deleted = store.delete(&scope, &name("p-old")).await;
@@ -577,7 +586,10 @@ async fn a_restore_whose_pack_reads_fail_gives_a_retryable_storage_error() {
     let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
     let scope = new_scope();
     let tree = fixture_tree();
-    store.save(&scope, &name("p-1"), tree.path()).await.unwrap();
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
     refuse.store(true, Ordering::SeqCst);
 
     let restored = restored_listing(&store, &scope, &name("p-1")).await;
@@ -611,7 +623,9 @@ async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_d
     std::fs::write(&locked, b"locked").unwrap();
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-    let saved = store.save(&scope, &name("p-locked"), tree.path()).await;
+    let saved = store
+        .save(&scope, &name("p-locked"), tree.path(), None)
+        .await;
 
     assert!(
         matches!(&saved, Err(SnapshotStoreError::Source(error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
@@ -657,7 +671,7 @@ async fn a_restore_that_cannot_set_an_extended_attribute_gives_destination() {
     );
     let scope = new_scope();
     store
-        .save(&scope, &name("p-xattr"), source.path())
+        .save(&scope, &name("p-xattr"), source.path(), None)
         .await
         .unwrap();
 
@@ -702,7 +716,7 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path())
+        .save(&scope, &name("p-kept"), tree.path(), None)
         .await
         .unwrap();
     storage
@@ -742,11 +756,11 @@ async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_per
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path())
+        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path())
+        .save(&scope, &name("p-kept"), kept_tree.path(), None)
         .await
         .unwrap();
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
@@ -779,11 +793,11 @@ async fn a_delete_below_the_threshold_does_not_prune() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), one_file_tree("kept"));
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path())
+        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path())
+        .save(&scope, &name("p-kept"), kept_tree.path(), None)
         .await
         .unwrap();
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
@@ -815,7 +829,10 @@ async fn no_second_prune_runs_within_the_grace_period() {
             let store = store.clone();
             let scope = scope.clone();
             async move {
-                store.save(&scope, &name(text), tree.path()).await.unwrap();
+                store
+                    .save(&scope, &name(text), tree.path(), None)
+                    .await
+                    .unwrap();
             }
         })
         .await;
@@ -855,11 +872,11 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path())
+        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path())
+        .save(&scope, &name("p-kept"), kept_tree.path(), None)
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
@@ -893,11 +910,11 @@ async fn a_deleted_scope_holds_no_blob() {
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), one_file_tree("second"));
     store
-        .save(&scope, &name("p-1"), first.path())
+        .save(&scope, &name("p-1"), first.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), second.path())
+        .save(&scope, &name("p-2"), second.path(), None)
         .await
         .unwrap();
     store.delete(&scope, &name("p-1")).await.unwrap();
@@ -927,7 +944,7 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
         counted.clone(),
         policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
     )
-    .save(&new_scope(), &name("p-dropped"), tree.path())
+    .save(&new_scope(), &name("p-dropped"), tree.path(), None)
     .await
     .unwrap();
     let calls = counted.calls().len();
@@ -951,7 +968,7 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
                 let ended = drop_when(
                     &storage,
                     |calls| calls.len() >= held,
-                    dropping.save(&scope, &name("p-dropped"), &tree),
+                    dropping.save(&scope, &name("p-dropped"), &tree, None),
                 )
                 .await;
                 let stopped = tokio::time::timeout(LIMIT, dropping.shut_down())
@@ -960,7 +977,7 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
                 let later = store(inner, policy);
                 let stat = later.stat(&scope, &name("p-dropped")).await.ok().flatten();
                 let names = listed_names(&later, &scope).await;
-                let saved_again = later.save(&scope, &name("p-dropped"), &other).await;
+                let saved_again = later.save(&scope, &name("p-dropped"), &other, None).await;
                 let restored = restored_listing(&later, &scope, &name("p-dropped"))
                     .await
                     .ok();
@@ -1014,7 +1031,7 @@ async fn shut_down_ends_running_operations_before_it_returns() {
         let store = store.clone();
         let scope = scope.clone();
         let path = tree.path().to_path_buf();
-        async move { store.save(&scope, &name("p-held"), &path).await }
+        async move { store.save(&scope, &name("p-held"), &path, None).await }
     });
     let held = eventually(|| {
         storage
@@ -1080,7 +1097,10 @@ async fn a_dropped_operation_stops_its_blocking_work() {
         );
         let scope = new_scope();
         let tree = fixture_tree();
-        store.save(&scope, &name("p-1"), tree.path()).await.unwrap();
+        store
+            .save(&scope, &name("p-1"), tree.path(), None)
+            .await
+            .unwrap();
         hold.store(true, Ordering::SeqCst);
         let before = storage.calls().len();
         let reached = |calls: &[(&'static str, String)]| {
@@ -1156,6 +1176,168 @@ async fn snapshot_files(
     .unwrap()
 }
 
+/// Gives, for the snapshot with the name, the numbers of new, changed and unmodified files that its
+/// save counted, and the id of its parent.
+fn read_counts(
+    files: &[rustic_core::repofile::SnapshotFile],
+    name: &str,
+) -> Option<((u64, u64, u64), Option<SnapshotId>)> {
+    let snapshot = files.iter().find(|snapshot| snapshot.label == name)?;
+    let summary = snapshot.summary.as_ref()?;
+    Some((
+        (
+            summary.files_new,
+            summary.files_changed,
+            summary.files_unmodified,
+        ),
+        snapshot.parent,
+    ))
+}
+
+fn id_of(files: &[rustic_core::repofile::SnapshotFile], name: &str) -> Option<SnapshotId> {
+    files
+        .iter()
+        .find(|snapshot| snapshot.label == name)
+        .map(|snapshot| snapshot.id)
+}
+
+#[test]
+async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
+    // A copy gives each file a new inode and a new change time, and keeps its size and its
+    // modification time, as a capture does.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = three_file_tree();
+    let copy = Scratch::new();
+    wait_past_change_times(&entries(tree.path()));
+    copy_flat_tree(tree.path(), copy.path());
+
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-2"),
+            copy.path(),
+            Some((&name("p-1"), ChangeDetection::SizeMtime)),
+        )
+        .await
+        .unwrap();
+    let files = snapshot_files(storage, &scope).await;
+
+    assert_eq!(
+        read_counts(&files, "p-2"),
+        Some(((0, 0, 3), id_of(&files, "p-1")))
+    );
+}
+
+#[test]
+async fn a_full_save_reads_each_file() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = three_file_tree();
+
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-2"),
+            tree.path(),
+            Some((&name("p-1"), ChangeDetection::Full)),
+        )
+        .await
+        .unwrap();
+    let files = snapshot_files(storage, &scope).await;
+
+    assert_eq!(read_counts(&files, "p-2"), Some(((3, 0, 0), None)));
+}
+
+#[test]
+async fn the_parent_of_a_save_is_the_named_snapshot_also_when_a_newer_snapshot_exists() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = three_file_tree();
+
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-2"), tree.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-3"),
+            tree.path(),
+            Some((&name("p-1"), ChangeDetection::SizeMtime)),
+        )
+        .await
+        .unwrap();
+    let files = snapshot_files(storage, &scope).await;
+
+    assert_eq!(
+        (
+            read_counts(&files, "p-3"),
+            id_of(&files, "p-1") == id_of(&files, "p-2")
+        ),
+        (Some(((0, 0, 3), id_of(&files, "p-1"))), false)
+    );
+}
+
+#[test]
+async fn a_save_without_a_parent_or_with_a_parent_that_the_scope_does_not_hold_reads_each_file() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = three_file_tree();
+
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-2"), tree.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-3"),
+            tree.path(),
+            Some((&name("p-missing"), ChangeDetection::SizeMtime)),
+        )
+        .await
+        .unwrap();
+    let files = snapshot_files(storage, &scope).await;
+
+    assert_eq!(
+        (read_counts(&files, "p-2"), read_counts(&files, "p-3")),
+        (Some(((3, 0, 0), None)), Some(((3, 0, 0), None)))
+    );
+}
+
 #[test]
 async fn a_failed_read_of_a_snapshot_file_fails_stat_and_list_with_a_retryable_storage_error() {
     let refuse = Arc::new(AtomicBool::new(false));
@@ -1174,7 +1356,7 @@ async fn a_failed_read_of_a_snapshot_file_fails_stat_and_list_with_a_retryable_s
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path())
+        .save(&scope, &name("p-kept"), tree.path(), None)
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
@@ -1210,7 +1392,7 @@ async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path())
+        .save(&scope, &name("p-kept"), tree.path(), None)
         .await
         .unwrap();
     inner
@@ -1235,7 +1417,7 @@ async fn a_delete_that_frees_nothing_writes_no_ledger() {
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path())
+        .save(&scope, &name("p-kept"), tree.path(), None)
         .await
         .unwrap();
 
@@ -1287,7 +1469,9 @@ async fn a_save_of_a_relative_directory_path_gives_source_and_writes_nothing() {
     );
     let scope = new_scope();
 
-    let saved = store.save(&scope, &name("p-relative"), relative).await;
+    let saved = store
+        .save(&scope, &name("p-relative"), relative, None)
+        .await;
 
     assert!(
         matches!(saved, Err(SnapshotStoreError::Source(_))),
@@ -1308,7 +1492,7 @@ async fn a_save_of_a_regular_file_gives_source_and_writes_nothing() {
     let scope = new_scope();
 
     let saved = store
-        .save(&scope, &name("p-file"), &tree.path().join("file.txt"))
+        .save(&scope, &name("p-file"), &tree.path().join("file.txt"), None)
         .await;
 
     assert!(
@@ -1328,7 +1512,7 @@ async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
     let scope = new_scope();
     let tree = fixture_tree();
     store
-        .save(&scope, &name("p-deleted"), tree.path())
+        .save(&scope, &name("p-deleted"), tree.path(), None)
         .await
         .unwrap();
     let added = snapshot_files(storage.clone(), &scope)
@@ -1360,7 +1544,7 @@ async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
     let scope = new_scope();
     let tree = one_file_tree("never saved");
 
-    let saved = store.save(&scope, &name("p-1"), tree.path()).await;
+    let saved = store.save(&scope, &name("p-1"), tree.path(), None).await;
 
     assert!(
         matches!(
@@ -1381,11 +1565,11 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path())
+        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path())
+        .save(&scope, &name("p-kept"), kept_tree.path(), None)
         .await
         .unwrap();
     let packs = storage
@@ -1469,7 +1653,10 @@ async fn the_writes_of_a_save_run_at_nice_19() {
     let scope = new_scope();
     let tree = fixture_tree();
 
-    store.save(&scope, &name("p-1"), tree.path()).await.unwrap();
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
     let writes = taken_calls(&calls, "write");
 
     assert_eq!(
@@ -1492,11 +1679,11 @@ async fn the_writes_of_a_prune_run_at_nice_19() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path())
+        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path())
+        .save(&scope, &name("p-kept"), kept_tree.path(), None)
         .await
         .unwrap();
     taken_calls(&calls, "write");
@@ -1524,7 +1711,10 @@ async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
     let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
     let scope = new_scope();
     let tree = fixture_tree();
-    store.save(&scope, &name("p-1"), tree.path()).await.unwrap();
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
     std::mem::take(&mut *calls.lock().unwrap());
 
     let restored = restored_listing(&store, &scope, &name("p-1")).await;
@@ -1561,11 +1751,11 @@ async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path())
+        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path())
+        .save(&scope, &name("p-kept"), kept_tree.path(), None)
         .await
         .unwrap();
     store.delete(&scope, &name("p-deleted")).await.unwrap();
@@ -1627,11 +1817,11 @@ async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_n
     let kept = Scratch::new();
     write_tree(kept.path(), &[("kept.txt", file(b"kept content"))]);
     store
-        .save(&scope, &name("p-both"), both.path())
+        .save(&scope, &name("p-both"), both.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept.path())
+        .save(&scope, &name("p-kept"), kept.path(), None)
         .await
         .unwrap();
     std::mem::take(&mut *calls.lock().unwrap());
@@ -1689,11 +1879,11 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), fixture_tree());
     store
-        .save(&scope, &name("p-1"), first.path())
+        .save(&scope, &name("p-1"), first.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), second.path())
+        .save(&scope, &name("p-2"), second.path(), None)
         .await
         .unwrap();
 

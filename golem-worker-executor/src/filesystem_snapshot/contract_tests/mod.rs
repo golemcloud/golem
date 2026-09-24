@@ -40,7 +40,8 @@
 pub(super) mod fixture;
 
 use super::{
-    FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,
+    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    SnapshotStoreError,
 };
 use fixture::{
     Listed, Scratch, Spec, files_and_bytes, fixture, listing, one_file, pattern, write_tree,
@@ -165,6 +166,12 @@ const CASES: &[(&str, Case)] = &[
         "a_dropped_save_publishes_nothing_and_leaves_the_name_free",
         |open| a_dropped_save_publishes_nothing_and_leaves_the_name_free(open).boxed(),
     ),
+    (
+        "a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_one",
+        |open| {
+            a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_one(open).boxed()
+        },
+    ),
     ("no_method_blocks_the_runtime", |open| {
         no_method_blocks_the_runtime(open).boxed()
     }),
@@ -250,12 +257,73 @@ async fn a_saved_tree_comes_back_the_same(open: OpenStore) {
     let tree = new_tree(&fixture());
 
     let saved = store
-        .save(&scope, &name("p-fixture"), tree.path())
+        .save(&scope, &name("p-fixture"), tree.path(), None)
         .await
         .unwrap();
     let (restored, info) = restored(&*store, &scope, &name("p-fixture")).await.unwrap();
 
     assert_eq!((restored, info), (listing(tree.path()), saved));
+}
+
+async fn a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_one(
+    open: OpenStore,
+) {
+    // Each changed file gets a new size, so the parent is truthful for both modes.
+    let store = open();
+    let scope = new_scope();
+    let file = |content: &str| Spec::File {
+        content: Box::from(content.as_bytes()),
+        mode: 0o644,
+    };
+    let tree = new_tree(&[
+        ("changed.txt", file("old")),
+        ("kept.txt", file("kept")),
+        ("removed.txt", file("removed")),
+    ]);
+    let parent = name("p-parent");
+    store
+        .save(&scope, &parent, tree.path(), None)
+        .await
+        .unwrap();
+    write_tree(
+        tree.path(),
+        &[
+            ("changed.txt", file("new and longer")),
+            ("added.txt", file("added")),
+        ],
+    );
+    std::fs::remove_file(tree.path().join("removed.txt")).unwrap();
+
+    store
+        .save(&scope, &name("p-none"), tree.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-size-mtime"),
+            tree.path(),
+            Some((&parent, ChangeDetection::SizeMtime)),
+        )
+        .await
+        .unwrap();
+    store
+        .save(
+            &scope,
+            &name("p-full"),
+            tree.path(),
+            Some((&parent, ChangeDetection::Full)),
+        )
+        .await
+        .unwrap();
+    let restored = [
+        restored_listing(&*store, &scope, &name("p-none")).await,
+        restored_listing(&*store, &scope, &name("p-size-mtime")).await,
+        restored_listing(&*store, &scope, &name("p-full")).await,
+    ];
+
+    let expected = listing(tree.path());
+    assert_eq!(restored, [expected.clone(), expected.clone(), expected]);
 }
 
 async fn each_name_of_a_hard_linked_file_comes_back_as_its_own_file(open: OpenStore) {
@@ -270,7 +338,7 @@ async fn each_name_of_a_hard_linked_file_comes_back_as_its_own_file(open: OpenSt
     let into = Scratch::new();
 
     store
-        .save(&scope, &name("p-linked"), tree.path())
+        .save(&scope, &name("p-linked"), tree.path(), None)
         .await
         .unwrap();
     store
@@ -301,7 +369,7 @@ async fn save_stat_list_and_restore_give_the_same_info(open: OpenStore) {
 
     let before = Timestamp::now_utc();
     let saved = store
-        .save(&scope, &name("p-info"), tree.path())
+        .save(&scope, &name("p-info"), tree.path(), None)
         .await
         .unwrap();
     let after = Timestamp::now_utc();
@@ -334,7 +402,7 @@ async fn a_save_leaves_the_tree_as_it_was(open: OpenStore) {
     let before = listing(tree.path());
 
     store
-        .save(&scope, &name("p-source"), tree.path())
+        .save(&scope, &name("p-source"), tree.path(), None)
         .await
         .unwrap();
 
@@ -347,11 +415,13 @@ async fn a_name_in_use_gives_already_exists_and_changes_nothing(open: OpenStore)
     let first = new_tree(&one_file("first"));
     let second = new_tree(&one_file("second tree"));
     let saved = store
-        .save(&scope, &name("p-taken"), first.path())
+        .save(&scope, &name("p-taken"), first.path(), None)
         .await
         .unwrap();
 
-    let again = store.save(&scope, &name("p-taken"), second.path()).await;
+    let again = store
+        .save(&scope, &name("p-taken"), second.path(), None)
+        .await;
 
     assert!(
         matches!(again, Err(SnapshotStoreError::AlreadyExists)),
@@ -382,12 +452,14 @@ async fn a_tree_that_cannot_be_read_gives_source_and_publishes_nothing(open: Ope
     std::fs::write(&file, b"not a directory").unwrap();
     let tree = new_tree(&one_file("real"));
 
-    let from_missing = store.save(&scope, &name("p-unread"), &missing).await;
-    let from_file = store.save(&scope, &name("p-unread"), &file).await;
+    let from_missing = store.save(&scope, &name("p-unread"), &missing, None).await;
+    let from_file = store.save(&scope, &name("p-unread"), &file, None).await;
     let stat = store.stat(&scope, &name("p-unread")).await.unwrap();
     let names = listed_names(&*store, &scope).await;
     let restore = restored(&*store, &scope, &name("p-unread")).await;
-    let later = store.save(&scope, &name("p-unread"), tree.path()).await;
+    let later = store
+        .save(&scope, &name("p-unread"), tree.path(), None)
+        .await;
 
     assert!(
         matches!(from_missing, Err(SnapshotStoreError::Source(_))),
@@ -421,7 +493,9 @@ async fn an_entry_that_cannot_be_read_gives_source_and_publishes_nothing(open: O
         std::fs::write(&locked, b"locked").unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-        let saved = store.save(&scope, &name("p-locked"), tree.path()).await;
+        let saved = store
+            .save(&scope, &name("p-locked"), tree.path(), None)
+            .await;
         let stat = store.stat(&scope, &name("p-locked")).await.unwrap();
         let names = listed_names(&*store, &scope).await;
 
@@ -448,7 +522,7 @@ async fn sequential_saves_get_later_times_and_list_newest_first(open: OpenStore)
             let store = store.clone();
             let scope = scope.clone();
             let tree = tree.path().to_path_buf();
-            async move { store.save(&scope, &name(text), &tree).await.unwrap() }
+            async move { store.save(&scope, &name(text), &tree, None).await.unwrap() }
         })
         .collect::<Vec<_>>()
         .await;
@@ -478,7 +552,7 @@ async fn an_unknown_name_gives_not_found_every_time(open: OpenStore) {
     let used = new_scope();
     let tree = new_tree(&one_file("other"));
     store
-        .save(&used, &name("p-other"), tree.path())
+        .save(&used, &name("p-other"), tree.path(), None)
         .await
         .unwrap();
 
@@ -505,7 +579,7 @@ async fn a_restore_into_a_directory_that_is_not_empty_writes_nothing(open: OpenS
     let scope = new_scope();
     let tree = new_tree(&one_file("content"));
     store
-        .save(&scope, &name("p-busy"), tree.path())
+        .save(&scope, &name("p-busy"), tree.path(), None)
         .await
         .unwrap();
     let into = new_tree(&[(
@@ -532,7 +606,7 @@ async fn a_restore_into_a_path_that_is_not_a_directory_writes_nothing(open: Open
     let scope = new_scope();
     let tree = new_tree(&one_file("content"));
     store
-        .save(&scope, &name("p-nowhere"), tree.path())
+        .save(&scope, &name("p-nowhere"), tree.path(), None)
         .await
         .unwrap();
     let parent = Scratch::new();
@@ -562,11 +636,11 @@ async fn a_deleted_name_stops_resolving_at_once(open: OpenStore) {
     let scope = new_scope();
     let tree = new_tree(&one_file("deleted"));
     store
-        .save(&scope, &name("p-deleted"), tree.path())
+        .save(&scope, &name("p-deleted"), tree.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), tree.path())
+        .save(&scope, &name("p-kept"), tree.path(), None)
         .await
         .unwrap();
 
@@ -587,7 +661,7 @@ async fn delete_is_idempotent(open: OpenStore) {
     let scope = new_scope();
     let tree = new_tree(&one_file("twice"));
     store
-        .save(&scope, &name("p-twice"), tree.path())
+        .save(&scope, &name("p-twice"), tree.path(), None)
         .await
         .unwrap();
 
@@ -611,15 +685,15 @@ async fn a_delete_keeps_every_other_snapshot(open: OpenStore) {
     let shared = new_tree(&fixture());
     let other = new_tree(&one_file("other"));
     store
-        .save(&scope, &name("p-twin-1"), shared.path())
+        .save(&scope, &name("p-twin-1"), shared.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-twin-2"), shared.path())
+        .save(&scope, &name("p-twin-2"), shared.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-other"), other.path())
+        .save(&scope, &name("p-other"), other.path(), None)
         .await
         .unwrap();
 
@@ -644,7 +718,7 @@ async fn a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing
     let scope = new_scope();
     let tree = new_tree(&fixture());
     store
-        .save(&scope, &name("p-raced"), tree.path())
+        .save(&scope, &name("p-raced"), tree.path(), None)
         .await
         .unwrap();
 
@@ -668,11 +742,11 @@ async fn a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open: Op
     let tree = new_tree(&fixture());
     let other = new_tree(&fixture());
     store
-        .save(&scope, &name("p-restored"), tree.path())
+        .save(&scope, &name("p-restored"), tree.path(), None)
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-deleted"), other.path())
+        .save(&scope, &name("p-deleted"), other.path(), None)
         .await
         .unwrap();
 
@@ -695,14 +769,17 @@ async fn a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open: O
     let second = new_tree(&one_file("second"));
     let third = new_tree(&one_file("third"));
     let (first_name, second_name, third_name) = (name("p-1"), name("p-2"), name("p-3"));
-    store.save(&scope, &first_name, first.path()).await.unwrap();
     store
-        .save(&scope, &second_name, second.path())
+        .save(&scope, &first_name, first.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &second_name, second.path(), None)
         .await
         .unwrap();
 
     let (saved, restore, deleted) = futures::join!(
-        store.save(&scope, &third_name, third.path()),
+        store.save(&scope, &third_name, third.path(), None),
         restored(&*store, &scope, &first_name),
         store.delete(&scope, &second_name)
     );
@@ -728,14 +805,23 @@ async fn a_deleted_scope_is_as_unused_as_before_its_first_save(open: OpenStore) 
     let scope = new_scope();
     let old = new_tree(&one_file("old"));
     let new = new_tree(&one_file("new tree"));
-    store.save(&scope, &name("p-1"), old.path()).await.unwrap();
-    store.save(&scope, &name("p-2"), old.path()).await.unwrap();
+    store
+        .save(&scope, &name("p-1"), old.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-2"), old.path(), None)
+        .await
+        .unwrap();
 
     store.delete_scope(&scope).await.unwrap();
     let names = listed_names(&*store, &scope).await;
     let stat = store.stat(&scope, &name("p-1")).await.unwrap();
     let restore = restored(&*store, &scope, &name("p-2")).await;
-    store.save(&scope, &name("p-1"), new.path()).await.unwrap();
+    store
+        .save(&scope, &name("p-1"), new.path(), None)
+        .await
+        .unwrap();
 
     assert!(is_not_found(&restore), "{restore:?}");
     assert_eq!(
@@ -754,10 +840,13 @@ async fn delete_scope_is_idempotent_and_keeps_other_scopes(open: OpenStore) {
     let kept = new_scope();
     let tree = new_tree(&one_file("kept"));
     store
-        .save(&deleted, &name("p-1"), tree.path())
+        .save(&deleted, &name("p-1"), tree.path(), None)
         .await
         .unwrap();
-    store.save(&kept, &name("p-1"), tree.path()).await.unwrap();
+    store
+        .save(&kept, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
 
     let results = [
         store.delete_scope(&new_scope()).await.is_ok(),
@@ -787,9 +876,12 @@ async fn a_copied_scope_has_the_same_names_infos_and_trees(open: OpenStore) {
     let to = new_scope();
     let first = new_tree(&fixture());
     let second = new_tree(&one_file("second"));
-    store.save(&from, &name("p-1"), first.path()).await.unwrap();
     store
-        .save(&from, &name("u-2"), second.path())
+        .save(&from, &name("p-1"), first.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&from, &name("u-2"), second.path(), None)
         .await
         .unwrap();
     let source = store.list(&from).await.unwrap();
@@ -822,12 +914,21 @@ async fn copied_scopes_are_independent(open: OpenStore) {
     let to = new_scope();
     let tree = new_tree(&one_file("copied"));
     let later = new_tree(&one_file("later"));
-    store.save(&from, &name("p-1"), tree.path()).await.unwrap();
-    store.save(&from, &name("p-2"), tree.path()).await.unwrap();
+    store
+        .save(&from, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&from, &name("p-2"), tree.path(), None)
+        .await
+        .unwrap();
     store.copy_scope(&from, &to).await.unwrap();
 
     store.delete(&from, &name("p-1")).await.unwrap();
-    store.save(&to, &name("p-3"), later.path()).await.unwrap();
+    store
+        .save(&to, &name("p-3"), later.path(), None)
+        .await
+        .unwrap();
     let target_after_source_delete = restored_listing(&*store, &to, &name("p-1")).await;
     let source_names = listed_names(&*store, &from).await;
     store.delete_scope(&to).await.unwrap();
@@ -855,7 +956,7 @@ async fn a_copy_of_an_unused_scope_leaves_the_target_unused(open: OpenStore) {
     let to = new_scope();
     let tree = new_tree(&one_file("other scope"));
     store
-        .save(&other, &name("p-other"), tree.path())
+        .save(&other, &name("p-other"), tree.path(), None)
         .await
         .unwrap();
 
@@ -871,11 +972,11 @@ async fn one_name_in_two_scopes_gives_two_snapshots(open: OpenStore) {
     let first = new_tree(&one_file("first scope"));
     let second = new_tree(&one_file("second scope"));
     store
-        .save(&first_scope, &name("p-same"), first.path())
+        .save(&first_scope, &name("p-same"), first.path(), None)
         .await
         .unwrap();
     store
-        .save(&second_scope, &name("p-same"), second.path())
+        .save(&second_scope, &name("p-same"), second.path(), None)
         .await
         .unwrap();
     let first_restored = restored_listing(&*store, &first_scope, &name("p-same")).await;
@@ -904,7 +1005,7 @@ async fn a_save_through_one_store_resolves_through_another(open: OpenStore) {
     let tree = new_tree(&fixture());
 
     let saved = writer
-        .save(&scope, &name("p-shared"), tree.path())
+        .save(&scope, &name("p-shared"), tree.path(), None)
         .await
         .unwrap();
 
@@ -933,8 +1034,8 @@ async fn two_stores_save_into_a_new_scope_at_the_same_time(open: OpenStore) {
 
     let (first_name, second_name) = (name("p-first"), name("p-second"));
     let (first_saved, second_saved) = futures::join!(
-        first.save(&scope, &first_name, first_tree.path()),
-        second.save(&scope, &second_name, second_tree.path())
+        first.save(&scope, &first_name, first_tree.path(), None),
+        second.save(&scope, &second_name, second_tree.path(), None)
     );
     let mut names = listed_names(&*first, &scope).await;
     names.sort();
@@ -973,7 +1074,7 @@ async fn a_dropped_save_publishes_nothing_and_leaves_the_name_free(open: OpenSto
         .filter_map(|_| {
             let scope = new_scope();
             let dropped = store
-                .save(&scope, &dropped_name, tree.path())
+                .save(&scope, &dropped_name, tree.path(), None)
                 .now_or_never();
             std::future::ready(dropped.is_none().then_some(scope))
         })
@@ -985,7 +1086,7 @@ async fn a_dropped_save_publishes_nothing_and_leaves_the_name_free(open: OpenSto
     let stat = store.stat(&scope, &dropped_name).await.unwrap();
     let restore = restored(&*store, &scope, &dropped_name).await;
     let names_after_the_drop = listed_names(&*store, &scope).await;
-    let saved_again = store.save(&scope, &dropped_name, other.path()).await;
+    let saved_again = store.save(&scope, &dropped_name, other.path(), None).await;
 
     assert!(is_not_found(&restore), "{restore:?}");
     assert!(saved_again.is_ok(), "{saved_again:?}");
@@ -1041,7 +1142,7 @@ async fn no_method_blocks_the_runtime(open: OpenStore) {
 
             let before_save = ticks.load(Ordering::SeqCst);
             store
-                .save(&scope, &name("p-large"), &tree_path)
+                .save(&scope, &name("p-large"), &tree_path, None)
                 .await
                 .unwrap();
             let during_save = counted(before_save);

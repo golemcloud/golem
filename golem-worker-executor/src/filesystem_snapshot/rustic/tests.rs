@@ -967,7 +967,7 @@ fn set_modified(path: &Path, time: std::time::SystemTime) {
 
 /// Copies each file of the flat tree `from` into the new directory `to`, with its modification
 /// time. Each copy is a new inode with a new change time, as a capture gives.
-fn copy_flat_tree(from: &Path, to: &Path) {
+pub(super) fn copy_flat_tree(from: &Path, to: &Path) {
     std::fs::read_dir(from).unwrap().for_each(|entry| {
         let entry = entry.unwrap();
         let target = to.join(entry.file_name());
@@ -992,7 +992,7 @@ const CHANGE_TIME_WAIT: Duration = Duration::from_secs(10);
 /// changes within one tick get the same change time. The wait changes a probe file in its own
 /// directory until the change time of the probe is later than the latest change time of the
 /// files. It fails the test when that does not happen within [`CHANGE_TIME_WAIT`].
-fn wait_past_change_times(files: &[PathBuf]) {
+pub(super) fn wait_past_change_times(files: &[PathBuf]) {
     let latest = files.iter().map(|file| changed_at(file)).max().unwrap();
     let probe_directory = Scratch::new();
     let probe = probe_directory.path().join("probe");
@@ -1010,7 +1010,7 @@ fn wait_past_change_times(files: &[PathBuf]) {
 }
 
 /// Gives the path of each entry of the directory, in the order of the names.
-fn entries(directory: &Path) -> Vec<PathBuf> {
+pub(super) fn entries(directory: &Path) -> Vec<PathBuf> {
     let mut paths = std::fs::read_dir(directory)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -1020,7 +1020,7 @@ fn entries(directory: &Path) -> Vec<PathBuf> {
 }
 
 /// Writes a tree of three files into a new directory, and gives the directory.
-fn three_file_tree() -> Scratch {
+pub(super) fn three_file_tree() -> Scratch {
     let tree = Scratch::new();
     ["a.txt", "b.txt", "c.txt"]
         .iter()

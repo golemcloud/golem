@@ -121,6 +121,16 @@ pub(crate) struct SnapshotInfo {
     pub bytes: u64,
 }
 
+/// How a save with a parent finds the files that did not change since the parent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChangeDetection {
+    /// A file whose size and modification time equal those of the same path in the parent keeps
+    /// the content of the parent, and the save does not read it.
+    SizeMtime,
+    /// The save reads every file.
+    Full,
+}
+
 /// Why a call on a [`FilesystemSnapshotStore`] failed.
 #[derive(Debug)]
 pub(crate) enum SnapshotStoreError {
@@ -210,11 +220,17 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// The result gives the number of files, the size of the tree, and the time of the
     /// snapshot. That time is later than the time of each snapshot that the scope held when the
     /// save started.
+    ///
+    /// `parent` names the snapshot that the save compares with. With `SizeMtime`, a file whose
+    /// size and modification time equal those of the same path in the parent keeps the content of
+    /// the parent, and the save does not read it. With `Full`, the save reads every file. A parent
+    /// that the scope does not hold gives a save that reads every file.
     async fn save(
         &self,
         scope: &SnapshotScope,
         name: &SnapshotName,
         tree: &Path,
+        parent: Option<(&SnapshotName, ChangeDetection)>,
     ) -> Result<SnapshotInfo, SnapshotStoreError>;
 
     /// Rebuilds a saved tree in the empty directory `into`.

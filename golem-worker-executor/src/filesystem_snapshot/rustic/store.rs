@@ -28,13 +28,13 @@ use super::prune::{PruneLedger, prune_due, read_ledger, write_ledger};
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
 use super::{
-    ChangeDetection, PruneReport, PruneSettings, RepackLimits, RepositoryKey, RepositorySettings,
-    SaveSettings, backup_options, open_existing, open_or_create, prune, restore_snapshot,
-    run_blocking,
+    ChangeDetection as RusticChangeDetection, PruneReport, PruneSettings, RepackLimits,
+    RepositoryKey, RepositorySettings, SaveSettings, backup_options, open_existing, open_or_create,
+    prune, restore_snapshot, run_blocking,
 };
 use crate::filesystem_snapshot::{
-    FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,
-    newest_first, snapshot_time,
+    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    SnapshotStoreError, newest_first, snapshot_time,
 };
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
 use anyhow::Context;
@@ -72,7 +72,9 @@ pub(super) struct StorePolicy {
     pub(super) deadline: Duration,
     /// The settings of a repository that a save makes.
     pub(super) repository: RepositorySettings,
-    pub(super) save: SaveSettings,
+    /// The number of threads of each parallel stage of a save. `None` is the number of CPUs that
+    /// the process can use.
+    pub(super) save_threads: Option<NonZeroUsize>,
     /// The number of threads that read packs in a restore.
     pub(super) restore_reader_threads: NonZeroUsize,
     /// The settings of a prune. `keep_delete` is also the shortest time between two prunes.
@@ -87,10 +89,7 @@ impl StorePolicy {
         Self {
             deadline: config.storage_call_deadline(),
             repository: RepositorySettings::DEFAULT,
-            save: SaveSettings {
-                threads: Some(config.save_threads()),
-                detection: ChangeDetection::Ctime,
-            },
+            save_threads: Some(config.save_threads()),
             restore_reader_threads: config.restore_reader_threads(),
             prune: PruneSettings {
                 fast_repack: false,
@@ -105,8 +104,34 @@ impl StorePolicy {
 /// The options of a save of the store: the options of the bridge, and a save that cannot read an
 /// entry fails before it writes the snapshot file. A save records no device id, so a restore gives
 /// each name of a hard-linked file as its own file.
-fn store_backup_options(policy: &StorePolicy) -> BackupOptions {
-    backup_options(&policy.save)
+///
+/// With a parent and `SizeMtime`, rustic compares each file with the parent that the id names, by
+/// size and modification time. Without a parent, or with `Full`, rustic uses no parent and reads
+/// every file.
+fn store_backup_options(
+    policy: &StorePolicy,
+    parent: Option<(SnapshotId, ChangeDetection)>,
+) -> BackupOptions {
+    let settings = |detection| SaveSettings {
+        threads: policy.save_threads,
+        detection,
+    };
+    let options = match parent {
+        Some((id, ChangeDetection::SizeMtime)) => {
+            let options = backup_options(&settings(RusticChangeDetection::SizeMtime));
+            let parent_opts = options
+                .parent_opts
+                .clone()
+                .parents(vec![id.to_hex().to_string()]);
+            options.parent_opts(parent_opts)
+        }
+        None | Some((_, ChangeDetection::Full)) => {
+            let options = backup_options(&settings(RusticChangeDetection::Ctime));
+            let parent_opts = options.parent_opts.clone().force(true);
+            options.parent_opts(parent_opts)
+        }
+    };
+    options
         .fail_on_read_error(true)
         .ignore_save_opts(LocalSourceSaveOptions::default().set_devid(DevIdOption::No))
 }
@@ -160,7 +185,7 @@ impl RusticSnapshotStore {
             policy,
             root: CancellationToken::new(),
             tracker: TaskTracker::new(),
-            low_priority: LowPriority::new(policy.save.threads),
+            low_priority: LowPriority::new(policy.save_threads),
         }
     }
 
@@ -287,6 +312,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         scope: &SnapshotScope,
         name: &SnapshotName,
         tree: &Path,
+        parent: Option<(&SnapshotName, ChangeDetection)>,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         check_tree(tree).await?;
@@ -296,11 +322,12 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let policy = self.policy;
         let name = name.clone();
         let tree: Box<Path> = tree.into();
+        let parent = parent.map(|(parent, detection)| (parent.clone(), detection));
         let low_priority = self.low_priority;
         let staged = self
             .blocking(Operation::Save, move || {
                 low_priority.run("fs-snap-save", move || {
-                    stage_save(backend, &stage, &key, &policy, &name, &tree)
+                    stage_save(backend, &stage, &key, &policy, &name, &tree, parent)
                 })
             })
             .await?;
@@ -516,7 +543,9 @@ async fn check_destination(into: &Path) -> Result<(), SnapshotStoreError> {
 }
 
 /// Backs up the tree with the snapshot file in the stage, and gives the staged file with the info
-/// of the snapshot. The result is `None` when a snapshot of the scope already has the name.
+/// of the snapshot. The result is `None` when a snapshot of the scope already has the name. The
+/// parent is the snapshot that [`lookup`] finds for its name, and a name without a snapshot gives
+/// no parent.
 fn stage_save(
     backend: Arc<BlobBackend>,
     stage: &SnapshotStage,
@@ -524,12 +553,16 @@ fn stage_save(
     policy: &StorePolicy,
     name: &SnapshotName,
     tree: &Path,
+    parent: Option<(SnapshotName, ChangeDetection)>,
 ) -> anyhow::Result<Option<(StagedSnapshot, SnapshotInfo)>> {
     let (repository, _) = open_or_create(backend, key, &policy.repository)?;
     let before = scope_snapshots(&repository)?;
     if has_name(&before, name) {
         return Ok(None);
     }
+    let parent = parent.and_then(|(parent, detection)| {
+        named(&before.readable, &parent).map(|snapshot| (snapshot.id, detection))
+    });
     let newest = before
         .readable
         .iter()
@@ -549,7 +582,7 @@ fn stage_save(
         .to_snapshot()?;
     let repository = repository.to_indexed_ids()?;
     repository.backup(
-        &store_backup_options(policy),
+        &store_backup_options(policy, parent),
         &PathList::from_iter(Some(tree)),
         snapshot,
     )?;
@@ -604,14 +637,9 @@ fn has_name(found: &ScopeSnapshots, name: &SnapshotName) -> bool {
 /// time and id wins. When no file has the name and a file failed its integrity check, the result is
 /// `Corrupt`, because that file can have the name.
 fn lookup(found: ScopeSnapshots, name: &SnapshotName) -> Lookup {
-    let winner = found
-        .readable
-        .into_iter()
-        .filter(|snapshot| snapshot.label == name.as_str())
-        .min_by_key(|snapshot| (snapshot.time.timestamp(), snapshot.id));
-    match (winner, found.unreadable) {
-        (Some(snapshot), _) => match snapshot_info(&snapshot) {
-            Some(info) => Lookup::Found(Box::new(snapshot), info),
+    match (named(&found.readable, name), found.unreadable) {
+        (Some(snapshot), _) => match snapshot_info(snapshot) {
+            Some(info) => Lookup::Found(Box::new(snapshot.clone()), info),
             None => Lookup::Corrupt(anyhow::anyhow!(
                 "the snapshot {} does not describe its tree",
                 snapshot.id
@@ -622,6 +650,14 @@ fn lookup(found: ScopeSnapshots, name: &SnapshotName) -> Lookup {
         )),
         (None, false) => Lookup::Missing,
     }
+}
+
+/// Of the snapshot files with the name, gives the one with the least time and id.
+fn named<'a>(snapshots: &'a [SnapshotFile], name: &SnapshotName) -> Option<&'a SnapshotFile> {
+    snapshots
+        .iter()
+        .filter(|snapshot| snapshot.label == name.as_str())
+        .min_by_key(|snapshot| (snapshot.time.timestamp(), snapshot.id))
 }
 
 /// Gives the name and the info of each snapshot whose label is a name and whose description
