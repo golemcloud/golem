@@ -6107,6 +6107,46 @@ mod test {
     }
 
     #[test]
+    fn test_component_templates_with_shared_parent_apply_it_once() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                componentWasm: base.wasm
+                clean: [base-output]
+              template-a:
+                templates: base
+                clean: [a-output]
+              template-b:
+                templates: base
+                clean: [b-output]
+
+            components:
+              app:main:
+                templates: [template-a, template-b]
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+
+        assert_eq!(
+            component.clean(),
+            &vec![
+                "base-output".to_string(),
+                "a-output".to_string(),
+                "b-output".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn test_root_level_agents_are_accepted() {
         let source = indoc! { r#"
             app: hello-app

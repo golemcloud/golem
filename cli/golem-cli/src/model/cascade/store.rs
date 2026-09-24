@@ -14,7 +14,7 @@
 
 use crate::model::cascade::error::{StoreAddLayerError, StoreGetValueError};
 use crate::model::cascade::layer::Layer;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct Store<L: Layer> {
@@ -61,6 +61,9 @@ impl<L: Layer> Store<L> {
             return Err(StoreGetValueError::LayerNotFound(id.clone()));
         };
 
+        // Parents are applied depth-first before their child. A layer reachable through multiple
+        // paths (diamond inheritance) is applied only once, at its first position, so properties
+        // with appending merge modes do not receive its entries multiple times.
         fn apply_layer<'a, L: Layer>(
             store: &'a Store<L>,
             ctx: &L::ApplyContext,
@@ -68,6 +71,7 @@ impl<L: Layer> Store<L> {
             layer: &'a L,
             value: &mut L::Value,
             path: &mut Vec<&'a L::Id>,
+            applied: &mut HashSet<&'a L::Id>,
         ) -> Result<(), StoreGetValueError<L>> {
             let layer_id = layer.id();
             if path.contains(&layer_id) {
@@ -75,22 +79,35 @@ impl<L: Layer> Store<L> {
                 chain.push(layer_id.clone());
                 return Err(StoreGetValueError::CircularParents(chain));
             }
+            if applied.contains(layer_id) {
+                return Ok(());
+            }
             path.push(layer_id);
             for parent_id in layer.parent_layers() {
                 let Some(parent) = store.layers.get(parent_id) else {
                     return Err(StoreGetValueError::LayerNotFound(parent_id.clone()));
                 };
-                apply_layer(store, ctx, selector, parent, value, path)?;
+                apply_layer(store, ctx, selector, parent, value, path, applied)?;
             }
             if let Some(err) = layer.apply_onto_parent(ctx, selector, value).err() {
                 return Err(StoreGetValueError::LayerApplyError(layer.id().clone(), err));
             };
             path.pop();
+            applied.insert(layer_id);
             Ok(())
         }
         let mut value = L::Value::default();
         let mut path = Vec::new();
-        apply_layer(self, ctx, selector, layer, &mut value, &mut path)?;
+        let mut applied = HashSet::new();
+        apply_layer(
+            self,
+            ctx,
+            selector,
+            layer,
+            &mut value,
+            &mut path,
+            &mut applied,
+        )?;
         Ok(value)
     }
 }
@@ -193,7 +210,7 @@ mod test {
     }
 
     #[test]
-    fn value_allows_diamond_shaped_parents() {
+    fn value_applies_diamond_shared_parent_once() {
         // a -> {b, c} -> d : d is reachable via two paths but is not a cycle.
         let mut store = Store::<TestLayer>::new();
         add(&mut store, "d", &[]);
@@ -202,6 +219,6 @@ mod test {
         add(&mut store, "a", &["b", "c"]);
 
         let value = store.value(&"a".to_string(), &(), &()).unwrap();
-        assert_eq!(value, vec!["d", "b", "d", "c", "a"]);
+        assert_eq!(value, vec!["d", "b", "c", "a"]);
     }
 }
