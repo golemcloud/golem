@@ -51,7 +51,7 @@ use golem_common::model::tool::{ToolDeploymentMetadata, ToolName};
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{diff, tool};
 use golem_common::schema::agent::{
-    AgentTypeSchema, ComponentConfigSchema, FieldSource, InputSchema, OutputSchema,
+    AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, FieldSource, InputSchema, OutputSchema,
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
@@ -536,6 +536,7 @@ pub fn show_exported_agent_constructors(
 ) -> Vec<String> {
     agents
         .iter()
+        .filter(|agent| agent.kind != AgentTypeKind::HttpRouter)
         .map(|c| render_agent_constructor(c, wrapper_naming, true))
         .collect()
 }
@@ -668,10 +669,11 @@ pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> 
 mod tests {
     use super::{
         AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard, app_raw,
-        resolve_initial_permission,
+        resolve_initial_permission, show_exported_agent_constructors,
     };
+    use golem_common::model::Empty;
     use golem_common::model::account::AccountEmail;
-    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::card::owner::{AgentOwnerLeafPattern, PolymorphicAgentOwnerPattern};
     use golem_common::model::card::recipient::{
@@ -683,6 +685,9 @@ mod tests {
     };
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
     use golem_common::model::environment::EnvironmentName;
+    use golem_common::schema::{
+        AgentConstructorSchema, AgentTypeKind, AgentTypeSchema, InputSchema, SchemaGraph,
+    };
     use test_r::test;
 
     fn manifest_card() -> ParsedInitialPermissionCard {
@@ -696,6 +701,58 @@ mod tests {
             Vec::new(),
         )
         .unwrap()
+    }
+
+    fn agent_type(kind: AgentTypeKind, name: &str) -> AgentTypeSchema {
+        AgentTypeSchema {
+            kind,
+            type_name: AgentTypeName(name.to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
+
+    #[test]
+    fn tooling_corpus_controls_constructor_discovery_by_kind() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        ))
+        .unwrap();
+
+        for id in ["tooling-router-discovery", "tooling-name-not-kind"] {
+            let case = corpus["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["id"] == id)
+                .unwrap();
+            let kind = match case["input"]["kind"].as_str().unwrap() {
+                "regular" => AgentTypeKind::Regular,
+                "http-router" => AgentTypeKind::HttpRouter,
+                other => panic!("{id}: unsupported agent kind {other}"),
+            };
+            let name = case["input"]["name"].as_str().unwrap_or("Router");
+            let constructors = show_exported_agent_constructors(&[agent_type(kind, name)], true);
+
+            assert_eq!(
+                !constructors.is_empty(),
+                case["expect"]["included"].as_bool().unwrap(),
+                "{id}"
+            );
+        }
     }
 
     #[test]

@@ -125,23 +125,10 @@ pub(crate) async fn plan_bridge_generation(
 
     if let Some(target) = ctx.repl_bridge_sdk_target() {
         let repl_targets = collect_custom_targets(ctx, target).await?;
-
-        for target in &repl_targets {
-            let Some(agent_type) = target.subject.as_agent() else {
-                continue;
-            };
-            plan.repl_metadata_by_language
-                .entry(target.target_language)
-                .or_default()
-                .agents
-                .insert(
-                    agent_type.type_name.clone(),
-                    ReplAgentMetadata {
-                        client_dir: target.output_dir.clone(),
-                        mode: agent_type.mode,
-                    },
-                );
-        }
+        let repl_language = target
+            .target_language
+            .expect("REPL bridge target requires a target language");
+        plan.repl_metadata_by_language = repl_metadata_for_targets(repl_language, &repl_targets);
 
         plan.targets.extend(repl_targets);
     }
@@ -248,9 +235,24 @@ pub(crate) async fn plan_repl_bridge_generation_lenient(
     repl_target: &CustomBridgeSdkTarget,
 ) -> anyhow::Result<BridgeGenerationPlan> {
     let targets = collect_custom_targets_lenient(ctx, repl_target).await?;
-    let mut repl_metadata_by_language = BTreeMap::<GuestLanguage, ReplMetadata>::new();
+    let repl_language = repl_target
+        .target_language
+        .expect("REPL bridge target requires a target language");
+    let repl_metadata_by_language = repl_metadata_for_targets(repl_language, &targets);
 
-    for target in &targets {
+    Ok(BridgeGenerationPlan {
+        targets,
+        repl_metadata_by_language,
+    })
+}
+
+fn repl_metadata_for_targets(
+    repl_language: GuestLanguage,
+    targets: &[BridgeSdkTarget],
+) -> BTreeMap<GuestLanguage, ReplMetadata> {
+    let mut repl_metadata_by_language = BTreeMap::from([(repl_language, ReplMetadata::default())]);
+
+    for target in targets {
         let Some(agent_type) = target.subject.as_agent() else {
             continue;
         };
@@ -267,10 +269,7 @@ pub(crate) async fn plan_repl_bridge_generation_lenient(
             );
     }
 
-    Ok(BridgeGenerationPlan {
-        targets,
-        repl_metadata_by_language,
-    })
+    repl_metadata_by_language
 }
 
 pub(crate) async fn collect_manifest_external_bridge_targets_for_components_lenient(
@@ -1984,6 +1983,14 @@ components:
         deduplicate_bridge_targets(&mut targets);
 
         assert!(validate_no_output_dir_collisions(&targets).is_err());
+    }
+
+    #[test]
+    fn repl_metadata_is_written_empty_when_no_callable_agents_remain() {
+        let metadata = repl_metadata_for_targets(GuestLanguage::TypeScript, &[]);
+
+        assert_eq!(metadata.len(), 1);
+        assert!(metadata[&GuestLanguage::TypeScript].agents.is_empty());
     }
 
     #[test]
