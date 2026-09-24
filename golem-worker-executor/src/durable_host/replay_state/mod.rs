@@ -148,7 +148,7 @@ mod cursor;
 mod resolution;
 
 use abandoned::AbandonedStarts;
-pub(crate) use claims::{ReplayStartClaimOutcome, StartClaim};
+pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
@@ -228,6 +228,11 @@ struct ReplayCursor {
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
+    /// Number of entries in [`CursorState::retained_starts`]: unclaimed `Start`s the cursor has
+    /// already committed past. Published lock-free (written only through a held [`CursorTx`]) so
+    /// durable-call admission can tell "the cursor is exhausted" apart from "every recorded call
+    /// has been claimed" without queueing on the cursor lock from a Store-holding host call.
+    unclaimed_retained_starts: std::sync::atomic::AtomicUsize,
     /// Resolver-owned reconstruction population registered atomically with entity `Start` claims.
     /// This shared view is used only for waiting and active-body subscriptions outside the cursor
     /// lock; resolver registration, incomplete release, and guard settlement own all mutations.
@@ -405,6 +410,29 @@ struct CursorState {
     /// operation and are drained with their terminals while resolving the root. The map stores
     /// every known member index for each root so nested descendants can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
+    /// Durable-call `Start`s the cursor committed past before their owner claimed them, keyed by
+    /// the `Start`'s index and kept in oplog order, together with the `End`/`Cancelled` that
+    /// closed them if the cursor has reached it.
+    ///
+    /// Concurrent host tasks append their `Start`s in scheduling order, so a reader driving the
+    /// cursor (a positional marker read, a direct call awaiting its own `End`, a sibling's
+    /// terminal drain) may reach a `Start` that belongs to a call the guest has issued but whose
+    /// host task has not been admitted yet. Such a reader is not entitled to that entry: it must
+    /// neither consume it as its own (kind/ownership validation happens at claim time) nor park
+    /// on it, because the owner may need the same Store the parked reader holds. The cursor
+    /// therefore commits past it and retains it here, where the owner's later claim finds it in
+    /// oplog order ([`CursorTx::claim_retained_start`]). Entries leave this map when claimed, when
+    /// the invocation-boundary reader folds them into the abandoned-record tolerance, or when a
+    /// target shrink / rollback deletes their region.
+    retained_starts: std::collections::BTreeMap<OplogIndex, RetainedStart>,
+}
+
+/// One entry of [`CursorState::retained_starts`].
+#[derive(Debug)]
+struct RetainedStart {
+    entry: OplogEntry,
+    /// The committed `End`/`Cancelled` closing this `Start`, once the cursor has reached it.
+    terminal: Option<(OplogIndex, OplogEntry)>,
 }
 
 #[allow(dead_code)]

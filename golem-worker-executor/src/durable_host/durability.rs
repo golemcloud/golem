@@ -17,7 +17,9 @@ use crate::durable_host::call_coordinator::{
     DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
 };
 use crate::durable_host::concurrent::{self, DropEvent, Resolution, ResolutionOutcome};
-use crate::durable_host::replay_state::{ReplayToLiveOutcome, ReplayToLiveRole};
+use crate::durable_host::replay_state::{
+    CustomStartClaimOutcome, ReplayToLiveOutcome, ReplayToLiveRole,
+};
 use crate::metrics::wasm::{
     record_custom_invocation_scope_open, record_host_function_call, record_in_function_retry,
 };
@@ -29,6 +31,7 @@ use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
@@ -1693,7 +1696,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 invocation_id,
                 function_type,
                 parent_start_index,
-                ctx.state.is_live(),
+                // Only the primary agent Store can legitimately reach the replay tail through a
+                // custom claim; entity Stores keep their own liveness (see
+                // `WorkerState::durable_call_is_live`).
+                if *ctx.runtime() == OwnerRuntime::Agent {
+                    ctx.state.durable_call_is_live()
+                } else {
+                    ctx.state.is_live()
+                },
                 ctx.state.oplog.clone(),
                 ctx.public_state.worker(),
                 ctx.state.replay_state.clone(),
@@ -1709,7 +1719,39 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             .await
             .map_err(|err| err.source)?;
 
-        if is_live {
+        // A call admitted after the live transition may still own a recorded `Start` the cursor
+        // retained (see `WorkerState::durable_call_is_live`), so it claims first and records a new
+        // `Start` only once replay reports that no `Start` carries its invocation id.
+        let claimed = if is_live {
+            None
+        } else {
+            match replay_state
+                .claim_custom_start_or_replay_end(
+                    &function_name,
+                    &function_type,
+                    parent_start_index,
+                    invocation_id,
+                    &request,
+                )
+                .await?
+            {
+                CustomStartClaimOutcome::Claimed(claimed) => Some(claimed),
+                CustomStartClaimOutcome::ReplayEnded => {
+                    let outcome = replay_state
+                        .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+                        .await?;
+                    if matches!(outcome, ReplayToLiveOutcome::ReplayResumed) {
+                        return Err(WorkerExecutorError::runtime(
+                            "replay target grew while a new custom invocation was settling",
+                        )
+                        .into());
+                    }
+                    None
+                }
+            }
+        };
+
+        let Some(claimed) = claimed else {
             let (verdict_tx, verdict_rx) = oneshot::channel();
             let lifecycle = CustomBeginLifecycle::new(verdict_tx, child_initiation, cleanup_sink);
             let coordinator_lifecycle = lifecycle.clone();
@@ -1788,17 +1830,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             return Ok(durability::CustomDurableInvocation::Live(
                 open_live_custom_durable_invocation(accessor, start_index)?,
             ));
-        }
+        };
 
-        let claimed = replay_state
-            .claim_custom_start_matching_invocation_id(
-                &function_name,
-                &function_type,
-                parent_start_index,
-                invocation_id,
-                &request,
-            )
-            .await?;
         let start_index = claimed.handle.start_idx();
         match replay_state
             .await_resolution_outcome(claimed.handle)
@@ -1903,7 +1936,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
 
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
-            is_live: self.state.is_live() || self.state.durability_is_suppressed(),
+            is_live: self.state.durable_call_is_live() || self.state.durability_is_suppressed(),
             snapshotting_mode: self.state.snapshotting_mode,
             assume_idempotence: self.state.assume_idempotence,
             max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,

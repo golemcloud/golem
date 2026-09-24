@@ -128,7 +128,11 @@ fn describe_public_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::End(params) => format!(
             "End start={} response={}",
             params.start_index,
-            if params.response.is_some() { "some" } else { "none" }
+            if params.response.is_some() {
+                "some"
+            } else {
+                "none"
+            }
         ),
         PublicOplogEntry::Cancelled(params) => format!("Cancelled start={}", params.start_index),
         other => {

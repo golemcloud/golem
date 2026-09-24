@@ -946,7 +946,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 ))
                 .await;
         } else {
-            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
+            let (_, _) = get_oplog_entry!(self, OplogEntry::EndAtomicRegion)?;
         }
 
         // Same transition on live and replay: transfer surviving members to the parent region (or

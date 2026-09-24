@@ -33,6 +33,13 @@ use crate::model::component::ComponentRevision;
 
 impl OplogEntry {
     pub fn entity_parent_start_index(&self) -> Option<OplogIndex> {
+        self.entity_attribution().flatten()
+    }
+
+    /// The Store an entry was recorded from, for entry kinds that record it: `Some(Some(start))`
+    /// for an entity body whose entity invocation `Start` is at `start`, `Some(None)` for the
+    /// primary agent Store, and `None` for entry kinds that carry no attribution.
+    pub fn entity_attribution(&self) -> Option<Option<OplogIndex>> {
         match self {
             OplogEntry::Error {
                 entity_parent_start_index,
@@ -129,7 +136,7 @@ impl OplogEntry {
             | OplogEntry::StreamSession {
                 entity_parent_start_index,
                 ..
-            } => *entity_parent_start_index,
+            } => Some(*entity_parent_start_index),
             OplogEntry::Create { .. }
             | OplogEntry::Start { .. }
             | OplogEntry::End { .. }
