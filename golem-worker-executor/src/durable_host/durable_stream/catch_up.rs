@@ -446,7 +446,7 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         {
             event?;
         }
-        // The attachment may have been renewed, finalized, or replaced while the long poll was
+        // The attachment may have been finalized or replaced while the long poll was
         // asleep. Re-read it authoritatively and drain the full available segment rather than
         // returning only the bus event that happened to wake this waiter.
         let now_millis = now_millis.saturating_add(started.elapsed().as_millis() as u64);
