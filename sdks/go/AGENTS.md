@@ -11,7 +11,12 @@ Three independently built Go modules, none of them part of the root Cargo worksp
 - `golem/` — the guest SDK: agents, tools, RPC, durability, host wrappers. Requires
   `core`, and holds the generated WIT bindings under `internal/wit`.
 - `bridge/` — the runtime generated bridge clients use to call an external Golem
-  server over REST. Requires `core`, and deliberately not the guest SDK.
+  server over REST. Requires `core`, and deliberately not the guest SDK. It also
+  holds the leaf conversions and checked accessors (`codec*.go`) the generated
+  per-type `encodeX`/`decodeX` functions are composed from, so the generator
+  (`cli/golem-cli/src/bridge_gen/go/external.rs`) never spells a wire encoding
+  itself. A new helper a generated client calls is public API: change the
+  generator and `cli/golem-cli/tests/bridge_gen/go.rs` in the same commit.
 
 `core` exists so there is exactly one implementation of canonical JSON in Go, and so
 an external program does not pull in the guest SDK's WebAssembly bindings to speak the

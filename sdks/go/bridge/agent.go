@@ -16,6 +16,8 @@ package bridge
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"time"
 
 	"github.com/golemcloud/golem/sdks/go/core/schema"
@@ -46,6 +48,18 @@ type AgentOption func(*Agent)
 // than the ambient one.
 func WithConfiguration(c Configuration) AgentOption {
 	return func(a *Agent) { a.configuration = &c }
+}
+
+// WithNewPhantomID addresses a fresh phantom instance, under a random id.
+// Every client made with it reaches a different instance.
+func WithNewPhantomID() AgentOption {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Sprintf("golem: no randomness for a phantom id: %v", err))
+	}
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return WithPhantomID(fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]))
 }
 
 // WithPhantomID addresses a phantom instance: one that exists only for the

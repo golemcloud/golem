@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -373,5 +374,18 @@ func TestACustomServerURLLosesItsTrailingSlash(t *testing.T) {
 	// a double slash the router does not match.
 	if got := Custom("http://example.test/", "t").URL(); got != "http://example.test" {
 		t.Fatalf("URL read as %q", got)
+	}
+}
+
+func TestANewPhantomIDIsAFreshV4UUID(t *testing.T) {
+	var a, b Agent
+	WithNewPhantomID()(&a)
+	WithNewPhantomID()(&b)
+	pattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	if !pattern.MatchString(*a.phantomID) {
+		t.Fatalf("not a v4 uuid: %s", *a.phantomID)
+	}
+	if *a.phantomID == *b.phantomID {
+		t.Fatalf("two phantom ids collided: %s", *a.phantomID)
 	}
 }
