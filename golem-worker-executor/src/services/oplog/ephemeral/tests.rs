@@ -241,24 +241,30 @@ fn entry(n: usize) -> OplogEntry {
 #[timeout("30s")]
 async fn threshold_flush_does_not_block_add_and_deferred_returns_receipt() {
     let fixture = fixture(1).await;
-    assert_eq!(fixture.oplog.add(entry(0)).await, OplogIndex::INITIAL);
-    assert_eq!(fixture.oplog.add(entry(1)).await, OplogIndex::from_u64(2));
+    assert_eq!(
+        fixture.oplog.add(entry(0)).await.unwrap(),
+        OplogIndex::INITIAL
+    );
+    assert_eq!(
+        fixture.oplog.add(entry(1)).await.unwrap(),
+        OplogIndex::from_u64(2)
+    );
     fixture.archive.wait_for_appends(1).await;
 
-    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await;
+    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
     assert_eq!(
         receipt.keys().copied().collect::<Vec<_>>(),
         vec![OplogIndex::INITIAL, OplogIndex::from_u64(2)]
     );
     fixture.archive.release(1);
-    fixture.oplog.commit(CommitLevel::Always).await;
+    fixture.oplog.commit(CommitLevel::Always).await.unwrap();
 }
 
 #[test]
 #[timeout("30s")]
 async fn always_commit_waits_for_prior_write_even_with_empty_residual_batch() {
     let fixture = fixture(0).await;
-    fixture.oplog.add(entry(0)).await;
+    fixture.oplog.add(entry(0)).await.unwrap();
     fixture.archive.wait_for_appends(1).await;
     let commit = fixture.oplog.commit(CommitLevel::Always);
     tokio::pin!(commit);
@@ -268,7 +274,7 @@ async fn always_commit_waits_for_prior_write_even_with_empty_residual_batch() {
             .is_err()
     );
     fixture.archive.release(1);
-    let receipt = commit.await;
+    let receipt = commit.await.unwrap();
     assert_eq!(receipt.len(), 1);
     assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
 }
@@ -280,11 +286,11 @@ async fn read_exact_combines_persisted_handed_off_and_buffer_without_reading_buf
     let expected: Vec<_> = (0..5).map(entry).collect();
     fixture.archive.release(1);
     for entry in &expected[..2] {
-        fixture.oplog.add(entry.clone()).await;
+        fixture.oplog.add(entry.clone()).await.unwrap();
     }
-    fixture.oplog.commit(CommitLevel::Always).await;
+    fixture.oplog.commit(CommitLevel::Always).await.unwrap();
     for entry in &expected[2..] {
-        fixture.oplog.add(entry.clone()).await;
+        fixture.oplog.add(entry.clone()).await.unwrap();
     }
     fixture.archive.wait_for_appends(2).await;
 
@@ -312,7 +318,7 @@ async fn read_exact_combines_persisted_handed_off_and_buffer_without_reading_buf
         expected[2..]
     );
     fixture.archive.release(2);
-    fixture.oplog.commit(CommitLevel::Always).await;
+    fixture.oplog.commit(CommitLevel::Always).await.unwrap();
 }
 
 #[test]
@@ -320,7 +326,7 @@ async fn read_exact_combines_persisted_handed_off_and_buffer_without_reading_buf
 async fn bounded_writer_queue_backpressures_fourth_threshold_flush_and_close_drains() {
     let fixture = fixture(0).await;
     for n in 0..3 {
-        fixture.oplog.add(entry(n)).await;
+        fixture.oplog.add(entry(n)).await.unwrap();
     }
     fixture.archive.wait_for_appends(1).await;
 
@@ -332,7 +338,7 @@ async fn bounded_writer_queue_backpressures_fourth_threshold_flush_and_close_dra
             .is_err()
     );
     fixture.archive.release(1);
-    assert_eq!(fourth.await, OplogIndex::from_u64(4));
+    assert_eq!(fourth.await.unwrap(), OplogIndex::from_u64(4));
 
     let closed = fixture.oplog.closed();
     fixture.oplog.retire();
@@ -349,16 +355,16 @@ async fn receipt_overflow_retains_a_detectable_gap_and_storage_barrier_covers_it
     fixture.archive.release(count);
     let expected: Vec<_> = (0..count).map(entry).collect();
     for entry in &expected {
-        fixture.oplog.add(entry.clone()).await;
+        fixture.oplog.add(entry.clone()).await.unwrap();
     }
-    let receipts = fixture.oplog.commit(CommitLevel::Deferred).await;
+    let receipts = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
     assert_eq!(receipts.len(), MAX_RETAINED_RECEIPT_BATCHES);
     assert_eq!(*receipts.first_key_value().unwrap().0, OplogIndex::INITIAL);
     assert_eq!(receipts.last_key_value().unwrap().0.as_u64(), count as u64);
     assert!(!receipts.contains_key(&OplogIndex::from_u64(2)));
     assert_eq!(fixture.archive.read_calls.load(Ordering::Relaxed), 0);
 
-    fixture.oplog.commit(CommitLevel::Always).await;
+    fixture.oplog.commit(CommitLevel::Always).await.unwrap();
     assert_eq!(
         fixture
             .archive
@@ -376,7 +382,7 @@ async fn receipt_overflow_retains_a_detectable_gap_and_storage_barrier_covers_it
 #[timeout("30s")]
 async fn failed_writer_is_joined_and_reported_by_close() {
     let fixture = fixture(0).await;
-    fixture.oplog.add(entry(0)).await;
+    fixture.oplog.add(entry(0)).await.unwrap();
     fixture.archive.wait_for_appends(1).await;
     fixture.archive.append_permits.close();
     fixture.oplog.retire();

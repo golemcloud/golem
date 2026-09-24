@@ -45,6 +45,12 @@ impl From<WorkerExecutorError> for Error {
     }
 }
 
+impl From<crate::services::oplog::OplogError> for Error {
+    fn from(error: crate::services::oplog::OplogError) -> Self {
+        Self::Worker(error.into())
+    }
+}
+
 fn reject(reason: Reason) -> Error {
     Error::Rejected(ForkStreamSlotRejection {
         reason: reason as i32,
@@ -260,7 +266,7 @@ async fn execute<Ctx: WorkerCtx>(
             )
             .await?;
         }
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await?;
         let target_lifecycle = service.oplog_service.lock_lifecycle(&target.agent_id).await;
         let expiry_deadline_millis = admitted_publication_deadline(&candidate);
         append_target_initialization(oplog.as_ref(), &candidate, hash, expiry_deadline_millis)
@@ -273,7 +279,7 @@ async fn execute<Ctx: WorkerCtx>(
             expiry_deadline_millis,
         )
         .await?;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await?;
         let last = oplog.current_oplog_index().await;
         drop(oplog);
         let published = service
@@ -432,7 +438,7 @@ async fn append_target_initialization(
             entity_parent_start_index: None,
             record,
         })
-        .await;
+        .await?;
     Ok(())
 }
 
@@ -474,9 +480,11 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
     let worker = Worker::find_durable_stream_worker(service, source)
         .await?
         .ok_or_else(|| reject(Reason::NotFound))?;
+    // A refused commit means the source has a new owner: fail the fork rather than read a
+    // horizon this executor is no longer allowed to write past.
     worker
         .commit_oplog_and_update_state(CommitLevel::Always)
-        .await;
+        .await?;
     let slot = worker
         .resolve_export_fork_slot(&request.session, &request.slot, &request.expected_method)
         .await?
@@ -582,7 +590,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
     // durable before staging reads the source from storage.
     worker
         .commit_oplog_and_update_state(CommitLevel::Always)
-        .await;
+        .await?;
     Ok(Candidate {
         export: StreamExportFork {
             source: source.agent_id.clone(),

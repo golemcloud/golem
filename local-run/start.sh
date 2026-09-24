@@ -16,8 +16,10 @@ fi
 
 LOCAL_RUN_DIR="${GOLEM_DIR}/local-run"
 
-rm -rf "${LOCAL_RUN_DIR}/data/shard-manager"
-mkdir -pv "${LOCAL_RUN_DIR}/data/redis" "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/logs"
+# Wipe the executor's indexed storage along with the shard manager's state: the oplog epochs it
+# records were minted by that state and are ahead of everything a fresh one mints.
+rm -rf "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/data/worker-executor"
+mkdir -pv "${LOCAL_RUN_DIR}/data/redis" "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/data/worker-executor" "${LOCAL_RUN_DIR}/logs"
 
 # start redis
 # Redis persistence isn't needed for local-run, and misconfigured snapshotting can force Redis into
@@ -137,6 +139,10 @@ GOLEM__SHARD_MANAGER__HOST="localhost" \
 GOLEM__SHARD_MANAGER__PORT=${SHARD_MANAGER_GRPC_PORT} \
 GOLEM__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS=10 \
 GOLEM__SHARD_MANAGER__RETRIES__MIN_DELAY=1s \
+GOLEM__INDEXED_STORAGE__TYPE="Sqlite" \
+GOLEM__INDEXED_STORAGE__CONFIG__DATABASE="../local-run/data/worker-executor/golem_indexed.sqlite" \
+GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS=10 \
+GOLEM__INDEXED_STORAGE__CONFIG__FOREIGN_KEYS=false \
 ../target/debug/worker-executor &
 
 worker_executor_pid=$!

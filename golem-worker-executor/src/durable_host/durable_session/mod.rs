@@ -898,16 +898,19 @@ impl StreamSession {
     }
 
     /// Commits and indexes a session record through the producer's owned write path.
-    #[cfg(test)]
+    ///
+    /// Every failure goes back to the session, not only a fence: a producer retired or poisoned
+    /// under the session answers `RecoveryRequired`, and a failed publication `LiveBus`, neither
+    /// of which says the record is invalid.
     async fn append_record(
         &self,
         context: Option<&StreamWriteContext>,
         record: StreamSessionRecord,
-    ) {
+    ) -> Result<(), String> {
         self.producer
             .append_session_record_attributed(context, self.entity_parent_start_index, record)
             .await
-            .expect("internally generated durable session record is valid");
+            .map_err(|error| error.to_string())
     }
 
     async fn try_append_record(
@@ -3368,14 +3371,8 @@ impl StreamSession {
                 return Err("durable RPC result conflicts with its caller journal".to_string());
             }
         } else {
-            self.producer
-                .append_session_record_attributed(
-                    None,
-                    self.entity_parent_start_index,
-                    StreamSessionRecord::InvocationResult(record),
-                )
-                .await
-                .map_err(|error| error.to_string())?;
+            self.append_record(None, StreamSessionRecord::InvocationResult(record))
+                .await?;
             self.commit_consumer_journal().await?;
         }
         self.decode_initial(canonical, &mappings, SessionStreamRole::Output)
@@ -6097,15 +6094,7 @@ impl DurableInputEndpoint {
                     }),
                 };
                 if !journaled {
-                    streams
-                        .producer
-                        .append_session_record_attributed(
-                            None,
-                            streams.entity_parent_start_index,
-                            record,
-                        )
-                        .await
-                        .map_err(|error| error.to_string())?;
+                    streams.append_record(None, record).await?;
                     streams.commit_consumer_journal().await?;
                     let committed_through = queued_events
                         .back()

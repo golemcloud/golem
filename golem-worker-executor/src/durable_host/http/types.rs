@@ -21,7 +21,7 @@ use crate::durable_host::http::inline_retry::{
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::services::HasWorker;
-use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::oplog::{CommitLevel, OplogError, OplogOps};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::NamedRetryPolicy;
 use golem_common::model::oplog::host_functions::{
@@ -1161,7 +1161,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     _ => None,
                 };
             }
-            persist_http_response(self, request, &serializable_response, begin_index).await;
+            persist_http_response(self, request, &serializable_response, begin_index).await?;
 
             if !is_pending && let Ok(Some(Ok(Ok(resource)))) = &response {
                 let incoming_response_handle = resource.rep();
@@ -1422,7 +1422,7 @@ async fn persist_http_response<Ctx: WorkerCtx>(
     request: golem_common::model::oplog::HostRequestHttpRequest,
     serializable_response: &SerializableHttpResponse,
     begin_index: golem_common::model::oplog::OplogIndex,
-) {
+) -> Result<(), WorkerExecutorError> {
     if !ctx.state.durability_is_suppressed() {
         ctx.state
             .oplog
@@ -1436,12 +1436,16 @@ async fn persist_http_response<Ctx: WorkerCtx>(
                 Some(begin_index),
             )
             .await
-            .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
+            .map_err(|err| match err {
+                OplogError::Fenced(_) => err,
+                err => panic!("failed to serialize http response: {err}"),
+            })?;
         ctx.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-            .await;
+            .await?;
     }
+    Ok(())
 }
 
 /// Typed HTTP failure for retry classification, preserving the original `ErrorCode`

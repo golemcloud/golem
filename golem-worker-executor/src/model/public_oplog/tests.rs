@@ -311,6 +311,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
     let timestamp = Timestamp::now_utc();
@@ -320,10 +321,11 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
                 timestamp,
                 entity_parent_start_index: None,
             })
-            .await,
+            .await
+            .unwrap(),
         OplogIndex::INITIAL
     );
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let chunk = get_public_oplog_chunk(
         Arc::new(PanicComponentService),
@@ -375,10 +377,11 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
-    let agent_entry = oplog.add(OplogEntry::no_op(None)).await;
+    let agent_entry = oplog.add(OplogEntry::no_op(None)).await.unwrap();
     let observational_owner = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -389,7 +392,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
         })
-        .await;
+        .await
+        .unwrap();
     let middleware_entity =
         AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap());
     let middleware_input = "middleware-input"
@@ -413,9 +417,10 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: Some(OplogPayload::Inline(Box::new(middleware_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
         })
-        .await;
+        .await
+        .unwrap();
 
-    let interleaved_agent_entry = oplog.add(OplogEntry::no_op(None)).await;
+    let interleaved_agent_entry = oplog.add(OplogEntry::no_op(None)).await.unwrap();
     let child_start = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -426,7 +431,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
             durable_function_type: DurableFunctionType::ReadLocal,
         })
-        .await;
+        .await
+        .unwrap();
 
     let tool_entity = AgentEntity::Tool(ToolName::try_from("lookup").unwrap());
     let secret_id = Uuid::from_u128(1);
@@ -475,7 +481,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: Some(OplogPayload::Inline(Box::new(tool_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
         })
-        .await;
+        .await
+        .unwrap();
     let entity_retry_error = oplog
         .add(OplogEntry::error(
             Some(tool_start),
@@ -485,8 +492,12 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             false,
             None,
         ))
-        .await;
-    let entity_marker = oplog.add(OplogEntry::no_op(Some(tool_start))).await;
+        .await
+        .unwrap();
+    let entity_marker = oplog
+        .add(OplogEntry::no_op(Some(tool_start)))
+        .await
+        .unwrap();
     let log_index = oplog
         .add(OplogEntry::Log {
             timestamp: Timestamp::now_utc(),
@@ -495,7 +506,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             context: "tool".to_string(),
             message: "entity-attribution-needle".to_string(),
         })
-        .await;
+        .await
+        .unwrap();
     let span_id = SpanId::generate();
     let span_index = oplog
         .add(OplogEntry::StartSpan {
@@ -506,7 +518,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             linked_context_id: None,
             attributes: AttributeMap(HashMap::new()),
         })
-        .await;
+        .await
+        .unwrap();
     let stream_frame_index = oplog
         .add(OplogEntry::HostStreamFrame {
             timestamp: Timestamp::now_utc(),
@@ -514,7 +527,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             kind: HostStreamKind::P3HttpRequestBody,
             payload: OplogPayload::Inline(Box::new(HostRequestNoInput {}.into())),
         })
-        .await;
+        .await
+        .unwrap();
 
     let reveal_secret_id = Uuid::from_u128(2);
     let reveal_request = HostRequestSecretReveal {
@@ -564,7 +578,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: None,
             durable_function_type: DurableFunctionType::ReadLocal,
         })
-        .await;
+        .await
+        .unwrap();
     let observational_log = oplog
         .add(OplogEntry::Log {
             timestamp: Timestamp::now_utc(),
@@ -573,10 +588,12 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             context: "custom".to_string(),
             message: "agent-owned observation".to_string(),
         })
-        .await;
+        .await
+        .unwrap();
     let observational_end = oplog
         .add(OplogEntry::end(observational_start, None, false))
-        .await;
+        .await
+        .unwrap();
 
     let transaction_start = oplog
         .add(OplogEntry::Start {
@@ -588,24 +605,31 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: None,
             durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
         })
-        .await;
+        .await
+        .unwrap();
     let transaction_begin = oplog
         .add(OplogEntry::BeginRemoteTransaction {
             timestamp: Timestamp::now_utc(),
             transaction_id: TransactionId::new("entity-transaction".to_string()),
             original_begin_index: None,
         })
-        .await;
+        .await
+        .unwrap();
     let transaction_commit = oplog
         .add(OplogEntry::CommittedRemoteTransaction {
             timestamp: Timestamp::now_utc(),
             begin_index: transaction_start,
         })
-        .await;
+        .await
+        .unwrap();
     let transaction_end = oplog
         .add(OplogEntry::end(transaction_start, None, false))
-        .await;
-    let child_end = oplog.add(OplogEntry::end(child_start, None, false)).await;
+        .await
+        .unwrap();
+    let child_end = oplog
+        .add(OplogEntry::end(child_start, None, false))
+        .await
+        .unwrap();
     let tool_terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Executed,
         result: Ok(SerializableToolStructuredResult { result: None }),
@@ -622,10 +646,12 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             Some(OplogPayload::Inline(Box::new(tool_response))),
             false,
         ))
-        .await;
+        .await
+        .unwrap();
     let completion = oplog
         .add(OplogEntry::completion_delivered(tool_start))
-        .await;
+        .await
+        .unwrap();
 
     let rejected_request: HostRequest = HostRequestGolemToolInvocationRejected {
         attempt_ordinal: 0,
@@ -649,13 +675,16 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             request: Some(OplogPayload::Inline(Box::new(rejected_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
         })
-        .await;
+        .await
+        .unwrap();
     let rejected_end = oplog
         .add(OplogEntry::end(rejected_start, None, false))
-        .await;
+        .await
+        .unwrap();
     let middleware_end = oplog
         .add(OplogEntry::end(middleware_start, None, false))
-        .await;
+        .await
+        .unwrap();
     let final_log = oplog
         .add(OplogEntry::Log {
             timestamp: Timestamp::now_utc(),
@@ -664,8 +693,9 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             context: "tool".to_string(),
             message: "last-entity-attribution-needle".to_string(),
         })
-        .await;
-    oplog.commit(CommitLevel::Always).await;
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
     let chunk = get_public_oplog_chunk(
@@ -909,10 +939,11 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
-    let non_start = oplog.add(OplogEntry::no_op(None)).await;
+    let non_start = oplog.add(OplogEntry::no_op(None)).await.unwrap();
     let non_entity_start = oplog
         .add(OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -923,7 +954,8 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
         })
-        .await;
+        .await
+        .unwrap();
     let entity_request = test_entity_request(
         &owned_agent_id,
         AgentEntity::Tool(ToolName::try_from("valid").unwrap()),
@@ -941,16 +973,24 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             request: Some(OplogPayload::Inline(Box::new(entity_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
         })
-        .await;
-    let valid = oplog.add(OplogEntry::no_op(Some(entity_start))).await;
-    let invalid_non_start = oplog.add(OplogEntry::no_op(Some(non_start))).await;
-    let invalid_non_entity = oplog.add(OplogEntry::no_op(Some(non_entity_start))).await;
+        .await
+        .unwrap();
+    let valid = oplog
+        .add(OplogEntry::no_op(Some(entity_start)))
+        .await
+        .unwrap();
+    let invalid_non_start = oplog.add(OplogEntry::no_op(Some(non_start))).await.unwrap();
+    let invalid_non_entity = oplog
+        .add(OplogEntry::no_op(Some(non_entity_start)))
+        .await
+        .unwrap();
     let invalid_forward_index = invalid_non_entity.next();
     let future_entity_start = invalid_forward_index.next();
     assert_eq!(
         oplog
             .add(OplogEntry::no_op(Some(future_entity_start)))
-            .await,
+            .await
+            .unwrap(),
         invalid_forward_index
     );
     assert_eq!(
@@ -964,10 +1004,11 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
                 request: None,
                 durable_function_type: DurableFunctionType::WriteLocal,
             })
-            .await,
+            .await
+            .unwrap(),
         future_entity_start
     );
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
     let valid_chunk = get_public_oplog_chunk(
@@ -1053,6 +1094,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
+            None,
         )
         .await;
 
@@ -1308,7 +1350,8 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             request: Some(cancelled_request_payload),
             durable_function_type: DurableFunctionType::WriteRemote,
         })
-        .await;
+        .await
+        .unwrap();
     expected_starts.insert(
         cancelled_start_index,
         (
@@ -1331,8 +1374,9 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             cancelled_start_index,
             Some(partial_payload),
         ))
-        .await;
-    oplog.commit(CommitLevel::Always).await;
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let last_index = oplog_service
         .get_last_index(&owned_agent_id, AgentMode::Durable)

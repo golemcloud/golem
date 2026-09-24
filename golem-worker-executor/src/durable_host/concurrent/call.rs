@@ -871,10 +871,10 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         retry_policy_state: Option<golem_common::model::RetryPolicyState>,
-    ) {
+    ) -> Result<(), crate::services::oplog::OplogError> {
         self.inner
             .append_retry_error_entry(retry_from, inside_atomic_region, retry_policy_state)
-            .await;
+            .await
     }
 }
 
@@ -2137,8 +2137,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 }
                 ScopeReplayRecovery::Default => {}
             }
-            let begin_index =
-                Self::append_access_scope_start(prepared, scope_name, function_type).await;
+            let begin_index = Self::append_access_scope_start(prepared, scope_name, function_type)
+                .await
+                .map_err(|error| {
+                    (
+                        error,
+                        AccessStartCleanup {
+                            atomic_lease: prepared.atomic_lease.clone(),
+                        },
+                    )
+                })?;
             Ok(AccessOpenedScope {
                 begin_index,
                 replay_handle: None,
@@ -2334,7 +2342,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             };
             let Some((begin_index, replay_handle)) = claimed_scope else {
                 let begin_index =
-                    Self::append_access_scope_start(prepared, scope_name, function_type).await;
+                    Self::append_access_scope_start(prepared, scope_name, function_type)
+                        .await
+                        .map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                 prepared
                     .public_state
                     .worker()
@@ -2434,6 +2451,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             start: begin_index.next(),
                             end: pending.replay_target().next(),
                         };
+                        // Refused, the scope must not re-run live: its first attempt would be
+                        // replayed by the shard's new owner with no `Jump` skipping it.
                         prepared
                             .public_state
                             .worker()
@@ -2441,7 +2460,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 prepared.entity_parent_start_index,
                                 deleted_region,
                             ))
-                            .await;
+                            .await
+                            .map_err(|error| {
+                                (
+                                    WorkerExecutorError::from(error),
+                                    AccessStartCleanup {
+                                        atomic_lease: prepared.atomic_lease.clone(),
+                                    },
+                                )
+                            })?;
                         prepared
                             .public_state
                             .worker()
@@ -2500,11 +2527,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
     }
 
+    /// Appends the scope `Start` that the call's side effect waits on. A `Start` the storage
+    /// refused is returned as the fence, so the effect never runs for a scope the shard's new
+    /// owner cannot see.
     async fn append_access_scope_start<Ctx: WorkerCtx>(
         prepared: &mut PreparedAccessStart<Pair, P, Ctx>,
         scope_name: HostFunctionName,
         function_type: DurableFunctionType,
-    ) -> OplogIndex {
+    ) -> Result<OplogIndex, WorkerExecutorError> {
         prepared
             .public_state
             .worker()
@@ -2518,6 +2548,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 durable_function_type: function_type,
             })
             .await
+            .map_err(WorkerExecutorError::from)
     }
 
     fn finish_access_start<Ctx: WorkerCtx>(
@@ -3261,7 +3292,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.start_idx
                 )));
             }
-            oplog.add(end).await;
+            oplog.add(end).await?;
             self.execution_scope.release_atomic_lease();
             DurableCallCoordinator::new(ctx)
                 .finish(self.retry.function_type(), self.boundary, false)
@@ -3470,13 +3501,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let end_append = oplog.enqueue_add(end);
         let post_end_append = post_end_entry.map(|entry| oplog.enqueue_add(entry));
         let terminal = tokio::spawn(async move {
-            end_append.await;
+            end_append.await?;
             // A deferred-delivery call's mandatory post-`End` entry (e.g. its durable
             // `FinishSpan`) is appended by the same owned task: it is recorded even when the
             // completing future is torn right after the `End`, so replay can rely on it
             // unconditionally following the `End` (any discard marker chains after this task).
             if let Some(append) = post_end_append {
-                append.await;
+                append.await?;
             }
             Ok(())
         });
@@ -4822,7 +4853,7 @@ where
                     response: None,
                     forced_commit: true,
                 })
-                .await;
+                .await?;
         } else if let Some(handle) = replay_handle {
             match replay_state.await_resolution_outcome(handle).await? {
                 ResolutionOutcome::Resolved(Resolution::Completed { .. }) => {}
@@ -4855,7 +4886,7 @@ where
                             response: None,
                             forced_commit: true,
                         })
-                        .await;
+                        .await?;
                 }
             }
         }
@@ -4877,7 +4908,7 @@ where
         public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-            .await;
+            .await?;
         if let Some(min_exposed_marker) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             if ctx.state.at_clean_checkpoint_boundary() {
@@ -5004,7 +5035,7 @@ where
     if is_live {
         worker
             .add_to_oplog(OplogEntry::finish_span(parent_start_index, span_id.clone()))
-            .await;
+            .await?;
     }
 
     store.with(|mut access| {

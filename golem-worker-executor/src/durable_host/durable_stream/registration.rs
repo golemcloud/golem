@@ -159,8 +159,8 @@ impl DurableStreamStore {
                 )]
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("registration batch returned no oplog entry");
@@ -613,8 +613,8 @@ impl DurableStreamStore {
                 result
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
 
         let registered_count = registered_handles.len();
         let mut handles = registered_handles;

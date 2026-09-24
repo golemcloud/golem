@@ -21,7 +21,7 @@ use crate::metrics::workers::{
     record_agent_identity_resolution, record_derived_cache_publication_failed,
     record_stale_running_worker, record_status_cache_publication, record_worker_call,
 };
-use crate::services::oplog::{OplogLifecycleGuard, OplogService};
+use crate::services::oplog::{OplogError, OplogLifecycleGuard, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
@@ -38,7 +38,7 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
     DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey,
     InvocationResultMembership, OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    ShardId, SuccessfulUpdateRecord,
+    ShardEpoch, ShardId, SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -371,12 +371,18 @@ pub trait WorkerService: Send + Sync {
     ///
     /// Returns `Err` when the storage could not be reached. Delete is not retried by the caller:
     /// a retry would re-run the oplog delete, so the error is reported instead.
+    ///
+    /// `expected_epoch` is the epoch the caller's oplog handle asserts. The oplog is deleted only
+    /// while this executor still holds it at that epoch; otherwise nothing at all is removed and
+    /// the result is [`WorkerExecutorError::OplogFenced`], because the agent's state belongs to
+    /// the shard's new owner.
     async fn remove(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
@@ -1648,6 +1654,7 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), WorkerExecutorError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
@@ -1670,6 +1677,22 @@ impl WorkerService for DefaultWorkerService {
             None => false,
         };
 
+        // The oplog first, so that a refusal leaves every other piece of the agent's state in place
+        // too. Only this incarnation's: a recreated agent's oplog is not the deleting one's to remove.
+        if delete_current_oplog {
+            self.oplog_service
+                .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+                .await
+                .map_err(|error| match error {
+                    OplogError::Fenced(fence) => WorkerExecutorError::oplog_fenced(
+                        fence.agent_id,
+                        fence.expected_epoch.0,
+                        fence.actual_epoch.map(|epoch| epoch.0),
+                    ),
+                    other => WorkerExecutorError::runtime(other.to_string()),
+                })?;
+        }
+
         self.remove_cached_status(owned_agent_id, fingerprint)
             .await?;
         self.remove_all_fields(
@@ -1690,12 +1713,6 @@ impl WorkerService for DefaultWorkerService {
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
-
-        if delete_current_oplog {
-            self.oplog_service
-                .delete(lifecycle, owned_agent_id, agent_mode)
-                .await;
-        }
 
         let shard_assignment = self
             .shard_service
@@ -2377,7 +2394,7 @@ mod tests {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardLeaseRevision,
+        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardEpoch, ShardLeaseRevision,
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
@@ -2459,6 +2476,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn crate::services::oplog::Oplog> {
             unreachable!()
         }
@@ -2472,6 +2490,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn crate::services::oplog::Oplog> {
             unreachable!()
         }
@@ -2485,6 +2504,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn crate::services::oplog::Oplog> {
             unreachable!()
         }
@@ -2506,7 +2526,8 @@ mod tests {
             _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) {
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
+        ) -> Result<(), crate::services::oplog::OplogError> {
             unreachable!()
         }
 
@@ -4061,6 +4082,7 @@ mod tests {
                 &owned_agent_id,
                 AgentMode::Durable,
                 first,
+                None,
             )
             .await
             .unwrap();
@@ -4266,6 +4288,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
@@ -4279,6 +4302,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
@@ -4292,6 +4316,7 @@ mod tests {
             _initial_worker_metadata: AgentMetadata,
             _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
             _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+            _shard_epoch: Option<ShardEpoch>,
         ) -> Arc<dyn Oplog + 'static> {
             unreachable!()
         }
@@ -4309,7 +4334,8 @@ mod tests {
             _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) {
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
+        ) -> Result<(), crate::services::oplog::OplogError> {
             unreachable!()
         }
 
@@ -4641,6 +4667,7 @@ mod tests {
                     &owned_agent_id,
                     AgentMode::Durable,
                     AgentFingerprint(Uuid::new_v4()),
+                    None,
                 )
                 .await
                 .is_err(),

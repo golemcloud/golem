@@ -521,7 +521,7 @@ impl EntityInvocationDurability {
                                 Some(handle.start_index()),
                                 region.clone(),
                             ))
-                            .await;
+                            .await?;
                     }
                     replay.register_entity_atomic_rollback(regions).await?;
                     worker.reattach_worker_status().await;

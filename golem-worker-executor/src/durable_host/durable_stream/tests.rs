@@ -251,6 +251,11 @@ struct TestOplogState {
     entries: BTreeMap<OplogIndex, OplogEntry>,
     committed: OplogIndex,
     commit_count: u64,
+    /// When set, `add` answers the way a primary oplog does when the threshold commit behind
+    /// the add is refused by the storage.
+    refused_adds: Option<crate::services::oplog::OplogFence>,
+    /// The fence a primary oplog latches when the storage refuses one of its commits.
+    fence: Option<crate::services::oplog::OplogFence>,
 }
 
 #[derive(Default)]
@@ -271,7 +276,7 @@ impl TestOplog {
         std::mem::take(&mut *self.read_ranges.lock().unwrap())
     }
 
-    fn committed_length(&self) -> u64 {
+    pub(crate) fn committed_length(&self) -> u64 {
         self.state.lock().unwrap().committed.as_u64()
     }
 
@@ -288,18 +293,32 @@ impl TestOplog {
             .cloned()
             .collect()
     }
+
+    pub(crate) fn refuse_adds(&self, fence: crate::services::oplog::OplogFence) {
+        self.state.lock().unwrap().refused_adds = Some(fence);
+    }
+
+    pub(crate) fn latch_fence(&self, fence: crate::services::oplog::OplogFence) {
+        self.state.lock().unwrap().fence = Some(fence);
+    }
 }
 
 #[async_trait]
 impl Oplog for TestOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         let mut state = self.state.lock().unwrap();
+        if let Some(fence) = &state.refused_adds {
+            return Err(crate::services::oplog::OplogError::Fenced(fence.clone()));
+        }
         let index = state
             .entries
             .last_key_value()
             .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
         state.entries.insert(index, entry);
-        index
+        Ok(index)
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
@@ -309,7 +328,11 @@ impl Oplog for TestOplog {
             .last_key_value()
             .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
         state.entries.insert(index, entry);
-        Box::pin(async move { index })
+        Box::pin(async move { Ok(index) })
+    }
+
+    fn fence(&self) -> Option<crate::services::oplog::OplogFence> {
+        self.state.lock().unwrap().fence.clone()
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -319,20 +342,23 @@ impl Oplog for TestOplog {
         (before - state.entries.len()) as u64
     }
 
-    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(
+        &self,
+        _level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
         let mut state = self.state.lock().unwrap();
         let committed = state
             .entries
             .iter()
             .filter(|(index, _)| **index > state.committed)
             .map(|(index, entry)| (*index, entry.clone()))
-            .collect();
+            .collect::<BTreeMap<OplogIndex, OplogEntry>>();
         state.committed = state
             .entries
             .last_key_value()
             .map_or(state.committed, |(index, _)| *index);
         state.commit_count += 1;
-        committed
+        Ok(committed)
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -470,9 +496,9 @@ impl Oplog for TestOplog {
         &self,
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
-        let index = self.add(entry.clone()).await;
+        let index = self.add(entry.clone()).await?;
         Ok(OrderedOplogStart {
             index,
             entry,
@@ -483,7 +509,7 @@ impl Oplog for TestOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: crate::services::oplog::IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         let mut state = self.state.lock().unwrap();
         let index = state
             .entries
@@ -503,10 +529,10 @@ impl Oplog for TestOplog {
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
-        let first = self.add(start).await;
-        let second = self.add(make_second(first)).await;
-        (first, second)
+    ) -> Result<(OplogIndex, OplogIndex), crate::services::oplog::OplogError> {
+        let first = self.add(start).await?;
+        let second = self.add(make_second(first)).await?;
+        Ok((first, second))
     }
 }
 
@@ -514,7 +540,7 @@ impl Oplog for TestOplog {
 async fn test_oplog_read_exact_includes_uncommitted_entries() {
     let oplog = TestOplog::default();
     let entry = OplogEntry::interrupted();
-    let index = oplog.add(entry.clone()).await;
+    let index = oplog.add(entry.clone()).await.unwrap();
 
     let entries = oplog.read_exact(index, 1).await;
 
@@ -524,7 +550,7 @@ async fn test_oplog_read_exact_includes_uncommitted_entries() {
 #[test]
 async fn test_oplog_read_exact_rejects_incomplete_range() {
     let oplog = TestOplog::default();
-    let index = oplog.add(OplogEntry::interrupted()).await;
+    let index = oplog.add(OplogEntry::interrupted()).await.unwrap();
 
     let result = std::panic::AssertUnwindSafe(oplog.read_exact(index, 2))
         .catch_unwind()
@@ -861,7 +887,7 @@ async fn session_finish_holds_its_lock_and_reserves_terminal_batch_bytes() {
             let reached = reached.clone();
             let release = release.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 reached.notify_one();
                 release.notified().await;
                 if let Some(published) = published {
@@ -1656,7 +1682,10 @@ async fn delayed_stream_records_retain_registration_entity_attribution() {
     request.entity_parent_start_index = entity_parent_start_index;
     let handle = live.register(None, request).await.unwrap().value;
 
-    oplog.add(OplogEntry::no_op(None)).await;
+    oplog
+        .add(OplogEntry::no_op(None))
+        .await
+        .expect("oplog write");
     live.write_items(
         None,
         handle.stream_id,
@@ -1718,7 +1747,10 @@ async fn item_payloads_are_loaded_only_for_the_requested_batch() {
             .unwrap();
     }
     for _ in 0..2050 {
-        oplog.add(OplogEntry::interrupted()).await;
+        oplog
+            .add(OplogEntry::interrupted())
+            .await
+            .expect("oplog write");
     }
     assert!(
         producer.index.lock().await.streams[&handle.stream_id]
@@ -1949,7 +1981,10 @@ async fn cursor_validation_point_reads_without_historical_event_cache() {
         .unwrap()
         .value;
     for _ in 0..2050 {
-        oplog.add(OplogEntry::interrupted()).await;
+        oplog
+            .add(OplogEntry::interrupted())
+            .await
+            .expect("oplog write");
     }
     producer
         .end(None, handle.stream_id, 3, StreamEndResult::Ok)
@@ -3509,7 +3544,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
         let oplog = oplog_for_commit.clone();
         let batches = batches_for_commit.clone();
         Box::pin(async move {
-            let committed_entries = oplog.commit(CommitLevel::Always).await;
+            let committed_entries = oplog.commit(CommitLevel::Always).await.unwrap();
             batches
                 .lock()
                 .unwrap()
@@ -3565,7 +3600,8 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
             Vec::new(),
             Vec::new(),
         ))
-        .await;
+        .await
+        .unwrap();
     producer
         .append_session_record(
             None,
@@ -4101,7 +4137,7 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
                 let oplog = oplog.clone();
                 let fail = fail.clone();
                 Box::pin(async move {
-                    oplog.commit(CommitLevel::Always).await;
+                    oplog.commit(CommitLevel::Always).await.unwrap();
                     assert!(
                         fail_after_receipt || !fail.load(Ordering::Acquire),
                         "injected failure before durability receipt"
@@ -4254,7 +4290,7 @@ async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
             let block_commit = block_commit.clone();
             let committed = committed.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(published) = published {
                     let _ = published.send(());
                 }
@@ -4336,7 +4372,7 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
             let block_commit = block_commit.clone();
             let committed = committed.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(published) = published {
                     let _ = published.send(());
                 }
@@ -4438,7 +4474,7 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
             let blocked = blocked.clone();
             let release = release.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if block_receipt.swap(false, Ordering::SeqCst) {
                     blocked.notify_one();
                     release.notified().await;
@@ -5436,7 +5472,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
             let oplog = oplog.clone();
             let commit_reached = commit_reached.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(committed) = committed {
                     let _ = committed.send(());
                 }
@@ -5611,7 +5647,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
             let oplog = oplog.clone();
             let commit_reached = commit_reached.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 let _ = committed.unwrap().send(());
                 commit_reached.wait().await;
                 std::future::pending::<()>().await;
@@ -6299,7 +6335,7 @@ async fn malformed_history_is_rejected_while_rebuilding_the_index() {
         }))
         .await
         .unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     drop(producer);
 
     assert!(matches!(
@@ -6457,7 +6493,7 @@ async fn history_rebuild_rejects_duplicate_nested_stream_ownership() {
         }))
         .await
         .unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     drop(producer);
 
     assert!(
@@ -6512,7 +6548,7 @@ async fn history_rebuild_rejects_nested_registration_without_enclosing_item() {
         }))
         .await
         .unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     drop(producer);
 
     assert!(matches!(
@@ -6964,6 +7000,184 @@ async fn session_control_batch_validates_before_appending_any_record() {
     }
 }
 
+pub(crate) fn test_fence() -> crate::services::oplog::OplogFence {
+    crate::services::oplog::OplogFence {
+        agent_id: identity().agent_id,
+        expected_epoch: golem_common::model::ShardEpoch(3),
+        actual_epoch: Some(golem_common::model::ShardEpoch(4)),
+        writer_conflict: false,
+    }
+}
+
+/// A fence has to reach the worker executor's boundaries as a fence: flattened into
+/// `InvalidRequest` it is rejected as a validation failure, and the caller never reroutes.
+#[test]
+fn a_fenced_oplog_error_keeps_its_type_through_the_producer() {
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+    let fenced = StreamStoreError::from(crate::services::oplog::OplogError::Fenced(test_fence()));
+    assert!(matches!(fenced, StreamStoreError::Fenced(_)));
+    assert!(matches!(
+        fenced.into_worker_executor_error(WorkerExecutorError::invalid_request),
+        WorkerExecutorError::OplogFenced { .. }
+    ));
+
+    let storage = StreamStoreError::from(crate::services::oplog::OplogError::Storage(
+        "connection reset".to_string(),
+    ));
+    assert!(matches!(storage, StreamStoreError::Oplog(_)));
+    assert!(matches!(
+        storage.into_worker_executor_error(WorkerExecutorError::invalid_request),
+        WorkerExecutorError::InvalidRequest { .. }
+    ));
+}
+
+#[test]
+async fn a_fenced_session_record_append_is_reported_as_fenced() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = producer(oplog.clone(), &identity, None).await;
+    oplog.refuse_adds(test_fence());
+
+    let result = producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerDeleting(StreamConsumerDeletingRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                consumer_environment_id: identity.environment_id,
+                consumer: identity.agent_id,
+                consumer_fingerprint: identity.fingerprint,
+                deleting_at_millis: 100,
+            }),
+        )
+        .await;
+
+    assert!(
+        matches!(result, Err(StreamStoreError::Fenced(_))),
+        "a refused session record append must stay a fence, got {result:?}"
+    );
+}
+
+/// A producer committing the way the worker does: a commit refused by a fence is swallowed,
+/// and only the oplog's latch records it.
+async fn producer_swallowing_fenced_commits(
+    oplog: Arc<TestOplog>,
+    identity: &TestIdentity,
+) -> Arc<DurableStreamStore> {
+    let commit_oplog = oplog.clone();
+    let commit: DurableStreamCommit = Arc::new(move |committed| {
+        let oplog = commit_oplog.clone();
+        Box::pin(async move {
+            if oplog.fence().is_some() {
+                return;
+            }
+            oplog
+                .commit(CommitLevel::Always)
+                .await
+                .expect("oplog write");
+            if let Some(committed) = committed {
+                let _ = committed.send(());
+            }
+        })
+    });
+    DurableStreamStore::load_with_commit(
+        oplog,
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+        commit,
+    )
+    .await
+    .unwrap()
+}
+
+/// Items whose commit was refused never reached the oplog: a live reader handed them would
+/// journal offsets the shard's new owner replays without.
+#[test]
+async fn a_fenced_commit_neither_publishes_nor_indexes_stream_items() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = producer_swallowing_fenced_commits(oplog.clone(), &identity).await;
+    let handle = producer
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    let bus = producer.bus(handle.stream_id).unwrap();
+    let mut subscription = bus.subscribe().await.unwrap();
+    let committed_before = oplog.committed_length();
+    oplog.latch_fence(test_fence());
+
+    let result = producer
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
+        .await;
+
+    assert!(
+        matches!(result, Err(StreamStoreError::Fenced(_))),
+        "a write whose commit was refused must report the fence, got {result:?}"
+    );
+    // The refused write poisons the store, which retires its buses: the reader may observe
+    // that retirement, but never an event.
+    let received = tokio::time::timeout(Duration::from_millis(200), subscription.recv()).await;
+    assert!(
+        !matches!(received, Ok(Ok(_))),
+        "nothing may be published for a write whose commit was refused"
+    );
+    assert_eq!(oplog.committed_length(), committed_before);
+    assert_eq!(
+        producer.index.lock().await.streams[&handle.stream_id].next_sequence,
+        0
+    );
+    // The latch outlives the refused write: a later write reports the fence as well, not a
+    // local recovery.
+    let retried = producer
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
+        .await;
+    assert!(
+        matches!(retried, Err(StreamStoreError::Fenced(_))),
+        "a write after a fence must report the fence, got {retried:?}"
+    );
+}
+
+#[test]
+async fn a_fenced_commit_does_not_record_an_attachment_in_the_index() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = producer_swallowing_fenced_commits(oplog.clone(), &identity).await;
+    let handle = producer
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    let key = attachment_key(&identity, handle.stream_id);
+    oplog.latch_fence(test_fence());
+
+    let result = producer.prepare_attachment(key.clone(), 100).await;
+
+    assert!(
+        matches!(result, Err(StreamStoreError::Fenced(_))),
+        "an attachment whose commit was refused must report the fence, got {result:?}"
+    );
+    assert!(
+        producer
+            .inspect_attachments()
+            .await
+            .iter()
+            .all(|view| view.key != key)
+    );
+}
+
 #[test]
 async fn malformed_session_record_is_rejected_at_the_write_boundary() {
     let identity = identity();
@@ -7181,7 +7395,7 @@ async fn restart_recovers_registration_committed_before_caller_observation() {
             let oplog = oplog.clone();
             let commit_reached = commit_reached.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(committed) = committed {
                     let _ = committed.send(());
                 }
@@ -7332,7 +7546,7 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
         let live = live.clone();
         async move {
             live.run_owned(None, 0, move |owner, context| async move {
-                owner.commit(&context).await;
+                owner.commit(&context).await.unwrap();
                 context.finish_durable_effect();
                 owner.notify_session_records_changed(Some(&context));
                 requested.send(()).unwrap();
@@ -7372,7 +7586,7 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
                 let committed = committed.clone();
                 let release = release.clone();
                 Box::pin(async move {
-                    oplog.commit(CommitLevel::Always).await;
+                    oplog.commit(CommitLevel::Always).await.unwrap();
                     if let Some(receipt) = receipt {
                         let _ = receipt.send(());
                     }

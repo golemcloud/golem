@@ -83,7 +83,7 @@ pub trait Pool: Debug + Sync + Clone {
             Err(err) => {
                 warn!(
                     svc_name, api_name, error = ?err,
-                    "Rolling back, transaction failed with repo error",
+                    "Rolling back transaction, closure returned an error",
                 );
 
                 // If rollback fails, we still return the original error, but log the rollback error

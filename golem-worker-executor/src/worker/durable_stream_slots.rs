@@ -254,7 +254,8 @@ fn append_error(error: StreamStoreError) -> WorkerExecutorError {
         | StreamStoreError::UnknownStream(_) => {
             WorkerExecutorError::invalid_request(error.to_string())
         }
-        _ => WorkerExecutorError::runtime(error.to_string()),
+        // A refused write keeps its type, so the caller is sent to the shard's new owner.
+        error => error.into_worker_executor_error(WorkerExecutorError::runtime),
     }
 }
 

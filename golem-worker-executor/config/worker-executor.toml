@@ -111,9 +111,12 @@ max_idle_per_host = 8
 max_total_connections = 200
 
 [indexed_storage]
-type = "KVStoreRedis"
+type = "Sqlite"
 
 [indexed_storage.config]
+database = "../data/worker-executor-indexed-storage.db"
+foreign_keys = false
+max_connections = 10
 
 [indexed_storage_retry]
 max_attempts = 3

@@ -1594,6 +1594,7 @@ mod tests {
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _fingerprint: golem_common::model::AgentFingerprint,
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }

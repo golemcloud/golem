@@ -224,7 +224,12 @@ impl DurableStreamStore {
     /// Rejects work after the resident producer has been poisoned or retired.
     pub(crate) fn ensure_healthy(&self) -> Result<(), StreamStoreError> {
         if self.poisoned.load(Ordering::Acquire) {
-            Err(StreamStoreError::RecoveryRequired)
+            // A fenced write poisons the store, and every later write would be refused by the
+            // same latch: report the fence so a caller reroutes instead of recovering locally.
+            match self.oplog.fence() {
+                Some(fence) => Err(StreamStoreError::Fenced(fence)),
+                None => Err(StreamStoreError::RecoveryRequired),
+            }
         } else {
             Ok(())
         }
@@ -567,7 +572,10 @@ impl DurableStreamStore {
             .expect("durable stream producer-owned write terminated")
     }
 
-    pub(super) async fn commit(&self, context: &StreamWriteContext) {
+    pub(super) async fn commit(
+        &self,
+        context: &StreamWriteContext,
+    ) -> Result<(), StreamStoreError> {
         context.assert_owner(self);
         context.begin_durable_effect();
         let scope = &context.scope;
@@ -585,17 +593,32 @@ impl DurableStreamStore {
             .lock()
             .expect("commit tail list lock poisoned")
             .push(task);
-        receipt
-            .await
-            .expect("durable stream commit failed before durability receipt");
+        let received = receipt.await;
+        // A fenced commit drops the receipt rather than signalling it, so the latch is read
+        // before a missing receipt is treated as a failed callback.
+        self.committed_unless_fenced()?;
+        received.expect("durable stream commit failed before durability receipt");
+        Ok(())
     }
 
     pub(super) async fn commit_notifying(
         &self,
         context: &StreamWriteContext,
         committed: oneshot::Sender<()>,
-    ) {
-        self.commit(context).await;
+    ) -> Result<(), StreamStoreError> {
+        self.commit(context).await?;
         let _ = committed.send(());
+        Ok(())
+    }
+
+    /// The worker's commit swallows a refusal: it only spawns the give-up. The refused append
+    /// has latched the fence before the commit resolves, so the latch is what tells a persisted
+    /// write from one that must not be indexed, retained or published. A below-threshold add
+    /// answers `Ok` on a latched oplog, so no earlier result can stand in for this check.
+    fn committed_unless_fenced(&self) -> Result<(), StreamStoreError> {
+        match self.oplog.fence() {
+            Some(fence) => Err(StreamStoreError::Fenced(fence)),
+            None => Ok(()),
+        }
     }
 }

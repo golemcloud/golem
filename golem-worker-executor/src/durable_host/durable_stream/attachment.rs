@@ -230,8 +230,8 @@ impl DurableStreamStore {
                 entity_parent_start_index,
                 OplogPayload::Inline(Box::new(record)),
             ))
-            .await;
-        self.commit(context).await;
+            .await?;
+        self.commit(context).await?;
         self.notify_session_records_changed(Some(context));
         Ok(false)
     }
@@ -336,8 +336,8 @@ impl DurableStreamStore {
                     entity_parent_start_index,
                     OplogPayload::Inline(Box::new(record)),
                 ))
-                .await;
-            self.commit(context).await;
+                .await?;
+            self.commit(context).await?;
             match (was_reconcilable, is_reconcilable) {
                 (false, true) => {
                     self.reconcilable_attachment_count
@@ -759,8 +759,8 @@ impl DurableStreamStore {
                 records
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {
             match entry {
@@ -877,8 +877,8 @@ impl DurableStreamStore {
                 entity_parent_start_index,
                 OplogPayload::Inline(Box::new(record.clone())),
             ))
-            .await;
-        self.commit(context).await;
+            .await?;
+        self.commit(context).await?;
         index.apply_session_references(
             entity_parent_start_index,
             &record,

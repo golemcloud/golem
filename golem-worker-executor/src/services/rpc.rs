@@ -234,9 +234,10 @@ impl<E> DurableStreamReadError<E> {
         map: impl FnOnce(String) -> E,
     ) -> Self {
         match error {
-            crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired => {
-                Self::Unavailable
-            }
+            // A fenced store is as unavailable here as one awaiting recovery: the stream lives on
+            // with the shard's new owner.
+            crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired
+            | crate::durable_host::durable_stream::StreamStoreError::Fenced(_) => Self::Unavailable,
             error => Self::Other(map(error.to_string())),
         }
     }

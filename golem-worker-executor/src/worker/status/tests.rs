@@ -2932,6 +2932,7 @@ impl OplogService for TestCase {
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         unreachable!()
     }
@@ -2945,6 +2946,7 @@ impl OplogService for TestCase {
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         unreachable!()
     }
@@ -2958,6 +2960,7 @@ impl OplogService for TestCase {
         _initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        _shard_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Arc<dyn Oplog + 'static> {
         unreachable!()
     }
@@ -2975,7 +2978,8 @@ impl OplogService for TestCase {
         _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-    ) {
+        _expected_epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<(), crate::services::oplog::OplogError> {
         unreachable!()
     }
 

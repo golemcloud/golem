@@ -658,7 +658,7 @@ impl UpdateManagement for Context {
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_failed(target_revision, details)
             .await
@@ -669,7 +669,7 @@ impl UpdateManagement for Context {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
             .await

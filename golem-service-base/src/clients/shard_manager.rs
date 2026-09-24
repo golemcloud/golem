@@ -56,22 +56,37 @@ pub trait ShardManager: Send + Sync {
     /// UUID it generated at startup. Idempotent: the same `executor_id` at the
     /// same address refreshes the existing shard lease rather than creating a
     /// second one.
+    ///
+    /// `previous_shard_epochs` is the set this process held under an earlier
+    /// `executor_id` the manager answered `LeaseNotFound` for, and is empty on
+    /// a first registration. It is evidence, not a request: it never assigns a
+    /// shard, and only raises the manager's recorded epochs where its state has
+    /// lost history, so the epochs it mints next clear the oplog rows this
+    /// process wrote before.
     async fn register(
         &self,
         port: u16,
         pod_name: Option<String>,
         executor_id: Uuid,
+        previous_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardRegistration, ShardManagerError>;
 
     /// Extends this executor's shard lease. `shard_epochs` is the set the
     /// executor believes it holds; it is not a condition of the renewal. A
-    /// claim that does not match the manager's view is renewed all the same,
+    /// set that does not match the manager's view is renewed all the same,
     /// and the returned lease carries the manager's set, which the caller
     /// adopts exactly as it would an `AssignShards` push.
+    ///
+    /// `fenced_shard_epochs` are the epochs recorded on oplogs this executor
+    /// was refused writes to, keyed by shard. Evidence, like
+    /// `previous_shard_epochs` on `register`: above the manager's record they
+    /// mean its state lost history, and every owner of the shard is minted one
+    /// past them; at or below it they move nothing.
     async fn renew_shard_lease(
         &self,
         executor_id: Uuid,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+        fenced_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLease, ShardLeaseError>;
 
     /// Releases the shard lease on a graceful shutdown. Lenient by contract: a
@@ -158,7 +173,7 @@ fn shard_lease_from_wire(
     Ok(ShardLease {
         shard_epochs: shard_epochs_from_proto(lease.shard_epochs)?,
         expires_at: expires_at_from_ttl(lease.lease_ttl, sent_at)?,
-        revision: ShardLeaseRevision(lease.revision),
+        revision: ShardLeaseRevision::from_wire(&lease.incarnation_id, lease.revision),
     })
 }
 
@@ -285,14 +300,21 @@ impl ShardManager for GrpcShardManager {
         port: u16,
         pod_name: Option<String>,
         executor_id: Uuid,
+        previous_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardRegistration, ShardManagerError> {
         with_retries(
             "shard_manager",
             "register",
             Some(format!("{pod_name:?}")),
             &self.retries,
-            &(self.client.clone(), port, pod_name, executor_id),
-            |(client, port, pod_name, executor_id)| {
+            &(
+                self.client.clone(),
+                port,
+                pod_name,
+                executor_id,
+                previous_shard_epochs,
+            ),
+            |(client, port, pod_name, executor_id, previous_shard_epochs)| {
                 Box::pin(async move {
                     let (sent_at, response) = client
                         .call("register", move |client| {
@@ -300,6 +322,11 @@ impl ShardManager for GrpcShardManager {
                                 port: *port as i32,
                                 pod_name: pod_name.clone(),
                                 executor_id: executor_id.to_string(),
+                                previous_shard_epochs: shard_epochs_to_proto(
+                                    previous_shard_epochs
+                                        .iter()
+                                        .map(|(shard_id, epoch)| (*shard_id, *epoch)),
+                                ),
                             };
                             Box::pin(async move {
                                 let (sent_at, response) = issued(client.register(request)).await;
@@ -318,7 +345,10 @@ impl ShardManager for GrpcShardManager {
                                         .map_err(ShardManagerError::ConversionError)?,
                                     expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)
                                         .map_err(ShardManagerError::ConversionError)?,
-                                    revision: ShardLeaseRevision(success.revision),
+                                    revision: ShardLeaseRevision::from_wire(
+                                        &success.incarnation_id,
+                                        success.revision,
+                                    ),
                                 },
                             })
                         }
@@ -339,6 +369,7 @@ impl ShardManager for GrpcShardManager {
         &self,
         executor_id: Uuid,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+        fenced_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<ShardLease, ShardLeaseError> {
         let (sent_at, response) = self
             .client
@@ -347,6 +378,11 @@ impl ShardManager for GrpcShardManager {
                     executor_id: executor_id.to_string(),
                     shard_epochs: shard_epochs_to_proto(
                         shard_epochs
+                            .iter()
+                            .map(|(shard_id, epoch)| (*shard_id, *epoch)),
+                    ),
+                    fenced_shard_epochs: shard_epochs_to_proto(
+                        fenced_shard_epochs
                             .iter()
                             .map(|(shard_id, epoch)| (*shard_id, *epoch)),
                     ),
@@ -706,7 +742,7 @@ impl From<&'static str> for QuotaError {
 
 /// The failure arms of `RenewShardLease` and `Deregister`; the executor
 /// branches on the arm, never on the message string. There is no stale-epoch
-/// arm: a claim that does not match the manager's view is renewed and
+/// arm: a held set that does not match the manager's view is renewed and
 /// corrected in the response, not refused.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ShardLeaseError {
@@ -811,6 +847,7 @@ mod tests {
     /// earlier than one anchored on arrival would - by exactly the time it took.
     #[test]
     fn a_delayed_grant_is_anchored_where_the_request_was_sent_not_where_the_answer_arrived() {
+        let incarnation = Uuid::new_v4();
         let on_the_wire = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
             shard_epochs: vec![],
             lease_ttl: Some(prost_types::Duration {
@@ -818,6 +855,7 @@ mod tests {
                 nanos: 0,
             }),
             revision: 3,
+            incarnation_id: incarnation.to_string(),
         };
         let sent_at = Instant::now();
         // the answer took its time
@@ -830,6 +868,12 @@ mod tests {
             lease.expires_at < Instant::now() + Duration::from_secs(60),
             "time the answer spent in flight must come off the lease, never on to it"
         );
-        assert_eq!(lease.revision, ShardLeaseRevision(3));
+        assert_eq!(
+            lease.revision,
+            ShardLeaseRevision {
+                incarnation: Some(incarnation),
+                number: 3
+            }
+        );
     }
 }

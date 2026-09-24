@@ -566,6 +566,7 @@ pub(crate) mod tests {
                             timestamp: Timestamp::now_utc(),
                         },
                     ))),
+                    None,
                 )
                 .await;
             Self {
@@ -690,7 +691,8 @@ pub(crate) mod tests {
                         timestamp: Timestamp::now_utc(),
                         entity_parent_start_index: None,
                     })
-                    .await;
+                    .await
+                    .unwrap();
             }
             if let Some(matching) = matching {
                 fixture
@@ -698,7 +700,8 @@ pub(crate) mod tests {
                     .add(OplogEntry::revert(OplogRegion::from_range(
                         2..=if matching { 3 } else { 2 },
                     )))
-                    .await;
+                    .await
+                    .unwrap();
             } else {
                 fixture
                     .oplog
@@ -706,7 +709,8 @@ pub(crate) mod tests {
                         timestamp: Timestamp::now_utc(),
                         entity_parent_start_index: None,
                     })
-                    .await;
+                    .await
+                    .unwrap();
             }
             let marker = StreamSessionRecord::ForkCut(self_revert(3));
             fixture
@@ -716,7 +720,8 @@ pub(crate) mod tests {
                     entity_parent_start_index: None,
                     record: fixture.oplog.upload_payload(&marker).await.unwrap(),
                 })
-                .await;
+                .await
+                .unwrap();
             let result = StreamForkLineage::load(&*fixture.oplog, &identity, fingerprint).await;
             assert_eq!(result.is_ok(), matching == Some(true));
         }
@@ -730,11 +735,13 @@ pub(crate) mod tests {
         fixture
             .oplog
             .add(OplogEntry::jump(None, OplogRegion::from_range(2..=2)))
-            .await;
+            .await
+            .unwrap();
         fixture
             .oplog
             .add(OplogEntry::revert(OplogRegion::from_range(2..=2)))
-            .await;
+            .await
+            .unwrap();
         let lineage = StreamForkLineage::load(&*fixture.oplog, &identity, fingerprint)
             .await
             .unwrap();
@@ -854,10 +861,14 @@ pub(crate) mod tests {
                     entity_parent_start_index: None,
                 },
             };
-            fixture.oplog.add(entry).await;
+            fixture.oplog.add(entry).await.unwrap();
         }
         let region = OplogRegion::from_range(7..=9);
-        fixture.oplog.add(OplogEntry::revert(region.clone())).await;
+        fixture
+            .oplog
+            .add(OplogEntry::revert(region.clone()))
+            .await
+            .unwrap();
         let mut marker = fork(None, OplogIndex::from_u64(6));
         marker.revert = Some(region);
         marker.epoch_floor = 2;
@@ -872,8 +883,9 @@ pub(crate) mod tests {
                     .await
                     .unwrap(),
             })
-            .await;
-        fixture.oplog.commit(CommitLevel::Always).await;
+            .await
+            .unwrap();
+        fixture.oplog.commit(CommitLevel::Always).await.unwrap();
         fixture.blobs.reset();
 
         let lineage = StreamForkLineage::load_from_service(
@@ -939,7 +951,7 @@ pub(crate) mod tests {
                     entity_parent_start_index: None,
                 },
             };
-            oplog.add(entry).await;
+            oplog.add(entry).await.unwrap();
         }
         for _ in 0..2 {
             assert_eq!(
@@ -1015,7 +1027,7 @@ pub(crate) mod tests {
                         entity_parent_start_index: None,
                     }
                 };
-                oplog.add(entry).await;
+                oplog.add(entry).await.unwrap();
             }
             assert_eq!(
                 StreamForkLineage::load(&oplog, &target, fingerprint)
@@ -1067,9 +1079,12 @@ pub(crate) mod tests {
                     entity_parent_start_index: None,
                 },
             };
-            assert_eq!(fixture.oplog.add(entry).await, OplogIndex::from_u64(index));
+            assert_eq!(
+                fixture.oplog.add(entry).await.unwrap(),
+                OplogIndex::from_u64(index)
+            );
         }
-        fixture.oplog.commit(CommitLevel::Always).await;
+        fixture.oplog.commit(CommitLevel::Always).await.unwrap();
         let from_oplog = StreamForkLineage::load(&*fixture.oplog, &target, fingerprint)
             .await
             .unwrap();
@@ -1113,11 +1128,12 @@ pub(crate) mod tests {
                         timestamp: Timestamp::now_utc(),
                         entity_parent_start_index: None,
                     })
-                    .await,
+                    .await
+                    .unwrap(),
                 OplogIndex::from_u64(index)
             );
         }
-        fixture.oplog.commit(CommitLevel::Always).await;
+        fixture.oplog.commit(CommitLevel::Always).await.unwrap();
         assert!(
             !StreamForkLineage::suffix_contains_fork_cut(
                 &*fixture.service,
@@ -1138,10 +1154,11 @@ pub(crate) mod tests {
                     entity_parent_start_index: None,
                     record: fixture.oplog.upload_payload(&marker).await.unwrap(),
                 })
-                .await,
+                .await
+                .unwrap(),
             OplogIndex::from_u64(1025)
         );
-        fixture.oplog.commit(CommitLevel::Always).await;
+        fixture.oplog.commit(CommitLevel::Always).await.unwrap();
         assert!(
             StreamForkLineage::suffix_contains_fork_cut(
                 &*fixture.service,

@@ -69,7 +69,6 @@ use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::{collections::HashMap, sync::Arc};
@@ -180,24 +179,55 @@ fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorErro
 pub type InvocationRequestStream = Pin<Box<dyn Stream<Item = InvocationRequest> + Send + 'static>>;
 pub type InvocationResponseStream =
     Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
-type InvocationSessionCall<'a> = Pin<
-    Box<
-        dyn Future<Output = Result<tonic::Response<tonic::Streaming<InvocationResponse>>, Status>>
-            + Send
-            + 'a,
-    >,
->;
+/// One dispatch of an invocation session's opening frame, read up to the executor's decision.
+#[derive(Debug)]
+struct SessionDispatch {
+    decision: Option<InvocationResponse>,
+    responses: tonic::Streaming<InvocationResponse>,
+    /// Feeds the executor the rest of the caller's request stream. Nothing is sent on it before
+    /// the executor accepts, and a dispatch that is not accepted drops it unused.
+    tail: mpsc::Sender<InvocationRequest>,
+}
 
-fn invoke_agent_session_once<'a>(
-    client: &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
-    request: Option<InvocationRequestStream>,
-) -> InvocationSessionCall<'a> {
-    match request {
-        Some(request) => Box::pin(client.invoke_agent_session(request)),
-        None => Box::pin(std::future::ready(Err(Status::aborted(
-            "invocation session request was already consumed",
-        )))),
+impl SessionDispatch {
+    fn routing_miss(&self) -> Option<WorkerExecutorError> {
+        match &self.decision {
+            Some(InvocationResponse {
+                response: Some(invocation_response::Response::Rejected(rejected)),
+            }) => routing_miss_error(rejected),
+            _ => None,
+        }
     }
+
+    fn accepted(&self) -> bool {
+        matches!(
+            self.decision,
+            Some(InvocationResponse {
+                response: Some(invocation_response::Response::Accepted(_)),
+            })
+        )
+    }
+}
+
+async fn dispatch_invocation_session(
+    client: &mut WorkerExecutorClient<OtelGrpcService<Channel>>,
+    first: InvocationRequest,
+) -> Result<SessionDispatch, Status> {
+    let (tail, receiver) = mpsc::channel(1);
+    let mut responses = client
+        .invoke_agent_session(
+            futures::stream::once(std::future::ready(first)).chain(ReceiverStream::new(receiver)),
+        )
+        .await?
+        .into_inner();
+    // `tail` stays open while the decision is awaited: an executor rejects a request stream that
+    // closes before acceptance as a protocol violation.
+    let decision = responses.message().await?;
+    Ok(SessionDispatch {
+        decision,
+        responses,
+        tail,
+    })
 }
 
 #[derive(Debug)]
@@ -210,6 +240,24 @@ enum OneShotInvocationSessionResult {
 
 fn protocol_failure(details: impl Into<String>) -> OneShotInvocationSessionResult {
     OneShotInvocationSessionResult::ProtocolFailure(details.into())
+}
+
+/// The executor error a rejection carries when the request reached an executor that does not
+/// own the agent's shard: a stale route, a lapsed lease, or an oplog with a new owner. Not a
+/// refusal of the invocation - the caller retries it on the shard's owner after refreshing its
+/// routing table - which is why it is read off the typed error rather than
+/// [`decode_invocation_rejection`], whose result is a service error nothing retries.
+fn routing_miss_error(rejected: &InvocationRejected) -> Option<WorkerExecutorError> {
+    if rejected.reason != InvocationRejectionReason::Internal as i32 {
+        return None;
+    }
+    let error: WorkerExecutorError = rejected.worker_error.clone()?.try_into().ok()?;
+    // A fenced oplog crosses the wire as `ShardingNotReady`.
+    matches!(
+        error,
+        WorkerExecutorError::InvalidShardId { .. } | WorkerExecutorError::ShardingNotReady
+    )
+    .then_some(error)
 }
 
 fn protocol_executor_error(details: impl Into<String>) -> WorkerExecutorError {
@@ -2143,7 +2191,18 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 |outcome| match outcome {
                     OneShotInvocationSessionResult::Success(output) => Ok(*output),
                     OneShotInvocationSessionResult::Rejected(rejected) => {
-                        Err(decode_invocation_rejection(rejected).into())
+                        // A routing miss is retried on the shard's owner, like the typed failure
+                        // an executor sends for the same condition after accepting.
+                        match routing_miss_error(&rejected) {
+                            Some(error) => {
+                                tracing::debug!(
+                                    %error,
+                                    "Executor turned the invocation away as a routing miss"
+                                );
+                                Err(error.into())
+                            }
+                            None => Err(decode_invocation_rejection(rejected).into()),
+                        }
                     }
                     OneShotInvocationSessionResult::Failure(failure) => {
                         Err(decode_invocation_failure(failure).into())
@@ -2164,41 +2223,81 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         request: InvocationRequestStream,
     ) -> WorkerResult<InvocationResponseStream> {
-        let routing_table = self
-            .routing_table_service
-            .get_routing_table()
-            .await
-            .map_err(|error| {
-                WorkerServiceError::InternalCallError(
-                    CallWorkerExecutorError::FailedToGetRoutingTable(error),
-                )
-            })?;
-        let pod = routing_table.lookup(agent_id).ok_or_else(|| {
-            WorkerServiceError::InternalCallError(CallWorkerExecutorError::FailedToConnectToPod(
-                Status::unavailable(format!("no active shard for agent {agent_id}")),
-            ))
-        })?;
-        let request = Arc::new(std::sync::Mutex::new(Some(request)));
-        let response = self
-            .worker_executor_clients
-            .call_without_retry(
-                "invoke_agent_session",
-                pod.uri(self.worker_executor_clients.uses_tls()),
-                move |worker_executor_client| {
-                    let request = request
-                        .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
-                        .take();
-                    invoke_agent_session_once(worker_executor_client, request)
-                },
+        // An executor that does not own the agent's shard rejects the session before accepting
+        // it, and no input may precede acceptance. So the opening frame alone is dispatched, and
+        // is dispatched again after the routing table is refreshed, exactly like the unary path;
+        // the caller's input is attached only to the executor that accepted. A transport failure
+        // before the decision arrives also sends the opening frame again, with the same attempt
+        // id and downgraded to MayExist, as the unary path does. Two consequences: input a caller
+        // sends too early is held until acceptance, so it is the response validator rather than
+        // the executor that refuses it; and while no executor owns the shard the session waits,
+        // which keeps a WebSocket session's connection open for as long as that lasts.
+        let mut request = request;
+        let first = request.next().await.ok_or_else(|| {
+            WorkerServiceError::Internal(
+                "invocation session request ended before start".to_string(),
             )
-            .await
-            .map_err(|status| {
-                WorkerServiceError::InternalCallError(
-                    CallWorkerExecutorError::FailedToConnectToPod(status),
-                )
-            })?;
-        Ok(Box::pin(response.into_inner()))
+        })?;
+        let first_dispatch = Arc::new(AtomicBool::new(true));
+
+        let dispatch = self
+            .call_worker_executor(
+                agent_id.clone(),
+                "invoke_agent_session",
+                move |worker_executor_client| {
+                    let mut first = first.clone();
+                    if let Some(invocation_request::Request::Start(start)) = &mut first.request
+                        && start.freshness_disposition
+                            == golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                                as i32
+                        && freshness_disposition_for_dispatch(
+                            InvocationFreshnessDisposition::KnownFresh,
+                            &first_dispatch,
+                        ) == InvocationFreshnessDisposition::MayExist
+                    {
+                        start.freshness_disposition =
+                            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                                as i32;
+                    }
+                    Box::pin(dispatch_invocation_session(worker_executor_client, first))
+                },
+                |dispatch| match dispatch.routing_miss() {
+                    Some(error) => {
+                        tracing::debug!(
+                            %error,
+                            "Executor turned the invocation session away as a routing miss"
+                        );
+                        Err(error.into())
+                    }
+                    None => Ok(dispatch),
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
+
+        if dispatch.accepted() {
+            let tail = dispatch.tail;
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        item = request.next() => match item {
+                            Some(item) => {
+                                if tail.send(item).await.is_err() {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        },
+                        // The session ended on the executor's side while the caller still had
+                        // input to send; stop holding the caller's stream.
+                        _ = tail.closed() => break,
+                    }
+                }
+            });
+        }
+        Ok(Box::pin(
+            futures::stream::iter(dispatch.decision.map(Ok)).chain(dispatch.responses),
+        ))
     }
 
     async fn invoke_agent_session_one_shot(
@@ -3103,10 +3202,10 @@ mod one_shot_session_tests {
 #[cfg(test)]
 mod rejection_mapping_tests {
     use super::{
-        WorkerClient, WorkerExecutorWorkerClient, decode_invocation_rejection,
+        WorkerClient, WorkerExecutorWorkerClient, WorkerServiceError, decode_invocation_rejection,
         validate_agent_enumeration_count,
     };
-    use futures::{Stream, stream};
+    use futures::{Stream, StreamExt, stream};
     use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
     use golem_api_grpc::proto::golem::shardmanager::{
         IpAddress, Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry, ShardId,
@@ -3114,8 +3213,9 @@ mod rejection_mapping_tests {
     };
     use golem_api_grpc::proto::golem::worker::v1::{AgentError, agent_error};
     use golem_api_grpc::proto::golem::worker::{
+        InputStreamEnd, InvocationAccepted, InvocationFreshnessDisposition as WireFreshness,
         InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationResponse,
-        invocation_response,
+        InvocationStart, invocation_request, invocation_response,
     };
     use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::{
         WorkerExecutor, WorkerExecutorServer,
@@ -3137,11 +3237,15 @@ mod rejection_mapping_tests {
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
     use golem_service_base::service::routing_table::{RoutingTableConfig, RoutingTableService};
+    use std::collections::BTreeMap;
     use std::net::Ipv4Addr;
     use std::pin::Pin;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
     use test_r::test;
     use tokio::net::TcpListener;
+    use tokio_stream::wrappers::ReceiverStream;
     use tokio_stream::wrappers::TcpListenerStream;
     use tonic::codec::CompressionEncoding;
     use tonic::{Request, Response, Status};
@@ -3249,6 +3353,10 @@ mod rejection_mapping_tests {
             _port: u16,
             _pod_name: Option<String>,
             _executor_id: uuid::Uuid,
+            _previous_shard_epochs: std::collections::BTreeMap<
+                golem_common::model::ShardId,
+                ShardEpoch,
+            >,
         ) -> Result<ShardRegistration, ShardManagerError> {
             unreachable!()
         }
@@ -3257,6 +3365,10 @@ mod rejection_mapping_tests {
             &self,
             _executor_id: uuid::Uuid,
             _shard_epochs: std::collections::BTreeMap<golem_common::model::ShardId, ShardEpoch>,
+            _fenced_shard_epochs: std::collections::BTreeMap<
+                golem_common::model::ShardId,
+                ShardEpoch,
+            >,
         ) -> Result<ShardLease, ShardLeaseError> {
             unreachable!()
         }
@@ -3308,8 +3420,20 @@ mod rejection_mapping_tests {
         }
     }
 
-    #[derive(Clone)]
-    struct RejectingExecutor;
+    /// Rejects every invocation as `NotFound`, after first rejecting `routing_misses` of them as
+    /// having reached an executor that does not own the agent's shard. With `accept` it accepts
+    /// instead of rejecting as `NotFound`, and keeps the session open until its request stream ends.
+    #[derive(Clone, Default)]
+    struct RejectingExecutor {
+        routing_misses: Arc<AtomicUsize>,
+        accept: bool,
+        calls: Arc<AtomicUsize>,
+        /// The opening frame's freshness disposition, one per call in call order.
+        dispositions: Arc<std::sync::Mutex<Vec<i32>>>,
+        /// Receives `(call index, frames after the opening one)` once a call's request stream has
+        /// ended, which happens after the call returned its response stream.
+        tail_frames: Option<tokio::sync::mpsc::UnboundedSender<(usize, usize)>>,
+    }
 
     macro_rules! unimplemented_unary {
         ($name:ident, $request:ty, $response:ty) => {
@@ -3474,37 +3598,98 @@ mod rejection_mapping_tests {
         ) -> Result<Response<Self::InvokeAgentSessionStream>, Status> {
             let mut requests = request.into_inner();
             let start = requests.message().await?.expect("missing invocation start");
-            let (idempotency_key, agent_id) = match start.request {
+            let (idempotency_key, agent_id, freshness_disposition) = match start.request {
                 Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(
                     start,
-                )) => (start.idempotency_key, start.agent_id),
+                )) => (
+                    start.idempotency_key,
+                    start.agent_id,
+                    start.freshness_disposition,
+                ),
                 other => panic!("expected invocation start, got {other:?}"),
             };
-            Ok(Response::new(Box::pin(stream::iter([Ok(
-                InvocationResponse {
-                    response: Some(invocation_response::Response::Rejected(
-                        InvocationRejected {
-                            reason: InvocationRejectionReason::NotFound as i32,
-                            error: "agent not found".to_string(),
-                            idempotency_key,
-                            agent_id,
-                            component_revision: None,
-                            worker_error: None,
-                        },
-                    )),
-                },
-            )]))))
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.dispositions
+                .lock()
+                .unwrap()
+                .push(freshness_disposition);
+            let routing_miss = self
+                .routing_misses
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok();
+            let response = if !routing_miss && self.accept {
+                invocation_response::Response::Accepted(InvocationAccepted {
+                    agent_id,
+                    idempotency_key,
+                    ..Default::default()
+                })
+            } else {
+                let (reason, error, worker_error) = if routing_miss {
+                    let error = WorkerExecutorError::InvalidShardId {
+                        shard_id: golem_common::model::ShardId::new(0),
+                        shard_ids: Vec::new(),
+                    };
+                    (
+                        InvocationRejectionReason::Internal,
+                        error.to_string(),
+                        Some(error.into()),
+                    )
+                } else {
+                    (
+                        InvocationRejectionReason::NotFound,
+                        "agent not found".to_string(),
+                        None,
+                    )
+                };
+                invocation_response::Response::Rejected(InvocationRejected {
+                    reason: reason as i32,
+                    error,
+                    idempotency_key,
+                    agent_id,
+                    component_revision: None,
+                    worker_error,
+                })
+            };
+            let accepted = matches!(response, invocation_response::Response::Accepted(_));
+
+            let (responses, receiver) = tokio::sync::mpsc::channel(1);
+            responses
+                .send(Ok(InvocationResponse {
+                    response: Some(response),
+                }))
+                .await
+                .expect("the response stream was dropped before it was returned");
+            // A rejected session ends at once, as an executor's does. An accepted one stays open
+            // until the caller's request stream ends, or its forwarded input could be cut off.
+            let held_open = accepted.then_some(responses);
+            let tail_frames = self.tail_frames.clone();
+            tokio::spawn(async move {
+                let mut frames = 0;
+                // An error ends the count as well: a caller drops a rejected session's request
+                // stream rather than finishing it.
+                while let Ok(Some(_)) = requests.message().await {
+                    frames += 1;
+                }
+                if let Some(tail_frames) = tail_frames {
+                    let _ = tail_frames.send((call, frames));
+                }
+                drop(held_open);
+            });
+            Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
         }
     }
 
-    #[test]
-    async fn unary_not_found_rejection_preserves_the_public_error_category() {
+    /// A worker service client whose only executor is `executor`, and an agent to invoke through
+    /// it.
+    async fn client_against(executor: RejectingExecutor) -> (WorkerExecutorWorkerClient, AgentId) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             tonic::transport::Server::builder()
                 .add_service(
-                    WorkerExecutorServer::new(RejectingExecutor)
+                    WorkerExecutorServer::new(executor)
                         .accept_compressed(CompressionEncoding::Gzip)
                         .send_compressed(CompressionEncoding::Gzip),
                 )
@@ -3547,8 +3732,15 @@ mod rejection_mapping_tests {
             component_id: ComponentId::new(),
             agent_id: "missing".to_string(),
         };
+        (client, agent_id)
+    }
 
-        let error = client
+    /// Invokes an agent through a worker service whose only executor is `executor`, and returns
+    /// the error the invocation ends with.
+    async fn invoke_against(executor: RejectingExecutor) -> WorkerServiceError {
+        let (client, agent_id) = client_against(executor).await;
+
+        client
             .invoke_agent(
                 &agent_id,
                 Some("run".to_string()),
@@ -3568,12 +3760,162 @@ mod rejection_mapping_tests {
                 None,
             )
             .await
-            .unwrap_err();
+            .unwrap_err()
+    }
+
+    #[test]
+    async fn unary_not_found_rejection_preserves_the_public_error_category() {
+        let error = invoke_against(RejectingExecutor::default()).await;
 
         let public_error: AgentError = error.into();
         assert!(
             matches!(public_error.error, Some(agent_error::Error::NotFound(_))),
             "InvocationRejected(NotFound) must remain a public not-found error, got {public_error:?}"
+        );
+    }
+
+    #[test]
+    async fn a_routing_miss_rejection_is_retried_rather_than_surfaced() {
+        // An executor that has just lost the agent's shard rejects before accepting. The worker
+        // service has to retry that on the shard's owner - here the same fake, answering the second
+        // time - rather than fail the invocation with the first rejection.
+        let executor = RejectingExecutor {
+            routing_misses: Arc::new(AtomicUsize::new(1)),
+            ..Default::default()
+        };
+        let calls = executor.calls.clone();
+
+        let error = invoke_against(executor).await;
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the routing miss must be retried, exactly once"
+        );
+        let public_error: AgentError = error.into();
+        assert!(
+            matches!(public_error.error, Some(agent_error::Error::NotFound(_))),
+            "the retried call's answer must be the one surfaced, got {public_error:?}"
+        );
+    }
+
+    fn session_start(agent_id: &AgentId) -> InvocationRequest {
+        InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                agent_id: Some(agent_id.clone().into()),
+                method_name: Some("run".to_string()),
+                idempotency_key: Some(
+                    golem_common::model::IdempotencyKey::new("session-key".to_string()).into(),
+                ),
+                freshness_disposition: WireFreshness::KnownFresh as i32,
+                ..Default::default()
+            })),
+        }
+    }
+
+    #[test]
+    async fn a_routing_miss_rejection_on_a_session_is_retried_on_the_shard_owner() {
+        // A streaming session meets the same routing miss as a unary invocation and has to be
+        // retried the same way, including giving up KnownFresh once a dispatch may have reached
+        // an executor.
+        let executor = RejectingExecutor {
+            routing_misses: Arc::new(AtomicUsize::new(1)),
+            ..Default::default()
+        };
+        let calls = executor.calls.clone();
+        let dispositions = executor.dispositions.clone();
+        let (client, agent_id) = client_against(executor).await;
+
+        let responses = client
+            .invoke_agent_session(
+                &agent_id,
+                Box::pin(stream::iter([session_start(&agent_id)])),
+            )
+            .await
+            .expect("the session was not dispatched");
+        let responses =
+            tokio::time::timeout(Duration::from_secs(30), responses.collect::<Vec<_>>())
+                .await
+                .expect("the session's response stream never ended");
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the routing miss must be retried, exactly once"
+        );
+        assert_eq!(
+            *dispositions.lock().unwrap(),
+            vec![
+                WireFreshness::KnownFresh as i32,
+                WireFreshness::MayExist as i32
+            ]
+        );
+        match responses.as_slice() {
+            [
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Rejected(rejected)),
+                }),
+            ] => assert_eq!(
+                rejected.reason,
+                InvocationRejectionReason::NotFound as i32,
+                "the retried call's answer must be the one surfaced"
+            ),
+            other => panic!("expected only the retried call's rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    async fn session_input_reaches_only_the_executor_that_accepted() {
+        // No input may precede acceptance, so the executor that turned the session away must have
+        // seen the opening frame alone, and the caller's input must reach the one that accepted.
+        let (tail_frames, mut ended) = tokio::sync::mpsc::unbounded_channel();
+        let executor = RejectingExecutor {
+            routing_misses: Arc::new(AtomicUsize::new(1)),
+            accept: true,
+            tail_frames: Some(tail_frames),
+            ..Default::default()
+        };
+        let (client, agent_id) = client_against(executor).await;
+        let request = stream::iter([
+            session_start(&agent_id),
+            InvocationRequest {
+                request: Some(invocation_request::Request::InputEnd(
+                    InputStreamEnd::default(),
+                )),
+            },
+        ]);
+
+        // Held until the end: dropping it would cancel the session before its input arrived.
+        let mut responses = client
+            .invoke_agent_session(&agent_id, Box::pin(request))
+            .await
+            .expect("the session was not dispatched");
+        let first = tokio::time::timeout(Duration::from_secs(30), responses.next())
+            .await
+            .expect("the session sent no first frame")
+            .expect("the session's response stream ended without a frame");
+        assert!(
+            matches!(
+                first,
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Accepted(_)),
+                })
+            ),
+            "the caller must see the acceptance first, got {first:?}"
+        );
+
+        let mut frames_per_call = BTreeMap::new();
+        while frames_per_call.len() < 2 {
+            let (call, frames) = tokio::time::timeout(Duration::from_secs(30), ended.recv())
+                .await
+                .expect("a dispatch's request stream never ended")
+                .expect("the executor stopped reporting");
+            frames_per_call.insert(call, frames);
+        }
+        assert_eq!(
+            frames_per_call,
+            BTreeMap::from([(0, 0), (1, 1)]),
+            "input must reach only the executor that accepted"
         );
     }
 }

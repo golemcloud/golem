@@ -30,11 +30,14 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
+use test_r::{define_matrix_dimension, inherit_test_dep, test};
 use url::Url;
 use uuid::Uuid;
 
 inherit_test_dep!(Arc<DockerEtcd>);
+inherit_test_dep!(#[tagged_as("sqlite")] Arc<dyn GetRoutingTablePersistence>);
+inherit_test_dep!(#[tagged_as("postgres")] Arc<dyn GetRoutingTablePersistence>);
+inherit_test_dep!(#[tagged_as("etcd")] Arc<dyn GetRoutingTablePersistence>);
 
 /// One `executor_leases` row, as a person reading the table would see it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -59,7 +62,7 @@ type RawLeaseRow = (
 
 /// What the local-mode mirror tables hold, normalized for comparison.
 #[derive(Debug, PartialEq, Eq)]
-struct MirrorSnapshot {
+pub(crate) struct MirrorSnapshot {
     leases: Vec<LeaseRow>,
     /// `(shard_id, executor_id, epoch)` per `shard_assignments` row, sorted.
     assignments: Vec<(i32, Uuid, i64)>,
@@ -124,15 +127,17 @@ impl MirrorSnapshot {
     }
 }
 
-const LEASE_TTL: Duration = Duration::from_secs(60);
-const NUMBER_OF_SHARDS: usize = 16;
+/// Shared with `service.rs`: the fixtures below construct every persistence with this count, and a
+/// persistence refuses to serve a state that disagrees with it, so the tests must use the same one.
+pub(crate) const LEASE_TTL: Duration = Duration::from_secs(60);
+pub(crate) const NUMBER_OF_SHARDS: usize = 16;
 
 /// A place where shard lease state can be stored.
 ///
 /// Hands out any number of independent clients over the *same* underlying store, which is what
 /// the compare-and-swap tests need: two clients must see each other's writes.
 #[async_trait]
-trait PersistenceStore: std::fmt::Debug + Send + Sync {
+pub(crate) trait PersistenceStore: std::fmt::Debug + Send + Sync {
     async fn connect(&self) -> Arc<dyn RoutingTablePersistence>;
 
     /// Writes something unrelated to the shard state on the same backend, so a test can check
@@ -148,7 +153,7 @@ trait PersistenceStore: std::fmt::Debug + Send + Sync {
 
 /// Creates isolated stores: two stores never see each other's data.
 #[async_trait]
-trait GetRoutingTablePersistence: std::fmt::Debug + Send + Sync {
+pub(crate) trait GetRoutingTablePersistence: std::fmt::Debug + Send + Sync {
     async fn new_store(&self) -> Arc<dyn PersistenceStore>;
 
     /// For the tests that only need a single client over a fresh store.
@@ -494,21 +499,22 @@ async fn fenced_etcd_persistence(
     (store, leader_key, persistence)
 }
 
-#[test_dep(scope = Shared, tagged_as = "sqlite")]
-async fn sqlite_persistence() -> Arc<dyn GetRoutingTablePersistence> {
+/// The dimension's fixtures live in [`super`], so that this module and `service.rs` can both
+/// inherit them; these are the constructors behind them.
+pub(crate) async fn sqlite_persistence() -> Arc<dyn GetRoutingTablePersistence> {
     let temp_dir = TempDir::new().expect("Cannot create temp dir");
     Arc::new(SqliteRoutingTablePersistence { temp_dir })
 }
 
-#[test_dep(scope = Shared, tagged_as = "postgres")]
-async fn postgres_persistence() -> Arc<dyn GetRoutingTablePersistence> {
+pub(crate) async fn postgres_persistence() -> Arc<dyn GetRoutingTablePersistence> {
     let unique_network_id = Uuid::new_v4().to_string();
     let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
     Arc::new(PostgresRoutingTablePersistence { postgres })
 }
 
-#[test_dep(scope = PerWorker, tagged_as = "etcd")]
-async fn etcd_persistence(etcd: &Arc<DockerEtcd>) -> Arc<dyn GetRoutingTablePersistence> {
+pub(crate) async fn etcd_persistence(
+    etcd: &Arc<DockerEtcd>,
+) -> Arc<dyn GetRoutingTablePersistence> {
     Arc::new(EtcdRoutingTablePersistenceFactory { etcd: etcd.clone() })
 }
 

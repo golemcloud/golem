@@ -34,6 +34,7 @@ use crate::durable_host::http::policy::{
 use crate::durable_host::http::types::classify_serializable_http_error_code;
 use crate::durable_host::p3::{DurableP3, DurableP3View, durable_worker_ctx, wasi_http_view};
 use crate::services::HasWorker;
+use crate::services::oplog::{Oplog, OplogError};
 use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
@@ -856,6 +857,27 @@ where
         }
         Err(error_code) => {
             let _ = physical.final_transmission_tx.send(Err(error_code.clone()));
+
+            // A write the storage refused because the shard moved latches the oplog, and nothing
+            // on this path sees the latch otherwise: a below-threshold frame add still succeeds,
+            // and so does this send's buffered `End`. Without this read the guest would be
+            // handed an HTTP error produced by, or racing, the lost shard instead of the
+            // ShardLost trap. `handle.trap` abandons the call exactly as the retry trap below
+            // does.
+            let latched = store.with(|mut access| {
+                latched_fence_error(
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .state
+                        .oplog
+                        .as_ref(),
+                )
+            });
+            if let Some(error) = latched {
+                return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                    handle.trap(error),
+                )));
+            }
+
             let serialized_error = serialize_error_code(&error_code);
 
             // Worker-level retry classification, mirroring the P2
@@ -946,6 +968,13 @@ where
             Err(error_code.into())
         }
     }
+}
+
+/// The error a send traps with once the oplog has latched a fence, or `None` while it has not.
+fn latched_fence_error(oplog: &dyn Oplog) -> Option<WorkerExecutorError> {
+    oplog
+        .fence()
+        .map(|fence| WorkerExecutorError::from(OplogError::Fenced(fence)))
 }
 
 pub(super) struct PhysicalSendHttpError {
@@ -1486,4 +1515,77 @@ pub(super) fn apply_headers_to_request_resource<Ctx: WorkerCtx, U: Send>(
         apply_managed_http_headers(&mut request.headers, field_size_limit, headers)
             .map_err(WorkerExecutorError::runtime)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::durability::{DurableCallTrapContext, mark_durable_call_trap_context};
+    use crate::durable_host::p3::http::test_support::*;
+    use crate::model::TrapType;
+    use crate::services::oplog::OplogFence;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::oplog::payload::types::SerializableP3HttpRequestBodyFrame;
+    use golem_common::model::{AgentId, ShardEpoch};
+    use golem_service_base::error::worker_executor::InterruptKind;
+    use test_r::test;
+
+    /// The send's gate cannot rely on the recording: once the fence has latched, a frame add that
+    /// stays below the commit threshold still succeeds. Only the latch says the shard moved, and
+    /// the error read from it has to keep its ShardLost classification through `handle.trap`.
+    ///
+    /// The gate inside `send_with_durability` needs a wasmtime `Accessor` and a live worker
+    /// context, so it is exercised here through the pieces it is built from.
+    #[test]
+    async fn a_send_failure_after_a_latched_fence_traps_as_shard_lost_even_when_frame_adds_succeed()
+    {
+        let oplog = FrameTestOplog::new();
+        assert!(
+            latched_fence_error(oplog.as_ref()).is_none(),
+            "no fence has latched, so a send failure is a genuine HTTP error"
+        );
+
+        oplog.latch_fence(OplogFence {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "sender".to_string(),
+            },
+            expected_epoch: ShardEpoch(8),
+            actual_epoch: Some(ShardEpoch(9)),
+            writer_conflict: false,
+        });
+        record_frame_entry(
+            oplog.clone(),
+            OplogIndex::NONE,
+            SerializableP3HttpRequestBodyFrame::End,
+        )
+        .await
+        .expect("a frame add below the commit threshold does not see the latch");
+
+        let error = latched_fence_error(oplog.as_ref()).expect("the latch must be read");
+        assert!(
+            matches!(error, WorkerExecutorError::OplogFenced { .. }),
+            "expected a fenced error, got {error:?}"
+        );
+
+        let trapped = mark_durable_call_trap_context(
+            anyhow::Error::from(error),
+            DurableCallTrapContext {
+                retry_from: OplogIndex::INITIAL,
+                in_atomic_region: false,
+            },
+        );
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &trapped,
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+        assert!(
+            matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "the trapped send must give the agent up, got {trap:?}"
+        );
+    }
 }

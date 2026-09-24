@@ -33,11 +33,14 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplog,
+    HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
+    HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::{ExportStreamControlResult as DomainExportResult, Worker, WorkerUpdateMode};
+use crate::worker::{
+    ExportStreamControlResult as DomainExportResult, GiveUpReason, Worker, WorkerUpdateMode,
+    given_up_by_assignment,
+};
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
 };
@@ -1233,35 +1236,42 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
-        let revision = ShardLeaseRevision(request.revision);
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision);
 
-        if let ShardDeliveryOutcome::Stale { delivered, applied } =
-            self.shard_service().revoke_shards(&shard_ids, revision)?
-        {
-            // A newer delivery has already been applied and its set is the
-            // authority; taking shards out of it would be acting on stale news.
-            tracing::warn!(
-                %delivered,
-                %applied,
-                "Ignoring a RevokeShards older than the last delivery applied"
-            );
-            return Ok(());
-        }
-
-        for (agent_id, worker_details) in self.active_agents().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err() {
-                worker_details
-                    .interrupt_and_retire(InterruptKind::Restart)
-                    .await?;
+        match self.shard_service().revoke_shards(&shard_ids, revision)? {
+            ShardDeliveryOutcome::Applied { .. } => {}
+            ShardDeliveryOutcome::Stale { delivered, applied } => {
+                // A newer delivery has already been applied and its set is the
+                // authority; taking shards out of it would be acting on stale news.
+                tracing::warn!(
+                    %delivered,
+                    %applied,
+                    "Ignoring a RevokeShards older than the last delivery applied"
+                );
+                return Ok(());
+            }
+            ShardDeliveryOutcome::FromAnotherManager { delivered, applied } => {
+                self.renew_after_a_push_from_another_manager("RevokeShards", delivered, applied);
+                return Ok(());
             }
         }
+
+        // Given up, not restarted: a restart in place would reopen each agent's oplog with the
+        // epoch this executor no longer holds. They are dropped from here and recovered by the
+        // shards' new owners.
+        let shard_service = self.shard_service();
+        self.active_agents()
+            .give_up_matching(GiveUpReason::ShardRevoked, |agent_id| {
+                shard_service.check_worker(agent_id).is_err()
+            })
+            .await;
 
         Ok(())
     }
 
     /// Full replace: the request carries this executor's complete shard set
     /// with epochs and the cluster's shard count. Anything absent from the
-    /// set is dropped, and any agent whose shard went away is restarted.
+    /// set is dropped, and any agent whose shard went away is given up.
     async fn assign_shards_internal(
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
@@ -1282,28 +1292,55 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let revision = ShardLeaseRevision(request.revision);
-        if let ShardDeliveryOutcome::Stale { delivered, applied } = self
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision);
+        match self
             .shard_service()
             .assign_shards(number_of_shards, &shard_epochs, revision)?
         {
-            // Crossed on the network with a newer delivery, which has already
-            // been applied; applying this one would put the older set back.
-            tracing::warn!(
-                %delivered,
-                %applied,
-                "Ignoring an AssignShards push older than the last delivery applied"
-            );
-            return Ok(());
+            ShardDeliveryOutcome::Applied { .. } => {}
+            ShardDeliveryOutcome::Stale { delivered, applied } => {
+                // Crossed on the network with a newer delivery, which has already
+                // been applied; applying this one would put the older set back.
+                tracing::warn!(
+                    %delivered,
+                    %applied,
+                    "Ignoring an AssignShards push older than the last delivery applied"
+                );
+                return Ok(());
+            }
+            ShardDeliveryOutcome::FromAnotherManager { delivered, applied } => {
+                self.renew_after_a_push_from_another_manager("AssignShards", delivered, applied);
+                return Ok(());
+            }
         }
 
         Self::apply_shard_assignment_effects(self).await?;
         Ok(())
     }
 
+    /// A push from a shard manager process this executor does not follow is either a deposed
+    /// manager still sending, or a new one this executor has not heard a reply from yet. The
+    /// push cannot say which, so it is ignored either way and the renewal asks: its answer names
+    /// the process in charge and carries that process's set.
+    fn renew_after_a_push_from_another_manager(
+        &self,
+        push: &'static str,
+        delivered: ShardLeaseRevision,
+        applied: ShardLeaseRevision,
+    ) {
+        tracing::warn!(
+            push,
+            %delivered,
+            %applied,
+            "Ignoring a push from a shard manager process other than the one followed; renewing the lease to hear from the one in charge"
+        );
+        self.shard_manager_service().renew_now();
+    }
+
     /// The one receipt path for a delivered shard set, whichever way it came:
     /// a registration, an `AssignShards` push, or a renewal reply that
-    /// corrected the set. Sweeps the agents whose shard went away, then hands
+    /// corrected the set. Sweeps the agents whose shard went away or came back
+    /// at a higher epoch, then hands
     /// the executor the new set to recover agents for. The sweep runs for
     /// every path, because a renewal can narrow the set as well as widen it:
     /// a path without it would leave agents running on shards this executor
@@ -1325,16 +1362,37 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         T: HasAll<Ctx> + Send + Sync + 'static,
     {
         let ticket = this.shard_manager_service().recovery_deferred();
-
-        // Pure set membership on purpose: a lapsed lease must not restart every
-        // running agent: a lapsed lease refuses new work and leaves running work alone.
-        for (agent_id, worker_details) in this.active_agents().snapshot().await {
-            if this.shard_service().check_worker(&agent_id).is_err() {
-                worker_details
-                    .interrupt_and_retire(InterruptKind::Restart)
-                    .await?;
-            }
-        }
+        // Membership and epochs, never the lease: a lapsed lease must not give up every running
+        // agent - a lapsed lease refuses new work and leaves running work alone.
+        //
+        // Given up rather than restarted: a narrowing delivery means these shards have another
+        // owner now, and a restart in place would reopen their oplogs at the stale epoch. A
+        // delivery that raises the epoch of a shard this executor kept means the shard left and
+        // came back, so another executor may have written to its agents. Those are given up the
+        // same way, and the recovery below or their next invocation reopens them at the new epoch.
+        //
+        // The epochs come from one snapshot and the assignment from one read, both taken just
+        // before the sweep selects. An agent created after the snapshot read its epoch from the
+        // delivered assignment, so only membership applies to it. An agent given up and reopened
+        // at the new epoch between the snapshot and the selection is given up once more, which
+        // the same reopen repairs.
+        let held_epochs: HashMap<AgentId, Option<ShardEpoch>> = this
+            .active_agents()
+            .snapshot()
+            .await
+            .into_iter()
+            .map(|(agent_id, worker)| (agent_id, worker.oplog().shard_epoch()))
+            .collect();
+        let assignment = this.shard_service().try_get_current_assignment();
+        this.active_agents()
+            .give_up_matching(GiveUpReason::ShardNotAssigned, |agent_id| {
+                given_up_by_assignment(
+                    assignment.as_ref(),
+                    agent_id,
+                    held_epochs.get(agent_id).copied().flatten(),
+                )
+            })
+            .await;
 
         if !this.shard_service().is_ready() {
             tracing::info!(
