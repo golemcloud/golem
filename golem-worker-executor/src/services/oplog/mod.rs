@@ -224,7 +224,7 @@ pub trait OplogService: Debug + Send + Sync {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    );
+    ) -> Result<(), String>;
 
     /// Reads exactly `n` contiguous entries starting at `idx`.
     async fn read_exact(

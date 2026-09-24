@@ -1694,7 +1694,8 @@ impl WorkerService for DefaultWorkerService {
         if delete_current_oplog {
             self.oplog_service
                 .delete(lifecycle, owned_agent_id, agent_mode)
-                .await;
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
         }
 
         let shard_assignment = self
@@ -2506,7 +2507,7 @@ mod tests {
             _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) {
+        ) -> Result<(), String> {
             unreachable!()
         }
 
@@ -4234,6 +4235,7 @@ mod tests {
     struct FakeOplogService {
         existing: Vec<OwnedAgentId>,
         initial_entries: HashMap<(OwnedAgentId, AgentMode), OplogEntry>,
+        fail_exists_once: AtomicBool,
     }
 
     #[async_trait]
@@ -4309,7 +4311,7 @@ mod tests {
             _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) {
+        ) -> Result<(), String> {
             unreachable!()
         }
 
@@ -4339,6 +4341,18 @@ mod tests {
 
         async fn exists(&self, owned_agent_id: &OwnedAgentId, _agent_mode: AgentMode) -> bool {
             self.existing.contains(owned_agent_id)
+        }
+
+        async fn try_exists(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            agent_mode: AgentMode,
+        ) -> Result<bool, String> {
+            if self.fail_exists_once.swap(false, Ordering::Relaxed) {
+                Err("injected oplog existence failure".to_string())
+            } else {
+                Ok(self.exists(owned_agent_id, agent_mode).await)
+            }
         }
 
         async fn scan_for_component(
@@ -4645,6 +4659,34 @@ mod tests {
                 .await
                 .is_err(),
             "expected the delete failure to surface"
+        );
+    }
+
+    #[test]
+    async fn mode_lookup_archive_failure_is_scoped_and_service_recovers() {
+        let failed_agent_id = test_owned_agent_id("mode-probe-failure");
+        let healthy_agent_id = test_owned_agent_id("healthy-mode-probe");
+        let oplog_service = Arc::new(FakeOplogService {
+            existing: vec![failed_agent_id.clone(), healthy_agent_id.clone()],
+            fail_exists_once: AtomicBool::new(true),
+        });
+        let service = test_worker_service(Arc::new(InMemoryKeyValueStorage::new()), oplog_service);
+
+        let error = service.get_agent_mode(&failed_agent_id).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("injected oplog existence failure")
+        );
+        assert_eq!(
+            service.get_agent_mode(&healthy_agent_id).await.unwrap(),
+            Some(AgentMode::Durable),
+            "one agent's infrastructure failure must not affect another agent"
+        );
+        assert_eq!(
+            service.get_agent_mode(&failed_agent_id).await.unwrap(),
+            Some(AgentMode::Durable),
+            "a later operation must recover after the infrastructure failure"
         );
     }
 
