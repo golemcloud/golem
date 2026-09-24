@@ -5,7 +5,7 @@ use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStream
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, ToolError, WireSchema,
-    tool_definition, tool_implementation,
+    decode_schema_value, encode_schema_graph, tool_definition, tool_implementation,
 };
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
@@ -16,7 +16,7 @@ pub trait MiddlewareProbe {
     async fn apply(&self, value: String) -> String;
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyObservation {
     pub label: String,
     pub config_resolved: bool,
@@ -24,7 +24,7 @@ pub struct SecretPolicyObservation {
     pub input_secret_revealed: bool,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyEvidence {
     pub middleware: Vec<SecretPolicyObservation>,
     pub leaf_revealed: bool,
