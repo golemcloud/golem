@@ -1,36 +1,124 @@
 use super::{
-    CachedToolDeployment, ToolActivationOutcome, ToolActivationSnapshot, ToolDiscoveryCache,
-    ToolDiscoveryError, ToolDiscoverySnapshot, get_accessible_tool_from_snapshot,
-    get_accessible_tools_from_snapshot, get_tool_activation_from_deployment,
+    CachedToolDeployment, EnvironmentStateService, GrpcEnvironmentStateService,
+    ToolActivationOutcome, ToolActivationSnapshot, ToolDiscoveryCache, ToolDiscoveryError,
+    ToolDiscoverySnapshot, get_accessible_tool_from_snapshot, get_accessible_tools_from_snapshot,
+    get_tool_activation_from_deployment,
 };
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
+use golem_common::model::agent::{
+    AgentFileContentHash, AgentTypeName, RegisteredAgentType, ResolvedAgentType,
+};
+use golem_common::model::agent_secret::{
+    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+};
+use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{
     AgentFilePath, AgentFilePermissions, ComponentId, ComponentName, ComponentRevision,
     InitialAgentFile,
 };
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::domain_registration::Domain;
 use golem_common::model::entity::{
     EntityActivationPolicy, EntityActivationSource, EntityInvocationPlanLayer, ExecutableTarget,
     FilesystemCapability,
 };
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::json::NormalizedJsonValue;
+use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingOwner,
-    ToolDeploymentState, ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
+    ToolBindingInput, ToolBindingOwner, ToolDeploymentState, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
+use golem_common::model::tool_middleware::CompiledToolMiddlewareChain;
 use golem_common::model::tool_middleware::{
-    CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+    CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware, ToolMiddlewareInstallation,
     ToolMiddlewareName, ToolMiddlewareSource,
 };
 use golem_common::schema::tool::{
-    CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
+    CommandNode, CommandTree, Doc, Globals, MonomorphicToolMiddlewareScope, Tool, ToolMiddleware,
+    ToolMiddlewareScope,
 };
 use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
-use std::collections::BTreeMap;
+use golem_service_base::clients::registry::{
+    RegistryInvalidationHandler, RegistryService, RegistryServiceError, ResourceUsageUpdate,
+};
+use golem_service_base::custom_api::CompiledRoutes;
+use golem_service_base::mcp::CompiledMcp;
+use golem_service_base::model::agent_secret::AgentSecret;
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::component::Component;
+use golem_service_base::model::environment::EnvironmentState;
+use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{test, timeout};
+
+#[test]
+fn mcp_binding_scopes_intersect_environment_and_agent_authority() {
+    use golem_common::model::agent_config::CanonicalAgentConfigPath;
+    use golem_common::model::tool::{ConfigKeyScope, ToolBindingInput};
+    let config = |names: &[&str]| {
+        ConfigKeyScope::Keys(
+            names
+                .iter()
+                .map(|name| CanonicalAgentConfigPath(vec![(*name).to_string()]))
+                .collect(),
+        )
+    };
+    let secrets = |names: &[&str]| {
+        SecretKeyScope::Keys(
+            names
+                .iter()
+                .map(|name| CanonicalAgentSecretPath(vec![(*name).to_string()]))
+                .collect(),
+        )
+    };
+    let environment = ToolBindingInput {
+        config_keys_readable: config(&["shared", "environment"]),
+        secret_keys_readable: secrets(&["shared", "environment"]),
+        secret_keys_revealable: secrets(&["shared", "unreadable"]),
+        ..Default::default()
+    };
+    let agent = ToolBindingInput {
+        config_keys_readable: config(&["shared", "agent"]),
+        secret_keys_readable: secrets(&["shared", "agent"]),
+        secret_keys_revealable: secrets(&["agent", "unreadable"]),
+        ..Default::default()
+    };
+    assert_eq!(
+        super::mcp_binding_scopes(Some(&environment), Some(&agent)),
+        (config(&["shared"]), secrets(&["shared"]), secrets(&[]),)
+    );
+    let middleware_only = ToolBindingInput {
+        middleware: Some(vec![]),
+        ..Default::default()
+    };
+    for owner in [None, Some(&middleware_only)] {
+        assert_eq!(
+            super::mcp_binding_scopes(Some(&environment), owner),
+            (
+                config(&["shared", "environment"]),
+                secrets(&["shared", "environment"]),
+                secrets(&["shared"]),
+            )
+        );
+    }
+    assert_eq!(
+        super::mcp_binding_scopes(None, Some(&agent)),
+        (
+            config(&["shared", "agent"]),
+            secrets(&["shared", "agent"]),
+            secrets(&["agent"]),
+        )
+    );
+    assert_eq!(
+        super::mcp_binding_scopes(None, None),
+        (config(&[]), secrets(&[]), secrets(&[]))
+    );
+}
 
 fn registered_tool(name: &str, deployment_revision: DeploymentRevision) -> RegisteredTool {
     RegisteredTool {
@@ -120,6 +208,8 @@ fn deployment_state() -> (ToolDeploymentState, AgentTypeName, AgentTypeName) {
                     BTreeMap::from([(beta_name.clone(), binding(&agent_b, &beta_name, &beta))]),
                 ),
             ]),
+            mcp_imports: Vec::new(),
+            tool_middleware_configuration: Default::default(),
             registered_tool_middlewares: BTreeMap::new(),
             tool_middleware_chains: BTreeMap::new(),
         },
@@ -145,6 +235,220 @@ fn ready_activation(
         ToolActivationOutcome::Ready(activation) => *activation,
         outcome => panic!("expected ready activation, got {outcome:?}"),
     }
+}
+
+fn empty_deployment(revision: DeploymentRevision) -> ToolDeploymentState {
+    ToolDeploymentState {
+        deployment_revision: revision,
+        registered_tools: BTreeMap::new(),
+        tool_bindings: BTreeMap::new(),
+        mcp_imports: Vec::new(),
+        tool_middleware_configuration: Default::default(),
+        registered_tool_middlewares: BTreeMap::new(),
+        tool_middleware_chains: BTreeMap::new(),
+    }
+}
+
+fn monomorphic_middleware(
+    deployment_revision: DeploymentRevision,
+    expected: Tool,
+    presented_name: &str,
+) -> (
+    ToolMiddlewareName,
+    RegisteredToolMiddleware,
+    ToolMiddlewareInstallation,
+) {
+    let name = ToolMiddlewareName::try_from("project").unwrap();
+    let mut presented = expected.clone();
+    presented.commands.nodes[0].name = presented_name.to_string();
+    let registration = RegisteredToolMiddleware {
+        deployment_revision,
+        release_id: None,
+        definition: ToolMiddleware {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            parameter_schema: SchemaGraph::empty(),
+            scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                presented,
+                expected: Some(expected),
+            })),
+        },
+        provision: ToolProvisionConfig::default(),
+        source: ToolMiddlewareSource::Component {
+            component_id: ComponentId::new(),
+            component_revision: ComponentRevision::INITIAL,
+            component_name: ComponentName("middleware:project".to_string()),
+        },
+        owner_account_id: AccountId::new(),
+        owner_account_email: AccountEmail::new("middleware@example.com"),
+        metadata_version: "0.1.0".to_string(),
+        metadata_digest: Default::default(),
+    };
+    let installation = ToolMiddlewareInstallation {
+        name: name.clone(),
+        version: Some("1.0.0".to_string()),
+        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        account: Some(AccountEmail::new("middleware@example.com")),
+        secret_keys_readable: None,
+        secret_keys_revealable: None,
+        filesystem_access: ToolFilesystemAccess::Denied,
+    };
+    (name, registration, installation)
+}
+
+#[test]
+fn dynamic_admission_compiles_projected_metadata_and_rejects_changed_upstream_contract() {
+    use golem_common::model::agent_config::CanonicalAgentConfigPath;
+    use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::mcp_import::McpImportSource;
+    use golem_mcp_import::tool::{Limits, ProjectedTool};
+
+    let revision = DeploymentRevision::INITIAL;
+    let agent = AgentTypeName("Agent".to_string());
+    let owner = agent_owner(&agent);
+    let projected = ProjectedTool::new(
+        &serde_json::json!({
+            "name": "search",
+            "description": "Search the genuine upstream catalog",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "query": { "type": "string", "description": "search text" } },
+                "required": ["query"],
+                "additionalProperties": false
+            },
+            "outputSchema": { "type": "string" }
+        }),
+        "search",
+        Limits::default(),
+    )
+    .unwrap();
+    let tool_name = ToolName::try_from("search").unwrap();
+    let (middleware_name, middleware, installation) =
+        monomorphic_middleware(revision, projected.definition.clone(), "presented-search");
+    let config_key = CanonicalAgentConfigPath(vec!["allowed".to_string()]);
+    let secret_key = CanonicalAgentSecretPath(vec!["allowed".to_string()]);
+    let mut deployment = empty_deployment(revision);
+    deployment
+        .registered_tool_middlewares
+        .insert(middleware_name, middleware);
+    deployment
+        .tool_middleware_configuration
+        .environment_bindings
+        .insert(
+            tool_name.clone(),
+            ToolBindingInput {
+                config_keys_readable: ConfigKeyScope::All,
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                middleware: Some(vec![installation]),
+                ..Default::default()
+            },
+        );
+    deployment
+        .tool_middleware_configuration
+        .agent_bindings
+        .insert(
+            agent.clone(),
+            BTreeMap::from([(
+                tool_name.clone(),
+                ToolBindingInput {
+                    config_keys_readable: ConfigKeyScope::Keys([config_key].into()),
+                    secret_keys_readable: SecretKeyScope::Keys([secret_key.clone()].into()),
+                    secret_keys_revealable: SecretKeyScope::Keys([secret_key].into()),
+                    ..Default::default()
+                },
+            )]),
+        );
+    let component = Component {
+        id: ComponentId::new(),
+        revision: ComponentRevision::INITIAL,
+        environment_id: EnvironmentId::new(),
+        component_name: ComponentName("agent".to_string()),
+        hash: Default::default(),
+        application_id: ApplicationId::new(),
+        account_id: AccountId::new(),
+        account_email: AccountEmail::new("owner@example.com"),
+        application_name: ApplicationName("app".to_string()),
+        environment_name: EnvironmentName::try_from("test").unwrap(),
+        component_size: 0,
+        metadata: ComponentMetadata::default(),
+        created_at: chrono::Utc::now(),
+        wasm_hash: Default::default(),
+        object_store_key: String::new(),
+    };
+    let source = McpImportSource {
+        environment_id: component.environment_id,
+        deployment_revision: revision,
+        import_index: 0,
+        upstream_tool_name: String::new(),
+    };
+
+    let activation = super::tool_activation_from_mcp(
+        source.clone(),
+        "2025-06-18".to_string(),
+        projected.clone(),
+        &deployment,
+        &component,
+        &owner,
+    )
+    .unwrap();
+    assert_eq!(
+        activation.registered_tool().definition,
+        projected.definition
+    );
+    let chain = activation.middleware_chain().unwrap();
+    assert_eq!(chain.effective_definition.name(), Some("presented-search"));
+    assert_eq!(chain.occurrences.len(), 1);
+    let occurrence = &chain.occurrences[0];
+    assert_eq!(
+        occurrence.config_keys_readable,
+        activation.binding().config_keys_readable
+    );
+    assert_eq!(
+        occurrence.secret_keys_readable,
+        activation.binding().secret_keys_readable
+    );
+    assert_eq!(
+        occurrence.secret_keys_revealable,
+        activation.binding().secret_keys_revealable
+    );
+
+    let changed = ProjectedTool::new(
+        &serde_json::json!({
+            "name": "search",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "query": { "type": "integer" } },
+                "required": ["query"],
+                "additionalProperties": false
+            },
+            "outputSchema": { "type": "string" }
+        }),
+        "search",
+        Limits::default(),
+    )
+    .unwrap();
+    let error = super::tool_activation_from_mcp(
+        source,
+        "2025-06-18".to_string(),
+        changed,
+        &deployment,
+        &component,
+        &owner,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ToolDiscoveryError::InconsistentSnapshot { .. }
+    ));
+    assert!(
+        error
+            .to_string()
+            .contains("middleware for dynamic tool 'search' is incompatible")
+    );
 }
 
 #[test]
@@ -522,6 +826,7 @@ fn component_dispatch_uses_one_pinned_consumer_snapshot() {
         &EntityActivationPolicy::Tool {
             provision: registered.provision,
             binding: Box::new(binding),
+            mcp_import: None,
         }
     );
 }
@@ -584,6 +889,7 @@ fn host_dispatch_preserves_exact_handler_and_consumer_policy() {
         &EntityActivationPolicy::Tool {
             provision: expected_provision,
             binding: Box::new(expected_binding),
+            mcp_import: None,
         }
     );
 }
@@ -818,28 +1124,14 @@ async fn tool_discovery_invalidation_cannot_be_undone_by_an_in_flight_fill() {
     });
     lookup_started.notified().await;
 
-    let invalidation_started = Arc::new(tokio::sync::Notify::new());
-    let invalidation = tokio::spawn({
-        let cache = cache.clone();
-        let invalidation_started = invalidation_started.clone();
-        async move {
-            invalidation_started.notify_one();
-            cache.invalidate_environment(environment_id).await;
-        }
-    });
-    invalidation_started.notified().await;
-    for _ in 0..100 {
-        if cache.invalidation_guard.try_read().is_err() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    let mut invalidation = Box::pin(cache.invalidate_environment(environment_id));
+    assert!(futures::poll!(invalidation.as_mut()).is_pending());
     assert!(cache.invalidation_guard.try_read().is_err());
 
     release_lookup.notify_one();
     let loaded_stale_snapshot = lookup.await.unwrap();
     assert!(Arc::ptr_eq(&loaded_stale_snapshot, &stale_snapshot));
-    invalidation.await.unwrap();
+    invalidation.await;
 
     let loaded_fresh_snapshot = cache
         .get_or_insert(&key, {
@@ -958,4 +1250,505 @@ async fn tool_discovery_cache_retains_background_ttl_eviction() {
         .unwrap()
         .unwrap();
     assert!(Arc::ptr_eq(&loaded_fresh_snapshot, &fresh_snapshot));
+}
+
+type ExactKey = (EnvironmentId, DeploymentRevision);
+type LiveKey = (EnvironmentId, ComponentId, ComponentRevision);
+type DeploymentResponse = Result<Option<ToolDeploymentState>, RegistryServiceError>;
+
+#[derive(Default)]
+struct MockRegistryService {
+    exact: std::sync::Mutex<HashMap<ExactKey, VecDeque<DeploymentResponse>>>,
+    live: std::sync::Mutex<HashMap<LiveKey, Option<ToolDeploymentState>>>,
+    exact_calls: std::sync::Mutex<Vec<ExactKey>>,
+    live_calls: std::sync::Mutex<Vec<LiveKey>>,
+    exact_gate: std::sync::Mutex<Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>>,
+}
+
+impl MockRegistryService {
+    fn service(self: &Arc<Self>) -> Arc<GrpcEnvironmentStateService> {
+        Arc::new(GrpcEnvironmentStateService::new(
+            self.clone(),
+            32,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        ))
+    }
+
+    fn script_exact(&self, key: ExactKey, responses: impl IntoIterator<Item = DeploymentResponse>) {
+        self.exact
+            .lock()
+            .unwrap()
+            .insert(key, responses.into_iter().collect());
+    }
+}
+
+#[async_trait::async_trait]
+impl RegistryService for MockRegistryService {
+    async fn resolve_mcp_import(
+        &self,
+        _: &golem_common::model::mcp_import::McpImportSource,
+        _: &AuthCtx,
+        _: bool,
+    ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+    {
+        panic!("unexpected MCP discovery")
+    }
+    async fn get_mcp_runtime_credential(
+        &self,
+        _: &golem_common::model::mcp_import::McpImportSource,
+        _: &AuthCtx,
+    ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+    {
+        panic!("unexpected MCP credential request")
+    }
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        _: &golem_common::model::mcp_import::McpImportSource,
+        _: &AuthCtx,
+        _: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        panic!("unexpected MCP feedback")
+    }
+    async fn authenticate_token(&self, _: &TokenSecret) -> Result<AuthCtx, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_resource_limits(
+        &self,
+        _: AccountId,
+    ) -> Result<ResourceLimits, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn update_worker_connection_limit(
+        &self,
+        _: AccountId,
+        _: &golem_common::model::AgentId,
+        _: bool,
+    ) -> Result<(), RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn batch_update_resource_usage(
+        &self,
+        _: HashMap<AccountId, ResourceUsageUpdate>,
+    ) -> Result<AccountResourceLimits, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn download_component(
+        &self,
+        _: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Vec<u8>, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_component_metadata(
+        &self,
+        _: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Component, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_deployed_component_metadata(
+        &self,
+        _: ComponentId,
+    ) -> Result<Component, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_all_deployed_component_revisions(
+        &self,
+        _: ComponentId,
+    ) -> Result<Vec<Component>, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn resolve_component(
+        &self,
+        _: AccountId,
+        _: ApplicationId,
+        _: EnvironmentId,
+        _: &str,
+    ) -> Result<Component, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_all_agent_types(
+        &self,
+        _: EnvironmentId,
+        _: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_agent_type(
+        &self,
+        _: EnvironmentId,
+        _: ComponentId,
+        _: ComponentRevision,
+        _: &AgentTypeName,
+    ) -> Result<RegisteredAgentType, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_tool_deployment_state(
+        &self,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        let key = (environment_id, component_id, component_revision);
+        self.live_calls.lock().unwrap().push(key);
+        Ok(self.live.lock().unwrap().get(&key).cloned().flatten())
+    }
+    async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, RegistryServiceError> {
+        let key = (environment_id, deployment_revision);
+        self.exact_calls.lock().unwrap().push(key);
+        let gate = self.exact_gate.lock().unwrap().clone();
+        if let Some((started, release)) = gate {
+            started.notify_one();
+            release.notified().await;
+        }
+        self.exact
+            .lock()
+            .unwrap()
+            .get_mut(&key)
+            .and_then(VecDeque::pop_front)
+            .unwrap_or_else(|| panic!("unexpected exact lookup: {key:?}"))
+    }
+    async fn resolve_agent_type_by_names(
+        &self,
+        _: &ApplicationName,
+        _: &golem_common::model::environment::EnvironmentName,
+        _: &AgentTypeName,
+        _: Option<DeploymentRevision>,
+        _: Option<&str>,
+        _: &AuthCtx,
+    ) -> Result<ResolvedAgentType, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_active_routes_for_domain(
+        &self,
+        _: &Domain,
+    ) -> Result<CompiledRoutes, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_active_compiled_mcps_for_domain(
+        &self,
+        _: &Domain,
+    ) -> Result<CompiledMcp, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_current_environment_state(
+        &self,
+        _: EnvironmentId,
+    ) -> Result<EnvironmentState, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_agent_secret_revision(
+        &self,
+        _: EnvironmentId,
+        _: AgentSecretId,
+        _: CanonicalAgentSecretPath,
+        _: AgentSecretRevision,
+    ) -> Result<Option<AgentSecret>, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_resource_definition_by_id(
+        &self,
+        _: ResourceDefinitionId,
+    ) -> Result<ResourceDefinition, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn get_resource_definition_by_name(
+        &self,
+        _: EnvironmentId,
+        _: ResourceName,
+    ) -> Result<ResourceDefinition, RegistryServiceError> {
+        unimplemented!()
+    }
+    async fn subscribe_registry_invalidations(
+        &self,
+        _: Option<u64>,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            golem_common::model::agent::RegistryInvalidationEvent,
+                            RegistryServiceError,
+                        >,
+                    > + Send,
+            >,
+        >,
+        RegistryServiceError,
+    > {
+        unimplemented!()
+    }
+    async fn run_registry_invalidation_event_subscriber(
+        &self,
+        _: &'static str,
+        _: Option<tokio_util::sync::CancellationToken>,
+        _: Arc<dyn RegistryInvalidationHandler>,
+    ) {
+        unimplemented!()
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn exact_revision_service_keys_results_and_error_classification() {
+    let registry = Arc::new(MockRegistryService::default());
+    let env_cedar = EnvironmentId::new();
+    let env_orchid = EnvironmentId::new();
+    let revision_17 = DeploymentRevision::try_from(17_u64).unwrap();
+    let revision_43 = DeploymentRevision::try_from(43_u64).unwrap();
+    let revision_89 = DeploymentRevision::try_from(89_u64).unwrap();
+    registry.script_exact(
+        (env_cedar, revision_17),
+        [Ok(Some(empty_deployment(revision_17)))],
+    );
+    registry.script_exact(
+        (env_orchid, revision_17),
+        [Ok(Some(empty_deployment(revision_17)))],
+    );
+    registry.script_exact(
+        (env_cedar, revision_43),
+        [Ok(Some(empty_deployment(revision_43)))],
+    );
+    registry.script_exact((env_orchid, revision_43), [Ok(None)]);
+    registry.script_exact(
+        (env_cedar, revision_89),
+        [
+            Err(RegistryServiceError::InternalServerError(
+                "temporary".to_string(),
+            )),
+            Ok(Some(empty_deployment(revision_89))),
+        ],
+    );
+    let service = registry.service();
+
+    for (environment, revision) in [
+        (env_cedar, revision_17),
+        (env_orchid, revision_17),
+        (env_cedar, revision_43),
+    ] {
+        let state = service
+            .get_tool_deployment_state_at_revision(environment, revision)
+            .await
+            .unwrap();
+        assert_eq!(state.deployment_revision, revision);
+        assert!(
+            state.registered_tools.is_empty(),
+            "valid empty state must be returned"
+        );
+    }
+    assert!(matches!(
+        service
+            .get_tool_deployment_state_at_revision(env_orchid, revision_43)
+            .await,
+        Err(ToolDiscoveryError::MissingDeploymentRevision {
+            environment_id,
+            deployment_revision
+        }) if environment_id == env_orchid && deployment_revision == revision_43
+    ));
+    assert!(matches!(
+        service
+            .get_tool_deployment_state_at_revision(env_cedar, revision_89)
+            .await,
+        Err(ToolDiscoveryError::Retrieval(_))
+    ));
+    assert_eq!(
+        service
+            .get_tool_deployment_state_at_revision(env_cedar, revision_89)
+            .await
+            .unwrap()
+            .deployment_revision,
+        revision_89
+    );
+    assert_eq!(
+        *registry.exact_calls.lock().unwrap(),
+        vec![
+            (env_cedar, revision_17),
+            (env_orchid, revision_17),
+            (env_cedar, revision_43),
+            (env_orchid, revision_43),
+            (env_cedar, revision_89),
+            (env_cedar, revision_89),
+        ]
+    );
+}
+
+#[test]
+#[timeout("30s")]
+async fn exact_revision_service_rejects_a_response_for_another_revision() {
+    let registry = Arc::new(MockRegistryService::default());
+    let environment = EnvironmentId::new();
+    let requested_revision = DeploymentRevision::try_from(17_u64).unwrap();
+    let returned_revision = DeploymentRevision::try_from(43_u64).unwrap();
+    registry.script_exact(
+        (environment, requested_revision),
+        [
+            Ok(Some(empty_deployment(returned_revision))),
+            Ok(Some(empty_deployment(requested_revision))),
+        ],
+    );
+    let service = registry.service();
+
+    let result = service
+        .get_tool_deployment_state_at_revision(environment, requested_revision)
+        .await;
+
+    assert!(
+        matches!(result, Err(ToolDiscoveryError::InconsistentSnapshot { .. })),
+        "an exact-revision lookup must not accept state for a different revision: {result:?}"
+    );
+    assert_eq!(
+        service
+            .get_tool_deployment_state_at_revision(environment, requested_revision)
+            .await
+            .unwrap()
+            .deployment_revision,
+        requested_revision
+    );
+    assert_eq!(registry.exact_calls.lock().unwrap().len(), 2);
+}
+
+#[test]
+#[timeout("30s")]
+async fn exact_revision_service_coalesces_and_survives_initial_caller_cancellation() {
+    let registry = Arc::new(MockRegistryService::default());
+    let environment = EnvironmentId::new();
+    let revision = DeploymentRevision::try_from(137_u64).unwrap();
+    registry.script_exact(
+        (environment, revision),
+        [Ok(Some(empty_deployment(revision)))],
+    );
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    *registry.exact_gate.lock().unwrap() = Some((started.clone(), release.clone()));
+    let service = registry.service();
+
+    let initial = tokio::spawn({
+        let service = service.clone();
+        async move {
+            service
+                .get_tool_deployment_state_at_revision(environment, revision)
+                .await
+        }
+    });
+    started.notified().await;
+    let followers = (0..6)
+        .map(|_| {
+            let service = service.clone();
+            tokio::spawn(async move {
+                service
+                    .get_tool_deployment_state_at_revision(environment, revision)
+                    .await
+                    .unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    tokio::task::yield_now().await;
+    initial.abort();
+    assert!(initial.await.unwrap_err().is_cancelled());
+    release.notify_one();
+    let states = futures::future::join_all(followers)
+        .await
+        .into_iter()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        registry.exact_calls.lock().unwrap().as_slice(),
+        &[(environment, revision)]
+    );
+    assert!(
+        states
+            .iter()
+            .all(|state| state.deployment_revision == revision)
+    );
+    assert!(
+        states
+            .windows(2)
+            .all(|states| Arc::ptr_eq(&states[0], &states[1]))
+    );
+}
+
+#[test]
+#[timeout("30s")]
+async fn invalidation_refreshes_live_state_but_preserves_exact_state() {
+    let registry = Arc::new(MockRegistryService::default());
+    let environment = EnvironmentId::new();
+    let component = ComponentId::new();
+    let component_revision = ComponentRevision::try_from(23_u64).unwrap();
+    let revision_n = DeploymentRevision::try_from(211_u64).unwrap();
+    let revision_next = DeploymentRevision::try_from(223_u64).unwrap();
+    let live_key = (environment, component, component_revision);
+    registry
+        .live
+        .lock()
+        .unwrap()
+        .insert(live_key, Some(empty_deployment(revision_n)));
+    registry.script_exact(
+        (environment, revision_n),
+        [Ok(Some(empty_deployment(revision_n)))],
+    );
+    let service = registry.service();
+
+    assert_eq!(
+        service
+            .get_live_tool_deployment_state(environment, component, component_revision)
+            .await
+            .unwrap()
+            .unwrap()
+            .deployment_revision,
+        revision_n
+    );
+    let exact_n = service
+        .get_tool_deployment_state_at_revision(environment, revision_n)
+        .await
+        .unwrap();
+    registry
+        .live
+        .lock()
+        .unwrap()
+        .insert(live_key, Some(empty_deployment(revision_next)));
+    service.invalidate_environment(environment).await;
+    assert_eq!(
+        service
+            .get_live_tool_deployment_state(environment, component, component_revision)
+            .await
+            .unwrap()
+            .unwrap()
+            .deployment_revision,
+        revision_next
+    );
+    service.invalidate_all().await;
+    let exact_after_both_invalidations = service
+        .get_tool_deployment_state_at_revision(environment, revision_n)
+        .await
+        .unwrap();
+    assert!(Arc::ptr_eq(&exact_n, &exact_after_both_invalidations));
+    assert_eq!(
+        registry.live_calls.lock().unwrap().as_slice(),
+        &[live_key, live_key]
+    );
+    assert_eq!(
+        registry.exact_calls.lock().unwrap().as_slice(),
+        &[(environment, revision_n)]
+    );
+
+    registry.script_exact(
+        (environment, revision_n),
+        [Ok(Some(empty_deployment(revision_n)))],
+    );
+    let cold_service = registry.service();
+    assert_eq!(
+        cold_service
+            .get_tool_deployment_state_at_revision(environment, revision_n)
+            .await
+            .unwrap()
+            .deployment_revision,
+        revision_n
+    );
+    assert_eq!(registry.exact_calls.lock().unwrap().len(), 2);
 }

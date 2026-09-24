@@ -76,6 +76,7 @@ fn activation() -> EntityActivation {
         EntityActivationPolicy::Tool {
             provision: ToolProvisionConfig::default(),
             binding: Box::new(binding),
+            mcp_import: None,
         },
         FilesystemCapability::Incapable,
     )
@@ -566,6 +567,11 @@ fn invocation_scope_protobuf_roundtrip_preserves_activation_fingerprint() {
     assert_eq!(decoded, scope);
     assert_eq!(json_decoded, scope);
     assert_eq!(scope.idempotency_key().value, "scope-protobuf-seed");
+    assert_eq!(
+        scope.stream_session_idempotency_key().value,
+        "scope-stream-seed"
+    );
+    assert_eq!(scope.mode(), InvocationExecutionMode::ReplayingCompleted);
     assert!(!scope.assume_idempotence());
     assert!(scope.logical_key_positions());
 }
@@ -696,6 +702,119 @@ fn activation_protobuf_rejects_content_that_does_not_match_fingerprint() {
 }
 
 #[test]
+fn mcp_activation_is_pinned_and_bound_to_bridge_revision_and_owner_environment() {
+    use crate::model::mcp_import::{McpImportSource, mcp_import_bridge_source};
+
+    let owner = owner();
+    let base = host_activation();
+    let ToolSource::Host {
+        host_tool_id,
+        implementation_version,
+    } = mcp_import_bridge_source()
+    else {
+        unreachable!()
+    };
+    let mut policy = base.policy.clone();
+    let EntityActivationPolicy::Tool {
+        binding,
+        mcp_import,
+        ..
+    } = &mut policy
+    else {
+        unreachable!()
+    };
+    binding.source = mcp_import_bridge_source();
+    *mcp_import = Some(Box::new(McpImportActivation {
+        source: McpImportSource {
+            environment_id: owner.environment_id,
+            deployment_revision: base.deployment_revision,
+            import_index: 3,
+            upstream_tool_name: "Search_Remote".into(),
+        },
+        protocol_version: "2026-07-28".into(),
+        projected_tool: b"projection snapshot".to_vec(),
+    }));
+    let make = |policy| {
+        EntityActivation::new_host(
+            host_tool_id.clone(),
+            implementation_version.clone(),
+            base.deployment_revision,
+            policy,
+            FilesystemCapability::Incapable,
+        )
+    };
+    let activation = make(policy.clone()).unwrap();
+    let bytes = desert_rust::serialize_to_byte_vec(&activation).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<EntityActivation>(&bytes).unwrap(),
+        activation
+    );
+    let proto: golem_api_grpc::proto::golem::worker::EntityActivation = activation.clone().into();
+    assert_eq!(EntityActivation::try_from(proto).unwrap(), activation);
+
+    for mutation in 0..5 {
+        let mut changed = policy.clone();
+        let EntityActivationPolicy::Tool { mcp_import, .. } = &mut changed else {
+            unreachable!()
+        };
+        match mutation {
+            0 => *mcp_import = None,
+            1 => {
+                mcp_import.as_mut().unwrap().source.deployment_revision = 99_u64.try_into().unwrap()
+            }
+            2 => mcp_import
+                .as_mut()
+                .unwrap()
+                .source
+                .upstream_tool_name
+                .clear(),
+            3 => mcp_import.as_mut().unwrap().projected_tool.clear(),
+            _ => mcp_import.as_mut().unwrap().protocol_version.clear(),
+        }
+        assert!(make(changed).is_err(), "invalid mutation {mutation}");
+    }
+
+    let mut changed = policy.clone();
+    let EntityActivationPolicy::Tool { mcp_import, .. } = &mut changed else {
+        unreachable!()
+    };
+    mcp_import.as_mut().unwrap().projected_tool.push(1);
+    assert_ne!(
+        make(changed).unwrap().fingerprint(),
+        activation.fingerprint()
+    );
+
+    let make_scope = |owner: OwnedAgentId| {
+        EntityInvocationScope::new(
+            EntityInvocationId::new(
+                OwnedAgentEntityId {
+                    owner: owner.clone(),
+                    entity: activation.entity(),
+                },
+                OplogIndex::from_u64(8),
+            )
+            .unwrap(),
+            OplogIndex::from_u64(7),
+            Arc::new(activation.clone()),
+            Principal::Agent(AgentPrincipal {
+                agent_id: owner.agent_id,
+            }),
+            InvocationExecutionMode::ReplayingCompleted,
+            IdempotencyKey::new("mcp-activation-scope-seed".to_string()),
+            false,
+            true,
+            IdempotencyKey::new("mcp-activation-stream-seed".to_string()),
+        )
+    };
+    assert!(make_scope(owner.clone()).is_ok());
+    let other_environment = OwnedAgentId {
+        environment_id: EnvironmentId::new(),
+        ..owner
+    };
+    assert!(make_scope(other_environment).is_err());
+}
+
+#[test]
 fn host_activation_roundtrips_through_binary_json_and_protobuf() {
     let activation = host_activation();
     assert!(activation.executable_opt().is_none());
@@ -748,6 +867,7 @@ fn host_activation_rejects_source_policy_identity_mismatches() {
             EntityActivationPolicy::Tool {
                 provision: provision.clone(),
                 binding: binding.clone(),
+                mcp_import: None,
             },
             activation.filesystem,
         );
@@ -774,7 +894,11 @@ fn host_activation_rejects_invalid_source_contracts() {
             host_tool_id.clone(),
             "  ".to_string(),
             activation.deployment_revision,
-            EntityActivationPolicy::Tool { provision, binding },
+            EntityActivationPolicy::Tool {
+                provision,
+                binding,
+                mcp_import: None,
+            },
             activation.filesystem,
         )
         .unwrap_err(),

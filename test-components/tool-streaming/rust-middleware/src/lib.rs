@@ -1,13 +1,17 @@
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{AgentStream, Secret, spawn_local};
+use golem_rust::schema::tool::{ErrorCase, ErrorKind};
+use golem_rust::schema::try_into_schema_graph;
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::tool::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
-    ToolInvokeError, UnderlyingTool,
+    EmptyMiddlewareParameters, InputStream, InvocationResult, MonomorphicToolMiddlewareScope,
+    OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError, ToolMiddleware,
+    ToolMiddlewareInvokeFuture, ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, TypedSchemaValue, decode_schema_value,
-    encode_schema_graph, tool_definition, tool_middleware, universal_tool_middleware,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaType, SchemaValue, TypedSchemaValue,
+    decode_schema_value, encode_schema_graph, tool_definition, tool_middleware,
+    universal_tool_middleware,
 };
 use std::convert::Infallible;
 
@@ -101,6 +105,145 @@ impl SecretPolicyProbeMiddleware for SecretPolicyAudit {
         Ok(evidence)
     }
 }
+
+mod expected_mcp_probe {
+    use super::*;
+
+    #[derive(IntoSchema, FromSchema)]
+    pub struct Evidence {
+        pub evidence: String,
+    }
+
+    #[tool_definition(version = "1.0.0")]
+    pub trait MiddlewareProbe {
+        async fn middleware_probe(&self, value: String, stdout: Option<OutputStream>) -> Evidence;
+    }
+}
+
+mod presented_mcp_probe {
+    pub use super::expected_mcp_probe::Evidence;
+    use super::*;
+
+    #[tool_definition(version = "1.0.0")]
+    pub trait MiddlewareProbe {
+        async fn middleware_probe(&self, value: String, stdout: Option<OutputStream>) -> Evidence;
+    }
+}
+
+struct McpProbeProjection;
+
+impl McpProbeProjection {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[tool_middleware(name = "streaming-monomorphic-mcp-projection-typed", constructor = McpProbeProjection::new)]
+impl presented_mcp_probe::MiddlewareProbeMiddleware<expected_mcp_probe::MiddlewareProbeUnderlying>
+    for McpProbeProjection
+{
+    async fn middleware_probe(
+        &self,
+        underlying: &expected_mcp_probe::MiddlewareProbeUnderlying,
+        value: String,
+        mut stdout: Option<OutputStream>,
+    ) -> Result<presented_mcp_probe::Evidence, ToolInvokeError<Infallible>> {
+        let (result, mut underlying_stdout) = underlying.middleware_probe(value).await?;
+        while let Some(item) = underlying_stdout.next().await {
+            match item {
+                Ok(bytes) => {
+                    if let Some(stdout) = &mut stdout {
+                        let _ = stdout.write(bytes).await;
+                    }
+                }
+                Err(failure) => {
+                    if let Some(stdout) = stdout.take() {
+                        let _ = stdout.fail(failure).await;
+                    }
+                    break;
+                }
+            }
+        }
+        if let Some(stdout) = stdout {
+            let _ = stdout.finish().await;
+        }
+        Ok(presented_mcp_probe::Evidence {
+            evidence: format!("monomorphic({})", result.evidence),
+        })
+    }
+}
+
+fn invoke_mcp_projection(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    _parameters: TypedSchemaValue,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> ToolMiddlewareInvokeFuture {
+    Box::pin(async move {
+        let (graph, mut value) = input.into_parts();
+        let SchemaValue::Record { fields } = &mut value else {
+            panic!("MCP input is a record");
+        };
+        let SchemaValue::String(argument) = &mut fields[0] else {
+            panic!("MCP value argument is a string");
+        };
+        *argument = format!("monomorphic({argument})");
+        let mut completed = underlying
+            .invoke_forwarding_stdout(
+                command_path,
+                TypedSchemaValue::new(graph, value),
+                stdin,
+                stdout,
+            )
+            .await?;
+        completed.result = None;
+        Ok(completed)
+    })
+}
+
+golem_rust::ctor::__support::ctor_parse!(
+    #[ctor]
+    fn register_mcp_projection() {
+        let mut presented =
+            <McpProbeProjection as presented_mcp_probe::MiddlewareProbeMiddleware<
+                expected_mcp_probe::MiddlewareProbeUnderlying,
+            >>::__golem_presented_tool_descriptor();
+        let mut expected = <expected_mcp_probe::MiddlewareProbeUnderlying as ToolUnderlying>::__golem_tool_descriptor();
+        for descriptor in [&mut presented, &mut expected] {
+            let body = descriptor.commands.nodes[0].body.as_mut().unwrap();
+            body.stdout.as_mut().unwrap().mime = vec!["*/*".to_string()];
+        }
+        presented.commands.nodes[0].body.as_mut().unwrap().result = None;
+        let expected_body = expected.commands.nodes[0].body.as_mut().unwrap();
+        expected_body.result.as_mut().unwrap().type_ = SchemaType::record(Vec::new());
+        expected_body.errors.push(ErrorCase {
+            name: "mcp-tool-error".to_string(),
+            doc: Default::default(),
+            kind: ErrorKind::RuntimeError,
+            exit_code: 1,
+            payload: Some(SchemaType::string()),
+        });
+        golem_rust::tool::register_tool_middleware(
+            ToolMiddleware {
+                name: "streaming-monomorphic-mcp-projection".to_string(),
+                version: "0.0.0".to_string(),
+                aliases: Vec::new(),
+                doc: Default::default(),
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                    presented,
+                    expected: Some(expected),
+                })),
+                parameter_schema: try_into_schema_graph::<EmptyMiddlewareParameters>().unwrap(),
+            },
+            invoke_mcp_projection,
+        );
+    }
+);
 
 mod expected_typed_output {
     use super::*;
@@ -263,8 +406,8 @@ async fn universal_secret_policy_audit(
         .as_ref()
         .is_ok_and(|configured| reveal_string(configured).is_ok());
     let input_secret_revealed = match input.value() {
-        golem_rust::SchemaValue::Record { fields } => fields.first().is_some_and(|value| {
-            matches!(value, golem_rust::SchemaValue::Secret(handle) if reveal_string(handle).is_ok())
+        SchemaValue::Record { fields } => fields.first().is_some_and(|value| {
+            matches!(value, SchemaValue::Secret(handle) if reveal_string(handle).is_ok())
         }),
         _ => false,
     };
@@ -288,6 +431,77 @@ async fn universal_secret_policy_audit(
             .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))?,
     );
     Ok(result)
+}
+
+#[universal_tool_middleware(name = "streaming-universal-transform-input")]
+async fn universal_transform_input(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    let (graph, mut value) = input.into_parts();
+    let SchemaValue::Record { fields } = &mut value else {
+        panic!("MCP input is a record");
+    };
+    let SchemaValue::String(argument) = &mut fields[0] else {
+        panic!("MCP value argument is a string");
+    };
+    *argument = format!("middleware({argument})");
+    underlying
+        .invoke_forwarding_stdout(
+            command_path,
+            TypedSchemaValue::new(graph, value),
+            stdin,
+            stdout,
+        )
+        .await
+}
+
+#[universal_tool_middleware(name = "streaming-universal-mcp-fanout")]
+async fn universal_mcp_fanout(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    fn with_suffix(input: &TypedSchemaValue, suffix: &str) -> TypedSchemaValue {
+        let (graph, mut value) = input.clone().into_parts();
+        let SchemaValue::Record { fields } = &mut value else {
+            panic!("MCP input is a record");
+        };
+        let SchemaValue::String(argument) = &mut fields[0] else {
+            panic!("MCP value argument is a string");
+        };
+        *argument = format!("{argument}-{suffix}");
+        TypedSchemaValue::new(graph, value)
+    }
+
+    underlying
+        .invoke(command_path.clone(), with_suffix(&input, "first"), None)
+        .await?;
+    let completed = underlying
+        .invoke_forwarding_stdout(
+            command_path.clone(),
+            with_suffix(&input, "second"),
+            stdin,
+            stdout,
+        )
+        .await?;
+    let pending = underlying
+        .start(command_path, with_suffix(&input, "pending"), None)
+        .await?;
+    wait_at_middleware_promise_checkpoint("mcp-pending-admitted").await;
+    pending.cancel();
+    Ok(completed)
 }
 
 macro_rules! streaming_middleware {

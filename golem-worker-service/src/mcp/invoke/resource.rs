@@ -134,7 +134,7 @@ pub async fn invoke_resource(
         uri,
     )?;
 
-    Ok(ReadResourceResult { contents })
+    Ok(ReadResourceResult::new(contents))
 }
 
 fn map_agent_response_to_resource_contents(
@@ -284,7 +284,7 @@ mod tests {
         unstructured_url_value,
     };
     use golem_common::schema::{BinaryValuePayload, InputSchema, TextValuePayload};
-    use rmcp::model::{Annotated, RawResource};
+    use rmcp::model::Resource;
     use serde_json::json;
     use test_r::test;
 
@@ -605,19 +605,7 @@ mod tests {
             vec![method.clone()],
         );
         let resource = AgentMcpResource {
-            kind: AgentMcpResourceKind::Static(Annotated::new(
-                RawResource {
-                    uri: TEST_URI.to_string(),
-                    name: "mcp-agent-read".to_string(),
-                    title: None,
-                    description: None,
-                    mime_type: None,
-                    size: None,
-                    icons: None,
-                    meta: None,
-                },
-                None,
-            )),
+            kind: AgentMcpResourceKind::Static(Resource::new(TEST_URI, "mcp-agent-read")),
             environment_id: harness.environment_id,
             account_id: harness.account_id,
             schema_graph: Arc::new(SchemaGraph::empty()),

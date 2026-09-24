@@ -2320,3 +2320,53 @@ _root_.scala.Either[
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn mcp_projections_compile_with_scala_generator() {
+    let (typed, mixed) = super::mcp_import::projections();
+    for (projected, typed) in [(typed, true), (mixed, false)] {
+        let dir = TempDir::new().unwrap();
+        let target = Utf8Path::from_path(dir.path()).unwrap();
+        ScalaToolBridgeGenerator::new(projected.definition, target, true)
+            .unwrap()
+            .generate()
+            .unwrap();
+        let (name, client, fields) = if typed {
+            (
+                "typed",
+                "TypedLookupClient",
+                "val answer: String = result.structured.answer; val score: Long = result.structured.score",
+            )
+        } else {
+            (
+                "mixed",
+                "MixedLookupClient",
+                "val structured: Option[String] = result.structured",
+            )
+        };
+        std::fs::write(
+            target.join("src/main/scala/Consumer.scala"),
+            format!(
+                r#"
+import golem.bridge.client.{name}_lookup.{client}
+import scala.concurrent.ExecutionContext
+object Consumer {{
+  def consume(client: {client})(using ExecutionContext): Unit = {{
+    client.{name}Lookup(Some(3L), "query", Map("region" -> "west"))
+    client.{name}Lookup(None, "query", Map.empty).foreach {{ invocation =>
+      val stdout: golem.tool.ToolInputStream = invocation.stdout
+      invocation.result.foreach(_.foreach {{ result =>
+        {fields}
+        val content = result.content
+        ()
+      }})
+    }}
+  }}
+}}
+"#
+            ),
+        )
+        .unwrap();
+        compile(target);
+    }
+}

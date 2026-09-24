@@ -342,7 +342,7 @@ oplog.
 
 ```
 Owner O oplog
-#60 ... tool discovery / authorization reads (durable reads, ordinary Start/End pairs) ...
+#60 ... discovery snapshot / authorization (durable ordinary Start/End pairs) ...
 #61 Start { fn: golem-entity-invoke, entity: sidecar }              entity invocation id = 61
                                                                     (dispatch_tool_call; no outer
                                                                      call-tool Start wraps it)
@@ -401,3 +401,23 @@ ordinary durable path where a completed nested effect legitimately repeats, and 
 owns its idempotency.
 Test: `tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`
 expects the effect sequence `probe, callback, probe, callback`.
+
+## 16. Dynamic MCP call and ambiguous `-32602`
+
+Admission creates a synthetic native activation that freezes the complete projected tool,
+protocol version, binding/digest and exact deployment/import source. Its native body uses the
+executor's shared MCP transport and the ordinary derived durable key.
+
+```
+#90 Start { fn: mcp/tools-call, WriteRemote, key: derived(#90) }
+#91 End   { start_index: 90, response: encoded -32602 }   committed before projection/stdout/401 feedback
+#92 Start { fn: mcp/tool-presence, ReadRemote, exact admitted source, forced refresh }
+     ✕ quota suspension or crash
+```
+
+Replay returns `#91` offline and repairs only the presence read under `#92`; it does not resend
+`tools/call`. Ordinary atomic-region rollback can still roll back both entries. An observed absent
+tool maps to `InvalidToolName`; true or a missing observation preserves the protocol ambiguity and
+maps to `InvalidInput`. Other MCP `isError` content becomes a custom tool error. Fixed discovery
+uses its recorded exact deployment reference, while this dynamic execution uses the full admission
+snapshot. Middleware and code-generation acceptance are outside this completed executor path.
