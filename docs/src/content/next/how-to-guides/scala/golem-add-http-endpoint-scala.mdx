@@ -142,7 +142,10 @@ Scala `Either[E, T]` is mapped to the WIT `result<T, E>` type, with `Right` trea
 | `Future[Either[E, T]]` | 200 OK if `Right`, 500 Internal Server Error if `Left` | JSON `T` or JSON `E` |
 | `Future[Either[E, Unit]]` | 204 No Content if `Right`, 500 if `Left` | empty or JSON `E` |
 | `Future[Either[Unit, T]]` | 200 OK if `Right`, 500 if `Left` | JSON `T` or empty |
-| `Future[UnstructuredBinary]` | 200 OK | Raw binary with Content-Type |
+
+The current Scala SDK does not expose `UnstructuredText` or `UnstructuredBinary`. Use ordinary
+schema-backed values, which are JSON encoded, or choose an SDK that supports rich raw-body types
+when an endpoint must return plain text or arbitrary binary bytes.
 
 ## Complete Example
 

@@ -7,14 +7,14 @@ Golem recovers agent state by **replaying the oplog** — the log of all operati
 Snapshotting also enables **manual agent updates** between incompatible versions — see [Updating Agents](/next/develop/updating) for details.
 
 <Callout type="info">
-    Snapshotting is optional. If you do not configure it, Golem will continue to recover agents by replaying the full oplog.
+    Automatic snapshotting is optional. Without it, recovery replays from the last successful manual-update snapshot, if one exists; otherwise it replays the full oplog.
 </Callout>
 
 ## Default snapshotting implementation
 
 Each language SDK can generate JSON saving and loading when the complete agent state has an explicit JSON-deserialization contract. Automatic loading is not generated for arbitrary state: use custom snapshotting when your SDK cannot deserialize the complete state.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Provide a state schema in the snapshotting configuration and **do not** provide a custom `snapshot: { save, load }` block. The SDK serializes and restores the schema-defined state as JSON:
 
@@ -26,6 +26,19 @@ Each language SDK can generate JSON saving and loading when the complete agent s
         ```
 
         A bare enabled policy without `state` requires a custom `save`/`load` pair.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Declare the saved value with `Snapshot.define(...)` and use a matching implementation strategy such as `Snapshot.ref()`:
+
+        ```typescript
+        snapshotting: Snapshot.define({
+          schema: Schema.Struct({ value: Schema.Number }),
+          policy: Snapshot.policy.everyN(1),
+        })
+
+        // In .implement({ ... }):
+        snapshot: Snapshot.ref<{ value: number }>()
+        ```
     </Tabs.Tab>
     <Tabs.Tab>
         If your agent struct implements `Serialize` and `DeserializeOwned` (from [serde](https://serde.rs/)), **do not** override the `save_snapshot` and `load_snapshot` methods. The SDK will use a default JSON-based implementation. Ordinary owned structs commonly satisfy these bounds by deriving `Serialize` and `Deserialize`.
@@ -42,7 +55,7 @@ Each language SDK can generate JSON saving and loading when the complete agent s
 
 You can implement custom saving and restoration to control exactly how agent state is serialized. Saving runs on the live instance. Loading is a separate factory that returns the complete state or instance; the SDK never runs the normal agent initialization path first and then hands that instance to the loader. The following example shows a counter agent that saves its count as raw bytes:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Provide a `snapshot: { save, load }` block on `.implement(...)`. `save()` has the agent state as `this`. `load(bytes, context)` has no `this` and returns a complete fresh state object:
 
@@ -69,8 +82,8 @@ You can implement custom saving and restoration to control exactly how agent sta
             },
             snapshot: {
                 save() {
-                    const snapshot = new Uint8Array(4);
-                    new DataView(snapshot.buffer).setUint32(0, this.value);
+                    const snapshot = new Uint8Array(8);
+                    new DataView(snapshot.buffer).setFloat64(0, this.value);
                     return snapshot;
                 },
                 load(bytes, _context) {
@@ -78,11 +91,41 @@ You can implement custom saving and restoration to control exactly how agent sta
                         bytes.buffer,
                         bytes.byteOffset,
                         bytes.byteLength,
-                    ).getUint32(0);
+                    ).getFloat64(0);
                     return { value };
                 },
             },
         });
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Select binary snapshots on the definition and provide `save` and `restore` effects on the implementation. Restoration constructs fresh state and does not run `init` first:
+
+        ```typescript
+        import { Effect, Ref } from "effect"
+        import { Snapshot } from "@golemcloud/effect-golem"
+
+        // In defineAgent({ ... }):
+        snapshotting: Snapshot.custom({
+          policy: Snapshot.policy.everyN(1),
+        })
+
+        // In .implement({ ... }):
+        snapshot: {
+          save: (state) =>
+            Ref.get(state).pipe(
+              Effect.map((value) => {
+                const bytes = new Uint8Array(8)
+                new DataView(bytes.buffer).setFloat64(0, value)
+                return bytes
+              }),
+            ),
+          restore: (bytes, _context) =>
+            Ref.make(
+              new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+                .getFloat64(0),
+            ),
+        }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -169,18 +212,19 @@ You can implement custom saving and restoration to control exactly how agent sta
 
 Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. The SDKs keep it separate from normal initialization and install the returned state or instance only after restoration succeeds. Restore context exposes the agent identity and restored principal, plus the phantom ID and fresh configuration where applicable.
 
-Golem runs snapshot loading in read-only mode and writes nothing from it to the oplog. Decoding, local computation, fresh randomness, configuration access, and other permitted reads can be used to construct the restored value. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
+Golem runs snapshot loading in read-only mode and writes nothing from it to the oplog. Decoding, local computation, fresh randomness, configuration access, and other permitted reads can be used to construct the restored value. Durable host calls classified as writes, and outgoing HTTP or agent RPC calls, are rejected before they take effect. This restriction is not a general filesystem write sandbox: local filesystem writes are not blocked by it.
 
 If loading fails, partial state is discarded:
 
 - A manual update fails and the agent remains on its previous component version.
-- During automatic recovery, Golem recreates the component and recovers without the failed automatic snapshot. It does not try an older automatic snapshot.
+- If an automatic snapshot is rejected by its loader, or loading or subsequent replay fails deterministically, Golem recreates the component and replays from the last successful manual-update snapshot—or from the beginning if none exists. It does not try an older automatic snapshot. Transient failures and resource-limit failures can instead propagate or cause recovery to retry.
+- Failure to load the baseline snapshot from an already completed manual update cannot fall back to pre-update history.
 
 ## Configuring snapshot-based recovery
 
 To enable snapshotting, add a `snapshotting` option to your agent definition:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Pass the `snapshotting` option to `defineAgent(...)`:
 
@@ -196,6 +240,16 @@ To enable snapshotting, add a `snapshotting` option to your agent definition:
                 increment: method({ input: {}, returns: z.number() }),
             },
         });
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Pass a `Snapshot` definition to `snapshotting`:
+
+        ```typescript
+        snapshotting: Snapshot.define({
+          schema: Schema.Struct({ value: Schema.Number }),
+          policy: Snapshot.policy.periodic("5 seconds"),
+        })
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -219,10 +273,10 @@ The available policy forms are listed below. Exact spelling and policy support v
 
 | Option | Description |
 |---|---|
-| `disabled` | Snapshotting is turned off. Recovery replays the full oplog. |
+| `disabled` | Automatic snapshot creation is disabled. Recovery still uses the last successful manual-update snapshot, if one exists. |
 | `enabled` | Uses the server-side default snapshotting configuration, which may be disabled. |
 | `every(N)` | Takes a snapshot every **N** successful invocations. |
-| `periodic(duration)` | Takes a snapshot every **duration** interval (e.g. `5s`, `1m`). |
+| `periodic(duration)` | Schedules snapshots at safe invocation boundaries after each **duration** interval (e.g. `5s`, `1m`). |
 
 ## Observability
 

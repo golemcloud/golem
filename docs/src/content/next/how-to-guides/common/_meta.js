@@ -30,5 +30,5 @@ export default {
   "golem-undo-agent-state": "Undoing Agent State",
   "golem-update-running-agents": "Updating Running Agents",
   "golem-view-agent-files": "Viewing Agent Files",
-  "golem-view-agent-logs": "Viewing Agent Logs",
-}
+  "golem-view-agent-logs": "Viewing Agent Logs"
+};

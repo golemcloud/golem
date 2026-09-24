@@ -11,7 +11,7 @@ In Golem 1.5, HTTP endpoints are defined **directly in agent code** using langua
 
 Every agent that wants to expose HTTP endpoints must first define a **mount point** — the base URL prefix under which all its endpoints are available. The mount path can contain placeholders like `{name}` that map to the agent's constructor parameters.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 export const Tasks = defineAgent({
@@ -22,6 +22,19 @@ export const Tasks = defineAgent({
     // ...
   },
 });
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+export const Tasks = defineAgent({
+  name: "Tasks",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/task-agents/{name}"),
+  methods: {
+    // ...
+  },
+})
 ```
 </Tabs.Tab>
 <Tabs.Tab>
@@ -58,7 +71,7 @@ If there are multiple agent constructor parameters, they all have to be mapped i
 
 Once the mount is defined, individual agent methods can be exposed as HTTP **endpoints**. Each endpoint specifies an HTTP method and a path suffix relative to the mount point. Path placeholders are mapped to method parameters. Parameters not mapped through the path or headers are taken from the request body.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 createTask: method({
@@ -73,6 +86,23 @@ completeTask: method({
   input: { id: z.number() },
   returns: Task.nullable(),
   http: http.post('/tasks/{id}/complete'),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+createTask: method({
+  input: { request: CreateTaskRequest },
+  success: Task,
+  http: [Http.post("/tasks")],
+}),
+
+getTasks: method({ input: {}, success: Schema.Array(Task), http: [Http.get("/tasks")] }),
+
+completeTask: method({
+  input: { id: Schema.Number },
+  success: Schema.NullOr(Task),
+  http: [Http.post("/tasks/{id}/complete")],
 }),
 ```
 </Tabs.Tab>
@@ -126,13 +156,22 @@ Supported HTTP methods: `get`, `post`, `put`, `delete`, `patch`, `head`, `option
 
 Query parameters can be bound to method parameters using standard HTTP query syntax in the endpoint path:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 search: method({
   input: { query: z.string(), limit: z.number() },
   returns: z.array(SearchResult),
   http: http.get('/search?q={query}&limit={limit}'),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+search: method({
+  input: { category: Schema.String, limit: Schema.Number, offset: Schema.Number },
+  success: Schema.Array(Item),
+  http: [Http.get("/search/{category}?limit={limit}&offset={offset}")],
 }),
 ```
 </Tabs.Tab>
@@ -162,13 +201,26 @@ pub fn MyAgent::search(self : Self, category : String, limit : UInt64, offset : 
 
 Custom HTTP headers can be mapped to function parameters:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 example: method({
   input: { location: z.string(), name: z.string() },
   returns: z.string(),
   http: http.get('/example', { headers: { 'X-Foo': 'location', 'X-Bar': 'name' } }),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+example: method({
+  input: { location: Schema.String, name: Schema.String },
+  success: Schema.String,
+  http: [
+    Http.get("/example", {
+      headers: { "X-Foo": "location", "X-Bar": "name" } as const,
+    }),
+  ],
 }),
 ```
 </Tabs.Tab>
@@ -200,13 +252,22 @@ pub fn ExampleAgent::example(self : Self, location : String, name : String) -> S
 
 The `{*variable}` syntax captures all remaining path segments. It must be the last segment in the path:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 serveFile: method({
   input: { rest: z.string() },
   returns: FileData,
   http: http.get('/files/{*rest}'),
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+serveFile: method({
+  input: { rest: Schema.String },
+  success: FileData,
+  http: [Http.get("/files/{*rest}")],
 }),
 ```
 </Tabs.Tab>
@@ -247,7 +308,7 @@ Return types control the HTTP response:
 
 Use the `UnstructuredBinary` type to receive raw binary data in the request body:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 upload: method({
@@ -258,24 +319,31 @@ upload: method({
 ```
 </Tabs.Tab>
 <Tabs.Tab>
+```typescript
+upload: method({
+  input: {
+    file: Unstructured.UnstructuredBinary({
+      restrictions: [{ mimeType: "application/octet-stream" }],
+    }),
+  },
+  success: Schema.Number,
+  http: [Http.post("/upload")],
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
 ```rust
 #[endpoint(post = "/upload")]
-fn upload(&mut self, file: UnstructuredBinary) -> u64;
+fn upload(&mut self, file: UnstructuredBinary<String>) -> u64;
 ```
+
+`String` implements `AllowedMimeTypes` and accepts any MIME type. Use an enum deriving `AllowedMimeTypes` to restrict accepted values.
 </Tabs.Tab>
 <Tabs.Tab>
-```scala
-@endpoint(method = "POST", path = "/upload")
-def upload(file: UnstructuredBinary): Future[Long]
-```
+The current Scala SDK does not expose the removed `UnstructuredBinary`/`BinarySegment` API. Use a supported structured byte-array parameter, or handle raw binary in another supported SDK.
 </Tabs.Tab>
 <Tabs.Tab>
-```moonbit
-#derive.endpoint(post = "/upload")
-pub fn MyAgent::upload(self : Self, file : UnstructuredBinary) -> UInt64 {
-  // ...
-}
-```
+The current MoonBit SDK does not yet expose a user-facing unstructured-binary wrapper. `Bytes` is structured binary data and does not opt an endpoint into the raw unstructured-binary body mapping.
 </Tabs.Tab>
 </Tabs>
 
@@ -283,7 +351,7 @@ pub fn MyAgent::upload(self : Self, file : UnstructuredBinary) -> UInt64 {
 
 CORS can be configured at the **mount level** (applies to all endpoints) and optionally overridden per **endpoint**:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 export const MyAgent = defineAgent({
@@ -297,6 +365,23 @@ export const MyAgent = defineAgent({
     getPublic: method({ input: {}, returns: Data, http: http.get('/public', { cors: ['*'] }) }),
   },
 });
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+export const MyAgent = defineAgent({
+  name: "MyAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/api/{name}", { cors: ["https://app.example.com"] }),
+  methods: {
+    getPublic: method({
+      input: {},
+      success: Data,
+      http: [Http.get("/public", { cors: ["*"] })],
+    }),
+  },
+})
 ```
 </Tabs.Tab>
 <Tabs.Tab>
@@ -349,7 +434,7 @@ Per-endpoint CORS settings are unioned with the mount-level settings.
 
 Golem API gateway has built-in authentication support. Authentication can be enabled at the mount level or per endpoint using `auth = true`. See [the API authentication page](/next/invoke/making-custom-apis/authentication) for setup details.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 export const SecureAgent = defineAgent({
@@ -368,6 +453,25 @@ adminOnly: method({
   http: http.get('/admin', { auth: true }),
 }),
 ```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+export const SecureAgent = defineAgent({
+  name: "SecureAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/secure/{name}", { auth: true }),
+  methods: {
+    adminOnly: method({
+      input: {},
+      success: AdminData,
+      http: [Http.get("/admin", { auth: true })],
+    }),
+  },
+})
+```
+
+The handler can read the authenticated caller with `yield* Principal.Principal`; it does not need to be part of the method input.
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
@@ -423,7 +527,7 @@ When authentication is enabled, agent constructors and methods can optionally re
 
 Endpoints can be served by **phantom agents** — ephemeral, stateless agents that are created for each request and discarded afterward. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 export const Gateway = defineAgent({
@@ -434,6 +538,19 @@ export const Gateway = defineAgent({
     // A new instance is created per request
   },
 });
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+export const Gateway = defineAgent({
+  name: "Gateway",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/gateway/{name}", { phantomAgent: true }),
+  methods: {
+    // A new instance is created per request
+  },
+})
 ```
 </Tabs.Tab>
 <Tabs.Tab>
