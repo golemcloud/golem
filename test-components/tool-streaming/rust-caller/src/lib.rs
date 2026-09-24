@@ -9,8 +9,8 @@ use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::{
-    FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph, SchemaType,
-    SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph,
+    SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
     decode_typed_schema_value_owned, read_only,
 };
 use secret_policy_probe_tool_guest_client::SecretPolicyProbeClient;
@@ -124,7 +124,7 @@ pub struct ToolSecretCallerConfig {
     pub tool_secret: Secret<String>,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyObservation {
     pub label: String,
     pub config_resolved: bool,
@@ -132,7 +132,7 @@ pub struct SecretPolicyObservation {
     pub input_secret_revealed: bool,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyEvidence {
     pub middleware: Vec<SecretPolicyObservation>,
     pub leaf_revealed: bool,
