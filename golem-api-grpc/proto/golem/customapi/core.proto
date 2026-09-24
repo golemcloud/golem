@@ -224,6 +224,40 @@ message RouteBehaviour {
     golem.component.AgentMode agent_mode = 13;
     AgentRouteMode route_mode = 14;
     uint32 base_path_variables = 15;
+    optional DurableStreamRoutePolicy durable_streams = 16;
+  }
+
+  message DurableStreamRoutePolicy {
+    repeated DurableStreamSlot slots = 1;
+    bool allow_external_writes = 2;
+    bool allow_stream_delete = 3;
+    bool allow_invocation_delete = 4;
+    optional DurableStreamRouteLoadPolicy load = 5;
+  }
+
+  message DurableStreamSlot {
+    string canonical_name = 1;
+    string public_name = 2;
+    DurableStreamSlotDirection direction = 3;
+    string content_type = 4;
+    DurableStreamRepresentation representation = 5;
+  }
+
+  enum DurableStreamSlotDirection {
+    DURABLE_STREAM_SLOT_DIRECTION_UNSPECIFIED = 0;
+    INPUT = 1;
+    OUTPUT = 2;
+  }
+
+  enum DurableStreamRepresentation {
+    DURABLE_STREAM_REPRESENTATION_UNSPECIFIED = 0;
+    JSON = 1;
+    BYTES = 2;
+  }
+
+  message DurableStreamRouteLoadPolicy {
+    optional uint32 max_concurrent_readers_per_stream = 1;
+    optional uint32 max_append_requests_per_second_per_stream = 2;
   }
 
   enum AgentRouteMode {

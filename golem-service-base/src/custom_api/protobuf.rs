@@ -19,8 +19,10 @@ use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
     AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
-    ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy, MethodParameter,
-    OriginPattern, QueryOrHeaderType, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
+    ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
+    DurableStreamRepresentation, DurableStreamRouteLoadPolicy, DurableStreamRoutePolicy,
+    DurableStreamSlot, DurableStreamSlotDirection, MethodParameter, OriginPattern,
+    QueryOrHeaderType, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
     WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
@@ -174,6 +176,10 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
         match value.kind.ok_or("RouteBehaviour.kind missing")? {
             Kind::CallAgent(call_agent) => Ok(RouteBehaviour::CallAgent(CallAgentBehaviour {
                 base_path_variables: call_agent.base_path_variables,
+                durable_streams: call_agent
+                    .durable_streams
+                    .map(TryInto::try_into)
+                    .transpose()?,
                 route_mode: match proto::golem::customapi::route_behaviour::AgentRouteMode::try_from(
                     call_agent.route_mode,
                 ) {
@@ -283,6 +289,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
             RouteBehaviour::CallAgent(CallAgentBehaviour {
                 route_mode,
                 base_path_variables,
+                durable_streams,
                 component_id,
                 component_revision,
                 agent_type,
@@ -300,6 +307,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 kind: Some(Kind::CallAgent(
                     proto::golem::customapi::route_behaviour::CallAgent {
                         base_path_variables,
+                        durable_streams: durable_streams.map(Into::into),
                         route_mode: match route_mode {
                             AgentRouteMode::Rest => proto::golem::customapi::route_behaviour::AgentRouteMode::Rest as i32,
                             AgentRouteMode::DurableStreams => proto::golem::customapi::route_behaviour::AgentRouteMode::DurableStreams as i32,
@@ -370,6 +378,120 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     )),
                 }
             }
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy>
+    for DurableStreamRoutePolicy
+{
+    type Error = String;
+
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            slots: value
+                .slots
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            allow_external_writes: value.allow_external_writes,
+            allow_stream_delete: value.allow_stream_delete,
+            allow_invocation_delete: value.allow_invocation_delete,
+            load: value.load.map(Into::into),
+        })
+    }
+}
+
+impl From<DurableStreamRoutePolicy>
+    for proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy
+{
+    fn from(value: DurableStreamRoutePolicy) -> Self {
+        Self {
+            slots: value.slots.into_iter().map(Into::into).collect(),
+            allow_external_writes: value.allow_external_writes,
+            allow_stream_delete: value.allow_stream_delete,
+            allow_invocation_delete: value.allow_invocation_delete,
+            load: value.load.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::route_behaviour::DurableStreamSlot> for DurableStreamSlot {
+    type Error = String;
+
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::DurableStreamSlot,
+    ) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::route_behaviour::{
+            DurableStreamRepresentation as ProtoRepresentation,
+            DurableStreamSlotDirection as ProtoDirection,
+        };
+
+        let direction = match ProtoDirection::try_from(value.direction) {
+            Ok(ProtoDirection::Input) => DurableStreamSlotDirection::Input,
+            Ok(ProtoDirection::Output) => DurableStreamSlotDirection::Output,
+            _ => return Err("Invalid or missing durable stream slot direction".into()),
+        };
+        let representation = match ProtoRepresentation::try_from(value.representation) {
+            Ok(ProtoRepresentation::Json) => DurableStreamRepresentation::Json,
+            Ok(ProtoRepresentation::Bytes) => DurableStreamRepresentation::Bytes,
+            _ => return Err("Invalid or missing durable stream representation".into()),
+        };
+        Ok(Self {
+            canonical_name: value.canonical_name,
+            public_name: value.public_name,
+            direction,
+            content_type: value.content_type,
+            representation,
+        })
+    }
+}
+
+impl From<DurableStreamSlot> for proto::golem::customapi::route_behaviour::DurableStreamSlot {
+    fn from(value: DurableStreamSlot) -> Self {
+        use proto::golem::customapi::route_behaviour::{
+            DurableStreamRepresentation as ProtoRepresentation,
+            DurableStreamSlotDirection as ProtoDirection,
+        };
+
+        Self {
+            canonical_name: value.canonical_name,
+            public_name: value.public_name,
+            direction: match value.direction {
+                DurableStreamSlotDirection::Input => ProtoDirection::Input as i32,
+                DurableStreamSlotDirection::Output => ProtoDirection::Output as i32,
+            },
+            content_type: value.content_type,
+            representation: match value.representation {
+                DurableStreamRepresentation::Json => ProtoRepresentation::Json as i32,
+                DurableStreamRepresentation::Bytes => ProtoRepresentation::Bytes as i32,
+            },
+        }
+    }
+}
+
+impl From<proto::golem::customapi::route_behaviour::DurableStreamRouteLoadPolicy>
+    for DurableStreamRouteLoadPolicy
+{
+    fn from(value: proto::golem::customapi::route_behaviour::DurableStreamRouteLoadPolicy) -> Self {
+        Self {
+            max_concurrent_readers_per_stream: value.max_concurrent_readers_per_stream,
+            max_append_requests_per_second_per_stream: value
+                .max_append_requests_per_second_per_stream,
+        }
+    }
+}
+
+impl From<DurableStreamRouteLoadPolicy>
+    for proto::golem::customapi::route_behaviour::DurableStreamRouteLoadPolicy
+{
+    fn from(value: DurableStreamRouteLoadPolicy) -> Self {
+        Self {
+            max_concurrent_readers_per_stream: value.max_concurrent_readers_per_stream,
+            max_append_requests_per_second_per_stream: value
+                .max_append_requests_per_second_per_stream,
         }
     }
 }
