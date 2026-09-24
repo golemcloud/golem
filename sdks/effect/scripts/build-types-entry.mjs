@@ -9,7 +9,8 @@
  */
 import { fileURLToPath } from "node:url"
 import { dirname, relative, resolve } from "node:path"
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import ts from "typescript"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, "..")
@@ -23,11 +24,17 @@ const postgresOutFile = resolve(distDir, "effect-golem-postgres.d.ts")
 const mysqlOutFile = resolve(distDir, "effect-golem-mysql.d.ts")
 const igniteOutFile = resolve(distDir, "effect-golem-ignite2.d.ts")
 
-// Ship the host-free public contract without a runtime dependency on the TS SDK.
-const sharedEntry = fileURLToPath(import.meta.resolve("@golemcloud/golem-ts-sdk/http-router"))
+// Bundle the private source package so published consumers need neither source nor a sibling SDK.
+const sharedEntry = fileURLToPath(import.meta.resolve("@golemcloud/http-contract"))
+const sharedSource = readFileSync(sharedEntry, "utf8")
 const sharedDir = resolve(distDir, "src/internal/http-contract")
 mkdirSync(sharedDir, { recursive: true })
-copyFileSync(sharedEntry, resolve(sharedDir, "index.mjs"))
+writeFileSync(
+  resolve(sharedDir, "index.mjs"),
+  ts.transpileModule(sharedSource, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText,
+)
 function localizeSharedImports(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = resolve(directory, entry.name)
@@ -35,9 +42,9 @@ function localizeSharedImports(directory) {
       localizeSharedImports(path)
     } else if (path.endsWith(".js") || path.endsWith(".d.ts")) {
       const source = readFileSync(path, "utf8")
-      if (!source.includes("@golemcloud/golem-ts-sdk/http-router")) continue
+      if (!source.includes("@golemcloud/http-contract")) continue
       const target = `./${relative(directory, resolve(sharedDir, "index.mjs")).replaceAll("\\", "/")}`
-      writeFileSync(path, source.replaceAll("@golemcloud/golem-ts-sdk/http-router", target))
+      writeFileSync(path, source.replaceAll("@golemcloud/http-contract", target))
     }
   }
 }
@@ -49,13 +56,21 @@ const refs = readdirSync(typesDir)
   .map((f) => `/// <reference path="../golem-types/${f}" />`)
   .join("\n")
 
-const sharedDeclaration = readFileSync(sharedEntry.replace(/\.mjs$/, ".d.mts"), "utf8").replace(
-  /^\/\/\/ <reference path=.*\r?\n/gm,
-  "",
-)
+const sharedDeclaration = ts.transpileDeclaration(sharedSource, { fileName: sharedEntry })
+if (sharedDeclaration.diagnostics?.length) {
+  throw new Error(
+    ts.formatDiagnosticsWithColorAndContext(sharedDeclaration.diagnostics, {
+      getCanonicalFileName: (name) => name,
+      getCurrentDirectory: () => root,
+      getNewLine: () => "\n",
+    }),
+  )
+}
 writeFileSync(
   resolve(sharedDir, "index.d.mts"),
-  refs.replaceAll("../golem-types/", "../../../../golem-types/") + "\n" + sharedDeclaration,
+  refs.replaceAll("../golem-types/", "../../../../golem-types/") +
+    "\n" +
+    sharedDeclaration.outputText,
 )
 
 const body = `export * from "./src/index.js"\n`
@@ -86,3 +101,69 @@ console.log(`wrote ${mysqlOutFile}`)
 const igniteBody = `export * from "./src/Ignite/IgniteClient.js"\n`
 writeFileSync(igniteOutFile, refs + "\n" + igniteBody, "utf-8")
 console.log(`wrote ${igniteOutFile}`)
+
+// Public subpaths must refer to the same stateful modules as the embedded SDK.
+// Discover runtime exports with the compiler, without executing host-bound code in Node.
+const configPath = resolve(root, "tsconfig.build.json")
+const config = ts.readConfigFile(configPath, ts.sys.readFile)
+if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"))
+const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root)
+const program = ts.createProgram(parsed.fileNames, { ...parsed.options, noEmit: true })
+const checker = program.getTypeChecker()
+const index = program.getSourceFile(resolve(root, "src/index.ts"))
+const facades = index.statements
+  .filter(
+    (node) =>
+      ts.isExportDeclaration(node) && node.exportClause && ts.isNamespaceExport(node.exportClause),
+  )
+  .map((node) => [
+    node.moduleSpecifier.text.slice(2, -3),
+    "@golemcloud/effect-golem",
+    node.exportClause.name.text,
+  ])
+facades.push(
+  ["ToolReflection", "@golemcloud/effect-golem", "Reflection"],
+  ["Sqlite/SqliteClient", "@golemcloud/effect-golem/sqlite"],
+  ["Postgres/PgClient", "@golemcloud/effect-golem/postgres"],
+  ["Mysql/MySqlClient", "@golemcloud/effect-golem/mysql"],
+  ["Ignite/IgniteClient", "@golemcloud/effect-golem/ignite2"],
+)
+for (const [modulePath, owner, namespace] of facades) {
+  const source = program.getSourceFile(resolve(root, "src", `${modulePath}.ts`))
+  const exports = checker
+    .getExportsOfModule(checker.getSymbolAtLocation(source))
+    .filter((symbol) => {
+      if (symbol.declarations?.some(ts.isTypeOnlyImportOrExportDeclaration)) return false
+      const target = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol
+      return target.flags & ts.SymbolFlags.Value
+    })
+  const names = new Set(exports.map((symbol) => symbol.name))
+  // Effect's JavaScript can export values omitted from its declarations.
+  for (const node of source.statements) {
+    if (
+      ts.isExportDeclaration(node) &&
+      !node.isTypeOnly &&
+      !node.exportClause &&
+      node.moduleSpecifier?.text.startsWith("effect/")
+    ) {
+      for (const name of Object.keys(await import(node.moduleSpecifier.text))) {
+        if (name !== "default") names.add(name)
+      }
+    }
+  }
+  const imports = namespace
+    ? `import { ${namespace} as shared } from ${JSON.stringify(owner)};`
+    : `import * as shared from ${JSON.stringify(owner)};`
+  writeFileSync(
+    resolve(distDir, "src", `${modulePath}.js`),
+    [
+      imports,
+      ...[...names].map(
+        (name, index) =>
+          `const sharedExport${index} = /* @__PURE__ */ (() => shared.${name})(); export { sharedExport${index} as ${name} };`,
+      ),
+      "",
+    ].join("\n"),
+  )
+}
+writeFileSync(resolve(distDir, "src/index.js"), 'export * from "@golemcloud/effect-golem";\n')

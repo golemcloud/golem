@@ -69,9 +69,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -96,9 +97,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -123,9 +125,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -188,9 +191,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -218,9 +222,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -246,9 +251,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -276,9 +282,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",

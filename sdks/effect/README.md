@@ -617,6 +617,10 @@ until the final parity matrix passes.
 Prerequisites are Node/npm, Rust with `wasm32-wasip2`, `wasm-rquickjs`, WASI SDK, and Golem's normal
 build prerequisites. From `sdks/effect`:
 
+The private `sdks/http-contract` source package is installed by `npm ci` and bundled by this SDK's
+build. No TypeScript SDK installation or sibling SDK build is required. Published packages contain
+the helper code and declarations, not a runtime dependency on that private package.
+
 ```nu
 npm ci
 npm run lint

@@ -1,5 +1,5 @@
 import { Effect, Pipeable, Schema, SchemaAST } from "effect"
-import { compileFileMappings, type FileExposure } from "@golemcloud/golem-ts-sdk/http-router"
+import { compileFileMappings, type FileExposure } from "@golemcloud/http-contract"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import { withPipe } from "./internal/pipeable.js"
 import type {

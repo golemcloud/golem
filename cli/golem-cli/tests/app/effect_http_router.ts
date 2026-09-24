@@ -2,7 +2,12 @@ import { Effect, FileSystem, Layer, Path, Ref, Schema, Stream } from "effect";
 import { Etag, HttpPlatform, HttpRouter as Routes, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
-import { defineAgent, method, Http, HttpRouter } from "@golemcloud/effect-golem";
+import { defineAgent, method, Http, HttpRouter as RootHttpRouter } from "@golemcloud/effect-golem";
+import * as HttpRouter from "@golemcloud/effect-golem/HttpRouter";
+
+if (HttpRouter.define !== RootHttpRouter.define || HttpRouter.withRawHeaders !== RootHttpRouter.withRawHeaders) {
+  throw new Error("SDK subpath imports must share the embedded router and registry");
+}
 
 const Counter = defineAgent({
   name: "RouterCounter", id: { name: Schema.String },

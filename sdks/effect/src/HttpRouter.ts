@@ -11,7 +11,7 @@ import {
   type HttpHeader,
   type HttpRequest,
   type HttpResponse,
-} from "@golemcloud/golem-ts-sdk/http-router"
+} from "@golemcloud/http-contract"
 import type { ConfigFields } from "./Config.js"
 import type { MountDef } from "./Http.js"
 import { registerAgent, type ConfigDef, type CfgTagOf, type Handlers } from "./internal/agent.js"

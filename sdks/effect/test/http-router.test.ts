@@ -22,7 +22,7 @@ import { GuestSchemaValueStreamHandle } from "../src/internal/schema-model/schem
 import { STREAM_INTERNAL } from "../src/internal/schema-model/streamInternal.js"
 import { schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v } from "../src/internal/schema-model/model.js"
-import type { HttpRequest } from "@golemcloud/golem-ts-sdk/http-router"
+import type { HttpRequest } from "@golemcloud/http-contract"
 
 const corpus = JSON.parse(
   readFileSync(

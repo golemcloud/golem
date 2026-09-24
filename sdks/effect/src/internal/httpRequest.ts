@@ -9,7 +9,7 @@ import {
   UrlParams,
 } from "effect/unstable/http"
 import type { HttpMethod } from "effect/unstable/http/HttpMethod"
-import { copyHttpHeaders, type HttpRequest } from "@golemcloud/golem-ts-sdk/http-router"
+import { copyHttpHeaders, type HttpRequest } from "@golemcloud/http-contract"
 
 /** Native request view; inspecting it must never read or print body data. */
 export class ServerRequest

@@ -13,7 +13,7 @@ import {
   type HttpHeader,
   type HttpRequest,
   type HttpResponse,
-} from "@golemcloud/golem-ts-sdk/http-router"
+} from "@golemcloud/http-contract"
 import { AbortableStreamIterable } from "./abortableStreamIterable.js"
 import { disposeAgentStream } from "./agentStream.js"
 import { ServerRequest, localUrl } from "./httpRequest.js"
