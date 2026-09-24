@@ -23,7 +23,10 @@ use super::fault::{BlobCallFailed, ConfigExists, FileMissing, OperationCancelled
 use super::files::TARGET_LABEL;
 use super::publish::{SnapshotStage, StagedSnapshot};
 use bytes::Bytes;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, PutIfAbsent};
+use golem_service_base::storage::blob::{
+    BlobRangeError, BlobStorage, BlobStorageNamespace, PutIfAbsent,
+};
+use kept::KeptPacks;
 use rustic_core::{
     BytesList, ErrorKind, FileType, Id, ReadBackend, RusticError, RusticResult, WriteBackend,
 };
@@ -37,6 +40,9 @@ use tokio_util::task::task_tracker::TaskTrackerToken;
 
 /// The path of the config file of a repository.
 const CONFIG_PATH: &str = "config";
+
+/// The largest number of bytes of tree packs that one backend keeps in memory.
+const KEPT_PACKS_LIMIT: usize = 32 * 1024 * 1024;
 
 /// A call that the backend makes on the blob storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +98,8 @@ pub(super) struct BlobBackend {
     stage: Option<Arc<SnapshotStage>>,
     /// Counts the backend as work of a tracker, until the last owner drops the backend.
     _tracked: Option<TaskTrackerToken>,
+    /// The packs of tree blobs that the operation of the backend read.
+    kept: KeptPacks,
 }
 
 impl BlobBackend {
@@ -111,6 +119,15 @@ impl BlobBackend {
             cancel: CancellationToken::new(),
             stage: None,
             _tracked: None,
+            kept: KeptPacks::new(KEPT_PACKS_LIMIT),
+        }
+    }
+
+    /// Gives the backend with another limit of the bytes of the tree packs that it keeps.
+    pub(super) fn keeping_packs_up_to(self, limit: usize) -> Self {
+        Self {
+            kept: KeptPacks::new(limit),
+            ..self
         }
     }
 
@@ -268,7 +285,7 @@ impl ReadBackend for BlobBackend {
         &self,
         tpe: FileType,
         id: &Id,
-        _cacheable: bool,
+        cacheable: bool,
         offset: u32,
         length: u32,
     ) -> RusticResult<Bytes> {
@@ -276,6 +293,11 @@ impl ReadBackend for BlobBackend {
         let Some(last) = length.checked_sub(1) else {
             return Ok(Bytes::new());
         };
+        // rustic marks the reads of tree blobs as cacheable, and reads each tree blob on its own.
+        if cacheable && tpe == FileType::Pack {
+            let pack = self.kept.get_or_read(id, || self.read_full(tpe, id))?;
+            return range_of(&pack, &path, offset, last);
+        }
         let start = u64::from(offset);
         self.request(
             StorageCall::ReadRange,
@@ -406,6 +428,25 @@ fn join(parts: &[Bytes]) -> Box<[u8]> {
         .into_boxed_slice()
 }
 
+/// Gives the bytes from `offset` to `last` of the pack as a slice of the pack. A range outside the
+/// pack gives the error of a ranged read outside a blob.
+fn range_of(pack: &Bytes, path: &Path, offset: u32, last: u32) -> RusticResult<Bytes> {
+    let start = u64::from(offset);
+    let end = start + u64::from(last);
+    usize::try_from(start)
+        .ok()
+        .zip(usize::try_from(end).ok())
+        .filter(|(_, end)| *end < pack.len())
+        .map(|(start, end)| pack.slice(start..=end))
+        .ok_or_else(|| {
+            storage_error(
+                StorageCall::ReadRange,
+                path,
+                anyhow::Error::new(BlobRangeError { start, end }),
+            )
+        })
+}
+
 /// The error of a file that the blob storage does not hold.
 fn missing_file(path: &Path) -> Box<RusticError> {
     RusticError::with_source(
@@ -445,6 +486,8 @@ fn storage_error(call: StorageCall, path: &Path, error: anyhow::Error) -> Box<Ru
     .attach_context("call", call.label())
     .attach_context("path", path.display().to_string())
 }
+
+mod kept;
 
 #[cfg(test)]
 mod tests;

@@ -478,6 +478,238 @@ fn a_thread_that_is_not_a_thread_of_the_runtime_can_call_the_backend() {
     assert_eq!(read.ok().flatten(), Some(Bytes::from_static(b"index")));
 }
 
+/// The content of the pack of the tests of the kept packs: 100 bytes, each its own offset.
+fn pack_content() -> Vec<u8> {
+    (0..100).collect()
+}
+
+/// A backend over a storage that holds one pack at the path of the id `ab`, with the rule of
+/// the storage and the limit of the kept packs. The storage records each call.
+struct PackFixture {
+    _runtime: Runtime,
+    storage: Arc<ScriptedBlobStorage>,
+    backend: Arc<BlobBackend>,
+}
+
+impl PackFixture {
+    fn new(limit: usize, rule: impl Fn(&str, &Path) -> Script + Send + Sync + 'static) -> Self {
+        let runtime = Runtime::new().unwrap();
+        let inner = Arc::new(InMemoryBlobStorage::new());
+        let namespace = new_namespace();
+        runtime
+            .block_on(inner.put_raw(
+                "test",
+                "test",
+                namespace.clone(),
+                Path::new(&format!("data/ab/{}", "ab".repeat(32))),
+                &pack_content(),
+            ))
+            .unwrap();
+        let storage = ScriptedBlobStorage::new(inner, rule);
+        let backend = BlobBackend::new(
+            storage.clone(),
+            namespace,
+            runtime.handle().clone(),
+            STORAGE_CALL_DEADLINE,
+        )
+        .keeping_packs_up_to(limit);
+        Self {
+            _runtime: runtime,
+            storage,
+            backend: Arc::new(backend),
+        }
+    }
+
+    /// Gives the operation label of each call on the pack.
+    fn pack_calls(&self) -> Vec<&'static str> {
+        self.storage
+            .calls()
+            .into_iter()
+            .filter(|(_, path)| path.starts_with("data/"))
+            .map(|(op_label, _)| op_label)
+            .collect()
+    }
+}
+
+/// Reads the range of the pack as a range of tree blobs, which rustic marks as cacheable.
+fn tree_range(backend: &BlobBackend, offset: u32, length: u32) -> RusticResult<Bytes> {
+    backend.read_partial(FileType::Pack, &id("ab"), true, offset, length)
+}
+
+#[test]
+fn a_later_range_of_a_kept_pack_makes_no_storage_call() {
+    let fixture = PackFixture::new(1024, |_, _| Script::Pass);
+    let backend = fixture.backend.clone();
+
+    let ranges = within_limit(move || {
+        (
+            tree_range(&backend, 0, 10).ok(),
+            tree_range(&backend, 20, 10).ok(),
+            tree_range(&backend, 90, 10).ok(),
+        )
+    });
+
+    assert_eq!(
+        (ranges, fixture.pack_calls()),
+        (
+            Some((
+                Some(Bytes::from_iter(0..10)),
+                Some(Bytes::from_iter(20..30)),
+                Some(Bytes::from_iter(90..100)),
+            )),
+            vec!["read"]
+        )
+    );
+}
+
+#[test]
+fn a_range_that_is_not_cacheable_is_a_ranged_read_each_time() {
+    let fixture = PackFixture::new(1024, |_, _| Script::Pass);
+    let backend = fixture.backend.clone();
+
+    let ranges = within_limit(move || {
+        [(0, 10), (20, 10)].map(|(offset, length)| {
+            backend
+                .read_partial(FileType::Pack, &id("ab"), false, offset, length)
+                .ok()
+        })
+    });
+
+    assert_eq!(
+        (ranges, fixture.pack_calls()),
+        (
+            Some([
+                Some(Bytes::from_iter(0..10)),
+                Some(Bytes::from_iter(20..30))
+            ]),
+            vec!["read_range", "read_range"]
+        )
+    );
+}
+
+#[test]
+fn two_threads_that_miss_one_pack_make_one_storage_read() {
+    // The first read waits at the gate. The second thread starts while it waits, and the gate
+    // opens only after the second thread had time to ask for the pack.
+    let fixture = PackFixture::new(1024, |op_label, _| {
+        if op_label == "read" {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let first = std::thread::spawn({
+        let backend = fixture.backend.clone();
+        move || tree_range(&backend, 0, 10).ok()
+    });
+    let first_read_started = (0..1000).any(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        !fixture.pack_calls().is_empty()
+    });
+    let second = std::thread::spawn({
+        let backend = fixture.backend.clone();
+        move || tree_range(&backend, 50, 10).ok()
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    fixture.storage.open_gate();
+
+    assert_eq!(
+        (
+            first_read_started,
+            first.join().ok().flatten(),
+            second.join().ok().flatten(),
+            fixture.pack_calls()
+        ),
+        (
+            true,
+            Some(Bytes::from_iter(0..10)),
+            Some(Bytes::from_iter(50..60)),
+            vec!["read"]
+        )
+    );
+}
+
+#[test]
+fn a_pack_over_the_limit_is_read_again_at_its_next_range() {
+    let fixture = PackFixture::new(99, |_, _| Script::Pass);
+    let backend = fixture.backend.clone();
+
+    let ranges = within_limit(move || {
+        (
+            tree_range(&backend, 0, 10).ok(),
+            tree_range(&backend, 20, 10).ok(),
+        )
+    });
+
+    assert_eq!(
+        (ranges, fixture.pack_calls()),
+        (
+            Some((
+                Some(Bytes::from_iter(0..10)),
+                Some(Bytes::from_iter(20..30))
+            )),
+            vec!["read", "read"]
+        )
+    );
+}
+
+#[test]
+fn a_failed_read_of_a_pack_is_not_kept_and_the_next_range_reads_again() {
+    let refused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fixture = PackFixture::new(1024, {
+        let refused = refused.clone();
+        move |op_label, _| {
+            if op_label == "read" && !refused.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                Script::Refuse
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let backend = fixture.backend.clone();
+
+    let ranges = within_limit(move || {
+        (
+            tree_range(&backend, 0, 10).is_err(),
+            tree_range(&backend, 20, 10).ok(),
+            tree_range(&backend, 40, 10).ok(),
+        )
+    });
+
+    assert_eq!(
+        (ranges, fixture.pack_calls()),
+        (
+            Some((
+                true,
+                Some(Bytes::from_iter(20..30)),
+                Some(Bytes::from_iter(40..50))
+            )),
+            vec!["read", "read"]
+        )
+    );
+}
+
+#[test]
+fn a_range_outside_a_kept_pack_gives_the_error_of_a_ranged_read_outside_a_blob() {
+    let fixture = PackFixture::new(1024, |_, _| Script::Pass);
+    let backend = fixture.backend.clone();
+
+    let outside = within_limit(move || {
+        [(90, 11), (100, 1), (u32::MAX, 1)].map(|(offset, length)| {
+            tree_range(&backend, offset, length).err().map(|error| {
+                (
+                    text_of(&error).contains("is not in the blob"),
+                    classify(Operation::Restore, anyhow::Error::new(error))
+                        .to_string()
+                        .contains("storage"),
+                )
+            })
+        })
+    });
+
+    assert_eq!(outside, Some([Some((true, true)); 3]));
+}
+
 #[test]
 fn a_tracked_backend_counts_in_its_tracker_until_it_drops() {
     let fixture = Fixture::new();

@@ -20,6 +20,7 @@
 
 use super::backend::BlobBackend;
 use super::holding::{holding_storage, reached_deadline};
+use super::scripted::{Script, ScriptedBlobStorage};
 use super::{
     ChangeDetection, Chunking, Compression, OperationPhase, PruneSettings, RepackLimits,
     Repository, RepositoryKey, RepositorySettings, SaveSettings, backup_options, config_options,
@@ -140,6 +141,52 @@ async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -
     .unwrap()
 }
 
+/// Gives the id in hex of each pack of tree blobs in the repository of the scope.
+async fn tree_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Box<[Box<str>]> {
+    with_existing_repository(
+        storage.clone(),
+        scope,
+        STORAGE_CALL_DEADLINE,
+        |repository| {
+            let indexes = repository
+                .stream_files::<IndexFile>()?
+                .collect::<RusticResult<Vec<_>>>()?;
+            Ok(indexes
+                .into_iter()
+                .flat_map(|(_, index)| index.packs)
+                .filter(|pack| pack.blob_type() == BlobType::Tree)
+                .map(|pack| Box::from(pack.id.to_hex().as_str()))
+                .collect())
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// Writes a tree of `count` directories, each with one small file, into a new directory.
+fn many_directories_tree(count: usize) -> Scratch {
+    let tree = Scratch::new();
+    let names = (0..count)
+        .flat_map(|index| [format!("dir-{index}"), format!("dir-{index}/file.txt")])
+        .collect::<Vec<_>>();
+    let entries = names
+        .iter()
+        .map(|name| {
+            let spec = if name.ends_with(".txt") {
+                Spec::File {
+                    content: Box::from(name.as_bytes()),
+                    mode: 0o644,
+                }
+            } else {
+                Spec::Directory { mode: 0o755 }
+            };
+            (name.as_str(), spec)
+        })
+        .collect::<Vec<_>>();
+    write_tree(tree.path(), &entries);
+    tree
+}
+
 /// Prunes the repository of the scope with the options, on a blocking thread. Each call on the
 /// storage waits for at most `deadline`.
 async fn prune(
@@ -236,6 +283,46 @@ async fn a_restore_report_gives_each_phase_of_the_restore_in_order() {
             OperationPhase::RestorePlan,
             OperationPhase::Restore,
         ]
+    );
+}
+
+#[test]
+async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_pack() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let tree = many_directories_tree(60);
+    repository(&inner, &scope)
+        .save(&name("first"), tree.path())
+        .await
+        .unwrap();
+    let tree_packs = tree_packs(&inner, &scope).await;
+    let storage = ScriptedBlobStorage::new(inner.clone(), |_, _| Script::Pass);
+    let into = Scratch::new();
+
+    Repository::new(storage.clone(), scope.clone(), key(), STORAGE_CALL_DEADLINE)
+        .restore(&name("first"), into.path(), None)
+        .await
+        .unwrap();
+    let calls_on_tree_packs = |op: &str| {
+        tree_packs
+            .iter()
+            .map(|pack| {
+                storage
+                    .calls()
+                    .iter()
+                    .filter(|(op_label, path)| *op_label == op && path.ends_with(&**pack))
+                    .count()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        (
+            calls_on_tree_packs("read"),
+            calls_on_tree_packs("read_range").iter().sum::<usize>(),
+            listing(into.path())
+        ),
+        (vec![1; tree_packs.len()], 0, listing(tree.path()))
     );
 }
 
@@ -785,7 +872,7 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
 }
 
 #[test]
-async fn a_prune_whose_pack_reads_get_no_answer_fails_and_stops_its_threads() {
+async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
     let tree = fixture_tree();
@@ -793,8 +880,9 @@ async fn a_prune_whose_pack_reads_get_no_answer_fails_and_stops_its_threads() {
         .save(&name("first"), tree.path())
         .await
         .unwrap();
+    // A prune reads the trees of the snapshots, and each tree read is a full read of a pack.
     let (storage, _gate, dropped) = holding_storage(inner, |op_label, path| {
-        op_label == "read_range" && path.starts_with("data")
+        op_label == "read" && path.starts_with("data")
     });
 
     let pruned = tokio::time::timeout(
