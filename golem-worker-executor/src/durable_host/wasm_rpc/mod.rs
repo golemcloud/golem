@@ -3446,7 +3446,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 // records the `CompletionDiscarded` marker. The call's durable `FinishSpan` is
                 // appended by the same owned task as the `End` (see `post_end_entry`), so replay
                 // can rely on it unconditionally following the `End` on this path.
-                let (response, delivery) = if handle.is_live() {
+                let (response, delivery, replayed_finish_span) = if handle.is_live() {
                     let task =
                         task.expect("a live future-invoke-result must own its background task");
                     let interrupt_signal = accessor.with(|mut access| {
@@ -3485,7 +3485,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             .await;
                         }
                     };
-                    match task_result {
+                    let (response, delivery) = match task_result {
                         Ok(rpc_result) => {
                             let rpc_result =
                                 admit_rpc_result_secret_holds(accessor, rpc_result).await?;
@@ -3511,15 +3511,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             // incomplete for durable-scope recovery, instead of recording an `End`.
                             return Err(handle.trap(anyhow::anyhow!(err.to_string())));
                         }
-                    }
+                    };
+                    (response, delivery, false)
                 } else {
-                    match handle
-                        .replay_access_deferred(accessor, accessor.getter())
+                    let (outcome, replayed_finish_span) = handle
+                        .replay_access_deferred_with_finish_span(
+                            accessor,
+                            accessor.getter(),
+                            &span_id,
+                        )
                         .await
-                        .map_err(anyhow::Error::from)?
-                    {
+                        .map_err(anyhow::Error::from)?;
+                    match outcome {
                         DeferredCallReplayOutcome::Replayed(response, delivery) => {
-                            (response, delivery)
+                            (response, delivery, replayed_finish_span)
                         }
                         DeferredCallReplayOutcome::Incomplete(mut live) => {
                             // Crash-after-`Start` recovery: the eager `Start` is committed but its
@@ -3581,7 +3586,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                 result = &mut task => Some(result),
                                 }
                             };
-                            match task_result {
+                            let (response, delivery) = match task_result {
                                 None => {
                                     // Cancelled while re-executing the recovered call: same
                                     // handling as the live-path cancellation race above.
@@ -3614,7 +3619,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                 Some(Err(err)) => {
                                     return Err(live.trap(anyhow::anyhow!(err.to_string())));
                                 }
-                            }
+                            };
+                            (response, delivery, false)
                         }
                     }
                 };
@@ -3634,11 +3640,13 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 if delivery.is_replay_discarded() {
                     // The recorded run persisted the `End` (and its `FinishSpan`) but the guest
                     // dropped this future before `get` returned. Mirror the recorded post-`End`
-                    // continuation deterministically — consume the positional `FinishSpan` and
-                    // mark the resource consumed — then park: never return the response, so the
-                    // deterministic guest drops this future at the same point it did live (its
-                    // resource `drop` sees no open handle and writes nothing durable).
-                    finish_span_access(accessor, accessor.getter(), &span_id).await?;
+                    // continuation deterministically — apply the already-consumed `FinishSpan`
+                    // in memory and mark the resource consumed — then park: never return the
+                    // response, so the deterministic guest drops this future at the same point it
+                    // did live (its resource `drop` sees no open handle and writes nothing
+                    // durable).
+                    debug_assert!(replayed_finish_span);
+                    accessor.with(|mut access| finish_span_in_memory(access.get(), &span_id))?;
                     accessor.with(|mut access| {
                         let ctx = access.get();
                         let entry = ctx
@@ -3696,9 +3704,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     }
                 } else {
                     // Replay of a delivered completion, or a live unpersisted (snapshotting)
-                    // call: the original span handling applies — replay consumes the positional
-                    // `FinishSpan`, an unpersisted live call appends it here.
-                    finish_span_access(accessor, accessor.getter(), &span_id).await?;
+                    // call: a successful replay already consumed the exact post-`End` tail;
+                    // cancellation replay and an unpersisted live call use positional handling.
+                    if replayed_finish_span {
+                        accessor
+                            .with(|mut access| finish_span_in_memory(access.get(), &span_id))?;
+                    } else {
+                        finish_span_access(accessor, accessor.getter(), &span_id).await?;
+                    }
                     accessor.with(|mut access| {
                         let ctx = access.get();
                         let entry = ctx

@@ -186,6 +186,13 @@ not a guest input; delivery order (#64 before #65) is. Owner: `ReplayDeliveryBar
 property this relies on (bare Wasmtime, no oplog); the marker mechanics are covered by
 `replay_state/tests.rs` and `concurrent/tests.rs`.
 
+If A atomically recorded a positional tail such as `FinishSpan` immediately after `End A`, a
+prefetched resolution does not make that tail positionally available. A's continuation waits while
+the owners of entries before `End A` advance them, lets the cursor auto-drain `End A`, then validates
+and consumes the exact adjacent `FinishSpan` before applying its in-memory span transition. Reading
+`FinishSpan` through the ordinary positional API as soon as A resolves would steal whichever
+interleaved entry is still at the cursor head.
+
 ## 9. Automatic update with snapshot
 
 ```

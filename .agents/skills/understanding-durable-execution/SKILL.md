@@ -387,6 +387,14 @@ possible; a hard error by itself is not a recovery.
 Host completion time and guest observation time are different facts. Only the second is a guest
 input, and only the second must recur exactly; the first may vary between runs.
 
+A deferred accessor may append a mandatory positional tail entry, such as `FinishSpan`, in the
+same owned task immediately after its `End`. Completion-marker lookahead can resolve that `End`
+before the positional cursor reaches it. The replaying continuation must therefore wait for the
+owners of any interleaved entries to advance normally, auto-drain its own terminal, and then
+atomically validate and consume the exact adjacent tail entry by identity. It must not issue an
+ordinary positional read early, scan past unrelated work, or apply the tail's in-memory effect
+before the durable entry is consumed.
+
 Fork and revert retain the exact inclusive prefix. A cut between `Start` and its terminal uses
 ordinary incomplete-call recovery; a cut between an accessor `End` and its delivery/discard
 marker uses `AtReplayTail`. No outcome beyond the cut is inherited. Revert leaves deleted entries

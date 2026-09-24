@@ -3853,10 +3853,47 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// was armed — and the *caller* parks at its own delivery boundary after performing its
     /// deterministic post-`End` continuation (e.g. consuming a positional `FinishSpan`).
     pub async fn replay_access_deferred<T, D, Ctx>(
-        mut self,
+        self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     ) -> Result<DeferredCallReplayOutcome<Pair, P>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.replay_access_deferred_impl(store, get_ctx, None)
+            .await
+            .map(|(outcome, _)| outcome)
+    }
+
+    /// Replays a deferred accessor call whose successful live terminal atomically appended a
+    /// `FinishSpan` immediately after its `End`.
+    ///
+    /// The boolean reports whether that durable span tail was consumed here. A cancellation with
+    /// a partial response has no post-`End` tail and still requires the caller's ordinary
+    /// positional span handling.
+    pub async fn replay_access_deferred_with_finish_span<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        span_id: &SpanId,
+    ) -> Result<(DeferredCallReplayOutcome<Pair, P>, bool), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.replay_access_deferred_impl(store, get_ctx, Some(span_id.clone()))
+            .await
+    }
+
+    async fn replay_access_deferred_impl<T, D, Ctx>(
+        mut self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        post_end_finish_span: Option<SpanId>,
+    ) -> Result<(DeferredCallReplayOutcome<Pair, P>, bool), WorkerExecutorError>
     where
         T: 'static,
         D: HasData + ?Sized,
@@ -3878,24 +3915,41 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .take()
             .expect("replay_access_deferred() called on a live handle");
         let outcome = replay_state.await_resolution_outcome(replay).await?;
+        let finish_span_tail = post_end_finish_span.and_then(|span_id| match &outcome {
+            ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            | ResolutionOutcome::Resolved(Resolution::CompletedButDiscarded { end_idx, .. }) => {
+                Some((*end_idx, span_id))
+            }
+            ResolutionOutcome::Resolved(Resolution::Cancelled { .. })
+            | ResolutionOutcome::Incomplete => None,
+        });
         match classify_replay_resolution(outcome) {
             ReplayedResolution::Delivered(payload, disposition) => {
                 self.finished = true;
                 let response = decode_replayed_payload::<Pair>(&oplog, payload).await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
+                let consumed_finish_span = finish_span_tail.is_some();
+                if let Some((end_idx, span_id)) = finish_span_tail {
+                    replay_state
+                        .consume_finish_span_after_terminal(end_idx, span_id)
+                        .await?;
+                }
                 // The delivery token is constructed only after the fallible decode / scope close
                 // succeeded: a token dropped on the error path would log a spurious
                 // unconsumed-token warning.
-                Ok(DeferredCallReplayOutcome::Replayed(
-                    response,
-                    CompletionDelivery::replay_delivered(
-                        disposition,
-                        self.start_idx,
-                        completion_marker_recorder,
-                        self.trap_context(),
-                        self.cleanup_sink.clone(),
+                Ok((
+                    DeferredCallReplayOutcome::Replayed(
+                        response,
+                        CompletionDelivery::replay_delivered(
+                            disposition,
+                            self.start_idx,
+                            completion_marker_recorder,
+                            self.trap_context(),
+                            self.cleanup_sink.clone(),
+                        ),
                     ),
+                    consumed_finish_span,
                 ))
             }
             ReplayedResolution::Undelivered(UndeliveredTerminal::CompletionDiscarded {
@@ -3919,10 +3973,20 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         .await?;
                 end_durable_function_access(store, get_ctx, function_type, begin_index, false)
                     .await?;
+                let consumed_finish_span = finish_span_tail.is_some();
+                if let Some((tail_end_idx, span_id)) = finish_span_tail {
+                    debug_assert_eq!(tail_end_idx, end_idx);
+                    replay_state
+                        .consume_finish_span_after_terminal(tail_end_idx, span_id)
+                        .await?;
+                }
                 // As above, the token is constructed only after the fallible operations.
-                Ok(DeferredCallReplayOutcome::Replayed(
-                    response,
-                    CompletionDelivery::replay_discarded(),
+                Ok((
+                    DeferredCallReplayOutcome::Replayed(
+                        response,
+                        CompletionDelivery::replay_discarded(),
+                    ),
+                    consumed_finish_span,
                 ))
             }
             ReplayedResolution::Undelivered(
@@ -3971,7 +4035,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     self.abandon_for_trap();
                     return Err(error);
                 }
-                Ok(DeferredCallReplayOutcome::Incomplete(self))
+                Ok((DeferredCallReplayOutcome::Incomplete(self), false))
             }
         }
     }
@@ -4923,8 +4987,8 @@ where
 
 /// Finishes a span in the in-memory invocation context only, without writing or consuming any
 /// oplog entry: pops the current-span pointer if it points at this span, then marks the span
-/// finished. This is the non-durable half of [`finish_span_access`], used directly for spans
-/// whose identity is derived from durable records (no `StartSpan`/`FinishSpan` entries exist).
+/// finished. This is the in-memory half of [`finish_span_access`], used directly when the durable
+/// entry either does not exist or has already been handled separately.
 pub(crate) fn finish_span_in_memory<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     span_id: &SpanId,

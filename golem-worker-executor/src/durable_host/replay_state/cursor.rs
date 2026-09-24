@@ -1,6 +1,7 @@
 use super::claims::{RequestClaimIdentity, StartClaim, recorded_request_payload_matches};
 use super::*;
 use crate::durable_host::PositionalRead;
+use golem_common::model::invocation_context::SpanId;
 #[cfg(feature = "test-utils")]
 use std::pin::Pin;
 
@@ -2824,6 +2825,84 @@ impl ReplayState {
             }
             progress.await;
         }
+    }
+
+    /// Waits until the positional cursor reaches a prefetched call's terminal, then consumes the
+    /// exact `FinishSpan` recorded immediately after it.
+    ///
+    /// A completion marker lets a concurrent call resolve from lookahead before its `End` reaches
+    /// the cursor. Its host continuation may therefore run while earlier interleaved calls still
+    /// own the cursor head. Those calls must advance normally; once they do, this method
+    /// auto-drains the resolver-owned terminal and atomically validates the adjacent span tail.
+    pub(crate) async fn consume_finish_span_after_terminal(
+        &self,
+        terminal_index: OplogIndex,
+        span_id: SpanId,
+    ) -> Result<(), WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            loop {
+                let progress = state.cursor.progress.notified();
+                tokio::pin!(progress);
+                progress.as_mut().enable();
+
+                let consumed = state
+                    .with_tx(async |tx| {
+                        if tx.cursor.last_replayed_index() < terminal_index {
+                            // Drive only entries already owned by claimed calls. An unrelated
+                            // positional entry remains untouched for its own replaying task.
+                            tx.try_get_oplog_entry(|_| false).await?;
+                        }
+
+                        let cursor_index = tx.cursor.last_replayed_index();
+                        if cursor_index < terminal_index {
+                            return Ok(false);
+                        }
+                        if cursor_index > terminal_index {
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("FinishSpan immediately after terminal {terminal_index}"),
+                                format!(
+                                    "replay cursor already advanced to {cursor_index} for {}",
+                                    tx.cursor.owned_agent_id
+                                ),
+                            ));
+                        }
+                        if tx.cursor.is_live() {
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("FinishSpan immediately after terminal {terminal_index}"),
+                                format!(
+                                    "end of replay for {} at terminal {terminal_index}",
+                                    tx.cursor.owned_agent_id
+                                ),
+                            ));
+                        }
+
+                        let (read_index, entry) = tx.raw_read_next_oplog_entry().await?;
+                        let expected_index = terminal_index.next();
+                        match &entry {
+                            OplogEntry::FinishSpan {
+                                span_id: recorded_span_id,
+                                ..
+                            } if read_index == expected_index && recorded_span_id == &span_id => {
+                                tx.commit_consumed_entry(read_index, &entry).await?;
+                                Ok(true)
+                            }
+                            _ => Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!(
+                                    "FinishSpan for span {span_id} at {expected_index} immediately after terminal {terminal_index}"
+                                ),
+                                format!("{entry:?} at {read_index}"),
+                            )),
+                        }
+                    })
+                    .await?;
+
+                if consumed {
+                    return Ok(());
+                }
+                progress.await;
+            }
+        })
+        .await
     }
 
     /// Owned-task variant of [`Self::get_oplog_entry_or_replay_end`].

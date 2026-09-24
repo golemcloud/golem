@@ -9,7 +9,7 @@ use golem_common::model::entity::{
     EntityCallMode, ToolInvocationClaimIdentity, ToolInvocationRejectedIdentity,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::invocation_context::TraceId;
+use golem_common::model::invocation_context::{SpanId, TraceId};
 use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult, SerializableToolRpcError,
 };
@@ -2991,6 +2991,132 @@ async fn marked_completion_is_prefetched_without_advancing_past_intervening_entr
         .unwrap();
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
     barrier.acknowledge();
+}
+
+#[test]
+async fn prefetched_completion_waits_for_interleaved_call_before_consuming_its_span_tail() {
+    // The outer RPC completion is visible through its delivery marker before the positional
+    // cursor reaches its End. Its continuation must leave the interleaved timer call untouched,
+    // then consume only the FinishSpan atomically recorded next to the RPC End.
+    let span_id = SpanId::generate();
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(3, 43),
+        end_for(2, 42),
+        OplogEntry::FinishSpan {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            span_id: span_id.clone(),
+        },
+        delivered_for(2),
+    ])
+    .await;
+
+    let outer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let outer_end = match rs.await_resolution(outer).await.unwrap() {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(7)));
+            end_idx
+        }
+        other => panic!("expected prefetched outer completion, got {other:?}"),
+    };
+
+    let mut consume_span = tokio::spawn({
+        let rs = rs.clone();
+        let span_id = span_id.clone();
+        async move {
+            rs.consume_finish_span_after_terminal(outer_end, span_id)
+                .await
+        }
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut consume_span)
+            .await
+            .is_err(),
+        "the outer continuation must wait instead of consuming the timer Start"
+    );
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
+
+    let timer = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        rs.await_resolution(timer).await.unwrap(),
+        Resolution::Completed {
+            end_idx,
+            delivery_marker: None,
+            ..
+        } if end_idx == OplogIndex::from_u64(4)
+    ));
+    consume_span
+        .await
+        .expect("span-tail task panicked")
+        .expect("span-tail replay failed");
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
+
+    let barrier = rs
+        .await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(7))
+        .await
+        .unwrap();
+    barrier.acknowledge();
+}
+
+#[test]
+async fn prefetched_completion_rejects_a_different_span_tail_without_consuming_it() {
+    let recorded_span_id = SpanId::generate();
+    let expected_span_id = SpanId::generate();
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        OplogEntry::FinishSpan {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            span_id: recorded_span_id.clone(),
+        },
+        delivered_for(2),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let end_idx = match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => end_idx,
+        other => panic!("expected prefetched completion, got {other:?}"),
+    };
+
+    let error = rs
+        .consume_finish_span_after_terminal(end_idx, expected_span_id)
+        .await
+        .expect_err("a different span tail must be rejected");
+    assert!(error.to_string().contains("FinishSpan for span"));
+    assert_eq!(rs.last_replayed_index(), end_idx);
+    let (index, entry) = rs.get_oplog_entry().await.unwrap();
+    assert_eq!(index, end_idx.next());
+    assert!(matches!(
+        entry,
+        OplogEntry::FinishSpan { span_id, .. } if span_id == recorded_span_id
+    ));
 }
 
 #[test]
