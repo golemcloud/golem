@@ -28,7 +28,6 @@ use golem_common::redis::{RedisError, RedisPool};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use uuid::Uuid;
 
 /// Redis checks a key's epoch in a Lua script, which it runs atomically with the `XADD`s the
 /// script guards. Two limits follow from Redis itself rather than from this code: an epoch is
@@ -45,7 +44,7 @@ impl RedisIndexedStorage {
     pub fn new(redis: RedisPool) -> Self {
         Self {
             redis,
-            writer_id: WriterId(Uuid::new_v4()),
+            writer_id: WriterId::process(),
         }
     }
 
@@ -185,6 +184,21 @@ return redis.status_reply('OK')
             actual,
             writer_conflict,
         })
+    }
+
+    /// The error of [`IndexedStorage::set_key_epoch`] or [`IndexedStorage::delete_with_epoch`]:
+    /// the scripts' fence, or else classified as a read is. A lost connection or a timeout is
+    /// `Transient` even if the script ran, because both repeat safely for the same writer: the
+    /// epoch it already holds is accepted again, and a deletion that already happened finds
+    /// nothing left and succeeds.
+    fn classify_epoch_error(
+        error: RedisError,
+        key: &str,
+        expected: Option<ShardEpoch>,
+    ) -> IndexedStorageError {
+        expected
+            .and_then(|expected| Self::parse_fenced(&error, key, expected))
+            .unwrap_or_else(|| Self::classify_read_error(error))
     }
 
     async fn append_fenced(
@@ -571,10 +585,7 @@ impl IndexedStorage for RedisIndexedStorage {
             )
             .await
             .map(|_| ())
-            .map_err(|error| {
-                Self::parse_fenced(&error, key, epoch)
-                    .unwrap_or_else(|| IndexedStorageError::Other(error.to_string()))
-            })
+            .map_err(|error| Self::classify_epoch_error(error, key, Some(epoch)))
     }
 
     async fn delete_with_epoch(
@@ -605,11 +616,7 @@ impl IndexedStorage for RedisIndexedStorage {
             )
             .await
             .map(|_| ())
-            .map_err(|error| {
-                expected_epoch
-                    .and_then(|expected| Self::parse_fenced(&error, key, expected))
-                    .unwrap_or_else(|| IndexedStorageError::Other(error.to_string()))
-            })
+            .map_err(|error| Self::classify_epoch_error(error, key, expected_epoch))
     }
 
     async fn move_if_absent(
@@ -886,5 +893,41 @@ mod tests {
                 IndexedStorageError::Transient(_)
             ));
         }
+    }
+
+    // The oplog retries only `Transient` around these two and panics on anything else but a
+    // fence, which SQLite and PostgreSQL never hand it for a lost connection.
+    #[test]
+    fn epoch_record_connection_errors_are_transient() {
+        for expected in [Some(ShardEpoch(7)), None] {
+            for kind in [ErrorKind::IO, ErrorKind::Timeout, ErrorKind::Canceled] {
+                let error = RedisError::new(kind, "outcome is unknown");
+                assert!(matches!(
+                    RedisIndexedStorage::classify_epoch_error(error, "k", expected),
+                    IndexedStorageError::Transient(_)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn epoch_record_fence_is_a_fence_and_other_errors_stay_permanent() {
+        let fenced = RedisError::new(ErrorKind::Unknown, "FENCED 9 0");
+        assert!(matches!(
+            RedisIndexedStorage::classify_epoch_error(fenced, "k", Some(ShardEpoch(7))),
+            IndexedStorageError::Fenced {
+                actual: Some(ShardEpoch(9)),
+                ..
+            }
+        ));
+
+        let wrong_type = RedisError::new(
+            ErrorKind::Unknown,
+            "WRONGTYPE Operation against a key holding the wrong kind of value",
+        );
+        assert!(matches!(
+            RedisIndexedStorage::classify_epoch_error(wrong_type, "k", Some(ShardEpoch(7))),
+            IndexedStorageError::Other(_)
+        ));
     }
 }

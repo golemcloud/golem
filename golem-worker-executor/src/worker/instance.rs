@@ -21,7 +21,7 @@ use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOper
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
-use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence};
+use crate::services::oplog::{CommitLevel, Oplog, OplogFence};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
@@ -367,7 +367,7 @@ impl OwnerExecution {
             // everywhere else.
             match self.oplog.commit(CommitLevel::Always).await {
                 Ok(_) => {}
-                Err(OplogError::Fenced(_)) => {
+                Err(crate::services::oplog::OplogError::Fenced(_)) => {
                     return Err(InterruptKind::ShardLost);
                 }
                 Err(error) => panic!("oplog write: {error}"),
