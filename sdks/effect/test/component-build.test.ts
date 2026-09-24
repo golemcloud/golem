@@ -23,6 +23,7 @@ import config from "../vitest.config.js"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdk = resolve(root, "dist/src")
+const httpContract = resolve(root, "../http-contract")
 const exports = [
   "golemAgent200Guest",
   "golemTool010Guest",
@@ -39,7 +40,10 @@ const sourcePlugin = {
     return null
   },
   load(id: string) {
-    if (id.startsWith(resolve(root, "test/fixtures/") + "/") && id.endsWith(".ts"))
+    if (
+      (id.startsWith(resolve(root, "test/fixtures/") + "/") || id.startsWith(httpContract + "/")) &&
+      id.endsWith(".ts")
+    )
       return ts.transpileModule(readFileSync(id, "utf8"), {
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
       }).outputText

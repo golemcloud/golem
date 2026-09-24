@@ -121,7 +121,7 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
                   for index = 0; index < (payload).length(); index = index + 1 {
                         let iter_elem : @common.AgentType = (payload)[(index)]
                         let iter_base = address + (index * 208);
-                        @wit_bindgen_export_lower.wit_bindgen_lower_t431((iter_base) + 0, iter_elem)
+                        @wit_bindgen_export_lower.wit_bindgen_lower_t439((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((return_area) + 8, (payload).length())
@@ -131,7 +131,7 @@ pub fn wasmExportDiscoverAgentTypes() -> Int {
             }
             Err(payload0) => {
                   mbt_ffi_store8((return_area) + 0, (1))
-                  @wit_bindgen_export_lower.wit_bindgen_lower_t434((return_area) + 4, payload0)
+                  @wit_bindgen_export_lower.wit_bindgen_lower_t442((return_area) + 4, payload0)
 
                   ()
             }
@@ -265,14 +265,14 @@ pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
 
                   for index = 0; index < (mbt_ffi_load32((p0) + 8)); index = index + 1 {
                         let iter_base = (mbt_ffi_load32((p0) + 4)) + (index * 208)
-                        @wit_bindgen_export_lower.wit_bindgen_deallocate_t431((iter_base) + 0)
+                        @wit_bindgen_export_lower.wit_bindgen_deallocate_t439((iter_base) + 0)
 
                   }
                   mbt_ffi_free(mbt_ffi_load32((p0) + 4))
 
             }
             1 => {
-                  @wit_bindgen_export_lower.wit_bindgen_deallocate_t434((p0) + 4)
+                  @wit_bindgen_export_lower.wit_bindgen_deallocate_t442((p0) + 4)
 
             }
             _ => panic()
@@ -285,7 +285,7 @@ pub fn wasmExportGetDefinition() -> Int {
 
       let (result) : (@common.AgentType) = get_definition();
       let return_area = mbt_ffi_malloc(208)
-      @wit_bindgen_export_lower.wit_bindgen_lower_t431((return_area) + 0, result)
+      @wit_bindgen_export_lower.wit_bindgen_lower_t439((return_area) + 0, result)
       let ret = return_area
       return ret
 
@@ -293,7 +293,7 @@ pub fn wasmExportGetDefinition() -> Int {
 ///|
 #doc(hidden)
 pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
-      @wit_bindgen_export_lower.wit_bindgen_deallocate_t431((p0) + 0)
+      @wit_bindgen_export_lower.wit_bindgen_deallocate_t439((p0) + 0)
 
 }
 ///|
@@ -305,7 +305,7 @@ pub fn wasmExportInitialize(p0 : Int) -> Int {
                   let result = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 0), mbt_ffi_load32((p0) + 4))
 
                   let return_result: Ref[Result[Unit, @common.AgentError]?] = Ref(None)
-                  return_result.val = Some(initialize(result, @wit_bindgen_export_lower.wit_bindgen_lift_t78((p0) + 8), @wit_bindgen_export_lower.wit_bindgen_lift_t420((p0) + 24), background_group))
+                  return_result.val = Some(initialize(result, @wit_bindgen_export_lower.wit_bindgen_lift_t78((p0) + 8), @wit_bindgen_export_lower.wit_bindgen_lift_t428((p0) + 24), background_group))
                   initialize_task_return(return_result)
 
             })
@@ -320,7 +320,7 @@ pub fn wasmExportInvokeGolemAgentGuest(p0 : Int) -> Int {
                   let result = mbt_ffi_ptr2str(mbt_ffi_load32((p0) + 0), mbt_ffi_load32((p0) + 4))
 
                   let return_result: Ref[Result[@types.SchemaValueTree?, @common.AgentError]?] = Ref(None)
-                  return_result.val = Some(invoke(result, @wit_bindgen_export_lower.wit_bindgen_lift_t78((p0) + 8), @wit_bindgen_export_lower.wit_bindgen_lift_t420((p0) + 24), background_group))
+                  return_result.val = Some(invoke(result, @wit_bindgen_export_lower.wit_bindgen_lift_t78((p0) + 8), @wit_bindgen_export_lower.wit_bindgen_lift_t428((p0) + 24), background_group))
                   invoke_task_return(return_result)
 
             })

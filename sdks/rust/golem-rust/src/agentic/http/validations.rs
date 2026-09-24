@@ -808,6 +808,7 @@ mod tests {
             cors_options: CorsOptions {
                 allowed_patterns: cors.into_iter().map(|s| s.to_string()).collect(),
             },
+            durable_streams: None,
         }
     }
 

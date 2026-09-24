@@ -93,13 +93,26 @@ try {
     ],
     { cwd: temporaryDirectory },
   )
+  if (
+    manifest.dependencies["@golemcloud/http-contract"] ||
+    manifest.dependencies["@golemcloud/golem-ts-sdk"]
+  ) {
+    throw new Error("The published SDK must not depend on the private contract or TypeScript SDK")
+  }
+  for (const path of walk(join(installed, "dist")).filter((path) =>
+    /\.(?:m?js|d\.m?ts)$/.test(path),
+  )) {
+    if (readFileSync(path, "utf8").includes("@golemcloud/http-contract")) {
+      throw new Error(`Unbundled private HTTP contract in ${path}`)
+    }
+  }
   runNpm(
     [
       "install",
       "--ignore-scripts",
       "--no-save",
       `@types/node@${manifest.devDependencies["@types/node"]}`,
-      `typescript@${manifest.devDependencies.typescript}`,
+      `typescript@${manifest.dependencies.typescript}`,
     ],
     {
       cwd: temporaryDirectory,
@@ -196,11 +209,29 @@ export async function load(url, context, nextLoad) {
       pathToFileURL(loader).href,
       "--input-type=module",
       "--eval",
-      uniquePublicModules.map((name) => `await import(${JSON.stringify(name)})`).join("\n"),
+      `import assert from "node:assert/strict";
+const root = await import(${JSON.stringify(manifest.name)});
+for (const name of ${JSON.stringify(uniquePublicModules)}) {
+  const module = await import(name);
+  const namespace = name.slice(${manifest.name.length + 1});
+  const shared = root[namespace];
+  if (shared && typeof shared === "object") {
+    assert.deepEqual(Object.keys(module), Object.keys(shared).sort(), name + " exports");
+    for (const key of Object.keys(module)) assert.equal(module[key], shared[key], name + "." + key);
+  }
+}
+const { HttpRouter, Http } = root;
+const subpath = await import(${JSON.stringify(`${manifest.name}/HttpRouter`)});
+subpath.define("PackageSubpathRouter", { mount: Http.mount("/package") }).register();
+assert.ok(root.golemAgent200Guest.discoverAgentTypes().some((agent) => agent.typeName === "PackageSubpathRouter"));
+assert.equal(subpath.define, HttpRouter.define);`,
     ],
-    { cwd: temporaryDirectory, encoding: "utf8" },
+    { cwd: temporaryDirectory, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
   )
-  if (runtime.status !== 0) throw new Error(`Public runtime import failed:\n${runtime.stderr}`)
+  if (runtime.status !== 0)
+    throw new Error(
+      `Public runtime import failed (status ${runtime.status}, signal ${runtime.signal}):\n${runtime.stderr}`,
+    )
 
   const ambientModules = Object.keys(manifest.typesVersions["*"])
   const ambientEntries = ambientModules.filter((name) => name.endsWith("guest"))

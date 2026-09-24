@@ -5,12 +5,10 @@ import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { bind, type IdentityBinding } from "./Client.js"
 import { bind as bindDynamic } from "./DynamicClient.js"
+import { AgentIdentityError } from "./internal/agentIdentityError.js"
+import { rawPhantomId, retainRawPhantomId } from "./internal/agentIdentityState.js"
 
-/** Identity parsing or construction failed at the host boundary. @since 1.6.0 @category errors */
-export class AgentIdentityError {
-  readonly _tag = "AgentIdentityError"
-  constructor(readonly cause: unknown) {}
-}
+export { AgentIdentityError } from "./internal/agentIdentityError.js"
 
 /** Immutable semantic parts of an environment-scoped agent identity. @since 1.6.0 @category models */
 export interface Identity {
@@ -32,8 +30,6 @@ export interface MakeOptions {
   readonly constructorValue: CoreTypes.SchemaValueTree
   readonly phantomId?: string
 }
-
-const rawPhantoms = new WeakMap<Identity, CoreTypes.Uuid | undefined>()
 
 const copyValue = <T>(value: T): T => {
   if (value instanceof Uint8Array) return value.slice() as T
@@ -78,7 +74,7 @@ const create = (
     dynamicClient: () => bindDynamic(identity),
     ...(phantom === undefined ? {} : { phantomId: uuidToString(phantom) }),
   })
-  rawPhantoms.set(identity, phantom)
+  retainRawPhantomId(identity, phantom)
   return identity
 }
 
@@ -113,12 +109,4 @@ export const make = (
     })
   })
 
-/** @internal Raw UUID retained by parsing/construction so clients never reparse the identity string. */
-export const rawPhantomId = (identity: Identity): CoreTypes.Uuid | undefined => {
-  if (!rawPhantoms.has(identity)) {
-    throw new TypeError(
-      "Expected an AgentIdentity created by AgentIdentity.parse or AgentIdentity.make",
-    )
-  }
-  return rawPhantoms.get(identity)
-}
+export { rawPhantomId }

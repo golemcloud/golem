@@ -157,11 +157,11 @@ Import `@golemcloud/golem-ts-sdk/http-router` without loading the agent registry
   full OpenAPI semantic validation, reference handling, rebasing and merging.
 - `HttpRouterError.category` provides a safe diagnostic category without document contents.
 
-From `sdks/ts`, `npx pnpm --filter @golemcloud/golem-ts-sdk run build:http-router` builds only
-`dist/http-router.mjs` and `dist/http-router.d.mts` plus the generated WIT type declarations.
-No template WASM is needed for this entry. Framework packages may bundle this public entry and
-its declarations at build time using a local development dependency; do not publish a sibling
-`file:` path as a runtime dependency.
+The TypeScript and Effect SDKs build these primitives from the private `sdks/http-contract`
+source package independently. Both bundle its code and declarations; npm consumers need no
+private package or sibling SDK checkout. After building the SDK and its template, run
+`pnpm --filter @golemcloud/golem-ts-sdk run check:package` from `sdks/ts` to verify a packed
+installation, host-free HTTP imports, and consumer declarations.
 
 The SDK tests execute shared corpus metadata/mapping cases and targeted stream/codec cases;
 corpus integrity alone does not prove runtime conformance. The CLI deployed fixture

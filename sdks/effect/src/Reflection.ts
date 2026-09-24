@@ -21,7 +21,7 @@ import { field, t, type SchemaGraph, type SchemaType } from "./internal/schema-m
 import { schemaGraphFromWit, schemaGraphToWit } from "./internal/schema-model/wit.js"
 import { freezeSchemaGraph, SchemaRef, SchemaRenderError, type JsonValue } from "./SchemaRef.js"
 
-export { AgentIdentityError } from "./AgentIdentity.js"
+export { AgentIdentityError } from "./internal/agentIdentityError.js"
 
 /** A reflected method and its concrete input/output schema roots. @since 1.6.0 @category models */
 export interface AgentMethod {

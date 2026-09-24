@@ -23,7 +23,11 @@ if (!appRootDir) {
   throw new Error("GOLEM_APP_ROOT is not set");
 }
 
-const embeddedPackages = new Set(["effect", "agent-guest"]);
+const embeddedPackages = new Set([
+  "effect",
+  "effect/unstable/http",
+  "agent-guest",
+]);
 
 const externalPackages = (id) =>
   embeddedPackages.has(id) ||

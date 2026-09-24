@@ -11,23 +11,30 @@ export function sharedEffectRuntime(input) {
   const prefix = "\0golem-effect-root-facade:"
   const redacted = "\0golem-effect-redacted-facade"
   const stableModule = (source, importer) => {
-    const subpath = /^effect\/([A-Za-z_$][A-Za-z0-9_$]*)$/.exec(source)
+    const subpath = /^effect\/((?:unstable\/(?:http|httpapi)\/)?[A-Za-z_$][A-Za-z0-9_$]*)$/.exec(
+      source,
+    )
     if (subpath) {
       const name = subpath[1]
-      return name !== "index" && existsSync(path.join(effectDistDir, `${name}.js`))
+      return !name.endsWith("index") && existsSync(path.join(effectDistDir, `${name}.js`))
         ? name
         : undefined
     }
     if (!importer || !source.startsWith(".") || importer.startsWith("\0")) return undefined
-    const relative = path.relative(effectDistDir, path.resolve(path.dirname(importer), source))
-    return !relative.includes(path.sep) && relative.endsWith(".js")
-      ? path.basename(relative, ".js")
+    const relative = path
+      .relative(effectDistDir, path.resolve(path.dirname(importer), source))
+      .split(path.sep)
+      .join("/")
+    return /^(?:unstable\/(?:http|httpapi)\/)?[A-Za-z_$][A-Za-z0-9_$]*\.js$/.test(relative)
+      ? relative.slice(0, -3)
       : undefined
   }
   return {
     name: "golem-shared-effect-runtime",
     resolveId(source, importer) {
       const name = stableModule(source, importer)
+      if (name === "unstable/httpapi/HttpApiScalar" || name === "unstable/httpapi/HttpApiSwagger")
+        return null
       if (name) return { id: prefix + name, moduleSideEffects: false }
       if (
         importer &&
@@ -50,8 +57,13 @@ export function sharedEffectRuntime(input) {
       if (!id.startsWith(prefix)) return null
       const name = id.slice(prefix.length)
       const module = await import(pathToFileURL(path.join(effectDistDir, `${name}.js`)))
+      const separator = name.lastIndexOf("/")
+      const namespace = name.slice(separator + 1)
+      const barrel = separator === -1 ? "effect" : `effect/${name.slice(0, separator)}`
       return [
-        `import { ${name} as sharedModule } from "effect";`,
+        barrel === "effect/unstable/httpapi"
+          ? `import { GolemHttpApi } from "effect"; const sharedModule = GolemHttpApi.${namespace};`
+          : `import { ${namespace} as sharedModule } from ${JSON.stringify(barrel)};`,
         ...Object.keys(module)
           .filter((key) => key !== "default" && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key))
           .map(

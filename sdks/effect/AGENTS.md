@@ -106,7 +106,9 @@ schema/WIT equality assertion in `test/wit-drift.ts`. Do not add inert null-valu
 
 ## Commands
 
-From `sdks/effect`:
+From `sdks/effect`, no TypeScript SDK preparation is required. `npm ci` installs the private
+`../http-contract` source package; the SDK build bundles its code and declarations. Published
+packages must not depend on that private package or on `@golemcloud/golem-ts-sdk` at runtime.
 
 ```nu
 npm ci

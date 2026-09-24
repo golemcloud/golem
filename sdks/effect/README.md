@@ -266,6 +266,81 @@ cleanup. A downstream drop stops future source pulls and eventually calls the pr
 later invocation. Terminal errors are not transported; model recoverable failures as stream items
 (for example `Result<T, E>`). Streams cannot be snapshotted, triggered, or scheduled.
 
+## Effect HTTP routers
+
+`HttpRouter.define` registers a parameterless ephemeral HTTP router, without snapshots or an
+ordinary agent client. Supply a real Effect application factory; it runs inside each request's
+scope. Normal typed agent clients remain available inside handlers:
+
+```ts
+import { Effect, Layer } from "effect"
+import { HttpRouter as Routes, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { Http, HttpRouter } from "@golemcloud/effect-golem"
+
+const routes = Layer.mergeAll(
+  Routes.add(
+    "GET",
+    "/count",
+    Effect.gen(function* () {
+      const counter = yield* Counter.client.get({ name: "web" })
+      return HttpServerResponse.text(String(yield* counter.value({})))
+    }),
+  ),
+  Routes.add(
+    "POST",
+    "/echo",
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      return HttpServerResponse.stream(request.stream)
+    }),
+  ),
+)
+
+HttpRouter.define("Web", {
+  mount: Http.mount("/web"),
+  static: [{ route: "/assets/*", path: "/public/$1" }],
+}).implement(Routes.toHttpEffect(routes))
+```
+
+The framework sees mount-relative URLs. `yield* HttpRouter.request` exposes the original scheme,
+authority, path, optional query, ordered byte headers, and the same single-consumer body. An absent
+query is `undefined`; a present empty query is `""`. Explicit `text`, `json`, and `arrayBuffer`
+accessors buffer with Effect's `HttpIncomingMessage.MaxBodySize`; ordinary stream handlers do not.
+Normalized Effect headers cannot represent every original occurrence. For repeated response
+fields or opaque bytes, apply `HttpRouter.withRawHeaders(response, headers)` after response
+combinators. Those overrides survive pre-response hooks. Effect cookies become separate
+`set-cookie` occurrences.
+
+For an Effect `HttpApi`, use `HttpApiBuilder.layer` and `HttpRouter.toHttpEffect` for the application,
+and a lazy `openApi: Effect.sync(() => OpenApi.fromApi(Api))` provider on the same definition.
+Provide the application's normal Effect layers, including the `HttpPlatform`, `FileSystem`,
+`Path`, and `Etag` requirements of `HttpApiBuilder`; static file mappings themselves are served
+by Golem, not those layers. OpenAPI paths stay mount-relative. The shared TypeScript serializer
+preserves the generated document; the host validates its semantics and handles mount composition.
+The optional `handlerMethod` and `openapiProviderMethod` change ordinary metadata method names.
+Use `.register()` instead of `.implement(...)` for static-only or provider-only routers.
+
+Static mappings use `{ route, path }` objects. Files must also be included in the component's
+deployment. For a regular durable non-phantom agent, use
+`Http.mount("/files/{id}", { exposeFiles: [{ route: "/*", path: "/data/$1" }] })` to expose its
+filesystem. Mapping parsing and metadata compilation are shared with the TypeScript SDK.
+
+Request resources stay scoped through response consumption. Endpoints decoded during a request
+are adopted by that request even when their streams are transformed. HEAD and 204/205/304 never
+start body programs; they release already-acquired endpoints and request resources. Put eager
+application resources in `Effect.acquireRelease`/`Effect.addFinalizer`, not solely in an unopened
+stream's `ensuring`. Scope finalizers receive the response's success, failure, or interruption.
+Effect `Respondable` failures retain their HTTP responses, including HttpApi validation failures.
+Other application failures remain invocation failures; router misses and request parsing failures become
+404 and 400 responses. A late body failure must not be interpreted as successful invocation EOF.
+Raw response bodies other than `Uint8Array`, response `FormData`, and WebSocket upgrades are not
+supported by this adapter.
+
+**Runtime limitation:** local Effect interruption joins finalizers, but current host epoch
+interruption does not deliver cooperative cancellation to JavaScript. The P3 output pump also
+cannot interrupt a pending first pull. These paths require runtime work and deployed acceptance
+tests; unit tests and artifact checks do not establish HTTP lifecycle conformance.
+
 ## External Durable Streams
 
 `DurableStreams.readJson(schema, options)` and `readBytes(options)` return lazy native Effect
@@ -551,6 +626,10 @@ registration is conditional or never executed.
 
 Prerequisites are Node/npm, Rust with `wasm32-wasip2`, `wasm-rquickjs`, WASI SDK, and Golem's normal
 build prerequisites. From `sdks/effect`:
+
+The private `sdks/http-contract` source package is installed by `npm ci` and bundled by this SDK's
+build. No TypeScript SDK installation or sibling SDK build is required. Published packages contain
+the helper code and declarations, not a runtime dependency on that private package.
 
 ```nu
 npm ci

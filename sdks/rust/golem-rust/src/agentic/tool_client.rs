@@ -1186,7 +1186,14 @@ mod tests {
     }
 
     #[derive(
-        Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, crate::IntoWire, crate::FromWire,
+        Clone,
+        Debug,
+        Eq,
+        PartialEq,
+        IntoSchema,
+        FromSchema,
+        crate::IntoWire,
+        crate::FromWire,
         crate::WireSchema,
     )]
     struct CallerPayload {

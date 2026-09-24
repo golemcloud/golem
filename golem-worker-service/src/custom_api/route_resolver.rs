@@ -556,6 +556,7 @@ pub(super) mod tests {
             _ => RouteBehaviour::CallAgent(CallAgentBehaviour {
                 route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
                 base_path_variables: 0,
+                durable_streams: None,
                 component_id,
                 component_revision,
                 agent_type,

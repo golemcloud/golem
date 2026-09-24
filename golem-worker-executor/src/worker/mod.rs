@@ -768,7 +768,7 @@ impl DurableTopologyRecoveryCache {
         fingerprint: AgentFingerprint,
     ) -> Result<(), String> {
         let metadata = service
-            .lookup_durable_stream_recovery_metadata(owner, mode)
+            .lookup_durable_stream_recovery_metadata(owner, mode, fingerprint)
             .await?;
         *self = Self {
             initialized: true,
@@ -874,7 +874,7 @@ impl DurableTopologyRecoveryCache {
                 };
                 if !self.sessions.contains_key(&key) {
                     let control = service
-                        .lookup_durable_stream_control_metadata(owner, mode, &key)
+                        .lookup_durable_stream_control_metadata(owner, mode, fingerprint, &key)
                         .await?;
                     self.sessions.insert(key.clone(), control);
                 }
@@ -984,6 +984,7 @@ struct WorkerDurableStreamConsumerJournal<Ctx: WorkerCtx> {
     worker_service: Arc<dyn WorkerService>,
     owner: OwnedAgentId,
     mode: AgentMode,
+    fingerprint: AgentFingerprint,
 }
 
 #[async_trait::async_trait]
@@ -1009,6 +1010,7 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
             .lookup_durable_stream_session(
                 &self.owner,
                 self.mode,
+                self.fingerprint,
                 &status,
                 &session.idempotency_key,
             )
@@ -1181,6 +1183,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_service: self.worker_service(),
             owner: self.owned_agent_id.clone(),
             mode: self.agent_mode(),
+            fingerprint: self.initial_worker_metadata.fingerprint,
         })
     }
 
@@ -1505,6 +1508,48 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await
     }
 
+    /// Loads and starts only the incarnation selected by assignment recovery.
+    pub async fn get_existing_running_with_fingerprint<T>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+    ) -> Result<Arc<Self>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Send + Sync + Clone + 'static,
+    {
+        let worker = deps
+            .active_agents()
+            .get_existing_with_fingerprint(
+                deps,
+                owned_agent_id,
+                Principal::anonymous(),
+                Some(expected_fingerprint),
+            )
+            .await?;
+
+        let lifecycle = deps
+            .oplog_service()
+            .lock_lifecycle(&owned_agent_id.agent_id)
+            .await;
+        lifecycle.assert_agent(&owned_agent_id.agent_id);
+
+        let current = deps
+            .worker_service()
+            .resolve_agent_identity(owned_agent_id)
+            .await?;
+        if worker.get_initial_worker_metadata().fingerprint != expected_fingerprint
+            || current.is_none_or(|identity| identity.fingerprint != expected_fingerprint)
+        {
+            return Err(WorkerExecutorError::AgentNotFound {
+                agent_id: owned_agent_id.agent_id.clone(),
+            });
+        }
+
+        Self::start_if_needed(worker.clone()).await?;
+        drop(lifecycle);
+        Ok(worker)
+    }
+
     pub async fn get_or_create_running_with_freshness<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
@@ -1632,6 +1677,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let Some(last_known_status) = calculate_last_known_status_with_checkpoint(
                 deps,
                 owned_agent_id,
+                initial_worker_metadata.fingerprint,
                 agent_mode,
                 last_known_status,
             )
@@ -1753,9 +1799,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    pub(crate) async fn ensure_existing(
+    pub(crate) async fn ensure_existing_with_fingerprint(
         self: &Arc<Self>,
         principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         let worker = self.clone();
         let build = async move {
@@ -1769,6 +1816,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &worker.deps,
                 &mut lifecycle,
                 &worker.owned_agent_id,
+                expected_fingerprint,
             )
             .await
             .and_then(|metadata| {
@@ -1928,10 +1976,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if newly_created {
             let initial_status = current_status.load_full().as_ref().clone();
             deps.worker_service()
-                .update_cached_status(&owned_agent_id, None, initial_status.clone())
+                .update_cached_status(
+                    &owned_agent_id,
+                    initial_worker_metadata.fingerprint,
+                    None,
+                    initial_status.clone(),
+                )
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
             persisted_status = Some(initial_status);
+        } else {
+            let reconstructed_status = current_status.load_full();
+            deps.worker_service()
+                .set_assignment_tracking(
+                    &owned_agent_id,
+                    initial_worker_metadata.fingerprint,
+                    reconstructed_status.as_ref(),
+                )
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
         }
 
         let current_status_snapshot = current_status.load_full();
@@ -1986,6 +2049,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let last_known_status_detached = Arc::new(AtomicBool::new(false));
         let status_flusher = status_flusher::AgentStatusFlusher::new(
             owned_agent_id.clone(),
+            initial_worker_metadata.fingerprint,
             initial_worker_metadata.agent_mode == AgentMode::Ephemeral,
             deps.config().agent_status_flush.enabled,
             deps.worker_service(),
@@ -1997,6 +2061,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let status_checkpointer = status_checkpointer::StatusCheckpointer::new(
             owned_agent_id.clone(),
+            initial_worker_metadata.fingerprint,
             initial_worker_metadata.agent_mode == AgentMode::Ephemeral,
             deps.config().agent_status_checkpoint.enabled,
             deps.config().agent_status_checkpoint.min_oplog_delta,
@@ -2011,6 +2076,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let state_actor = Arc::new(state_actor::WorkerStateActor::new(
             all_deps.clone(),
             owned_agent_id.clone(),
+            initial_worker_metadata.fingerprint,
             initial_worker_metadata.agent_mode,
             initial_worker_metadata.created_by,
             oplog.clone(),
@@ -2587,7 +2653,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         if result == Some(false) {
             self.worker_service()
-                .remove_cached_status(&self.owned_agent_id)
+                .remove_cached_status(
+                    &self.owned_agent_id,
+                    self.initial_worker_metadata.fingerprint,
+                )
                 .await?;
         }
         Ok(result)
@@ -2875,7 +2944,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 result.map_err(WorkerExecutorError::runtime)?;
             }
             self.worker_service()
-                .remove(&mut lifecycle, &self.owned_agent_id)
+                .remove(
+                    &mut lifecycle,
+                    &self.owned_agent_id,
+                    self.initial_worker_metadata.agent_mode,
+                    self.initial_worker_metadata.fingerprint,
+                )
                 .await?;
             self.complete_deletion_stage(WorkerDeletionStage::DurableStateRemoved)
                 .await;
@@ -6394,6 +6468,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .lookup_durable_stream_control_metadata(
                 &self.owned_agent_id,
                 self.agent_mode(),
+                self.initial_worker_metadata.fingerprint,
                 session_key,
             )
             .await
@@ -6403,6 +6478,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .lookup_durable_stream_resume_offset(
                     &self.owned_agent_id,
                     self.agent_mode(),
+                    self.initial_worker_metadata.fingerprint,
                     session_key,
                     attempt,
                 )
@@ -6431,6 +6507,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .lookup_durable_stream_control_metadata(
                                 &self.owned_agent_id,
                                 self.agent_mode(),
+                                self.initial_worker_metadata.fingerprint,
                                 session_key,
                             )
                             .await
@@ -6445,6 +6522,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 .lookup_durable_stream_resume_offset(
                                     &self.owned_agent_id,
                                     self.agent_mode(),
+                                    self.initial_worker_metadata.fingerprint,
                                     session_key,
                                     attempt,
                                 )
@@ -6521,6 +6599,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .lookup_durable_stream_session(
                 &self.owned_agent_id,
                 self.agent_mode(),
+                self.initial_worker_metadata.fingerprint,
                 &status,
                 idempotency_key,
             )
@@ -8142,6 +8221,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .lookup_durable_stream_session(
                                 &self.owned_agent_id,
                                 self.agent_mode(),
+                                self.initial_worker_metadata.fingerprint,
                                 &last_known_status,
                                 key,
                             )
@@ -8439,7 +8519,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Option<OplogIndex> {
         let worker_service = self.deps.worker_service();
         let lookup = worker_service
-            .lookup_invocation_result_index(&self.owned_agent_id, status, key)
+            .lookup_invocation_result_index(
+                &self.owned_agent_id,
+                self.initial_worker_metadata.fingerprint,
+                status,
+                key,
+            )
             .await;
         match lookup {
             Ok(InvocationResultIndexLookup::Found(index)) => {
@@ -8456,12 +8541,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         if worker_service
-            .catch_up_invocation_result_index(&self.owned_agent_id, self.agent_mode(), status)
+            .catch_up_invocation_result_index(
+                &self.owned_agent_id,
+                self.agent_mode(),
+                self.initial_worker_metadata.fingerprint,
+                status,
+            )
             .await
             .is_ok()
         {
             match worker_service
-                .lookup_invocation_result_index(&self.owned_agent_id, status, key)
+                .lookup_invocation_result_index(
+                    &self.owned_agent_id,
+                    self.initial_worker_metadata.fingerprint,
+                    status,
+                    key,
+                )
                 .await
             {
                 Ok(InvocationResultIndexLookup::Found(index)) => {
@@ -8982,10 +9077,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: &T,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<Option<GetOrCreateWorkerResult>, WorkerExecutorError> {
         let Some(metadata) = this.worker_service().get(owned_agent_id).await? else {
             return Ok(None);
         };
+        if expected_fingerprint
+            .is_some_and(|expected| metadata.initial_worker_metadata.fingerprint != expected)
+        {
+            return Ok(None);
+        }
         Self::hydrate_existing_worker_metadata(this, lifecycle, owned_agent_id, metadata)
             .await
             .map(Some)
@@ -9013,6 +9114,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let current_status = calculate_last_known_status_with_checkpoint(
             this,
             owned_agent_id,
+            initial_worker_metadata.fingerprint,
             agent_mode,
             last_known_status,
         )
@@ -9114,7 +9216,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let existing = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
         } else {
-            Self::get_existing_worker_metadata(this, lifecycle, owned_agent_id).await?
+            Self::get_existing_worker_metadata(this, lifecycle, owned_agent_id, None).await?
         };
 
         match existing {

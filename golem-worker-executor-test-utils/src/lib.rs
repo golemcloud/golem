@@ -674,14 +674,25 @@ impl TestWorkerExecutor {
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        use golem_worker_executor::services::HasOplogService;
+
         let services = self
             .services
             .as_ref()
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let create = services
+            .oplog_service()
+            .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
+            .await
+            .remove(&OplogIndex::INITIAL)
+            .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
+        let OplogEntry::Create { parameters, .. } = create else {
+            return Err(anyhow!("first oplog entry is not create: {owned_agent_id}"));
+        };
         services
             .worker_service()
-            .remove_cached_status(&owned_agent_id)
+            .remove_cached_status(&owned_agent_id, AgentFingerprint(parameters.instance_id))
             .await?;
         Ok(())
     }
@@ -1255,15 +1266,15 @@ impl TestWorkerExecutor {
             .await
     }
 
-    /// Pauses after committing the selected checkpoint of the next fire-and-forget RPC for
+    /// Pauses after committing the selected checkpoint of the next RPC for
     /// `agent_id`.
-    pub async fn gate_next_fire_and_forget_rpc_commit(
+    pub async fn gate_next_rpc_commit(
         &self,
         agent_id: &AgentId,
-        checkpoint: FireAndForgetRpcCheckpoint,
-    ) -> FireAndForgetRpcCommitGateHandle {
+        checkpoint: RpcCheckpoint,
+    ) -> RpcCommitGateHandle {
         self.additional_test_deps
-            .gate_next_fire_and_forget_rpc_commit(agent_id.clone(), checkpoint)
+            .gate_next_rpc_commit(agent_id.clone(), checkpoint)
             .await
     }
 
@@ -4087,7 +4098,7 @@ struct TestOplog {
     /// appended, so the scope `End` gate below can recognize their matching
     /// `End` appends (an `End` only carries its `start_index`).
     consume_body_scope_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
-    fire_and_forget_rpc_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
+    rpc_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
 }
 
 impl TestOplog {
@@ -4154,51 +4165,40 @@ impl TestOplog {
             additional_test_deps,
             consume_body_chunk_starts: Arc::new(std::sync::Mutex::new(HashSet::new())),
             consume_body_scope_starts: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            fire_and_forget_rpc_starts: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            rpc_starts: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
-    async fn pause_after_fire_and_forget_rpc_checkpoint(
-        &self,
-        index: OplogIndex,
-        entry: &OplogEntry,
-    ) {
+    async fn pause_after_rpc_checkpoint(&self, index: OplogIndex, entry: &OplogEntry) {
         let checkpoint = match entry {
             OplogEntry::Start {
-                function_name: HostFunctionName::GolemRpcWasmRpcInvoke,
+                function_name:
+                    HostFunctionName::GolemRpcWasmRpcInvoke
+                    | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult,
                 ..
             } => {
-                self.fire_and_forget_rpc_starts
-                    .lock()
-                    .unwrap()
-                    .insert(index);
-                Some(FireAndForgetRpcCheckpoint::Start)
+                self.rpc_starts.lock().unwrap().insert(index);
+                Some(RpcCheckpoint::Start)
             }
-            OplogEntry::StartSpan { .. }
-                if !self.fire_and_forget_rpc_starts.lock().unwrap().is_empty() =>
-            {
-                Some(FireAndForgetRpcCheckpoint::StartSpan)
+            OplogEntry::StartSpan { .. } if !self.rpc_starts.lock().unwrap().is_empty() => {
+                Some(RpcCheckpoint::StartSpan)
             }
             OplogEntry::End { start_index, .. }
-                if self
-                    .fire_and_forget_rpc_starts
-                    .lock()
-                    .unwrap()
-                    .contains(start_index) =>
+                if self.rpc_starts.lock().unwrap().contains(start_index) =>
             {
-                Some(FireAndForgetRpcCheckpoint::End)
+                Some(RpcCheckpoint::End)
             }
             _ => None,
         };
         if let Some(checkpoint) = checkpoint
             && self
                 .additional_test_deps
-                .has_fire_and_forget_rpc_commit_gate(&self.owned_agent_id.agent_id, checkpoint)
+                .has_rpc_commit_gate(&self.owned_agent_id.agent_id, checkpoint)
                 .await
         {
             self.oplog.commit(CommitLevel::Always).await;
             self.additional_test_deps
-                .pause_after_fire_and_forget_rpc_commit(&self.owned_agent_id.agent_id, checkpoint)
+                .pause_after_rpc_commit(&self.owned_agent_id.agent_id, checkpoint)
                 .await;
         }
     }
@@ -4444,8 +4444,7 @@ impl Oplog for TestOplog {
         if let Some(start_index) = delivered_start {
             self.observe_rpc_memory_delivery(start_index);
         }
-        self.pause_after_fire_and_forget_rpc_checkpoint(index, &entry)
-            .await;
+        self.pause_after_rpc_checkpoint(index, &entry).await;
         if track_scope_start
             && self
                 .additional_test_deps
@@ -4685,7 +4684,7 @@ impl Oplog for TestOplog {
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
             .await?;
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
-        self.pause_after_fire_and_forget_rpc_checkpoint(ordered.index, &ordered.entry)
+        self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
         if matches!(
             &ordered.entry,
@@ -4716,7 +4715,7 @@ impl Oplog for TestOplog {
             .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
-        self.pause_after_fire_and_forget_rpc_checkpoint(ordered.index, &ordered.entry)
+        self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
         if matches!(
             &ordered.entry,
@@ -5007,7 +5006,7 @@ pub struct AdditionalTestDeps {
         Arc<scc::HashMap<AgentId, Arc<AgentInitializationEnqueueGate>>>,
     consume_body_scope_start_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeStartGate>>>,
     consume_body_scope_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeEndGate>>>,
-    fire_and_forget_rpc_commit_gates: Arc<scc::HashMap<AgentId, Arc<FireAndForgetRpcCommitGate>>>,
+    rpc_commit_gates: Arc<scc::HashMap<AgentId, Arc<RpcCommitGate>>>,
     consume_body_reply_defer_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyReplyDeferGate>>>,
     entity_reconstruction_body_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
@@ -5054,7 +5053,7 @@ impl AdditionalTestDeps {
             agent_initialization_enqueue_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_start_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_end_gates: Arc::new(scc::HashMap::new()),
-            fire_and_forget_rpc_commit_gates: Arc::new(scc::HashMap::new()),
+            rpc_commit_gates: Arc::new(scc::HashMap::new()),
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
             entity_reconstruction_body_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             entity_body_start_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -5355,34 +5354,30 @@ impl AdditionalTestDeps {
             .await
     }
 
-    async fn gate_next_fire_and_forget_rpc_commit(
+    async fn gate_next_rpc_commit(
         &self,
         agent_id: AgentId,
-        checkpoint: FireAndForgetRpcCheckpoint,
-    ) -> FireAndForgetRpcCommitGateHandle {
+        checkpoint: RpcCheckpoint,
+    ) -> RpcCommitGateHandle {
         let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
-        let gate = Arc::new(FireAndForgetRpcCommitGate {
+        let gate = Arc::new(RpcCommitGate {
             armed: AtomicBool::new(true),
             abort_return: AtomicBool::new(false),
             checkpoint,
             committed_tx: std::sync::Mutex::new(Some(committed_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
-        self.fire_and_forget_rpc_commit_gates
+        self.rpc_commit_gates
             .entry_async(agent_id)
             .await
             .and_modify(|existing| *existing = gate.clone())
             .or_insert_with(|| gate.clone());
-        FireAndForgetRpcCommitGateHandle { committed_rx, gate }
+        RpcCommitGateHandle { committed_rx, gate }
     }
 
-    async fn pause_after_fire_and_forget_rpc_commit(
-        &self,
-        agent_id: &AgentId,
-        checkpoint: FireAndForgetRpcCheckpoint,
-    ) {
+    async fn pause_after_rpc_commit(&self, agent_id: &AgentId, checkpoint: RpcCheckpoint) {
         let Some(gate) = self
-            .fire_and_forget_rpc_commit_gates
+            .rpc_commit_gates
             .read_async(agent_id, |_, gate| gate.clone())
             .await
         else {
@@ -5398,19 +5393,15 @@ impl AdditionalTestDeps {
             .release
             .acquire()
             .await
-            .expect("the fire-and-forget RPC Start commit gate semaphore was closed");
+            .expect("the RPC commit gate semaphore was closed");
         permit.forget();
         if gate.abort_return.load(Ordering::SeqCst) {
             std::future::pending().await
         }
     }
 
-    async fn has_fire_and_forget_rpc_commit_gate(
-        &self,
-        agent_id: &AgentId,
-        checkpoint: FireAndForgetRpcCheckpoint,
-    ) -> bool {
-        self.fire_and_forget_rpc_commit_gates
+    async fn has_rpc_commit_gate(&self, agent_id: &AgentId, checkpoint: RpcCheckpoint) -> bool {
+        self.rpc_commit_gates
             .read_async(agent_id, |_, gate| {
                 gate.checkpoint == checkpoint && gate.armed.load(Ordering::SeqCst)
             })
@@ -5896,30 +5887,30 @@ impl Drop for ConsumeBodyScopeEndGateHandle {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FireAndForgetRpcCheckpoint {
+pub enum RpcCheckpoint {
     Start,
     StartSpan,
     End,
 }
 
-struct FireAndForgetRpcCommitGate {
+struct RpcCommitGate {
     armed: AtomicBool,
     abort_return: AtomicBool,
-    checkpoint: FireAndForgetRpcCheckpoint,
+    checkpoint: RpcCheckpoint,
     committed_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
 }
 
-pub struct FireAndForgetRpcCommitGateHandle {
+pub struct RpcCommitGateHandle {
     committed_rx: tokio::sync::oneshot::Receiver<()>,
-    gate: Arc<FireAndForgetRpcCommitGate>,
+    gate: Arc<RpcCommitGate>,
 }
 
-impl FireAndForgetRpcCommitGateHandle {
+impl RpcCommitGateHandle {
     pub async fn committed(&mut self) {
         (&mut self.committed_rx)
             .await
-            .expect("the fire-and-forget RPC Start commit gate was dropped without firing");
+            .expect("the RPC commit gate was dropped without firing");
     }
 
     pub fn abort_return(&self) {
@@ -5928,7 +5919,7 @@ impl FireAndForgetRpcCommitGateHandle {
     }
 }
 
-impl Drop for FireAndForgetRpcCommitGateHandle {
+impl Drop for RpcCommitGateHandle {
     fn drop(&mut self) {
         self.gate.release.add_permits(1);
     }

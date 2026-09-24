@@ -105,6 +105,23 @@ pub(all) struct CorsOptions {
       allowed_patterns : Array[String]
 } derive(Debug, Eq)
 ///|
+pub(all) enum DurableStreamSlotSource {
+      Input(String)
+      Output(String)
+} derive(Debug, Eq)
+///|
+pub(all) struct DurableStreamSlotOptions {
+      source : DurableStreamSlotSource; name : String?; content_type : String?
+} derive(Debug, Eq)
+///|
+pub(all) struct DurableStreamRouteLoadOptions {
+      max_concurrent_readers_per_stream : UInt?; max_append_requests_per_second_per_stream : UInt?
+} derive(Debug, Eq)
+///|
+pub(all) struct DurableStreamRouteOptions {
+      slots : Array[DurableStreamSlotOptions]; allow_external_writes : Bool?; allow_stream_delete : Bool?; allow_invocation_delete : Bool?; load : DurableStreamRouteLoadOptions?
+} derive(Debug, Eq)
+///|
 pub(all) enum HttpMethod {
       Get
       Head
@@ -167,7 +184,7 @@ pub(all) struct HttpMountDetails {
 } derive(Debug, Eq)
 ///|
 pub(all) struct HttpEndpointDetails {
-      http_method : HttpMethod; path_suffix : Array[PathSegment]; header_vars : Array[HeaderVariable]; query_vars : Array[QueryVariable]; auth_details : AuthDetails?; cors_options : CorsOptions
+      http_method : HttpMethod; path_suffix : Array[PathSegment]; header_vars : Array[HeaderVariable]; query_vars : Array[QueryVariable]; auth_details : AuthDetails?; cors_options : CorsOptions; durable_streams : DurableStreamRouteOptions?
 } derive(Debug, Eq)
 ///|
 pub(all) struct AgentMethod {

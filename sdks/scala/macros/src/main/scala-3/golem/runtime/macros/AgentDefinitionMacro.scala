@@ -35,6 +35,10 @@ import golem.runtime.{
 }
 import golem.schema.{IntoSchema, SchemaGraph}
 import golem.runtime.http.{
+  DurableStreamRouteLoadOptions,
+  DurableStreamRouteOptions,
+  DurableStreamSlotOptions,
+  DurableStreamSlotSource,
   HttpAgentValidation,
   HeaderVariable,
   HttpEndpointDetails,
@@ -49,6 +53,22 @@ import golem.runtime.http.{
 import scala.quoted.*
 
 object AgentDefinitionMacro {
+  private final case class EndpointSelector(method: String, path: String)
+  private final case class StreamSlot(
+    selector: EndpointSelector,
+    source: String,
+    slot: String,
+    name: Option[String],
+    contentType: Option[String]
+  )
+  private final case class StreamOptions(
+    selector: EndpointSelector,
+    writes: Option[Boolean],
+    streamDelete: Option[Boolean],
+    invocationDelete: Option[Boolean],
+    readers: Option[Int],
+    appends: Option[Int]
+  )
   private val schemaHint: String =
     "\nHint: IntoSchema is derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
@@ -932,6 +952,134 @@ object AgentDefinitionMacro {
   )(method: quotes.reflect.Symbol, headerVars: List[HeaderVariable]): List[HttpEndpointDetails] = {
     import quotes.reflect.*
 
+    def stringArg(args: List[Term], name: String, index: Int): Option[String] =
+      args.collectFirst { case NamedArg(`name`, Literal(StringConstant(v))) => v }
+        .orElse(args.lift(index).collect { case Literal(StringConstant(v)) => v })
+
+    def stripTerm(term: Term): Term = term match {
+      case Inlined(_, _, value) => stripTerm(value)
+      case Typed(value, _)      => stripTerm(value)
+      case NamedArg(_, value)   => stripTerm(value)
+      case _                    => term
+    }
+
+    def isDefaultArg(term: Term): Boolean = {
+      val value = stripTerm(term)
+      value.symbol != Symbol.noSymbol && value.symbol.name.contains("$default$")
+    }
+
+    def durableStreamArg(args: List[Term], name: String, index: Int): Option[Term] =
+      args.collectFirst { case NamedArg(`name`, value) if !isDefaultArg(value) => value }
+        .orElse(args.lift(index).filter {
+          case NamedArg(_, _) => false
+          case value          => !isDefaultArg(value)
+        })
+
+    def durableStreamStringArg(
+      args: List[Term],
+      name: String,
+      index: Int,
+      annotation: String
+    ): Option[String] =
+      durableStreamArg(args, name, index).map { value =>
+        stripTerm(value) match {
+          case Literal(StringConstant(result)) => result
+          case _                               => report.errorAndAbort(s"@$annotation argument '$name' must be a string literal", value.pos)
+        }
+      }
+
+    def durableStreamBoolArg(args: List[Term], name: String, index: Int): Option[Boolean] =
+      durableStreamArg(args, name, index).map { value =>
+        stripTerm(value) match {
+          case Literal(BooleanConstant(result)) => result
+          case _                                => report.errorAndAbort(s"@durableStreams argument '$name' must be a boolean literal", value.pos)
+        }
+      }
+
+    def durableStreamIntArg(args: List[Term], name: String, index: Int): Option[Int] =
+      durableStreamArg(args, name, index).map { value =>
+        stripTerm(value) match {
+          case Literal(IntConstant(result)) => result
+          case _                            => report.errorAndAbort(s"@durableStreams argument '$name' must be an integer literal", value.pos)
+        }
+      }
+
+    val endpoints = method.annotations.collect {
+      case Apply(Select(New(tpt), _), args)
+          if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.endpoint" =>
+        EndpointSelector(stringArg(args, "method", 0).getOrElse(""), stringArg(args, "path", 1).getOrElse(""))
+    }
+    def selector(args: List[Term], annotation: String): EndpointSelector = {
+      val requested = EndpointSelector(
+        durableStreamStringArg(args, "endpointMethod", 0, annotation).getOrElse(""),
+        durableStreamStringArg(args, "endpointPath", 1, annotation).getOrElse("")
+      )
+      if (requested.method.isEmpty != requested.path.isEmpty)
+        report.errorAndAbort(
+          s"@$annotation on method '${method.name}' must specify both endpointMethod and endpointPath"
+        )
+      val matches =
+        if (requested.method.isEmpty) endpoints
+        else endpoints.filter(e => e.method.equalsIgnoreCase(requested.method) && e.path == requested.path)
+      if (matches.size != 1) {
+        val reason =
+          if (requested.method.isEmpty) "selector is ambiguous or missing"
+          else "selector does not match exactly one @endpoint"
+        report.errorAndAbort(s"@$annotation on method '${method.name}': $reason")
+      }
+      matches.head
+    }
+    val slots = method.annotations.collect {
+      case Apply(Select(New(tpt), _), args)
+          if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.durableStreamSlot" =>
+        val selected = selector(args, "durableStreamSlot")
+        val source   = durableStreamStringArg(args, "source", 2, "durableStreamSlot").getOrElse(
+          report.errorAndAbort(s"@durableStreamSlot on method '${method.name}' must specify source")
+        )
+        val slot = durableStreamStringArg(args, "slot", 3, "durableStreamSlot")
+          .filter(_.nonEmpty)
+          .getOrElse(report.errorAndAbort(s"@durableStreamSlot on method '${method.name}' must specify slot"))
+        if (source != "input" && source != "output")
+          report.errorAndAbort(s"@durableStreamSlot source must be 'input' or 'output', found '$source'")
+        StreamSlot(
+          selected,
+          source,
+          slot,
+          durableStreamStringArg(args, "name", 4, "durableStreamSlot").filter(_.nonEmpty),
+          durableStreamStringArg(args, "contentType", 5, "durableStreamSlot").filter(_.nonEmpty)
+        )
+    }.reverse
+    slots
+      .groupBy(s => (s.selector, s.source, s.slot))
+      .collectFirst { case (key, values) if values.size > 1 => key }
+      .foreach { key =>
+        report.errorAndAbort(s"duplicate @durableStreamSlot for ${key._2} slot '${key._3}' on method '${method.name}'")
+      }
+    val routeOptions = method.annotations.collect {
+      case Apply(Select(New(tpt), _), args)
+          if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.durableStreams" =>
+        val selected = selector(args, "durableStreams")
+        val readers  = durableStreamIntArg(args, "maxConcurrentReadersPerStream", 5)
+        val appends  = durableStreamIntArg(args, "maxAppendRequestsPerSecondPerStream", 6)
+        if (readers.exists(value => value <= 0 || value > 16))
+          report.errorAndAbort("@durableStreams reader limit must be between 1 and 16")
+        if (appends.exists(_ <= 0)) report.errorAndAbort("@durableStreams append limit must be positive")
+        val writes = durableStreamBoolArg(args, "allowExternalWrites", 2)
+        if (writes.contains(false) && appends.nonEmpty)
+          report.errorAndAbort("@durableStreams append limit cannot be set when external writes are disabled")
+        StreamOptions(
+          selected,
+          writes,
+          durableStreamBoolArg(args, "allowStreamDelete", 3),
+          durableStreamBoolArg(args, "allowInvocationDelete", 4),
+          readers,
+          appends
+        )
+    }
+    routeOptions.groupBy(_.selector).collectFirst { case (key, values) if values.size > 1 => key }.foreach { key =>
+      report.errorAndAbort(s"duplicate @durableStreams for ${key.method} ${key.path} on method '${method.name}'")
+    }
+
     method.annotations.collect {
       case Apply(Select(New(tpt), _), args)
           if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.endpoint" =>
@@ -979,7 +1127,39 @@ object AgentDefinitionMacro {
           case Right(p)  => p
         }
 
-        HttpEndpointDetails(httpMethod, parsed.pathSegments, headerVars, parsed.queryVars, authOverride, corsOverride)
+        val selected      = EndpointSelector(methodStr, pathStr)
+        val endpointSlots = slots.filter(_.selector == selected)
+        val options       = routeOptions.find(_.selector == selected)
+        val durableStreams =
+          if (endpointSlots.isEmpty && options.isEmpty) None
+          else
+            Some(
+              DurableStreamRouteOptions(
+                endpointSlots.map { slot =>
+                  val source =
+                    if (slot.source == "input") DurableStreamSlotSource.Input(slot.slot)
+                    else DurableStreamSlotSource.Output(slot.slot)
+                  DurableStreamSlotOptions(source, slot.name, slot.contentType)
+                },
+                options.flatMap(_.writes),
+                options.flatMap(_.streamDelete),
+                options.flatMap(_.invocationDelete),
+                options.collect {
+                  case option if option.readers.nonEmpty || option.appends.nonEmpty =>
+                    DurableStreamRouteLoadOptions(option.readers, option.appends)
+                }
+              )
+            )
+
+        HttpEndpointDetails(
+          httpMethod,
+          parsed.pathSegments,
+          headerVars,
+          parsed.queryVars,
+          authOverride,
+          corsOverride,
+          durableStreams
+        )
     }
   }
 

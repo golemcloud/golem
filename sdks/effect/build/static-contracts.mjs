@@ -46,6 +46,7 @@ function metadataLoader(runtime) {
                   },
           },
         )
+      if (id === "@golemcloud/http-contract") return load(createRequire(file).resolve(id))
       if (id.startsWith(".")) return load(path.resolve(path.dirname(file), id))
       return createRequire(file)(id)
     }

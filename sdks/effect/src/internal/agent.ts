@@ -16,6 +16,7 @@ import {
   isQueryOrHeaderBindableSchema,
   isStringBindableSchema,
   validateAgentHttp,
+  type CompiledHttp,
   type MethodHttpInput,
 } from "../Http.js"
 import type { BindableKeys, MountDefCovering, WebhookVarsValid } from "./httpTypes.js"
@@ -763,6 +764,7 @@ export const registerAgent = <
 >(
   metadata: AgentMetadata<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
   impl: AgentImpl<C, Methods, State, F, S>,
+  routerHttp?: CompiledHttp,
 ): Effect.Effect<
   void,
   UnsupportedSchemaError | HttpRouteError | InvalidSnapshotError | DuplicateAgentNameError
@@ -797,14 +799,24 @@ export const registerAgent = <
     }
 
     // Validate + compile HTTP routes (mount + per-method endpoints).
-    const compiledHttp = yield* validateAgentHttp({
-      agentName: metadata.name,
-      mount: metadata.http,
-      constructorParamNames: Object.keys(metadata.id),
-      nonStringBindableConstructorParams: collectNonStringBindableParams(metadata.id),
-      stringBindableConstructorParams: collectStringBindableParams(metadata.id),
-      methods: methodHttpInputs,
-    })
+    if (
+      metadata.http?.exposeFiles?.length &&
+      (metadata.mode === "ephemeral" || metadata.http.phantomAgent)
+    ) {
+      return yield* Effect.fail(
+        new HttpRouteError("File exposure requires a regular durable non-phantom agent"),
+      )
+    }
+    const compiledHttp =
+      routerHttp ??
+      (yield* validateAgentHttp({
+        agentName: metadata.name,
+        mount: metadata.http,
+        constructorParamNames: Object.keys(metadata.id),
+        nonStringBindableConstructorParams: collectNonStringBindableParams(metadata.id),
+        stringBindableConstructorParams: collectStringBindableParams(metadata.id),
+        methods: methodHttpInputs,
+      }))
 
     let compiledConfig: CompiledConfig | null = null
     if (metadata.config !== undefined) compiledConfig = yield* metadata.config.__compile()
@@ -862,7 +874,7 @@ export const registerAgent = <
 
     const agentType: AgentCommon.AgentType = {
       typeName: metadata.name,
-      kind: "regular",
+      kind: routerHttp ? "http-router" : "regular",
       description: metadata.description ?? "",
       sourceLanguage: "typescript",
       schema: encoder.finish(),
@@ -1200,6 +1212,21 @@ export const dispatchInvoke = async (
     program = program.pipe(
       Effect.provideService(compiled.metadata.config as never, shape as never),
     ) as typeof program
+  }
+  if (compiled.agentType.kind === "http-router") {
+    const scope = Scope.makeUnsafe()
+    const handler = compiled.agentType.methods.find((method) => method.name === methodName)
+    const transfersScope = handler?.httpEndpoint.some(
+      (endpoint) => endpoint.httpMethod.tag === "any",
+    )
+    return await runUserPromise(
+      program.pipe(
+        Scope.provide(scope),
+        Effect.onExit((exit) =>
+          !transfersScope || Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void,
+        ),
+      ),
+    )
   }
   return await runUserPromise(program)
 }

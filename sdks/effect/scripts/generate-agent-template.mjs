@@ -11,7 +11,11 @@ const witBindgenLine =
 const forkedLine =
   'wit-bindgen-p3 = { package = "wit-bindgen", git = "https://github.com/golemcloud/wit-bindgen", rev = "4407232ead86d9bcbd06cbebd790a52120a4087a", version = "=0.59.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
 
-const sharedModules = [["effect", "dist/effect.mjs"]]
+const sharedModules = [
+  ["effect", "dist/effect.mjs"],
+  ["effect/unstable/http", "dist/effect-http.mjs"],
+  ["effect/unstable/httpapi", "dist/effect-httpapi.mjs"],
+]
 
 for (const template of templateMatrix) {
   const modules = [[template.sdkModuleName, template.sdkEntry], ...sharedModules]

@@ -20,7 +20,7 @@ pub fn wasmExportDiscoverToolMiddlewares() -> Int {
                   for index = 0; index < (payload).length(); index = index + 1 {
                         let iter_elem : @common.ToolMiddleware = (payload)[(index)]
                         let iter_base = address + (index * 148);
-                        @wit_bindgen_export_lower.wit_bindgen_lower_t578((iter_base) + 0, iter_elem)
+                        @wit_bindgen_export_lower.wit_bindgen_lower_t586((iter_base) + 0, iter_elem)
 
                   }
                   mbt_ffi_store32((return_area) + 8, (payload).length())
@@ -48,7 +48,7 @@ pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
 
                   for index = 0; index < (mbt_ffi_load32((p0) + 8)); index = index + 1 {
                         let iter_base = (mbt_ffi_load32((p0) + 4)) + (index * 148)
-                        @wit_bindgen_export_lower.wit_bindgen_deallocate_t578((iter_base) + 0)
+                        @wit_bindgen_export_lower.wit_bindgen_deallocate_t586((iter_base) + 0)
 
                   }
                   mbt_ffi_free(mbt_ffi_load32((p0) + 4))
@@ -74,7 +74,7 @@ pub fn wasmExportGetToolMiddleware(p0 : Int, p1 : Int) -> Int {
       match result0 {
             Ok(payload) => {
                   mbt_ffi_store8((return_area) + 0, (0))
-                  @wit_bindgen_export_lower.wit_bindgen_lower_t578((return_area) + 4, payload)
+                  @wit_bindgen_export_lower.wit_bindgen_lower_t586((return_area) + 4, payload)
 
                   ()
             }
@@ -624,7 +624,7 @@ pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
 
       match (mbt_ffi_load8_u((p0) + 0)) {
             0 => {
-                  @wit_bindgen_export_lower.wit_bindgen_deallocate_t578((p0) + 4)
+                  @wit_bindgen_export_lower.wit_bindgen_deallocate_t586((p0) + 4)
 
             }
             1 => {
@@ -840,7 +840,7 @@ pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
                   }
 
                   let return_result: Ref[Result[@common.InvocationResult, @types.ToolError]?] = Ref(None)
-                  return_result.val = Some(invoke_tool_middleware(result, result0, @wit_bindgen_export_lower.wit_bindgen_lift_t574((p0) + 16), @wit_bindgen_export_lower.wit_bindgen_lift_t79((p0) + 52), array, @wit_bindgen_export_lower.wit_bindgen_lift_t79((p0) + 92), lifted, lifted3, @wit_bindgen_export_lower.wit_bindgen_lift_t420((p0) + 144), @underlying.UnderlyingTool::UnderlyingTool(mbt_ffi_load32((p0) + 256)), background_group))
+                  return_result.val = Some(invoke_tool_middleware(result, result0, @wit_bindgen_export_lower.wit_bindgen_lift_t582((p0) + 16), @wit_bindgen_export_lower.wit_bindgen_lift_t79((p0) + 52), array, @wit_bindgen_export_lower.wit_bindgen_lift_t79((p0) + 92), lifted, lifted3, @wit_bindgen_export_lower.wit_bindgen_lift_t428((p0) + 144), @underlying.UnderlyingTool::UnderlyingTool(mbt_ffi_load32((p0) + 256)), background_group))
                   invoke_tool_middleware_task_return(return_result)
 
             })

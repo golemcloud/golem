@@ -1973,6 +1973,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
             headers: [],
             auth: None,
             cors: [],
+            durable_streams: None,
           }),
           read_only: None,
         },
@@ -1991,6 +1992,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
             headers: [("X-Source", "source")],
             auth: None,
             cors: [],
+            durable_streams: None,
           }),
           read_only: None,
         },
@@ -2069,6 +2071,7 @@ test "generate_agent_registration emits remaining/system path vars, required aut
             headers: [],
             auth: Some(true),
             cors: [],
+            durable_streams: None,
           }),
           read_only: None,
         },
@@ -2123,6 +2126,138 @@ test "generate_agent_registration emits remaining/system path vars, required aut
       "webhook_suffix:[@common.PathSegment::Literal(\"events\"),@common.PathSegment::PathVariable({variable_name:\"id\"",
     ),
   )
+}
+
+///|
+test "durable stream all-options source emits route metadata" {
+  let source =
+    #|#derive.agent
+    #|#derive.mount("/streams")
+    #|struct Streams {}
+    #|fn Streams::new() -> Streams { {} }
+    #|#derive.endpoint(post="/events")
+    #|#derive.durable_stream_slot(input="input", name="messages")
+    #|#derive.durable_stream_slot(output="$result", name="results", content_type="application/vnd.golem.events")
+    #|#derive.durable_streams(allow_external_writes=true, allow_stream_delete=false, allow_invocation_delete=false, max_concurrent_readers_per_stream=8, max_append_requests_per_second_per_stream=25)
+    #|pub fn Streams::events(self : Self, input : String) -> String { input }
+  let agents = parse_agents([("streams.mbt", source)])
+  let endpoint = agents[0].methods[0].http_endpoint.unwrap()
+  debug_inspect(
+    endpoint.durable_streams,
+    content=(
+      #|Some(
+      #|  {
+      #|    slots: [
+      #|      { source: Input("input"), name: Some("messages"), content_type: None },
+      #|      {
+      #|        source: Output("$result"),
+      #|        name: Some("results"),
+      #|        content_type: Some("application/vnd.golem.events"),
+      #|      },
+      #|    ],
+      #|    allow_external_writes: Some(true),
+      #|    allow_stream_delete: Some(false),
+      #|    allow_invocation_delete: Some(false),
+      #|    max_concurrent_readers_per_stream: Some(8),
+      #|    max_append_requests_per_second_per_stream: Some(25),
+      #|  },
+      #|)
+    ),
+  )
+  let emitted = @formatter.impls_to_string(generate_agent_registration(agents))
+  let compact = strip_whitespace(emitted)
+  assert_true(compact.contains(strip_whitespace("durable_streams: Some({")))
+  assert_true(
+    compact.contains(
+      strip_whitespace(
+        "source: @common.DurableStreamSlotSource::Input(\"input\")",
+      ),
+    ),
+  )
+  assert_true(
+    compact.contains(
+      strip_whitespace(
+        "source: @common.DurableStreamSlotSource::Output(\"$result\")",
+      ),
+    ),
+  )
+  assert_true(
+    compact.contains(
+      strip_whitespace("max_append_requests_per_second_per_stream: Some(25)"),
+    ),
+  )
+}
+
+///|
+test "durable stream slot strings support escaped quotes and commas" {
+  let source =
+    #|#derive.agent
+    #|#derive.mount("/streams")
+    #|struct Streams {}
+    #|fn Streams::new() -> Streams { {} }
+    #|#derive.endpoint(post="/events")
+    #|#derive.durable_stream_slot(input="input", name="events\",archive")
+    #|pub fn Streams::events(self : Self, input : String) -> Unit {}
+  let route = parse_agents([("streams.mbt", source)])[0].methods[0].http_endpoint.unwrap().durable_streams.unwrap()
+  assert_eq(route.slots[0].name, Some("events\",archive"))
+}
+
+///|
+test "durable stream limits preserve u32 maximum and reject overflow" {
+  let source =
+    #|#derive.agent
+    #|#derive.mount("/streams")
+    #|struct Streams {}
+    #|fn Streams::new() -> Streams { {} }
+    #|#derive.endpoint(post="/events")
+    #|#derive.durable_streams(max_append_requests_per_second_per_stream=4294967295)
+    #|pub fn Streams::events(self : Self, input : String) -> Unit {}
+  let route = parse_agents([("streams.mbt", source)])[0].methods[0].http_endpoint.unwrap().durable_streams.unwrap()
+  assert_eq(route.max_append_requests_per_second_per_stream, Some(4294967295U))
+  for
+    value in [
+      "4294967296", "4294967304", "18446744073709551616", "18446744073709551624",
+    ] {
+    let invalid = source.replace_all(old="4294967295", new=value)
+    assert_true(
+      capture_agent_parse_error(() => parse_agents([("streams.mbt", invalid)]))
+      is Err(_),
+    )
+  }
+}
+
+///|
+test "durable stream attributes require endpoint" {
+  let source =
+    #|#derive.agent
+    #|struct Streams {}
+    #|fn Streams::new() -> Streams { {} }
+    #|#derive.durable_stream_slot(input="input", name="messages")
+    #|pub fn Streams::events(self : Self, input : String) -> Unit {}
+  debug_inspect(
+    capture_agent_parse_error(() => parse_agents([("streams.mbt", source)])),
+    content=(
+      #|Err(AgentParseError("Durable stream attributes require exactly one #derive.endpoint"))
+    ),
+  )
+}
+
+///|
+test "durable stream attributes reject conflicts, duplicates, and malformed properties" {
+  let attributes = [
+    "#derive.durable_stream_slot(input=\"input\", output=\"$result\")", "#derive.durable_streams()\n#derive.durable_streams()",
+    "#derive.durable_stream_slot(input=\"input\", mystery=\"x\")", "#derive.durable_streams(allow_stream_delete=maybe)",
+    "#derive.durable_streams(max_concurrent_readers_per_stream=\"8\")", "#derive.durable_streams(max_concurrent_readers_per_stream=4294967296)",
+  ]
+  for attribute in attributes {
+    let source = "#derive.agent\nstruct Streams {}\nfn Streams::new() -> Streams { {} }\n#derive.endpoint(post=\"/events\")\n" +
+      attribute +
+      "\npub fn Streams::events(self : Self, input : String) -> Unit {}\n"
+    assert_true(
+      capture_agent_parse_error(() => parse_agents([("streams.mbt", source)]))
+      is Err(_),
+    )
+  }
 }
 
 ///|

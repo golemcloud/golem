@@ -47,6 +47,60 @@ pub trait DurableStreamAgent {
     #[endpoint(put = "/echo-bytes")]
     fn echo_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
 
+    #[endpoint(
+        put = "/custom-bytes",
+        durable_streams(
+            input(
+                "input",
+                name = "uploads",
+                content_type = "application/vnd.golem.events"
+            ),
+            output(
+                "$result",
+                name = "events",
+                content_type = "application/vnd.golem.events"
+            ),
+            allow_external_writes = true,
+            allow_stream_delete = false,
+            allow_invocation_delete = false,
+            max_concurrent_readers_per_stream = 1,
+        )
+    )]
+    fn custom_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
+
+    #[endpoint(
+        put = "/custom-echo",
+        durable_streams(
+            input("input", name = "messages"),
+            output("$result", name = "responses"),
+            allow_external_writes = true,
+            allow_stream_delete = false,
+            allow_invocation_delete = false,
+            max_concurrent_readers_per_stream = 1,
+            max_append_requests_per_second_per_stream = 1,
+        )
+    )]
+    #[endpoint(
+        put = "/custom-echo-secondary",
+        durable_streams(
+            input("input", name = "secondary-messages"),
+            output("$result", name = "secondary-responses"),
+            max_concurrent_readers_per_stream = 16,
+            max_append_requests_per_second_per_stream = 2,
+        )
+    )]
+    fn custom_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
+
+    #[endpoint(
+        put = "/locked-echo",
+        durable_streams(
+            input("input", name = "locked-messages"),
+            output("$result", name = "locked-responses"),
+            allow_external_writes = false,
+        )
+    )]
+    fn locked_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
+
     #[endpoint(put = "/echo-records")]
     fn echo_records(&self, input: AgentStream<FramedRecord>) -> AgentStream<FramedRecord>;
 
@@ -156,6 +210,18 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
     }
 
     fn echo_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8> {
+        copy_stream(input, |value| value)
+    }
+
+    fn custom_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8> {
+        copy_stream(input, |value| value)
+    }
+
+    fn custom_echo(&self, input: AgentStream<String>) -> AgentStream<String> {
+        copy_stream(input, |value| value)
+    }
+
+    fn locked_echo(&self, input: AgentStream<String>) -> AgentStream<String> {
         copy_stream(input, |value| value)
     }
 
@@ -272,6 +338,30 @@ where
         }
     });
     output
+}
+
+#[agent_definition(mount = "/invalid-durable-stream-agent")]
+pub trait InvalidDurableStreamAgent {
+    fn new() -> Self;
+
+    #[endpoint(
+        put = "/text",
+        durable_streams(input("input", content_type = "text/plain"))
+    )]
+    fn text(&self, input: AgentStream<String>) -> AgentStream<String>;
+}
+
+struct InvalidDurableStreamAgentImpl;
+
+#[agent_implementation]
+impl InvalidDurableStreamAgent for InvalidDurableStreamAgentImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    fn text(&self, input: AgentStream<String>) -> AgentStream<String> {
+        input
+    }
 }
 
 #[agent_definition(ephemeral, mount = "/ephemeral-stream-agents")]
