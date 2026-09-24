@@ -87,6 +87,10 @@ mod canonical {
 
     #[test_r::test]
     #[test_r::never_capture]
+    #[cfg_attr(
+        not(all(feature = "url", feature = "chrono")),
+        allow(clippy::single_element_loop)
+    )]
     fn prepared_canonical_descriptors_match_reference() {
         use golem_rust::agentic::ToolBuildCtx;
         for (prepared, reference) in [
@@ -127,6 +131,22 @@ mod canonical {
         // Deliberately shadows the standard String: selecting validators by
         // spelling would lose this custom schema (or reject a valid graph).
         struct String;
+
+        impl golem_rust::IntoWire for String {
+            fn write_wire(
+                &self,
+                writer: &mut golem_rust::schema::wit::direct::WireWriter,
+            ) -> Result<i32, golem_rust::schema::wit::direct::WireError> {
+                Ok(
+                    writer.push(golem_rust::schema::wit::wire::SchemaValueNode::TextValue(
+                        golem_rust::schema::wit::wire::TextValuePayload {
+                            text: std::string::String::new(),
+                            language: None,
+                        },
+                    )),
+                )
+            }
+        }
 
         impl golem_rust::WireSchema for String {
             fn append_schema(
@@ -305,7 +325,7 @@ mod canonical {
         use std::path::PathBuf;
         use test_r::test;
 
-        #[derive(Clone, IntoSchema, FromSchema, FromWire, WireSchema)]
+        #[derive(Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         #[schema(rename_all = "kebab-case")]
         enum ColorMode {
             Always,
@@ -313,7 +333,7 @@ mod canonical {
             Auto,
         }
 
-        #[derive(IntoSchema, FromSchema, IntoWire, WireSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         struct Hit {
             file: PathBuf,
             line: u32,

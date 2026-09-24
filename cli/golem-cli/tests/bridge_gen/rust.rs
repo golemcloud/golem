@@ -91,7 +91,9 @@ fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
     let path = target.join("src/lib.rs");
     let mut source = std::fs::read_to_string(&path).unwrap();
     assert!(source.contains("golem_rust::agentic::AgentStream<"));
-    assert!(source.contains("encode_schema_value_async(&method_parameters)"));
+    assert!(source.contains("new_with_wire_codecs"));
+    assert!(!source.contains("encode_schema_value"));
+    assert!(!source.contains("schema::SchemaValue::"));
     for method in [
         "consume",
         "produce",
@@ -147,22 +149,22 @@ fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
         let item_type = quote::quote!(#item_type).to_string();
         let reader = quote::quote!(#reader).to_string();
         let codec_test = match name.as_str() {
-            "new_string_stream" => Some(("String::from(\"value\")", "String(_)")),
+            "new_string_stream" => Some(("String::from(\"value\")", "StringValue(_)")),
             "new_stream_item_stream" => Some((
                 "StreamItem { label: String::from(\"root\"), children: vec![StreamItem { label: String::from(\"child\"), children: vec![] }] }",
-                "Record { .. }",
+                "RecordValue(_)",
             )),
-            "new_path_stream" => Some(("String::from(\"value\")", "Path { .. }")),
+            "new_path_stream" => Some(("String::from(\"value\")", "PathValue(_)")),
             "new_list_stream" => Some((
                 "vec![String::from(\"a\"), String::from(\"b\")]",
-                "List { .. }",
+                "ListValue(_)",
             )),
             "new_fixed_list_stream" => Some((
                 "vec![String::from(\"a\"), String::from(\"b\")]",
-                "FixedList { .. }",
+                "FixedListValue(_)",
             )),
-            "new_map_stream" => Some(("vec![(String::from(\"a\"), 1u32)]", "Map { .. }")),
-            "new_list_stream1" => Some(("vec![(String::from(\"a\"), 1u32)]", "List { .. }")),
+            "new_map_stream" => Some(("vec![(String::from(\"a\"), 1u32)]", "MapValue(_)")),
+            "new_list_stream1" => Some(("vec![(String::from(\"a\"), 1u32)]", "ListValue(_)")),
             _ => None,
         };
         if let Some((value, kind)) = codec_test {
@@ -177,13 +179,23 @@ fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
             source.push_str(&format!(r#"
                 #[test]
                 fn codec_{name}() {{
-                    let encode: fn({item_type}) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> = {encode};
+                    fn complete<F: std::future::Future>(future: F) -> F::Output {{
+                        let mut future = std::pin::pin!(future);
+                        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                        match std::future::Future::poll(future.as_mut(), &mut context) {{
+                            std::task::Poll::Ready(value) => value,
+                            std::task::Poll::Pending => panic!("pure codec unexpectedly suspended"),
+                        }}
+                    }}
+                    let encode = |value: {item_type}| ({encode})(value);
                     let decode = {decode};
                     let original = {value};
-                    let wire = encode(original.clone()).unwrap();
-                    assert!(matches!(wire, crate::__golem_bridge_runtime::schema::SchemaValue::{kind}));
-                    assert_eq!(encode(decode(wire.clone()).unwrap()).unwrap(), wire);
-                    assert!(decode(crate::__golem_bridge_runtime::schema::SchemaValue::Bool(false)).is_err());
+                    let wire = complete(encode(original.clone())).unwrap();
+                    assert!(matches!(wire.value_nodes[wire.root as usize], __wire::SchemaValueNode::{kind}));
+                    let expected = format!("{{wire:?}}");
+                    let actual = complete(encode(decode(wire).unwrap())).unwrap();
+                    assert_eq!(format!("{{actual:?}}"), expected);
+                    assert!(decode(__wire::SchemaValueTree {{ value_nodes: vec![__wire::SchemaValueNode::BoolValue(false)], root: 0 }}).is_err());
                 }}
             "#));
         }
@@ -819,7 +831,7 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
         "pub fn schedule_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::ScheduledTime,",
         "pub fn schedule_cancelable_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::ScheduledTime,",
         "async_invoke_and_await",
-        "await_invoke_schema_value_result",
+        "WireReader::new",
         ".invoke(",
         "schedule_invocation",
         "schedule_cancelable_invocation",
@@ -1394,12 +1406,12 @@ fn guest_generation_emits_self_contained_typed_config_schema_values() {
         "generated typed config schema graph must include referenced definitions:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("TypedSchemaValue::new"),
-        "generated typed config encoding must build a typed value:\n{lib_rs}"
+        lib_rs.contains("__wire::TypedSchemaValue"),
+        "generated typed config encoding must build a wire typed value:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("golem_rust::encode_typed_schema_value"),
-        "generated typed config encoding must use guest golem-rust wire encoding:\n{lib_rs}"
+        !lib_rs.contains("golem_rust::encode_typed_schema_value"),
+        "generated typed config encoding must not build owned models:\n{lib_rs}"
     );
 
     let output = std::process::Command::new("cargo")
@@ -1567,13 +1579,13 @@ fn tool_generation_compiles() {
         "{lib_rs}"
     );
     assert!(
-        lib_rs.contains("agentic::start_tool_invocation("),
+        lib_rs.contains("agentic::start_tool_invocation_direct_input("),
         "{lib_rs}"
     );
     assert!(lib_rs.contains(")\n            .await"), "{lib_rs}");
     for shape in [
-        "__name: String",
-        "__value: golem_rust::TypedSchemaValue",
+        "__name: &str",
+        "__value: i32",
         "Result<Option<GrepError>, String>",
         "\"bad-pattern\" =>",
         "Some(GrepError::BadPattern(__payload))",
@@ -1586,6 +1598,19 @@ fn tool_generation_compiles() {
         "_ => Ok(None)",
     ] {
         assert!(lib_rs.contains(shape), "missing {shape}:\n{lib_rs}");
+    }
+    for forbidden in [
+        "FromSchema",
+        "IntoSchema",
+        "schema::SchemaValue",
+        "golem_rust::TypedSchemaValue",
+        "decode_canonical_input_record",
+        "try_into_schema_graph",
+    ] {
+        assert!(
+            !lib_rs.contains(forbidden),
+            "retained {forbidden}:\n{lib_rs}"
+        );
     }
     assert!(!lib_rs.contains("expect_stdout"), "{lib_rs}");
     cargo_check(&target_path);

@@ -2,8 +2,8 @@ use golem_rust::agentic::{Config, Secret};
 use golem_rust::bindings::golem::secrets::{reveal, types};
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
-    ConfigSchema, FromSchema, IntoSchema, agent_definition, agent_implementation,
-    decode_schema_value, encode_schema_graph,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, agent_definition,
+    agent_implementation, decode_schema_value, encode_schema_graph,
 };
 use golem_rust::{PromiseId, blocking_await_promise, create_promise};
 use serde::Serialize;
@@ -116,7 +116,7 @@ impl LocalConfigAgent for LocalConfigAgentImpl {
     }
 }
 
-#[derive(IntoSchema, FromSchema, Serialize)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema, Serialize)]
 pub struct ComplexSecret {
     foo: String,
     bar: u32,
@@ -167,7 +167,10 @@ impl SharedConfigAgent for SharedConfigAgentImpl {
 
     fn reveal_secret_then_await_replay_gate(&self, promise_id: PromiseId) -> String {
         let config = self.config.get().expect("config access should be allowed");
-        let secret = config.secret.get().expect("secret reveal should be allowed");
+        let secret = config
+            .secret
+            .get()
+            .expect("secret reveal should be allowed");
         blocking_await_promise(&promise_id);
         secret
     }

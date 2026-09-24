@@ -18,14 +18,34 @@ use serde::{Deserialize, Serialize};
 
 /// The amount that was actually reserved (always equal to the requested amount
 /// on the happy path) and the amount committed back to the pool.
-#[derive(Clone, Debug, IntoSchema, FromSchema, golem_rust::IntoWire, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct ReserveCommitResult {
     pub reserved: u64,
     pub committed: u64,
 }
 
 /// Result of a split-then-reserve pair.
-#[derive(Clone, Debug, IntoSchema, FromSchema, golem_rust::IntoWire, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct SplitResult {
     /// How many units were reserved from the parent half.
     pub parent_reserved: u64,

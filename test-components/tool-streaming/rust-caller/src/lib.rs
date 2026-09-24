@@ -10,7 +10,7 @@ use golem_rust::golem_agentic::golem::tool::host::{
 };
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph, SchemaType,
-    SchemaValue, TypedSchemaValue, agent_definition, agent_implementation,
+    SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
     decode_typed_schema_value_owned, read_only,
 };
 use std::io::{Read, Write};
@@ -25,7 +25,7 @@ pub extern "C" fn initialize_component_baseline_clock() {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamEvidence {
     pub output: Vec<u8>,
     pub chunks_read: u32,
@@ -34,14 +34,14 @@ pub struct StreamEvidence {
     pub completion: String,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamingBenchmarkResult {
     pub first_chunk_nanos: u64,
     pub total_nanos: u64,
     pub chunks_read: u32,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct ClockedStreamEvidence {
     pub before_tool_nanos: u64,
     pub after_tool_nanos: u64,
@@ -105,7 +105,7 @@ struct RawEditFileResult {
     bytes_after: u64,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 struct TypedInputItem {
     ordinal: u32,
     caller_extra: u64,
@@ -122,13 +122,13 @@ struct RawDirectTypedInput {
     input: AgentStream<TypedInputEvidence>,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct TypedOutputEvidence {
     pub label: String,
     pub ordinal: u32,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct TypedInputEvidence {
     pub label: String,
     pub ordinal: u32,

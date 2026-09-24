@@ -1919,9 +1919,7 @@ mod tests {
         let context = SnapshotRestoreContext {
             principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
-            parameters: SchemaValue::Record {
-                fields: vec![SchemaValue::String("created".to_string())],
-            },
+            parameters: wire_input(vec![SchemaValue::String("created".to_string())]),
             phantom_id: None,
         };
         let restored = with_agent_initiator(
@@ -1987,16 +1985,15 @@ mod tests {
         CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
         CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.store(0, Ordering::SeqCst);
         let agent_type = AgentTypeName("CustomSnapshotAgent".to_string());
-        let context = SnapshotRestoreContext {
+        let context = || SnapshotRestoreContext {
             principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
-            parameters: SchemaValue::Record {
-                fields: vec![SchemaValue::String("original".to_string())],
-            },
+            parameters: wire_input(vec![SchemaValue::String("original".to_string())]),
             phantom_id: None,
         };
 
-        let failed_context = context.clone();
+        let failed_context = context();
+        let context = context();
         let failed = with_agent_initiator(
             |initiator| async move { initiator.restore(vec![0xff], failed_context).await },
             &agent_type,

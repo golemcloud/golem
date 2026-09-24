@@ -588,7 +588,7 @@ fn adapter_converts_input_output_and_custom_errors_between_exact_descriptors(
             panic!("mapped adapter error is custom")
         };
         assert_eq!(
-            PresentedError::from_error_payload_value(error.name, error.payload).unwrap(),
+            PresentedError::from_error_payload_value(error.name.clone(), error.payload().unwrap().clone()).unwrap(),
             Some(PresentedError::Rejected("denied".to_string()))
         );
     });

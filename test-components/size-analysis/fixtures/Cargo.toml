@@ -1,5 +1,5 @@
 [workspace]
-members = ["empty", "non-reflective", "reflection"]
+members = ["empty", "tool", "agent", "tool-client", "non-reflective", "reflection"]
 resolver = "2"
 
 [workspace.package]

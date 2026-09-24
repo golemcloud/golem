@@ -611,6 +611,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "retention-agent"
+version = "0.0.1"
+dependencies = [
+ "golem-rust",
+]
+
+[[package]]
 name = "retention-empty"
 version = "0.0.1"
 dependencies = [
@@ -626,6 +633,20 @@ dependencies = [
 
 [[package]]
 name = "retention-reflection"
+version = "0.0.1"
+dependencies = [
+ "golem-rust",
+]
+
+[[package]]
+name = "retention-tool"
+version = "0.0.1"
+dependencies = [
+ "golem-rust",
+]
+
+[[package]]
+name = "retention-tool-client"
 version = "0.0.1"
 dependencies = [
  "golem-rust",

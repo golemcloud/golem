@@ -23,6 +23,7 @@ use super::{GuestPermissionCardHandle, GuestQuotaTokenHandle, GuestSecretHandle,
 use crate::schema::SchemaValueStream;
 use crate::schema::{Quantity, QuantityUnit, QuantityValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 
 /// Builds the flat WIT schema arena used alongside directly encoded values.
 /// Named definitions are reserved before their bodies are appended, allowing
@@ -555,25 +556,140 @@ pub trait IntoWire {
     }
 }
 
-/// Owns nodes until a concrete decoder takes them. Dropping a failed reader
-/// drops all resources that have not already moved into decoded Rust values.
+enum SnapshotNode {
+    Value(wire::SchemaValueNode),
+    Secret(GuestSecretHandle),
+    QuotaToken(GuestQuotaTokenHandle),
+    PermissionCard(GuestPermissionCardHandle),
+    Stream(SchemaValueStream),
+}
+
+/// Reusable owned backing for independent direct decoders. Capability nodes
+/// share their take-once cells; ordinary nodes are copied into each reader.
+pub struct WireSnapshot {
+    nodes: Vec<SnapshotNode>,
+}
+
+impl WireSnapshot {
+    pub fn new(nodes: Vec<wire::SchemaValueNode>) -> Self {
+        let nodes = nodes
+            .into_iter()
+            .map(|node| match node {
+                wire::SchemaValueNode::SecretValue(value) => {
+                    SnapshotNode::Secret(GuestSecretHandle::new(value))
+                }
+                wire::SchemaValueNode::QuotaTokenHandle(value) => {
+                    SnapshotNode::QuotaToken(GuestQuotaTokenHandle::new(value))
+                }
+                wire::SchemaValueNode::PermissionCardHandle(value) => {
+                    SnapshotNode::PermissionCard(GuestPermissionCardHandle::new(value))
+                }
+                wire::SchemaValueNode::StreamValue(value) => {
+                    SnapshotNode::Stream(SchemaValueStream::from_wrapped(value))
+                }
+                value => SnapshotNode::Value(value),
+            })
+            .collect();
+        Self { nodes }
+    }
+
+    pub fn reader(self: &Rc<Self>) -> WireReader {
+        WireReader {
+            visited: vec![false; self.nodes.len()],
+            backing: ReaderBacking::Shared(Rc::clone(self)),
+        }
+    }
+}
+
+enum ReaderBacking {
+    Owned(Vec<Option<SnapshotNode>>),
+    Shared(Rc<WireSnapshot>),
+}
+
+/// Reads one independent view of a [`WireSnapshot`].
 pub struct WireReader {
-    nodes: Vec<Option<wire::SchemaValueNode>>,
+    backing: ReaderBacking,
+    visited: Vec<bool>,
 }
 
 impl WireReader {
     pub fn new(nodes: Vec<wire::SchemaValueNode>) -> Self {
         Self {
-            nodes: nodes.into_iter().map(Some).collect(),
+            backing: ReaderBacking::Owned(
+                WireSnapshot::new(nodes)
+                    .nodes
+                    .into_iter()
+                    .map(Some)
+                    .collect(),
+            ),
+            visited: Vec::new(),
         }
     }
 
     pub fn take(&mut self, index: ValueNodeIndex) -> Result<wire::SchemaValueNode, WireError> {
-        self.nodes
+        let node = self.visit(index)?;
+        match node {
+            SnapshotNode::Value(value) => Ok(value),
+            _ => Err(WireError::Shape("non-resource value")),
+        }
+    }
+
+    fn visit(&mut self, index: ValueNodeIndex) -> Result<SnapshotNode, WireError> {
+        let snapshot = match &mut self.backing {
+            ReaderBacking::Owned(nodes) => {
+                return nodes
+                    .get_mut(index as usize)
+                    .ok_or(WireError::OutOfBounds(index))?
+                    .take()
+                    .ok_or(WireError::AliasedNode(index));
+            }
+            ReaderBacking::Shared(snapshot) => snapshot,
+        };
+        let visited = self
+            .visited
             .get_mut(index as usize)
-            .ok_or(WireError::OutOfBounds(index))?
-            .take()
-            .ok_or(WireError::AliasedNode(index))
+            .ok_or(WireError::OutOfBounds(index))?;
+        if std::mem::replace(visited, true) {
+            return Err(WireError::AliasedNode(index));
+        }
+        Ok(match &snapshot.nodes[index as usize] {
+            SnapshotNode::Value(value) => SnapshotNode::Value(clone_value_node(value)),
+            SnapshotNode::Secret(value) => SnapshotNode::Secret(value.clone()),
+            SnapshotNode::QuotaToken(value) => SnapshotNode::QuotaToken(value.clone()),
+            SnapshotNode::PermissionCard(value) => SnapshotNode::PermissionCard(value.clone()),
+            SnapshotNode::Stream(value) => SnapshotNode::Stream(value.clone()),
+        })
+    }
+
+    fn secret(&mut self, index: ValueNodeIndex) -> Result<GuestSecretHandle, WireError> {
+        match self.visit(index)? {
+            SnapshotNode::Secret(value) => Ok(value.clone()),
+            _ => Err(WireError::Shape("secret")),
+        }
+    }
+
+    fn quota_token(&mut self, index: ValueNodeIndex) -> Result<GuestQuotaTokenHandle, WireError> {
+        match self.visit(index)? {
+            SnapshotNode::QuotaToken(value) => Ok(value.clone()),
+            _ => Err(WireError::Shape("quota-token")),
+        }
+    }
+
+    fn permission_card(
+        &mut self,
+        index: ValueNodeIndex,
+    ) -> Result<GuestPermissionCardHandle, WireError> {
+        match self.visit(index)? {
+            SnapshotNode::PermissionCard(value) => Ok(value.clone()),
+            _ => Err(WireError::Shape("permission-card")),
+        }
+    }
+
+    fn stream(&mut self, index: ValueNodeIndex) -> Result<SchemaValueStream, WireError> {
+        match self.visit(index)? {
+            SnapshotNode::Stream(value) => Ok(value.clone()),
+            _ => Err(WireError::Shape("stream")),
+        }
     }
 
     /// Consume an unbound field, releasing its resources and checking its edges
@@ -582,7 +698,10 @@ impl WireReader {
     pub fn discard(&mut self, index: ValueNodeIndex) -> Result<(), WireError> {
         let mut pending = vec![index];
         while let Some(index) = pending.pop() {
-            match self.take(index)? {
+            let SnapshotNode::Value(node) = self.visit(index)? else {
+                continue;
+            };
+            match node {
                 wire::SchemaValueNode::RecordValue(children)
                 | wire::SchemaValueNode::TupleValue(children)
                 | wire::SchemaValueNode::ListValue(children)
@@ -606,20 +725,74 @@ impl WireReader {
     }
 
     pub fn finish(self) -> Result<(), WireError> {
-        for (index, node) in self.nodes.iter().enumerate() {
-            if matches!(
-                node,
-                Some(
-                    wire::SchemaValueNode::SecretValue(_)
-                        | wire::SchemaValueNode::QuotaTokenHandle(_)
-                        | wire::SchemaValueNode::PermissionCardHandle(_)
-                        | wire::SchemaValueNode::StreamValue(_)
-                )
-            ) {
-                return Err(WireError::UnreachableResource(index as ValueNodeIndex));
+        match self.backing {
+            ReaderBacking::Owned(nodes) => {
+                for (index, node) in nodes.iter().enumerate() {
+                    if node
+                        .as_ref()
+                        .is_some_and(|node| !matches!(node, SnapshotNode::Value(_)))
+                    {
+                        return Err(WireError::UnreachableResource(index as ValueNodeIndex));
+                    }
+                }
+            }
+            ReaderBacking::Shared(snapshot) => {
+                for (index, (node, visited)) in
+                    snapshot.nodes.iter().zip(self.visited.iter()).enumerate()
+                {
+                    if !visited && !matches!(node, SnapshotNode::Value(_)) {
+                        return Err(WireError::UnreachableResource(index as ValueNodeIndex));
+                    }
+                }
             }
         }
         Ok(())
+    }
+}
+
+fn clone_value_node(node: &wire::SchemaValueNode) -> wire::SchemaValueNode {
+    match node {
+        wire::SchemaValueNode::BoolValue(v) => wire::SchemaValueNode::BoolValue(*v),
+        wire::SchemaValueNode::S8Value(v) => wire::SchemaValueNode::S8Value(*v),
+        wire::SchemaValueNode::S16Value(v) => wire::SchemaValueNode::S16Value(*v),
+        wire::SchemaValueNode::S32Value(v) => wire::SchemaValueNode::S32Value(*v),
+        wire::SchemaValueNode::S64Value(v) => wire::SchemaValueNode::S64Value(*v),
+        wire::SchemaValueNode::U8Value(v) => wire::SchemaValueNode::U8Value(*v),
+        wire::SchemaValueNode::U16Value(v) => wire::SchemaValueNode::U16Value(*v),
+        wire::SchemaValueNode::U32Value(v) => wire::SchemaValueNode::U32Value(*v),
+        wire::SchemaValueNode::U64Value(v) => wire::SchemaValueNode::U64Value(*v),
+        wire::SchemaValueNode::F32Value(v) => wire::SchemaValueNode::F32Value(*v),
+        wire::SchemaValueNode::F64Value(v) => wire::SchemaValueNode::F64Value(*v),
+        wire::SchemaValueNode::CharValue(v) => wire::SchemaValueNode::CharValue(*v),
+        wire::SchemaValueNode::StringValue(v) => wire::SchemaValueNode::StringValue(v.clone()),
+        wire::SchemaValueNode::RecordValue(v) => wire::SchemaValueNode::RecordValue(v.clone()),
+        wire::SchemaValueNode::VariantValue(v) => wire::SchemaValueNode::VariantValue(*v),
+        wire::SchemaValueNode::EnumValue(v) => wire::SchemaValueNode::EnumValue(*v),
+        wire::SchemaValueNode::FlagsValue(v) => wire::SchemaValueNode::FlagsValue(v.clone()),
+        wire::SchemaValueNode::TupleValue(v) => wire::SchemaValueNode::TupleValue(v.clone()),
+        wire::SchemaValueNode::ListValue(v) => wire::SchemaValueNode::ListValue(v.clone()),
+        wire::SchemaValueNode::FixedListValue(v) => {
+            wire::SchemaValueNode::FixedListValue(v.clone())
+        }
+        wire::SchemaValueNode::MapValue(v) => wire::SchemaValueNode::MapValue(v.clone()),
+        wire::SchemaValueNode::OptionValue(v) => wire::SchemaValueNode::OptionValue(*v),
+        wire::SchemaValueNode::ResultValue(v) => wire::SchemaValueNode::ResultValue(*v),
+        wire::SchemaValueNode::TextValue(v) => wire::SchemaValueNode::TextValue(v.clone()),
+        wire::SchemaValueNode::BinaryValue(v) => wire::SchemaValueNode::BinaryValue(v.clone()),
+        wire::SchemaValueNode::PathValue(v) => wire::SchemaValueNode::PathValue(v.clone()),
+        wire::SchemaValueNode::UrlValue(v) => wire::SchemaValueNode::UrlValue(v.clone()),
+        wire::SchemaValueNode::DatetimeValue(v) => wire::SchemaValueNode::DatetimeValue(*v),
+        wire::SchemaValueNode::DurationValue(v) => wire::SchemaValueNode::DurationValue(*v),
+        wire::SchemaValueNode::QuantityValueNode(v) => {
+            wire::SchemaValueNode::QuantityValueNode(v.clone())
+        }
+        wire::SchemaValueNode::UnionValue(v) => wire::SchemaValueNode::UnionValue(v.clone()),
+        wire::SchemaValueNode::SecretValue(_)
+        | wire::SchemaValueNode::QuotaTokenHandle(_)
+        | wire::SchemaValueNode::PermissionCardHandle(_)
+        | wire::SchemaValueNode::StreamValue(_) => {
+            unreachable!("resources are snapshot separately")
+        }
     }
 }
 
@@ -997,16 +1170,13 @@ tuple!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G);
 tuple!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H);
 
 macro_rules! resource {
-    ($ty:ty, $variant:ident, $kind:literal) => {
+    ($ty:ty, $method:ident, $variant:ident, $kind:literal) => {
         impl FromWire for $ty {
             fn read_wire(
                 reader: &mut WireReader,
                 index: ValueNodeIndex,
             ) -> Result<Self, WireError> {
-                match reader.take(index)? {
-                    wire::SchemaValueNode::$variant(value) => Ok(Self::new(value)),
-                    _ => Err(WireError::Shape($kind)),
-                }
+                reader.$method(index)
             }
         }
 
@@ -1023,10 +1193,16 @@ macro_rules! resource {
     };
 }
 
-resource!(GuestSecretHandle, SecretValue, "secret");
-resource!(GuestQuotaTokenHandle, QuotaTokenHandle, "quota-token");
+resource!(GuestSecretHandle, secret, SecretValue, "secret");
+resource!(
+    GuestQuotaTokenHandle,
+    quota_token,
+    QuotaTokenHandle,
+    "quota-token"
+);
 resource!(
     GuestPermissionCardHandle,
+    permission_card,
     PermissionCardHandle,
     "permission-card"
 );
@@ -1059,10 +1235,7 @@ impl WireSchema for GuestPermissionCardHandle {
 
 impl FromWire for SchemaValueStream {
     fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
-        match reader.take(index)? {
-            wire::SchemaValueNode::StreamValue(stream) => Ok(Self::from_wrapped(stream)),
-            _ => Err(WireError::Shape("stream")),
-        }
+        reader.stream(index)
     }
 }
 

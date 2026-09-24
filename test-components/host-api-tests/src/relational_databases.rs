@@ -11,7 +11,17 @@ use golem_rust::bindings::golem::rdbms::postgres::{
 use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, IntoSchema, FromSchema, golem_rust::FromWire, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct Statement {
     pub statement: String,
     pub params: Vec<String>,
@@ -19,14 +29,34 @@ pub struct Statement {
     pub sleep: Option<u64>,
 }
 
-#[derive(Clone, Debug, IntoSchema, FromSchema, golem_rust::FromWire, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub enum StatementAction {
     Execute,
     Query,
     QueryStream,
 }
 
-#[derive(Clone, Debug, IntoSchema, FromSchema, golem_rust::FromWire, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub enum TransactionEnd {
     Commit,
     Rollback,

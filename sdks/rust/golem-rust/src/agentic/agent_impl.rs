@@ -128,19 +128,15 @@ fn decode_snapshot(
 
 struct ParsedRestoreIdentity {
     agent_type: String,
-    parameters: crate::SchemaValue,
+    parameters: crate::schema::wit::wire::SchemaValueTree,
     phantom_id: Option<crate::Uuid>,
 }
 
 fn parse_restore_identity(id: &str) -> Result<ParsedRestoreIdentity, String> {
     let (agent_type, parameters, phantom_id) = parse_agent_id(id).map_err(|e| e.to_string())?;
-    let parameters = crate::decode_typed_schema_value(&parameters)
-        .map_err(|e| e.to_string())?
-        .into_parts()
-        .1;
     Ok(ParsedRestoreIdentity {
         agent_type,
-        parameters,
+        parameters: parameters.value,
         phantom_id: phantom_id.map(Into::into),
     })
 }
@@ -329,7 +325,8 @@ mod tests {
     };
     use crate::golem_agentic::exports::golem::agent::guest::AgentType;
     use crate::golem_agentic::golem::agent::common::{AgentError, Principal};
-    use crate::{SchemaValue, load_snapshot};
+    use crate::load_snapshot;
+    use crate::schema::wit::wire::{SchemaValueNode, SchemaValueTree};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
@@ -388,11 +385,11 @@ mod tests {
             RESTORE_CALLS.fetch_add(1, Ordering::SeqCst);
             let expected_phantom =
                 crate::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
-            let parameters_match = matches!(
-                context.parameters,
-                SchemaValue::Record { ref fields }
-                    if matches!(fields.as_slice(), [SchemaValue::String(value)] if value == "constructor")
-            );
+            let mut parameters = crate::agentic::DirectAgentInput::new(context.parameters)
+                .map_err(|e| e.to_string())?;
+            let parameters_match =
+                parameters.take::<String>().map_err(|e| e.to_string())? == "constructor";
+            parameters.finish().map_err(|e| e.to_string())?;
             if context.agent_type != "RestoreTest"
                 || !matches!(context.principal, Principal::Anonymous)
                 || !parameters_match
@@ -414,8 +411,12 @@ mod tests {
         );
         Ok(ParsedRestoreIdentity {
             agent_type: "RestoreTest".to_string(),
-            parameters: SchemaValue::Record {
-                fields: vec![SchemaValue::String("constructor".to_string())],
+            parameters: SchemaValueTree {
+                value_nodes: vec![
+                    SchemaValueNode::RecordValue(vec![1]),
+                    SchemaValueNode::StringValue("constructor".to_string()),
+                ],
+                root: 0,
             },
             phantom_id: Some(
                 crate::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(),

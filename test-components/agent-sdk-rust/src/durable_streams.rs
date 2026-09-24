@@ -1,6 +1,8 @@
 use golem_rust::agentic::{AgentStream, spawn_local};
 use golem_rust::schema::{FromSchema, IntoSchema};
-use golem_rust::{FromWire, IntoWire, agent_definition, agent_implementation, endpoint};
+use golem_rust::{
+    FromWire, IntoWire, WireSchema, agent_definition, agent_implementation, endpoint,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static INPUT_ITEMS: AtomicU64 = AtomicU64::new(0);
@@ -12,12 +14,12 @@ static OUTPUT_ERRORS: AtomicU64 = AtomicU64::new(0);
 static CONTINUATIONS: AtomicU64 = AtomicU64::new(0);
 static MARKERS: AtomicU64 = AtomicU64::new(0);
 
-#[derive(IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct EchoOutput {
     pub output: AgentStream<String>,
 }
 
-#[derive(IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct FramedRecord {
     pub name: String,
     pub number: u32,

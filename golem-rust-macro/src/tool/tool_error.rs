@@ -295,11 +295,14 @@ fn synthesize_tool_error(ir: &ToolErrorIr, guest: bool) -> proc_macro2::TokenStr
             };
             quote! {
                 #name => {
-                    let __payload = golem_rust::schema::wit::direct::decode::<#ty>(__value)
+                    let __payload = <#ty as golem_rust::schema::wit::direct::FromWire>::read_wire(__reader, __root)
                         .map_err(|__error| __error.to_string())?;
                     ::std::result::Result::Ok(::std::option::Option::Some(#constructor))
                 }
             }
+        });
+        let error_names = ir.variants.iter().map(|variant| {
+            to_kebab_case(&variant.variant_ident.to_string())
         });
         quote! {
             impl golem_rust::agentic::DirectToolError for #enum_ident {
@@ -309,9 +312,27 @@ fn synthesize_tool_error(ir: &ToolErrorIr, guest: bool) -> proc_macro2::TokenStr
                     ::std::vec![#(#cases),*]
                 }
 
+                fn recognizes_error_name(__name: &str) -> bool {
+                    ::std::matches!(__name, #(#error_names)|*)
+                }
+
                 fn from_direct_error_payload(
                     __name: &str,
                     __value: golem_rust::schema::wit::wire::SchemaValueTree,
+                ) -> ::std::result::Result<::std::option::Option<Self>, ::std::string::String> {
+                    let __root = __value.root;
+                    let mut __reader = golem_rust::schema::wit::direct::WireReader::new(__value.value_nodes);
+                    let __result = Self::from_direct_error_reader(__name, &mut __reader, __root)?;
+                    if __result.is_some() {
+                        __reader.finish().map_err(|__error| __error.to_string())?;
+                    }
+                    Ok(__result)
+                }
+
+                fn from_direct_error_reader(
+                    __name: &str,
+                    __reader: &mut golem_rust::schema::wit::direct::WireReader,
+                    __root: golem_rust::schema::wit::wire::ValueNodeIndex,
                 ) -> ::std::result::Result<::std::option::Option<Self>, ::std::string::String> {
                     match __name {
                         #(#decode_arms),*,

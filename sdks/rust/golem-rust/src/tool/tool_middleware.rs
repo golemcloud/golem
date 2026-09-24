@@ -57,11 +57,70 @@ pub type ToolMiddlewareInvokeFutureFor<'a> = Pin<
 #[doc(hidden)]
 pub type ToolMiddlewareInvokeFuture = ToolMiddlewareInvokeFutureFor<'static>;
 
-/// A custom tool error whose name is not declared by the typed client.
-#[derive(Clone, Debug, PartialEq)]
+/// A custom tool error whose payload is decoded only on explicit inspection.
+#[derive(Clone)]
 pub struct RawCustomToolError {
     pub name: String,
-    pub payload: TypedSchemaValue,
+    payload: Rc<RawCustomToolPayload>,
+}
+
+struct RawCustomToolPayload {
+    wire: std::cell::RefCell<Option<crate::schema::wit::wire::TypedSchemaValue>>,
+    decoded: std::cell::OnceCell<Result<TypedSchemaValue, String>>,
+}
+
+impl RawCustomToolError {
+    pub fn from_payload(name: String, payload: TypedSchemaValue) -> Self {
+        Self {
+            name,
+            payload: Rc::new(RawCustomToolPayload {
+                wire: std::cell::RefCell::new(None),
+                decoded: std::cell::OnceCell::from(Ok(payload)),
+            }),
+        }
+    }
+
+    pub fn from_wire(name: String, payload: crate::schema::wit::wire::TypedSchemaValue) -> Self {
+        Self {
+            name,
+            payload: Rc::new(RawCustomToolPayload {
+                wire: std::cell::RefCell::new(Some(payload)),
+                decoded: std::cell::OnceCell::new(),
+            }),
+        }
+    }
+
+    /// Materializes the dynamic schema model for an undeclared error.
+    pub fn payload(&self) -> Result<&TypedSchemaValue, String> {
+        self.payload
+            .decoded
+            .get_or_init(|| {
+                crate::decode_typed_schema_value_owned(
+                    self.payload
+                        .wire
+                        .borrow_mut()
+                        .take()
+                        .expect("undecoded payload"),
+                )
+                .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+}
+
+impl std::fmt::Debug for RawCustomToolError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawCustomToolError")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for RawCustomToolError {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.payload() == other.payload()
+    }
 }
 
 /// Exact error channel shared by middleware guest dispatch and its underlying layer.
@@ -309,7 +368,7 @@ impl UnderlyingInvocation {
     pub async fn get(
         &self,
     ) -> Result<Option<TypedSchemaValue>, ToolInvokeError<RawCustomToolError>> {
-        self.get_with(|name, payload| Ok(Some(RawCustomToolError { name, payload })))
+        self.get_with(|name, payload| Ok(Some(RawCustomToolError::from_payload(name, payload))))
             .await
     }
 
@@ -323,7 +382,10 @@ impl UnderlyingInvocation {
             .await
             .map_err(|error| match error {
                 ToolInvokeError::UnknownCustomError(raw) => {
-                    match decode_custom_error(raw.name.clone(), raw.payload.clone()) {
+                    match raw
+                        .payload()
+                        .and_then(|payload| decode_custom_error(raw.name.clone(), payload.clone()))
+                    {
                         Ok(Some(value)) => ToolInvokeError::Tool(value),
                         Ok(None) => ToolInvokeError::UnknownCustomError(raw),
                         Err(error) => ToolInvokeError::InvalidResult(error),
@@ -416,7 +478,7 @@ impl UnderlyingTool {
         stdin: Option<InputStream>,
     ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
         self.invoke_with(command_path, input, stdin, |name, payload| {
-            Ok(Some(RawCustomToolError { name, payload }))
+            Ok(Some(RawCustomToolError::from_payload(name, payload)))
         })
         .await
     }
@@ -627,10 +689,9 @@ fn decode_wire_error<E>(
             };
             match decode_custom_error(error.name.clone(), value.clone()) {
                 Ok(Some(error)) => ToolInvokeError::Tool(error),
-                Ok(None) => ToolInvokeError::UnknownCustomError(RawCustomToolError {
-                    name: error.name,
-                    payload: value,
-                }),
+                Ok(None) => ToolInvokeError::UnknownCustomError(RawCustomToolError::from_payload(
+                    error.name, value,
+                )),
                 Err(error) => ToolInvokeError::InvalidResult(error),
             }
         }

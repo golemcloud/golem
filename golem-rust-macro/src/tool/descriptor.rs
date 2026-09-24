@@ -1125,6 +1125,54 @@ enum Projection {
     Stdout(TokenStream),
 }
 
+pub(crate) fn client_surface_order(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &crate::tool::ir::ParamIr,
+) -> Result<u8, Error> {
+    let plan = Plan::analyze(ir)?;
+    let is_root = to_kebab_case(&cmd.method_ident.to_string()) == plan.tool_name;
+    let arg = arg_for(cmd, &param.ident);
+    let global = arg.and_then(|arg| arg.placement) == Some(ArgPlacement::Global);
+    let last = cmd
+        .params
+        .iter()
+        .rev()
+        .find(|candidate| is_positional_candidate(candidate, arg_for(cmd, &candidate.ident)));
+    let last_non_inherited = cmd.params.iter().rev().find(|candidate| {
+        let candidate_arg = arg_for(cmd, &candidate.ident);
+        is_positional_candidate(candidate, candidate_arg)
+            && (is_root
+                || !repeats_inherited_global(
+                    &candidate.ident,
+                    candidate_arg,
+                    &plan.root_global_names,
+                ))
+    });
+    let tail = last.is_some_and(|candidate| candidate.ident == param.ident)
+        || (last_non_inherited.is_some_and(|candidate| candidate.ident == param.ident)
+            && arg.and_then(|arg| arg.placement).is_none()
+            && vec_tail_representable(&param.ty, arg));
+    Ok(
+        match classify(
+            &param.ident,
+            &param.ty,
+            arg,
+            global,
+            tail,
+            DescriptorRepr::Wire,
+        )? {
+            Projection::Option(_) if global => 0,
+            Projection::Flag(_) if global => 1,
+            Projection::Positional { .. } => 2,
+            Projection::Tail(_) => 3,
+            Projection::Option(_) => 4,
+            Projection::Flag(_) => 5,
+            Projection::Stdin(_) | Projection::Stdout(_) => 6,
+        },
+    )
+}
+
 /// The concrete command-surface a parameter projects onto, used to validate that
 /// every authored placement-structural `#[arg]` field is actually lowered by that
 /// surface. Value-schema refinements (text/path/url/numeric) are validated

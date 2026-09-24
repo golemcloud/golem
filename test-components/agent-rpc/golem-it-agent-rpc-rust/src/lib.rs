@@ -6,8 +6,9 @@ use golem_rust::bindings::wasi::config::store as wasi_config;
 use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
 use golem_rust::retry::{NamedPolicy, Policy, set_named_policy};
 use golem_rust::{
-    FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid, agent_definition,
-    agent_implementation, encode_schema_value, mark_atomic_operation, oplog_commit,
+    FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid, WireSchema,
+    agent_definition, agent_implementation, encode_schema_value, mark_atomic_operation,
+    oplog_commit,
 };
 use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -21,13 +22,13 @@ fn encode_single_parameter<T: IntoSchema>(
     .expect("failed to encode RPC parameter")
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum State {
     Initial,
     Ongoing,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct Payload {
     pub field1: String,
     pub field2: Uuid,
@@ -272,19 +273,19 @@ fn agent_error_stream() -> AgentStream<u32> {
     AgentStream::from_raw(output)
 }
 
-#[derive(IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct NestedStreamInput {
     pub labels: AgentStream<String>,
     pub values: Option<AgentStream<u32>>,
 }
 
-#[derive(IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct NestedStreamItem {
     pub label: String,
     pub values: AgentStream<u32>,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamingRpcReport {
     pub input_only: Vec<u32>,
     pub output_only: Vec<u32>,
@@ -656,7 +657,7 @@ pub trait StreamingRpcCaller {
     async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64;
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamingRpcBenchmarkResult {
     pub first_chunk_nanos: u64,
     pub total_nanos: u64,
@@ -994,7 +995,7 @@ impl RpcCounter for RpcCounterImpl {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum TimelineNode {
     Leaf,
 }
@@ -1214,7 +1215,7 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
 
 /// Mirror of the WIT `rpc-error` variant so it can be returned from an agent
 /// method and pattern-matched in integration tests.
-#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum RpcCallOutcome {
     Ok,
     Denied { details: String },

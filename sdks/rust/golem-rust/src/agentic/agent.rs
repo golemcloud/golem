@@ -14,7 +14,6 @@
 
 use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, Principal};
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
-use crate::schema::SchemaValue;
 use crate::schema::wit::{direct, wire};
 
 pub struct AgentInvocationResult {
@@ -209,11 +208,11 @@ pub struct SnapshotData {
     pub mime_type: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SnapshotRestoreContext {
     pub principal: Principal,
     pub agent_type: String,
-    pub parameters: SchemaValue,
+    pub parameters: wire::SchemaValueTree,
     pub phantom_id: Option<crate::Uuid>,
 }
 

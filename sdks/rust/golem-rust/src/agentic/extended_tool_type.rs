@@ -150,10 +150,19 @@ pub async fn encode_direct_tool_value<T: IntoWire + direct::WireSchema + ?Sized>
 #[doc(hidden)]
 pub trait DirectToolError {
     fn wire_error_cases(builder: &mut direct::WireSchemaBuilder) -> Vec<wire::ErrorCase>;
+    fn recognizes_error_name(name: &str) -> bool;
 
     fn from_direct_error_payload(
         name: &str,
         value: crate::schema::wit::wire::SchemaValueTree,
+    ) -> Result<Option<Self>, String>
+    where
+        Self: Sized;
+
+    fn from_direct_error_reader(
+        name: &str,
+        reader: &mut direct::WireReader,
+        root: crate::schema::wit::wire::ValueNodeIndex,
     ) -> Result<Option<Self>, String>
     where
         Self: Sized;

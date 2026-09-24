@@ -91,6 +91,17 @@ impl<T> AgentStream<T> {
         )
     }
 
+    /// Lifts an existing endpoint with a concrete wire decoder, without reading it.
+    pub fn from_schema_stream_with_wire_decoder(
+        stream: SchemaValueStream,
+        decode: impl Fn(SchemaValueTree) -> Result<T, String> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            stream,
+            decode: Box::new(decode),
+        }
+    }
+
     /// Lifts an existing endpoint without reading or replacing it.
     pub fn from_schema_stream(
         stream: SchemaValueStream,
@@ -99,14 +110,11 @@ impl<T> AgentStream<T> {
     where
         T: 'static,
     {
-        Self {
-            stream,
-            decode: Box::new(move |tree| {
-                crate::schema::wit::decode_value(tree)
-                    .map_err(|e| format!("failed to decode agent stream item: {e}"))
-                    .and_then(decode)
-            }),
-        }
+        Self::from_schema_stream_with_wire_decoder(stream, move |tree| {
+            crate::schema::wit::decode_value(tree)
+                .map_err(|e| format!("failed to decode agent stream item: {e}"))
+                .and_then(decode)
+        })
     }
 
     /// Transfers the original endpoint without running an item codec.
@@ -286,8 +294,8 @@ mod tests {
         let item = Item {
             entries: vec![Ok(Some(19)), Err("bad".to_string()), Ok(None)],
         };
-        let mut stream = AgentStream::<Item> {
-            stream: SchemaValueStream::from_source(Items(
+        let mut stream = AgentStream::<Item>::from_schema_stream_with_wire_decoder(
+            SchemaValueStream::from_source(Items(
                 [
                     SchemaValueTree {
                         value_nodes: vec![
@@ -303,8 +311,8 @@ mod tests {
                 ]
                 .into(),
             )),
-            decode: Box::new(|tree| direct::decode(tree).map_err(|e| e.to_string())),
-        };
+            |tree| direct::decode(tree).map_err(|e| e.to_string()),
+        );
         assert_eq!(
             stream.next().await.unwrap_err(),
             "wire value index 2 is referenced more than once"

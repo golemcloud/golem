@@ -1718,7 +1718,7 @@ impl AsyncTool for AsyncToolImpl {
     }
 
     #[test]
-    fn generated_tool_client_requires_schema_decodable_error_type() {
+    fn generated_tool_client_requires_direct_decodable_error_type() {
         let output = cargo_check_tool_crate(
             "tool-client-error-schema-bound",
             r#"
@@ -1752,16 +1752,14 @@ trait ManualErrorTool {
 
         assert!(
             !output.status.success(),
-            "a tool client error type that implements ToolErrorSchema but not Schema must fail to compile\nstdout:\n{}\nstderr:\n{}",
+            "a tool client error type without DirectToolError must fail to compile\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("Schema")
-                || stderr.contains("FromSchema")
-                || stderr.contains("IntoSchema"),
-            "expected the compile error to mention the schema decodability bound, got:\n{stderr}",
+            stderr.contains("DirectToolError"),
+            "expected the compile error to mention the direct decodability bound, got:\n{stderr}",
         );
     }
 
@@ -2376,21 +2374,18 @@ mod golem_rust {
             }
         }
 
-        pub async fn invoke_and_await_infallible(
+        pub async fn invoke_and_await_direct_infallible(
             _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
-            input: &crate::golem_rust::TypedSchemaValue,
+            input: crate::golem_rust::schema::wit::wire::TypedSchemaValue,
             _stdin: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdin>,
             _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdout>,
-        ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
-            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
-            Ok(InvocationResult {
-                result: Some(
-                    crate::golem_rust::IntoTypedSchemaValue::into_typed_schema_value(
-                        &"ok".to_string(),
-                    )
-                    .unwrap(),
-                ),
+        ) -> Result<DirectInvocationResult, ToolError<std::convert::Infallible>> {
+            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(crate::golem_rust::decode_typed_schema_value_owned(input).unwrap()));
+            let tree = crate::golem_rust::schema::wit::direct::encode("ok").unwrap();
+            Ok(DirectInvocationResult {
+                root: Some(tree.root),
+                snapshot: std::rc::Rc::new(crate::golem_rust::schema::wit::direct::WireSnapshot::new(tree.value_nodes)),
             })
         }
     }
@@ -2506,21 +2501,18 @@ mod golem_rust {
             }
         }
 
-        pub async fn invoke_and_await_infallible(
+        pub async fn invoke_and_await_direct_infallible(
             _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
-            input: &crate::golem_rust::TypedSchemaValue,
+            input: crate::golem_rust::schema::wit::wire::TypedSchemaValue,
             _stdin: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdin>,
             _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdout>,
-        ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
-            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
-            Ok(InvocationResult {
-                result: Some(
-                    crate::golem_rust::IntoTypedSchemaValue::into_typed_schema_value(
-                        &"ok".to_string(),
-                    )
-                    .unwrap(),
-                ),
+        ) -> Result<DirectInvocationResult, ToolError<std::convert::Infallible>> {
+            crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(crate::golem_rust::decode_typed_schema_value_owned(input).unwrap()));
+            let tree = crate::golem_rust::schema::wit::direct::encode("ok").unwrap();
+            Ok(DirectInvocationResult {
+                root: Some(tree.root),
+                snapshot: std::rc::Rc::new(crate::golem_rust::schema::wit::direct::WireSnapshot::new(tree.value_nodes)),
             })
         }
     }
@@ -7158,6 +7150,19 @@ impl BadTool for BadToolImpl {
                     golem_rust::schema::wit::wire::FixedListSpec { element, length: 2 },
                 ),
             )
+        }
+    }
+
+    impl golem_rust::IntoWire for FixedPair {
+        fn write_wire(
+            &self,
+            writer: &mut golem_rust::schema::wit::direct::WireWriter,
+        ) -> Result<i32, golem_rust::schema::wit::direct::WireError> {
+            let first = 1u32.write_wire(writer)?;
+            let second = 2u32.write_wire(writer)?;
+            Ok(writer.push(
+                golem_rust::schema::wit::wire::SchemaValueNode::FixedListValue(vec![first, second]),
+            ))
         }
     }
 

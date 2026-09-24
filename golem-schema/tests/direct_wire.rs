@@ -8,6 +8,64 @@ use golem_schema_derive::{FromWire, IntoWire, WireSchema};
 use test_r::test;
 
 #[test]
+fn snapshot_readers_are_independent_without_clone_or_model_traits() {
+    use golem_schema::schema::wit::direct::{FromWire, WireSnapshot};
+    let value = Request {
+        id: 83,
+        values: vec![
+            None,
+            Some(Err(Fault::Rejected {
+                code: 7,
+                reason: "denied".into(),
+            })),
+        ],
+    };
+    let tree = encode(&value).unwrap();
+    let snapshot = std::rc::Rc::new(WireSnapshot::new(tree.value_nodes));
+    for _ in 0..2 {
+        let mut reader = snapshot.reader();
+        assert_eq!(Request::read_wire(&mut reader, tree.root).unwrap(), value);
+        reader.finish().unwrap();
+    }
+    let snapshot = std::rc::Rc::new(WireSnapshot::new(vec![
+        wire::SchemaValueNode::U32Value(9),
+        wire::SchemaValueNode::TupleValue(vec![0, 0]),
+    ]));
+    for _ in 0..2 {
+        assert!(matches!(
+            <(u32, u32)>::read_wire(&mut snapshot.reader(), 1),
+            Err(WireError::AliasedNode(0))
+        ));
+        assert!(matches!(
+            u32::read_wire(&mut snapshot.reader(), -1),
+            Err(WireError::OutOfBounds(-1))
+        ));
+    }
+}
+
+#[test]
+fn shared_readers_keep_resource_reachability_and_discard_checks() {
+    use golem_schema::schema::wit::direct::{FromWire, WireSnapshot};
+    let snapshot = std::rc::Rc::new(WireSnapshot::new(vec![
+        wire::SchemaValueNode::SecretValue(unsafe { wire::Secret::from_handle(61) }),
+        wire::SchemaValueNode::U32Value(9),
+    ]));
+    let mut reader = snapshot.reader();
+    assert_eq!(u32::read_wire(&mut reader, 1).unwrap(), 9);
+    assert!(matches!(
+        reader.finish(),
+        Err(WireError::UnreachableResource(0))
+    ));
+    let mut reader = snapshot.reader();
+    reader.discard(0).unwrap();
+    reader.finish().unwrap();
+    let mut reader = snapshot.reader();
+    let handle = GuestSecretHandle::read_wire(&mut reader, 0).unwrap();
+    reader.finish().unwrap();
+    assert_eq!(handle.take().unwrap().take_handle(), 61);
+}
+
+#[test]
 fn rich_values_and_nominal_ids_use_direct_wire_shapes() {
     let uuid = uuid::Uuid::from_u64_pair(0x1234, 0x9876);
     let tree = encode(&uuid).unwrap();
@@ -432,7 +490,20 @@ async fn direct_resource_transfer_consumes_handles_once() {
     assert!(!quota.is_present());
     assert!(!card.is_present());
     assert!(!stream.is_present());
-    let decoded = decode::<Resources>(encoded).unwrap();
+    use golem_schema::schema::wit::direct::{FromWire, WireSnapshot};
+    let snapshot = std::rc::Rc::new(WireSnapshot::new(encoded.value_nodes));
+    let mut first = snapshot.reader();
+    let decoded = Resources::read_wire(&mut first, encoded.root).unwrap();
+    first.finish().unwrap();
+    let mut second = snapshot.reader();
+    let alias = Resources::read_wire(&mut second, encoded.root).unwrap();
+    second.finish().unwrap();
+    assert_eq!(decoded.secret.cell_id(), alias.secret.cell_id());
+    assert_eq!(decoded.card.cell_id(), alias.card.cell_id());
+    assert_eq!(
+        decoded.tokens[1].as_ref().unwrap().cell_id(),
+        alias.tokens[1].as_ref().unwrap().cell_id()
+    );
     let forwarded = encode(&decoded).unwrap();
     let mut handles = Vec::new();
     for node in forwarded.value_nodes {
@@ -457,7 +528,7 @@ async fn direct_resource_transfer_consumes_handles_once() {
         vec![("secret", 17), ("quota", 29), ("card", 43), ("stream", 59)]
     );
     assert!(matches!(
-        encode(&decoded),
+        encode(&alias),
         Err(WireError::ConsumedResource("secret"))
     ));
 }

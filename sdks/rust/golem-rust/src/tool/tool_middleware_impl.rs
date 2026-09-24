@@ -113,7 +113,11 @@ async fn encode_invocation_error(error: ToolInvokeError<RawCustomToolError>) -> 
         }
         ToolInvokeError::InvalidResult(message) => wire::ToolError::InvalidResult(message),
         ToolInvokeError::Tool(error) => {
-            match crate::encode_typed_schema_value_async(&error.payload).await {
+            let payload = match error.payload() {
+                Ok(payload) => payload,
+                Err(error) => return wire::ToolError::InvalidResult(error),
+            };
+            match crate::encode_typed_schema_value_async(payload).await {
                 Ok(payload) => {
                     wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
                         name: error.name,
@@ -124,7 +128,11 @@ async fn encode_invocation_error(error: ToolInvokeError<RawCustomToolError>) -> 
             }
         }
         ToolInvokeError::UnknownCustomError(error) => {
-            match crate::encode_typed_schema_value_async(&error.payload).await {
+            let payload = match error.payload() {
+                Ok(payload) => payload,
+                Err(error) => return wire::ToolError::InvalidResult(error),
+            };
+            match crate::encode_typed_schema_value_async(payload).await {
                 Ok(payload) => {
                     wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
                         name: error.name,
@@ -214,10 +222,9 @@ mod tests {
         ));
 
         let payload = "custom".to_string().into_typed_schema_value().unwrap();
-        let encoded = encode_invocation_error(ToolInvokeError::Tool(RawCustomToolError {
-            name: "custom-name".to_string(),
-            payload,
-        }))
+        let encoded = encode_invocation_error(ToolInvokeError::Tool(
+            RawCustomToolError::from_payload("custom-name".to_string(), payload),
+        ))
         .await;
         let wire::ToolError::CustomError(encoded) = encoded else {
             panic!("custom middleware error was not preserved")
