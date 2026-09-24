@@ -16,7 +16,8 @@ use super::*;
 use crate::durable_host::stream_session::preflight_proto_recursive_stream_value;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use golem_common::model::durable_stream::{
-    StreamReaderForwardDestination, StreamReaderForwardPublication,
+    StreamReaderForwardAcceptedRecord, StreamReaderForwardDestination,
+    StreamReaderForwardIntentRecord, StreamReaderForwardPublication,
 };
 use prost::Message;
 
@@ -29,6 +30,92 @@ pub(crate) struct ReaderForwardInspector {
 impl ReaderForwardInspector {
     pub(crate) fn new(workers: Arc<dyn WorkerService>, oplog: Arc<dyn OplogService>) -> Self {
         Self { workers, oplog }
+    }
+
+    /// Inspects without holding the source writer, then durably settles the exact retained intent.
+    /// The receipt preserves source attribution and does not finalize any attachment dependency.
+    pub(crate) async fn settle(
+        &self,
+        producer: &DurableStreamStore,
+        mode: AgentMode,
+        intent_index: OplogIndex,
+        intent: StreamReaderForwardIntentRecord,
+    ) -> Result<bool, StreamStoreError> {
+        let owner = OwnedAgentId::new(producer.environment_id, &producer.producer);
+        if !self
+            .destination_accepted(&owner, mode, intent_index, &intent.destination)
+            .await?
+        {
+            return Ok(false);
+        }
+        let memory = golem_common::serialization::serialize(&intent)
+            .map_err(StreamStoreError::Oplog)?
+            .len();
+        producer
+            .run_lifecycle(None, memory, move |producer, context| async move {
+                context.begin_lifecycle_publication().await?;
+                let session = producer.qualify_session(&intent.session_key);
+                let mut control = SessionControlMetadata::default();
+                producer
+                    .refresh_control_metadata(&session, &mut control)
+                    .await
+                    .map_err(StreamStoreError::CorruptHistory)?;
+                if control.reader_binding(intent.reader_id).is_err()
+                    || control
+                        .reader_forward_intent(intent.reader_id)
+                        .map_err(StreamStoreError::CorruptHistory)?
+                        != Some(&(intent_index, intent.clone()))
+                {
+                    return Ok(false);
+                }
+                if control
+                    .has_accepted_reader_forward(intent.reader_id)
+                    .map_err(StreamStoreError::CorruptHistory)?
+                {
+                    return Ok(true);
+                }
+                let entry = producer
+                    .oplog
+                    .read_exact(intent_index, 1)
+                    .await
+                    .remove(&intent_index);
+                let Some(OplogEntry::StreamSession {
+                    entity_parent_start_index,
+                    record,
+                    ..
+                }) = entry
+                else {
+                    return Err(StreamStoreError::CorruptHistory(
+                        "forwarding intent projection references another record".into(),
+                    ));
+                };
+                if producer
+                    .oplog
+                    .download_payload(record)
+                    .await
+                    .map_err(StreamStoreError::Oplog)?
+                    != StreamSessionRecord::ReaderForwardIntent(intent.clone())
+                {
+                    return Err(StreamStoreError::CorruptHistory(
+                        "forwarding intent differs from its projection".into(),
+                    ));
+                }
+                producer
+                    .append_session_record_owned(
+                        &context,
+                        entity_parent_start_index,
+                        StreamSessionRecord::ReaderForwardAccepted(
+                            StreamReaderForwardAcceptedRecord {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: intent.session_key,
+                                intent_oplog_index: intent_index,
+                            },
+                        ),
+                    )
+                    .await?;
+                Ok(true)
+            })
+            .await
     }
 
     /// The caller must recheck the retained source intent under its writer before recording a receipt.

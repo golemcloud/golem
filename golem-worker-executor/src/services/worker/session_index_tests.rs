@@ -2767,6 +2767,185 @@ async fn historical_topology_witness_survives_epoch_changes_and_fork_without_liv
 }
 
 #[test]
+async fn forwarding_settlement_preserves_exact_intent_attribution_and_is_idempotent() {
+    use crate::durable_host::durable_stream::forwarding::ReaderForwardInspector;
+    use crate::durable_host::durable_stream::{DurableStreamStore, SessionControlMetadata};
+    use crate::services::oplog::OplogOps;
+    use golem_common::model::durable_stream::*;
+    use golem_common::model::oplog::DurableFunctionType;
+    use golem_common::model::oplog::payload::host_functions::HostFunctionName;
+
+    let (service, _, oplog_service) = service_with_oplog().await;
+    let inspector = ReaderForwardInspector::new(Arc::new(service), oplog_service.clone());
+    let owner = owned_agent("forward-receipt", ComponentId::new());
+    let key = session_key(&owner, &IdempotencyKey::new("source".into()));
+    let source = local_registration(&key);
+    let destination =
+        StreamRegistrationInvocation::Local(IdempotencyKey::new("destination".into()));
+    let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+    let mut starts = Vec::new();
+    for _ in 0..2 {
+        starts.push(
+            oplog
+                .add(OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    function_name: HostFunctionName::GolemEntityInvoke,
+                    invocation_id: None,
+                    observational_owner: None,
+                    request: None,
+                    durable_function_type: DurableFunctionType::WriteLocal,
+                })
+                .await,
+        );
+    }
+    let StreamSessionRecord::Prepared(prepared) =
+        prepared_with_reader(&owner, &key.idempotency_key)
+    else {
+        unreachable!()
+    };
+    let binding = prepared.stream_mappings[0].clone();
+    let introducing = oplog
+        .add(
+            DurableStreamOplogRecord::Session(
+                Some(starts[0]),
+                Box::new(StreamSessionRecord::Mapping(
+                    StreamSessionMappingUpdateRecord {
+                        format_version: 1,
+                        session_key: source.clone(),
+                        mapping: binding.clone(),
+                    },
+                )),
+            )
+            .into_inline_entry(),
+        )
+        .await;
+    let intent = StreamReaderForwardIntentRecord {
+        format_version: 1,
+        session_key: source,
+        reader_id: local_reader(introducing, 0),
+        destination: StreamReaderForwardDestination::SessionBinding {
+            session_key: destination.clone(),
+            binding: binding.clone(),
+            publication: StreamReaderForwardPublication::InvocationInput,
+        },
+    };
+    let intent_index = oplog
+        .add(
+            DurableStreamOplogRecord::Session(
+                Some(starts[0]),
+                Box::new(StreamSessionRecord::ReaderForwardIntent(intent.clone())),
+            )
+            .into_inline_entry(),
+        )
+        .await;
+    oplog.commit(CommitLevel::Always).await;
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        owner.environment_id,
+        owner.agent_id.clone(),
+        key.callee_fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !inspector
+            .settle(&producer, AgentMode::Durable, intent_index, intent.clone())
+            .await
+            .unwrap()
+    );
+    assert_eq!(oplog.current_oplog_index().await, intent_index);
+
+    producer
+        .append_session_record_attributed(
+            None,
+            Some(starts[1]),
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: 1,
+                session_key: destination,
+                mapping: binding.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+    let published = oplog.current_oplog_index().await;
+    assert!(
+        !inspector
+            .settle(
+                &producer,
+                AgentMode::Durable,
+                intent_index.next(),
+                intent.clone()
+            )
+            .await
+            .unwrap()
+    );
+    let mut wrong_reader = intent.clone();
+    wrong_reader.reader_id.binding_slot = 1;
+    assert!(
+        !inspector
+            .settle(&producer, AgentMode::Durable, intent_index, wrong_reader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(oplog.current_oplog_index().await, published);
+
+    let (first, retry) = tokio::join!(
+        inspector.settle(&producer, AgentMode::Durable, intent_index, intent.clone()),
+        inspector.settle(&producer, AgentMode::Durable, intent_index, intent.clone()),
+    );
+    assert!(first.unwrap());
+    assert!(retry.unwrap());
+    assert_eq!(oplog.current_oplog_index().await, published.next());
+    let OplogEntry::StreamSession {
+        entity_parent_start_index,
+        record,
+        ..
+    } = oplog.read(published.next()).await
+    else {
+        panic!("missing forwarding receipt");
+    };
+    assert_eq!(entity_parent_start_index, Some(starts[0]));
+    assert_eq!(
+        oplog.download_payload(record).await.unwrap(),
+        StreamSessionRecord::ReaderForwardAccepted(StreamReaderForwardAcceptedRecord {
+            format_version: 1,
+            session_key: intent.session_key.clone(),
+            intent_oplog_index: intent_index,
+        })
+    );
+    drop(producer);
+    let reconstructed = DurableStreamStore::load(
+        oplog.clone(),
+        owner.environment_id,
+        owner.agent_id.clone(),
+        key.callee_fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut control = SessionControlMetadata::default();
+    reconstructed
+        .refresh_control_metadata(&key, &mut control)
+        .await
+        .unwrap();
+    assert!(
+        control
+            .has_accepted_reader_forward(intent.reader_id)
+            .unwrap()
+    );
+    assert!(!control.has_consumer_terminal(&binding).unwrap());
+    assert!(
+        inspector
+            .settle(&reconstructed, AgentMode::Durable, intent_index, intent)
+            .await
+            .unwrap()
+    );
+    assert_eq!(oplog.current_oplog_index().await, published.next());
+}
+
+#[test]
 async fn forwarding_inspector_distinguishes_entity_publication_from_lifecycle_authority() {
     use crate::durable_host::durable_stream::forwarding::ReaderForwardInspector;
     use golem_api_grpc::proto::golem::schema::{
