@@ -35,6 +35,7 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentEntityKind, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex,
 };
 use golem_common::model::tool::{
     CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
@@ -145,6 +146,30 @@ fn describe_public_entry(entry: &PublicOplogEntry) -> String {
     }
 }
 
+/// Indices of the recorded `Start` entries before `boundary` whose terminal was recorded at or
+/// after `boundary` (or not at all).
+fn incomplete_starts_before(
+    recorded: &[PublicOplogEntryWithIndex],
+    boundary: OplogIndex,
+) -> Vec<OplogIndex> {
+    let mut open = BTreeMap::new();
+    for entry in recorded.iter().filter(|entry| entry.oplog_index < boundary) {
+        match &entry.entry {
+            PublicOplogEntry::Start(_) => {
+                open.insert(entry.oplog_index, ());
+            }
+            PublicOplogEntry::End(params) => {
+                open.remove(&params.start_index);
+            }
+            PublicOplogEntry::Cancelled(params) => {
+                open.remove(&params.start_index);
+            }
+            _ => {}
+        }
+    }
+    open.into_keys().collect()
+}
+
 /// Which oplog prefix of the recorded single-Store probe history is retained before replay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SingleStoreProbePrefix {
@@ -192,76 +217,113 @@ async fn run_single_store_http_atomic_probe(
         .store()
         .await?;
     let (port, gate_port, server, mut checkpoints) = start_crash_checkpoint_server().await;
-    let agent = agent_id!("ToolStreamingCaller", agent_name);
     let mut env = HashMap::from([
         ("CALLER_CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
         (
             "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
             gate_port.to_string(),
         ),
-        ("GOL581_YIELDS".to_string(), "16".to_string()),
     ]);
     if atomic_first {
         env.insert("GOL581_ATOMIC_FIRST".to_string(), "1".to_string());
     }
-    let worker_id = executor
-        .start_agent_with(&component.id, agent.clone(), env, Vec::new())
-        .await?;
-    let invocation = executor.invoke_and_await_agent(
-        &component,
-        &agent,
-        "single_store_http_atomic_probe",
-        data_value!(),
-    );
-    let release = async {
-        for _ in 0..8 {
-            let checkpoint =
-                next_crash_checkpoint(&mut checkpoints, "single-store-http-atomic").await?;
-            checkpoint
-                .release
-                .send(())
-                .map_err(|_| anyhow::anyhow!("checkpoint gate was dropped"))?;
-        }
-        anyhow::Ok(())
-    };
-    let (result, released) = tokio::join!(invocation, release);
-    result?;
-    released?;
-    let recorded = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    for entry in &recorded {
-        eprintln!(
-            "SINGLE_STORE_PROBE_RECORDED {} {}",
-            entry.oplog_index,
-            describe_public_entry(&entry.entry)
+    // The shape under test has the host-side body scope complete before the guest's first
+    // direct call, so that the gates below (not the recording) decide how the two interleave on
+    // replay. The fixture only yields between dropping the body and the first direct call; a
+    // body task that is still waiting on an oplog commit when the yields run out records its
+    // remaining entries after the direct `Start`. The guest cannot wait for the scope itself
+    // (awaiting the trailers replays identically and would park behind the paused body
+    // admission), so the recording is checked against the precondition and repeated on a fresh
+    // agent when it did not produce the shape. This re-records before any replay; it never
+    // retries a replay.
+    const RECORDING_ATTEMPTS: usize = 3;
+    let mut attempt = 0;
+    let (agent, worker_id, recorded, key_start, key_end) = loop {
+        attempt += 1;
+        let agent_name = if attempt == 1 {
+            agent_name.to_string()
+        } else {
+            format!("{agent_name}-recording-{attempt}")
+        };
+        let agent = agent_id!("ToolStreamingCaller", agent_name);
+        let worker_id = executor
+            .start_agent_with(&component.id, agent.clone(), env.clone(), Vec::new())
+            .await?;
+        let invocation = executor.invoke_and_await_agent(
+            &component,
+            &agent,
+            "single_store_http_atomic_probe",
+            data_value!(),
         );
-    }
-    assert!(
-        !recorded.iter().any(|entry| matches!(
-            &entry.entry,
-            PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke"
-        )),
-        "the probe must not involve entity Stores"
-    );
-    let key_start = recorded
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::Start(params)
-                if params.function_name == "golem::api::generate_idempotency-key" =>
-            {
-                Some(entry.oplog_index)
+        let release = async {
+            for _ in 0..8 {
+                let checkpoint =
+                    next_crash_checkpoint(&mut checkpoints, "single-store-http-atomic").await?;
+                checkpoint
+                    .release
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("checkpoint gate was dropped"))?;
             }
-            _ => None,
-        })
-        .ok_or_else(|| anyhow::anyhow!("recorded direct idempotency-key Start was not found"))?;
-    let key_end = recorded
-        .iter()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::End(params) if params.start_index == key_start => {
-                Some(entry.oplog_index)
-            }
-            _ => None,
-        })
-        .ok_or_else(|| anyhow::anyhow!("recorded direct idempotency-key End was not found"))?;
+            anyhow::Ok(())
+        };
+        let (result, released) = tokio::join!(invocation, release);
+        result?;
+        released?;
+        let recorded = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        for entry in &recorded {
+            eprintln!(
+                "SINGLE_STORE_PROBE_RECORDED {} {}",
+                entry.oplog_index,
+                describe_public_entry(&entry.entry)
+            );
+        }
+        assert!(
+            !recorded.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke"
+            )),
+            "the probe must not involve entity Stores"
+        );
+        let key_start = recorded
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::api::generate_idempotency-key" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("recorded direct idempotency-key Start was not found")
+            })?;
+        let key_end = recorded
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) if params.start_index == key_start => {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("recorded direct idempotency-key End was not found"))?;
+        let body_read_before_key = recorded.iter().any(|entry| {
+            entry.oplog_index < key_start
+                && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                    if params.function_name == "http::types::response::consume-body")
+        });
+        let incomplete_before_key = incomplete_starts_before(&recorded, key_start);
+        if body_read_before_key && incomplete_before_key.is_empty() {
+            break (agent, worker_id, recorded, key_start, key_end);
+        }
+        eprintln!(
+            "SINGLE_STORE_PROBE_RECORDING attempt {attempt}: the body scope was not complete before the first direct idempotency-key Start {key_start} (body read recorded before it: {body_read_before_key}, incomplete Starts {incomplete_before_key:?}); recording again on a fresh agent"
+        );
+        if attempt == RECORDING_ATTEMPTS {
+            return Err(anyhow::anyhow!(
+                "the single-Store probe recording did not complete the body scope before the first direct call in {RECORDING_ATTEMPTS} attempts"
+            ));
+        }
+    };
     let retained = match prefix {
         SingleStoreProbePrefix::Complete => None,
         SingleStoreProbePrefix::FirstDirectStart => Some(key_start),
