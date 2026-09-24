@@ -494,11 +494,10 @@ async fn durable_stream_cors_exposes_producer_outcomes_only_for_stream_routes() 
                 apply_cors_outgoing_middleware(&mut result, &request, &resolved)
                     .await
                     .unwrap();
-                assert_eq!(
+                assert!(
                     result
                         .headers
-                        .contains_key(&http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
-                    true
+                        .contains_key(&http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
                 );
                 assert_eq!(result.headers.get(&http::header::VARY).unwrap(), "Origin");
                 let exposed: std::collections::BTreeSet<_> = result.headers
