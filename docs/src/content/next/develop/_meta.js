@@ -12,7 +12,6 @@ export default {
     title: "Golem SDK",
   },
   "tool-authoring": "Tool Authoring and Lifecycle",
-  "http-handlers": "Custom HTTP Handlers",
   "durable-streams": "External Durable Streams",
   http: "HTTP client",
   websocket: "WebSocket client",

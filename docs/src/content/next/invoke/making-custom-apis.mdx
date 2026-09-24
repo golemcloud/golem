@@ -7,6 +7,10 @@ but also provides a way to expose agent methods as HTTP APIs.
 
 In Golem 1.5, HTTP endpoints are defined **directly in agent code** using language-native decorators and macros — no YAML route definitions or scripting languages needed.
 
+For raw streaming request/response handling, framework-owned routing, or static and
+live file mappings, see [HTTP routers and file serving](/next/invoke/http-routers).
+Complete code-first endpoints take precedence over those mounted fallback behaviors.
+
 ## Mount Points
 
 Every agent that wants to expose HTTP endpoints must first define a **mount point** — the base URL prefix under which all its endpoints are available. The mount path can contain placeholders like `{name}` that map to the agent's constructor parameters.
