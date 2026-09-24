@@ -35,10 +35,29 @@ test("normal agent clients and direct-module response hooks", async () => {
   assert.equal(await hook.text(), "hook");
 });
 
-test("canonical extension token and empty query survive the deployed boundary", async () => {
-  const response = await request("/raw/%61?", { method: "CuStOm" });
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { method: "CuStOm", path: "/raw/%61", query: "" });
+test("canonical extension token and query presence survive the deployed boundary", async (t) => {
+  const extension = await request("/raw/%61?q=%2F", { method: "CuStOm" });
+  assert.equal(extension.status, 200);
+  assert.deepEqual(await extension.json(), { method: "CuStOm", path: "/raw/%61", query: "q=%2F" });
+  const { hostname, port } = new URL(base);
+  for (const [path, query] of [["/raw/%61", null], ["/raw/%61?", ""], ["/raw/%61?q=%2F&q=b+z", "q=%2F&q=b+z"]]) {
+    await t.test(path, async () => {
+      // Send the literal target: older fetch implementations strip a trailing empty query.
+      const result = await new Promise((resolve, reject) => {
+        const req = http.request({ hostname, port, path, method: "GET", signal: AbortSignal.timeout(20_000) }, async (response) => {
+          try {
+            const chunks = [];
+            for await (const chunk of response) chunks.push(chunk);
+            resolve({ status: response.statusCode, body: Buffer.concat(chunks).toString() });
+          } catch (error) { reject(error); }
+        });
+        req.on("error", reject);
+        req.end();
+      });
+      assert.equal(result.status, 200);
+      assert.deepEqual(JSON.parse(result.body), { method: "GET", path: "/raw/%61", query });
+    });
+  }
 });
 
 test("envelope-head-unpolled: public status, declared length, empty body", async () => {
