@@ -34,6 +34,7 @@ pub mod cold_start_unknown;
 pub mod durability_overhead;
 pub mod idempotency_key;
 pub mod latency;
+pub mod registry;
 pub mod sleep;
 pub mod streaming;
 pub mod throughput;

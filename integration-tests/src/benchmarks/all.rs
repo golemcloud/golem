@@ -20,31 +20,19 @@ use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
-    Benchmark, BenchmarkApi, BenchmarkConfig, BenchmarkRecorder, BenchmarkResult, BenchmarkRunner,
-    BenchmarkSource, BenchmarkSuite, BenchmarkSuiteItem, BenchmarkSuiteResult,
+    BenchmarkConfig, BenchmarkRecorder, BenchmarkRunner, BenchmarkSource, BenchmarkSuite,
+    BenchmarkSuiteItem, BenchmarkSuiteResult,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
     BenchmarkCliParameters, BenchmarkTestDependencies, TestDependencies,
 };
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use integration_tests::benchmarks::registry::{BenchmarkRegistry, benchmark_registry};
 use integration_tests::benchmarks::{
     cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::pin::Pin;
 use tracing::{Level, debug, info, warn};
-
-type RunFn = Box<
-    dyn for<'a> Fn(
-        &'a TestMode,
-        Level,
-        &'a BenchmarkSuiteItem,
-        bool,
-        bool,
-    ) -> Pin<Box<dyn Future<Output = BenchmarkResult> + 'a>>,
->;
 
 #[tokio::main]
 async fn main() {
@@ -54,109 +42,7 @@ async fn main() {
         file_limit_increase_result
     );
 
-    let mut benchmarks_by_name: BTreeMap<&str, RunFn> = BTreeMap::new();
-    benchmarks_by_name.insert(
-        "cold-start-unknown-small",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::cold_start_unknown::ColdStartUnknownSmall,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "cold-start-unknown-medium",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::cold_start_unknown::ColdStartUnknownMedium,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "latency-small",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::latency::LatencySmall,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "latency-medium",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::latency::LatencyMedium,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "sleep",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(
-                run_benchmark::<integration_tests::benchmarks::sleep::Sleep>(
-                    mode,
-                    verbosity,
-                    item,
-                    primary_only,
-                    otlp,
-                ),
-            )
-        }),
-    );
-    benchmarks_by_name.insert(
-        "durability-overhead",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::durability_overhead::DurabilityOverhead,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "idempotency-key-lookup",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::idempotency_key::IdempotencyKeyLookup,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-echo",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput::ThroughputEcho,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-large-input",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput::ThroughputLargeInput,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-cpu-intensive",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::throughput::ThroughputCpuIntensive,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "streaming-tool",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::streaming::Streaming<true>,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "streaming-rpc",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                integration_tests::benchmarks::streaming::Streaming<false>,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
+    let benchmarks_by_name = benchmark_registry();
 
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
@@ -212,7 +98,7 @@ async fn main() {
                 }
                 result.failure_count()
             } else {
-                print_non_existing_benchmark(&mut benchmarks_by_name, name);
+                print_non_existing_benchmark(&benchmarks_by_name, name);
             }
         }
         BenchmarkConfig::Suite {
@@ -235,7 +121,7 @@ async fn main() {
             // without running warmup or any prior benchmark.
             for benchmark in &suite.benchmarks {
                 if !benchmarks_by_name.contains_key(benchmark.name.as_str()) {
-                    print_non_existing_benchmark(&mut benchmarks_by_name, &benchmark.name);
+                    print_non_existing_benchmark(&benchmarks_by_name, &benchmark.name);
                 }
             }
 
@@ -323,10 +209,7 @@ async fn main() {
     }
 }
 
-fn print_non_existing_benchmark(
-    benchmarks_by_name: &mut BTreeMap<&str, RunFn>,
-    name: &String,
-) -> ! {
+fn print_non_existing_benchmark(benchmarks_by_name: &BenchmarkRegistry, name: &String) -> ! {
     eprintln!("Non-existing benchmark: {name}");
     eprintln!(
         "Use one of: {}",
@@ -337,16 +220,6 @@ fn print_non_existing_benchmark(
             .join(", ")
     );
     std::process::exit(1);
-}
-
-async fn run_benchmark<B: Benchmark>(
-    mode: &TestMode,
-    verbosity: Level,
-    item: &BenchmarkSuiteItem,
-    primary_only: bool,
-    otlp: bool,
-) -> BenchmarkResult {
-    B::run_benchmark(mode, verbosity, item, primary_only, true, true, otlp).await
 }
 
 // ── Pre-flight warmup constants ───────────────────────────────────────────────
