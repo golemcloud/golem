@@ -162,8 +162,6 @@ rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
 test-r = { workspace = true }
-testcontainers = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing-subscriber = { workspace = true }
-tryhard = { workspace = true }
 system-interface = { workspace = true }

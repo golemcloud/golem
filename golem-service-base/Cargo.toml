@@ -100,8 +100,6 @@ assert2.workspace = true
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
-testcontainers = { workspace = true }
-tryhard = { workspace = true }
 uuid = { workspace = true }
 
 [[test]]
