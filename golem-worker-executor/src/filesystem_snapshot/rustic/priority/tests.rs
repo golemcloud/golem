@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{LOW_PRIORITY, LowPriority, own_nice};
+use super::{LOW_PRIORITY, LowPriority, lower_own_priority, own_nice};
 use pretty_assertions::assert_eq;
 use rayon::{ThreadPool, ThreadPoolBuildError, ThreadPoolBuilder};
 use std::num::NonZeroUsize;
@@ -96,4 +96,18 @@ fn a_panic_of_the_work_gives_an_error() {
         .run::<()>("fs-snap-test", || panic!("the work panics"));
 
     assert!(done.is_err());
+}
+
+#[test]
+fn lowering_the_own_priority_gives_ok_and_nice_19() {
+    // The thread cannot raise its priority again, so the test lowers a thread of its own.
+    let lowered = std::thread::spawn(|| {
+        (
+            lower_own_priority().map_err(|error| error.to_string()),
+            own_nice(),
+        )
+    })
+    .join();
+
+    assert_eq!(lowered.ok(), Some((Ok(()), LOW_PRIORITY)));
 }
