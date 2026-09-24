@@ -411,10 +411,7 @@ async fn typed_route_can_decline_h2c_upgrade_and_dispatch_over_http1() {
     );
     let response = request_handler().handle_request(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(
-        response.headers()[http::header::ALLOW],
-        "PUT, HEAD, GET, DELETE"
-    );
+    assert_eq!(response.headers()[http::header::ALLOW], "PUT");
 }
 
 #[test]
