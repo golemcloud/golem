@@ -162,6 +162,7 @@ jobs:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip2'
           install-cargo-binstall: 'true'
+          install-protoc: 'true'
       - uses: ./.github/actions/restore-binaries
         with:
           run-id: ${{ github.run_id }}

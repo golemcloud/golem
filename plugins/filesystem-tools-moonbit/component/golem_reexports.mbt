@@ -11,7 +11,11 @@ pub fn wasmExportAsyncInitialize(p0 : Int, p1 : Int, p2 : Int) -> Int {
 }
 
 ///|
-pub fn wasmExportAsyncInvokeGolemAgentGuest(p0 : Int, p1 : Int, p2 : Int) -> Int {
+pub fn wasmExportAsyncInvokeGolemAgentGuest(
+  p0 : Int,
+  p1 : Int,
+  p2 : Int,
+) -> Int {
   @minimalExports.callback(p0, p1, p2)
 }
 
@@ -124,4 +128,3 @@ pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
 pub fn wasmExportSave() -> Int {
   @minimalExports.save()
 }
-
