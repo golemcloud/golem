@@ -1,4 +1,5 @@
 import { Effect, Pipeable, Schema, SchemaAST } from "effect"
+import { compileFileMappings, type FileExposure } from "@golemcloud/http-contract"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import { withPipe } from "./internal/pipeable.js"
 import type {
@@ -449,6 +450,7 @@ export interface MountDef<MountVars extends string, WebhookVars extends string =
   readonly cors: ReadonlyArray<string>
   readonly phantomAgent: boolean
   readonly webhookSuffix: ReadonlyArray<PathSegment>
+  readonly exposeFiles?: readonly FileExposure[]
 }
 
 /**
@@ -750,6 +752,8 @@ const runParse = <A>(eff: Effect.Effect<A, HttpRouteError>): A => {
  * @category models
  */
 export interface MountOptions<W extends string = string> {
+  /** Ordered live-file mappings for regular durable non-phantom agents. */
+  readonly exposeFiles?: readonly FileExposure[]
   /** When `true`, the host treats every endpoint as authentication-required. */
   readonly auth?: boolean
   /** CORS allowed-origin patterns advertised at the mount level. */
@@ -832,6 +836,7 @@ export const mount: <const Path extends string, const W extends string = string>
     cors: opts?.cors ?? [],
     phantomAgent: opts?.phantomAgent ?? false,
     webhookSuffix,
+    exposeFiles: opts?.exposeFiles?.map((mapping) => ({ ...mapping })),
   }) as unknown as MountDef<never, never>
 }) as never
 
@@ -1394,7 +1399,7 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
   corsOptions: { allowedPatterns: [...mountDef.cors] },
   webhookSuffix: mountDef.webhookSuffix.map(segmentToWit),
   staticBindings: [],
-  filesystemBindings: [],
+  filesystemBindings: compileFileMappings(mountDef.exposeFiles ?? []),
   openapiProviderMethod: undefined,
 })
 
