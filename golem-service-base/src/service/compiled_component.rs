@@ -25,7 +25,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::wasmtime_config::wasmtime_artifact_fingerprint;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::Instant;
 use tracing::{debug, info_span};
