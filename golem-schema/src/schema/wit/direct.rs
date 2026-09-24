@@ -634,6 +634,15 @@ impl WireReader {
         }
     }
 
+    pub fn push(&mut self, node: wire::SchemaValueNode) -> Result<ValueNodeIndex, WireError> {
+        let ReaderBacking::Owned(nodes) = &mut self.backing else {
+            return Err(WireError::Shape("cannot extend a shared wire reader"));
+        };
+        let index = nodes.len() as ValueNodeIndex;
+        nodes.push(Some(SnapshotNode::Value(node)));
+        Ok(index)
+    }
+
     fn visit(&mut self, index: ValueNodeIndex) -> Result<SnapshotNode, WireError> {
         let snapshot = match &mut self.backing {
             ReaderBacking::Owned(nodes) => {

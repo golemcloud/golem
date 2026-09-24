@@ -743,7 +743,7 @@ mod canonical {
         use test_r::test;
         use url::Url;
 
-        #[derive(Clone, IntoSchema, FromSchema, FromWire, WireSchema)]
+        #[derive(Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         #[schema(rename_all = "kebab-case")]
         enum OutputMode {
             Human,
@@ -751,7 +751,7 @@ mod canonical {
             Json,
         }
 
-        #[derive(IntoSchema, FromSchema, IntoWire, WireSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         struct CommitResult {
             hash: String,
             files_changed: u32,
@@ -759,7 +759,7 @@ mod canonical {
             deletions: u32,
         }
 
-        #[derive(IntoSchema, FromSchema, IntoWire, WireSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         struct LogEntry {
             hash: String,
             author: String,

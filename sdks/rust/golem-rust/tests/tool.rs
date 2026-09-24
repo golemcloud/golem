@@ -215,6 +215,135 @@ mod tests {
         assert!(input.finish().unwrap_err().contains("out of bounds"));
     }
 
+    #[test]
+    fn direct_input_structurally_adapts_option_carriers_through_references() {
+        use golem_rust::agentic::DirectToolInput;
+        use golem_rust::schema::wit::{direct, wire};
+
+        #[derive(IntoWire, WireSchema)]
+        struct OptionalInput {
+            value: Option<String>,
+        }
+
+        #[derive(IntoWire, WireSchema)]
+        struct BareInput {
+            value: String,
+        }
+
+        #[derive(Debug, PartialEq)]
+        struct CustomMaybe(Option<String>);
+
+        impl FromWire for CustomMaybe {
+            fn read_wire(
+                reader: &mut direct::WireReader,
+                index: wire::ValueNodeIndex,
+            ) -> Result<Self, direct::WireError> {
+                Option::<String>::read_wire(reader, index).map(Self)
+            }
+        }
+
+        impl WireSchema for CustomMaybe {
+            fn append_schema(builder: &mut direct::WireSchemaBuilder) -> wire::TypeNodeIndex {
+                let (definition, fresh) =
+                    builder.reserve("test.CustomMaybe".to_string(), Some("custom-maybe".into()));
+                if fresh {
+                    let inner = Option::<String>::append_schema(builder);
+                    builder.commit(definition, inner);
+                }
+                builder.reference(definition)
+            }
+        }
+
+        fn reference_field(graph: &mut wire::SchemaGraph) {
+            let record = graph.defs[0].body as usize;
+            let wire::SchemaTypeBody::RecordType(fields) = &graph.type_nodes[record].body else {
+                panic!("expected named record")
+            };
+            let body = fields[0].body;
+            let definition = graph.defs.len() as wire::DefIndex;
+            graph.defs.push(wire::SchemaTypeDef {
+                id: "test.FieldCarrier".to_string(),
+                name: Some("field-carrier".to_string()),
+                body,
+            });
+            let reference = graph.type_nodes.len() as wire::TypeNodeIndex;
+            graph.type_nodes.push(wire::SchemaTypeNode {
+                body: wire::SchemaTypeBody::RefType(definition),
+                metadata: direct::empty_metadata(),
+            });
+            let wire::SchemaTypeBody::RecordType(fields) = &mut graph.type_nodes[record].body
+            else {
+                unreachable!()
+            };
+            fields[0].body = reference;
+        }
+
+        let optional = |value| {
+            let mut graph = direct::schema::<OptionalInput>();
+            reference_field(&mut graph);
+            wire::TypedSchemaValue {
+                graph,
+                value: direct::encode(&OptionalInput { value }).unwrap(),
+            }
+        };
+        let mut input = DirectToolInput::new(optional(Some("present".to_string()))).unwrap();
+        assert_eq!(
+            input.take_any_adapted::<String>(&["value"]).unwrap(),
+            "present"
+        );
+        input.finish().unwrap();
+
+        let error = DirectToolInput::new(optional(None))
+            .unwrap()
+            .take_any_adapted::<String>(&["value"])
+            .unwrap_err();
+        assert!(error.contains("absent"));
+
+        let mut graph = direct::schema::<BareInput>();
+        reference_field(&mut graph);
+        let mut input = DirectToolInput::new(wire::TypedSchemaValue {
+            graph,
+            value: direct::encode(&BareInput {
+                value: "wrapped".to_string(),
+            })
+            .unwrap(),
+        })
+        .unwrap();
+        assert_eq!(
+            input.take_any_adapted::<CustomMaybe>(&["value"]).unwrap(),
+            CustomMaybe(Some("wrapped".to_string()))
+        );
+        input.finish().unwrap();
+
+        let mut cyclic = direct::schema::<BareInput>();
+        let record = cyclic.defs[0].body as usize;
+        let definition = cyclic.defs.len() as wire::DefIndex;
+        let reference = cyclic.type_nodes.len() as wire::TypeNodeIndex;
+        cyclic.defs.push(wire::SchemaTypeDef {
+            id: "test.Cycle".to_string(),
+            name: None,
+            body: reference,
+        });
+        cyclic.type_nodes.push(wire::SchemaTypeNode {
+            body: wire::SchemaTypeBody::RefType(definition),
+            metadata: direct::empty_metadata(),
+        });
+        let wire::SchemaTypeBody::RecordType(fields) = &mut cyclic.type_nodes[record].body else {
+            unreachable!()
+        };
+        fields[0].body = reference;
+        let error = DirectToolInput::new(wire::TypedSchemaValue {
+            graph: cyclic,
+            value: direct::encode(&BareInput {
+                value: "cycle".to_string(),
+            })
+            .unwrap(),
+        })
+        .err()
+        .unwrap();
+        assert!(error.contains("reference cycle"));
+    }
+
     #[tool_definition]
     trait RefinedTextDirectRoundTrip {
         #[arg(value = "positional", regex = "[a-z]+")]
@@ -270,6 +399,53 @@ mod tests {
         assert_eq!(
             golem_rust::schema::wit::direct::decode::<String>(result.value).unwrap(),
             "scalar:first/second:optional",
+        );
+    }
+
+    type RequiredMaybeString = Option<String>;
+
+    #[tool_definition]
+    trait AliasedOptionDirectRoundTrip {
+        #[arg(value = "option", required = true)]
+        fn echo(&self, value: RequiredMaybeString) -> String;
+    }
+
+    struct AliasedOptionDirectRoundTripImpl;
+
+    #[tool_implementation]
+    impl AliasedOptionDirectRoundTrip for AliasedOptionDirectRoundTripImpl {
+        fn echo(&self, value: RequiredMaybeString) -> String {
+            value.unwrap_or_default()
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_preserves_option_carrier_hidden_by_type_alias() {
+        let tool =
+            <AliasedOptionDirectRoundTripImpl as AliasedOptionDirectRoundTrip>::__tool_descriptor();
+        let input = encoded_input(
+            &tool,
+            &["echo"],
+            vec![golem_rust::SchemaValue::Option {
+                inner: Some(Box::new(golem_rust::SchemaValue::String(
+                    "aliased".to_string(),
+                ))),
+            }],
+        );
+        let result = AliasedOptionDirectRoundTripImpl::__tool_invoke(
+            vec!["echo".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+        assert_eq!(
+            golem_rust::schema::wit::direct::decode::<String>(result.value).unwrap(),
+            "aliased",
         );
     }
 
@@ -1183,7 +1359,7 @@ async fn audit(
 
     fn generated_subtree_optional_capture_typechecks() {
         let client = OptionalCaptureParentClient::default().child(7);
-        let _: &golem_rust::SchemaGraph = &client.inherited_prefix[0].schema;
+        let _: &str = &client.inherited_prefix[0].name;
     }
 
     #[test]

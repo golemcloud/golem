@@ -24,7 +24,13 @@ pub fn encode_schema_value_default(
 #[doc(hidden)]
 pub struct DirectToolInput {
     reader: WireReader,
-    fields: HashMap<String, crate::schema::wit::wire::ValueNodeIndex>,
+    fields: HashMap<String, DirectToolInputField>,
+}
+
+#[derive(Clone, Copy)]
+struct DirectToolInputField {
+    index: crate::schema::wit::wire::ValueNodeIndex,
+    option_carrier: bool,
 }
 
 impl DirectToolInput {
@@ -95,9 +101,14 @@ impl DirectToolInput {
             if !field_indices.insert(index) {
                 return Err("tool input record references a field more than once".to_string());
             }
+            let option_carrier = Self::is_option_type(&value.graph, field.body)?;
+            let input_field = DirectToolInputField {
+                index,
+                option_carrier,
+            };
             for name in std::iter::once(&field.name).chain(&field.metadata.aliases) {
-                if let Some(previous) = fields.insert(name.clone(), index)
-                    && previous != index
+                if let Some(previous) = fields.insert(name.clone(), input_field)
+                    && previous.index != index
                 {
                     return Err(format!("ambiguous canonical tool input field `{name}`"));
                 }
@@ -106,26 +117,101 @@ impl DirectToolInput {
         Ok(Self { reader, fields })
     }
 
-    pub fn take<T: FromWire>(&mut self, name: &str) -> Result<T, String> {
-        let index = self
-            .fields
-            .remove(name)
-            .ok_or_else(|| format!("missing canonical tool input field `{name}`"))?;
-        self.fields.retain(|_, candidate| *candidate != index);
-        T::read_wire(&mut self.reader, index).map_err(|error| error.to_string())
+    fn is_option_type(
+        graph: &crate::schema::wit::wire::SchemaGraph,
+        mut index: crate::schema::wit::wire::TypeNodeIndex,
+    ) -> Result<bool, String> {
+        use crate::schema::wit::wire::SchemaTypeBody;
+        let mut visited = HashSet::new();
+        loop {
+            if !visited.insert(index) {
+                return Err("tool input field schema contains a reference cycle".to_string());
+            }
+            let node = graph
+                .type_nodes
+                .get(index as usize)
+                .ok_or("tool input field schema is out of bounds")?;
+            match node.body {
+                SchemaTypeBody::OptionType(_) => return Ok(true),
+                SchemaTypeBody::RefType(definition) => {
+                    index = graph
+                        .defs
+                        .get(definition as usize)
+                        .ok_or("tool input field schema definition is out of bounds")?
+                        .body;
+                }
+                _ => return Ok(false),
+            }
+        }
     }
 
-    pub fn take_any<T: FromWire>(&mut self, names: &[&str]) -> Result<T, String> {
+    fn remove_any(&mut self, names: &[&str]) -> Result<DirectToolInputField, String> {
         let name = names
             .iter()
             .copied()
             .find(|name| self.fields.contains_key(*name))
             .ok_or_else(|| format!("missing canonical tool input field `{}`", names[0]))?;
-        self.take(name)
+        let field = self.fields.remove(name).unwrap();
+        self.fields
+            .retain(|_, candidate| candidate.index != field.index);
+        Ok(field)
+    }
+
+    pub fn take<T: FromWire>(&mut self, name: &str) -> Result<T, String> {
+        self.take_any(&[name])
+    }
+
+    pub fn take_any<T: FromWire>(&mut self, names: &[&str]) -> Result<T, String> {
+        let field = self.remove_any(names)?;
+        T::read_wire(&mut self.reader, field.index).map_err(|error| error.to_string())
+    }
+
+    pub fn take_any_adapted<T: FromWire + direct::WireSchema>(
+        &mut self,
+        names: &[&str],
+    ) -> Result<T, String> {
+        let field = self.remove_any(names)?;
+        let target = direct::schema::<T>();
+        let target_option_carrier = Self::is_option_type(&target, target.root)?;
+        let index = if field.option_carrier && !target_option_carrier {
+            match self
+                .reader
+                .take(field.index)
+                .map_err(|error| error.to_string())?
+            {
+                crate::schema::wit::wire::SchemaValueNode::OptionValue(Some(index)) => index,
+                crate::schema::wit::wire::SchemaValueNode::OptionValue(None) => {
+                    return Err(format!(
+                        "canonical tool input field `{}` is absent but the implementation parameter is required",
+                        names[0]
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "canonical tool input field `{}` has an invalid optional carrier",
+                        names[0]
+                    ));
+                }
+            }
+        } else if !field.option_carrier && target_option_carrier {
+            self.reader
+                .push(crate::schema::wit::wire::SchemaValueNode::OptionValue(
+                    Some(field.index),
+                ))
+                .map_err(|error| error.to_string())?
+        } else {
+            field.index
+        };
+        T::read_wire(&mut self.reader, index).map_err(|error| error.to_string())
     }
 
     pub fn finish(mut self) -> Result<(), String> {
-        for index in self.fields.into_values().collect::<HashSet<_>>() {
+        for index in self
+            .fields
+            .into_values()
+            .map(|field| field.index)
+            .collect::<HashSet<_>>()
+        {
             self.reader
                 .discard(index)
                 .map_err(|error| error.to_string())?;

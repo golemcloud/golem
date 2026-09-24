@@ -666,7 +666,7 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
                     }
                 } else {
                     quote! {
-                        let #ident = #direct_input.take_any::<#ty>(&[#value_name, #(#value_aliases),*])
+                        let #ident = #direct_input.take_any_adapted::<#ty>(&[#value_name, #(#value_aliases),*])
                             .map_err(golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput)?;
                     }
                 }

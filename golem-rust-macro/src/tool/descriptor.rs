@@ -1173,6 +1173,61 @@ pub(crate) fn client_surface_order(
     )
 }
 
+pub(crate) fn canonical_field_has_option_carrier(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &crate::tool::ir::ParamIr,
+) -> Result<bool, Error> {
+    let plan = Plan::analyze(ir)?;
+    let is_root = to_kebab_case(&cmd.method_ident.to_string()) == plan.tool_name;
+    let arg = arg_for(cmd, &param.ident);
+    let global = arg.and_then(|arg| arg.placement) == Some(ArgPlacement::Global);
+    let last = cmd
+        .params
+        .iter()
+        .rev()
+        .find(|candidate| is_positional_candidate(candidate, arg_for(cmd, &candidate.ident)));
+    let last_non_inherited = cmd.params.iter().rev().find(|candidate| {
+        let candidate_arg = arg_for(cmd, &candidate.ident);
+        is_positional_candidate(candidate, candidate_arg)
+            && (is_root
+                || !repeats_inherited_global(
+                    &candidate.ident,
+                    candidate_arg,
+                    &plan.root_global_names,
+                ))
+    });
+    let tail = last.is_some_and(|candidate| candidate.ident == param.ident)
+        || (last_non_inherited.is_some_and(|candidate| candidate.ident == param.ident)
+            && arg.and_then(|arg| arg.placement).is_none()
+            && vec_tail_representable(&param.ty, arg));
+    let projection = classify(
+        &param.ident,
+        &param.ty,
+        arg,
+        global,
+        tail,
+        DescriptorRepr::Wire,
+    )?;
+    Ok(match projection {
+        Projection::Option(_) => {
+            let (base, optional) = unwrap_generic1(&param.ty, "Option")
+                .map(|inner| (inner, true))
+                .unwrap_or((&param.ty, false));
+            let collection = unwrap_generic1(base, "Vec").is_some() || is_map_type(base);
+            let required = !optional && arg.and_then(|arg| arg.required).unwrap_or(false);
+            !collection && !required && arg.and_then(|arg| arg.default.as_ref()).is_none()
+        }
+        Projection::Positional { required, .. } => {
+            !required && arg.and_then(|arg| arg.default.as_ref()).is_none()
+        }
+        Projection::Tail(_)
+        | Projection::Flag(_)
+        | Projection::Stdin(_)
+        | Projection::Stdout(_) => false,
+    })
+}
+
 /// The concrete command-surface a parameter projects onto, used to validate that
 /// every authored placement-structural `#[arg]` field is actually lowered by that
 /// surface. Value-schema refinements (text/path/url/numeric) are validated

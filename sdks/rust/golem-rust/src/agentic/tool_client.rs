@@ -164,6 +164,7 @@ pub struct DirectInputValue {
     pub name: String,
     pub aliases: Vec<String>,
     pub short: Option<char>,
+    option_carrier: bool,
     encoder: Rc<dyn DirectInputEncoder>,
 }
 
@@ -180,8 +181,14 @@ impl DirectInputValue {
             name: name.into(),
             aliases,
             short,
+            option_carrier: false,
             encoder: Rc::new(value),
         }
+    }
+
+    pub fn with_option_carrier(mut self, option_carrier: bool) -> Self {
+        self.option_carrier = option_carrier;
+        self
     }
 }
 
@@ -224,12 +231,24 @@ pub async fn encode_direct_tool_input(
     }
     let mut schemas = WireSchemaBuilder::default();
     let mut fields = Vec::with_capacity(values.len());
+    let mut encoded_are_options = Vec::with_capacity(values.len());
     for value in values {
         let mut metadata = empty_metadata();
         metadata.aliases = value.aliases.clone();
+        let body = value.encoder.schema(&mut schemas);
+        let body_is_option = matches!(
+            schemas.resolve(body).map(|node| &node.body),
+            Some(crate::schema::wit::wire::SchemaTypeBody::OptionType(_))
+        );
+        encoded_are_options.push(body_is_option);
+        let body = if value.option_carrier && !body_is_option {
+            schemas.push(crate::schema::wit::wire::SchemaTypeBody::OptionType(body))
+        } else {
+            body
+        };
         fields.push(crate::schema::wit::wire::NamedFieldType {
             name: value.name.clone(),
-            body: value.encoder.schema(&mut schemas),
+            body,
             metadata,
         });
     }
@@ -237,13 +256,18 @@ pub async fn encode_direct_tool_input(
     let graph = schemas.finish(schema_root);
     let mut writer = WireWriter::default();
     let mut indices = Vec::with_capacity(values.len());
-    for value in values {
-        indices.push(
-            value
-                .encoder
-                .write(&mut writer)
-                .map_err(|e| e.to_string())?,
-        );
+    for (value, encoded_is_option) in values.iter().zip(encoded_are_options) {
+        let index = value
+            .encoder
+            .write(&mut writer)
+            .map_err(|e| e.to_string())?;
+        indices.push(if value.option_carrier && !encoded_is_option {
+            writer.push(crate::schema::wit::wire::SchemaValueNode::OptionValue(
+                Some(index),
+            ))
+        } else {
+            index
+        });
     }
     let root = writer.push(crate::schema::wit::wire::SchemaValueNode::RecordValue(
         indices,
@@ -1299,6 +1323,26 @@ mod tests {
         .unwrap();
         assert_eq!(input.take::<String>("query").unwrap(), "needle");
         assert!(input.take::<bool>("v").unwrap());
+        input.finish().unwrap();
+
+        type MaybeString = Option<String>;
+        let aliased_option = DirectInputValue::new(
+            "maybe",
+            vec![],
+            None,
+            Some("present".to_string()) as MaybeString,
+        )
+        .with_option_carrier(true);
+        let mut input = crate::agentic::DirectToolInput::new(
+            encode_direct_tool_input(&[aliased_option], &["maybe"])
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            input.take::<MaybeString>("maybe").unwrap(),
+            Some("present".to_string())
+        );
         input.finish().unwrap();
 
         use crate::schema::wit::{GuestSecretHandle, wire};

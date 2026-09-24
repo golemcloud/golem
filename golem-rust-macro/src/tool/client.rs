@@ -639,20 +639,22 @@ fn subtree_client_macro_keep_param(
         let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
         let aliases = aliases.iter();
         let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
+        let option_carrier = direct_input_needs_option_carrier(ir, cmd, param, tool_name);
         quote! {
             $inherited_prefix.push(golem_rust::agentic::DirectInputValue::new(
                 #name, ::std::vec![#(#aliases.to_string()),*], #short, #ident
-            ));
+            ).with_option_carrier(#option_carrier));
         }
     } else {
         let name = canonical_value_name(ir, cmd, param, tool_name);
         let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
         let aliases = aliases.iter();
         let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
+        let option_carrier = direct_input_needs_option_carrier(ir, cmd, param, tool_name);
         quote! {
             golem_rust::agentic::DirectInputValue::new(
                 #name, ::std::vec![#(#aliases.to_string()),*], #short, #ident
-            ),
+            ).with_option_carrier(#option_carrier),
         }
     };
 
@@ -749,10 +751,11 @@ fn value_inserts(
             let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
             let aliases = aliases.iter();
             let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
+            let option_carrier = direct_input_needs_option_carrier(ir, cmd, param, tool_name);
             Some(quote! {
                 golem_rust::agentic::DirectInputValue::new(
                     #name, ::std::vec![#(#aliases.to_string()),*], #short, #ident
-                )
+                ).with_option_carrier(#option_carrier)
             })
         });
     let inserts: Vec<_> = inserts.collect();
@@ -971,10 +974,11 @@ fn prefix_value_builders(
             let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
             let aliases = aliases.iter();
             let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
+            let option_carrier = direct_input_needs_option_carrier(ir, cmd, param, tool_name);
             Some(quote! {
                 __inherited_prefix.push(golem_rust::agentic::DirectInputValue::new(
                     #name, ::std::vec![#(#aliases.to_string()),*], #short, #ident
-                ));
+                ).with_option_carrier(#option_carrier));
             })
         })
         .collect()
@@ -1044,6 +1048,45 @@ pub(crate) fn canonical_value_name(
         }
     }
     own_name
+}
+
+fn canonical_param_source<'a>(
+    ir: &'a ToolDefinitionIr,
+    cmd: &'a CommandIr,
+    param: &'a ParamIr,
+    tool_name: &str,
+) -> (&'a CommandIr, &'a ParamIr) {
+    let own_name = to_kebab_case(&param.ident.to_string());
+    if let Some(root) = ir
+        .commands
+        .iter()
+        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
+    {
+        for root_param in &root.params {
+            if is_global_param(root, root_param)
+                && param_surfaces_intersect(
+                    &to_kebab_case(&root_param.ident.to_string()),
+                    &param_aliases(root, root_param),
+                    &own_name,
+                    &param_aliases(cmd, param),
+                )
+            {
+                return (root, root_param);
+            }
+        }
+    }
+    (cmd, param)
+}
+
+fn direct_input_needs_option_carrier(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &ParamIr,
+    tool_name: &str,
+) -> bool {
+    let (source_cmd, source_param) = canonical_param_source(ir, cmd, param, tool_name);
+    crate::tool::descriptor::canonical_field_has_option_carrier(ir, source_cmd, source_param)
+        .unwrap_or(false)
 }
 
 fn canonical_param_aliases(
