@@ -329,6 +329,21 @@ pub trait StreamingRpcTarget {
     fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>);
     fn create_output_gate(&self) -> PromiseId;
     fn produce_gated_siblings(&self, gate: PromiseId) -> (AgentStream<String>, AgentStream<u32>);
+    fn benchmark_output(&self, length: u32, domain: u32) -> AgentStream<u32>;
+    fn benchmark_gated_output(&self, length: u32, domain: u32, gate: PromiseId)
+    -> AgentStream<u32>;
+    fn benchmark_gated_siblings(
+        &self,
+        length: u32,
+        left_gate: PromiseId,
+        right_gate: PromiseId,
+    ) -> (AgentStream<u32>, AgentStream<u32>);
+    fn benchmark_gated_nested_siblings(
+        &self,
+        length: u32,
+        left_gate: PromiseId,
+        right_gate: PromiseId,
+    ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>);
     fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>);
     fn produce_error(&self) -> AgentStream<u32>;
     fn ping(&self) -> u64;
@@ -590,6 +605,60 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             writer.write_all(16..64).await.unwrap();
         });
         (agent_stream(vec!["a".to_string(), "b".to_string()]), stream)
+    }
+
+    fn benchmark_output(&self, length: u32, domain: u32) -> AgentStream<u32> {
+        agent_stream((0..length).map(|index| domain + index * 3).collect())
+    }
+
+    fn benchmark_gated_output(
+        &self,
+        length: u32,
+        domain: u32,
+        gate: PromiseId,
+    ) -> AgentStream<u32> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            let prefix = (length / 4).clamp(1, 8).min(length);
+            for index in 0..length {
+                if index == prefix {
+                    golem_rust::await_promise(&gate).await;
+                }
+                writer.write_one(domain + index * 3).await.unwrap();
+            }
+        });
+        output
+    }
+
+    fn benchmark_gated_siblings(
+        &self,
+        length: u32,
+        left_gate: PromiseId,
+        right_gate: PromiseId,
+    ) -> (AgentStream<u32>, AgentStream<u32>) {
+        (
+            self.benchmark_gated_output(length, 1000, left_gate),
+            self.benchmark_gated_output(length + 3, 100_000, right_gate),
+        )
+    }
+
+    fn benchmark_gated_nested_siblings(
+        &self,
+        length: u32,
+        left_gate: PromiseId,
+        right_gate: PromiseId,
+    ) -> (AgentStream<NestedStreamItem>, AgentStream<NestedStreamItem>) {
+        let (left, right) = self.benchmark_gated_siblings(length, left_gate, right_gate);
+        (
+            agent_stream(vec![NestedStreamItem {
+                label: "left".to_string(),
+                values: left,
+            }]),
+            agent_stream(vec![NestedStreamItem {
+                label: "right".to_string(),
+                values: right,
+            }]),
+        )
     }
 
     fn produce_sibling_error(&self) -> (AgentStream<u32>, AgentStream<u32>) {
