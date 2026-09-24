@@ -57,6 +57,9 @@ fn in_memory() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(InMemoryTest)
 }
 
+/// Spins up a fresh MinIO container per `get_blob_storage` call and keeps it
+/// alive for the lifetime of this per-worker dependency, so the returned S3
+/// blob storage remains usable for the whole test.
 struct S3Test {
     minio_instances: Mutex<Vec<DockerMinio>>,
 }

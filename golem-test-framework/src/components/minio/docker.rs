@@ -29,7 +29,7 @@ pub struct DockerMinio {
 
 impl DockerMinio {
     const API_PORT: u16 = 9000;
-    const DEFAULT_IMAGE_NAME: &'static str = "minio/minio";
+    const DEFAULT_IMAGE_NAME: &'static str = "quay.io/minio/minio";
     const DEFAULT_IMAGE_TAG: &'static str = "RELEASE.2025-01-20T14-49-07Z";
     const ACCESS_KEY_ID: &'static str = "minioadmin";
     const SECRET_ACCESS_KEY: &'static str = "minioadmin";
