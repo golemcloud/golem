@@ -133,6 +133,35 @@ pub trait EntityReconstructionClaimHook: Send + Sync {
     async fn after_claim(&self, start_index: OplogIndex);
 }
 
+/// Where a replaying accessor durable call is paused relative to its scope admission.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplayAdmissionStage {
+    /// Before the call opens its durable scope (when it has one) and before it claims its `Start`.
+    BeforeScope,
+    /// After the scope `Start` is claimed but before the call's own `Start` is claimed.
+    AfterScope,
+}
+
+/// Test-harness coordination at the host-scheduling boundaries of durable call replay: where a
+/// replaying accessor call is admitted to claim its recorded `Start`, and where a direct
+/// (Store-holding) call begins waiting for its recorded terminal.
+#[doc(hidden)]
+#[async_trait]
+pub trait ReplayAdmissionHook: Send + Sync {
+    /// Runs on the accessor future, outside every cursor lock, before the replaying call claims
+    /// its `Start` at `stage`.
+    async fn before_replay_access_start(&self, function: &'static str, stage: ReplayAdmissionStage);
+
+    /// Runs synchronously on the Store-holding direct call right before it waits for its
+    /// recorded terminal.
+    fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex);
+
+    /// Runs synchronously on the Store-holding direct path right before a positional replay
+    /// read expecting the `expected` marker entry.
+    fn before_positional_replay_read(&self, expected: &str);
+}
+
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
 /// well as providing hooks for the general worker executor logic.

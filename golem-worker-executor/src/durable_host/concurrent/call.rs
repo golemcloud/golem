@@ -15,6 +15,7 @@
 use super::*;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
 use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
+use crate::workerctx::ReplayAdmissionStage;
 use golem_common::model::entity::{
     AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
     ToolInvocationClaimIdentity,
@@ -1671,11 +1672,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             prepared.retry.durable_execution_state().assume_idempotence,
             prepared.unpersisted,
         );
+        let admission_hook = if prepared.is_live {
+            None
+        } else {
+            store.with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
+        };
+        if let Some(hook) = &admission_hook {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::BeforeScope)
+                .await;
+        }
         let scope_start = if starts_scope {
             Some(Self::execute_access_scope_start(store, get_ctx, &mut prepared).await?)
         } else {
             None
         };
+        if let Some(hook) = &admission_hook {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::AfterScope)
+                .await;
+        }
 
         let replay_state = prepared.replay_state.clone();
         let linear_memory = prepared.linear_memory.clone();
@@ -3533,6 +3547,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .replay
             .take()
             .expect("replay() called on a live handle");
+        if let Some(hook) = ctx.replay_admission_hook() {
+            hook.before_direct_replay_wait(Pair::FQFN, self.start_idx);
+        }
         let outcome = ctx
             .state
             .replay_state

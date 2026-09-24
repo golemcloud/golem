@@ -454,6 +454,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     _owner_resources: Arc<OwnerRuntimeResources>,
     entity_reconstruction_claim_hook:
         Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
+    replay_admission_hook: Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>>,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     filesystem_generation_handle: FilesystemGenerationHandle,
@@ -766,6 +767,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.entity_reconstruction_claim_hook.clone()
     }
 
+    pub(crate) fn replay_admission_hook(
+        &self,
+    ) -> Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>> {
+        self.replay_admission_hook.clone()
+    }
+
     pub(crate) fn is_live(&self) -> bool {
         self.state.is_live()
     }
@@ -904,6 +911,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         entity_reconstruction_claim_hook: Option<
             Arc<dyn crate::workerctx::EntityReconstructionClaimHook>,
         >,
+        replay_admission_hook: Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>>,
         filesystem_capability: FilesystemCapability,
         executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
@@ -1207,6 +1215,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owner_execution,
             _owner_resources: owner_resources,
             entity_reconstruction_claim_hook,
+            replay_admission_hook,
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
@@ -2663,6 +2672,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         loop {
             if self.is_live() {
                 return Ok(None);
+            }
+            if let Some(hook) = &self.replay_admission_hook {
+                hook.before_positional_replay_read(expected);
             }
             match self
                 .state
