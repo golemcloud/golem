@@ -39,6 +39,7 @@ pub struct MessagesUnderlying {
   // private fields
 }
 pub async fn MessagesUnderlying::send(Self, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn MessagesUnderlying::start_send(Self, String) -> Result[@tool-middleware.UnderlyingInvocation[String, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
 
 type PublicFiles
 pub fn PublicFiles::read(String) -> String
@@ -50,6 +51,7 @@ pub struct StorageUnderlying {
   // private fields
 }
 pub async fn StorageUnderlying::fetch(Self, String) -> Result[String, @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
+pub async fn StorageUnderlying::start_fetch(Self, String) -> Result[@tool-middleware.UnderlyingInvocation[String, @tool-core.NoToolError], @tool-middleware.ToolInvokeError[@tool-core.NoToolError]]
 
 // Type aliases
 

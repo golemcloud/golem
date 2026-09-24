@@ -123,6 +123,7 @@ pub(all) struct CanonicalBigBoundClient {
 pub async fn CanonicalBigBoundClient::canonical_big_bound(Self, UInt64?) -> Result[Unit, @tool.ToolError[CanonicalGrepError]]
 pub fn CanonicalBigBoundClient::drop(Self) -> Unit
 pub fn CanonicalBigBoundClient::new() -> Self
+pub fn CanonicalBigBoundClient::new_for(String) -> Self
 
 type CanonicalCommitError
 pub impl @tool-core.ToolErrorSchema for CanonicalCommitError
@@ -149,6 +150,7 @@ pub async fn CanonicalGitClient::commit(Self, UInt, @schema.Path, Bool, Map[Stri
 pub fn CanonicalGitClient::drop(Self) -> Unit
 pub async fn CanonicalGitClient::log(Self, Int64?, @types.Datetime?, @types.Datetime?, Array[String], Array[String], Bool, Bool, Bool, Bool, Array[@schema.Path]) -> Result[Array[CanonicalLogEntry], @tool.ToolError[CanonicalLogError]]
 pub fn CanonicalGitClient::new() -> Self
+pub fn CanonicalGitClient::new_for(String) -> Self
 pub fn CanonicalGitClient::remote(Self, UInt, @schema.Path, Bool, Map[String, String]) -> CanonicalGitRemoteClient
 pub fn CanonicalGitClient::stash(Self, UInt, @schema.Path) -> CanonicalGitStashClient
 
@@ -188,6 +190,7 @@ pub(all) struct CanonicalGrepClient {
 pub fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[Array[CanonicalGrepHit], CanonicalGrepError], @tool.ToolError[CanonicalGrepError]]
 pub fn CanonicalGrepClient::drop(Self) -> Unit
 pub fn CanonicalGrepClient::new() -> Self
+pub fn CanonicalGrepClient::new_for(String) -> Self
 pub async fn CanonicalGrepClient::replace(Self, Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
 
 pub(all) enum CanonicalGrepColorMode {
@@ -320,6 +323,7 @@ pub(all) struct EmptyAgentInput {
 pub impl @schema.IntoSchema for EmptyAgentInput
 
 type MoonBitReflectionTest
+pub fn MoonBitReflectionTest::canonical_values(Int64, UInt64, @schema.Duration, @schema.Quantity[ReflectionMeters], String?) -> String
 pub fn MoonBitReflectionTest::echo(String) -> String
 pub fn MoonBitReflectionTest::optional(String?) -> String
 
@@ -328,6 +332,7 @@ pub async fn MoonBitStreaming::stream(String, @async-core.Stream[Byte], @tool.Pr
 
 type MoonBitToolReflectionCaller
 pub async fn MoonBitToolReflectionCaller::agent_round_trip(Self) -> String
+pub async fn MoonBitToolReflectionCaller::canonical_round_trip(Self) -> String
 pub async fn MoonBitToolReflectionCaller::optional_round_trip(Self) -> String
 pub async fn MoonBitToolReflectionCaller::principal_round_trip(Self) -> String
 pub async fn MoonBitToolReflectionCaller::round_trip(Self) -> String
@@ -336,6 +341,7 @@ pub(all) struct MoonBitToolReflectionCallerClient {
   client : @rpc.AgentClient
 }
 pub async fn MoonBitToolReflectionCallerClient::agent_round_trip(Self) -> String
+pub async fn MoonBitToolReflectionCallerClient::canonical_round_trip(Self) -> String
 pub fn MoonBitToolReflectionCallerClient::drop(Self) -> Unit
 pub fn MoonBitToolReflectionCallerClient::get(String) -> Self raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::get_agent_id(Self) -> String raise @common.AgentError
@@ -347,9 +353,11 @@ pub async fn MoonBitToolReflectionCallerClient::principal_round_trip(Self) -> St
 pub async fn MoonBitToolReflectionCallerClient::round_trip(Self) -> String
 pub fn MoonBitToolReflectionCallerClient::schedule_agent_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_agent_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_canonical_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_optional_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_principal_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_canonical_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_optional_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_principal_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
@@ -357,6 +365,7 @@ pub async fn[T] MoonBitToolReflectionCallerClient::scoped(String, async (Self) -
 pub async fn[T] MoonBitToolReflectionCallerClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
 pub async fn[T] MoonBitToolReflectionCallerClient::scoped_new_phantom(String, async (Self) -> T) -> T
 pub fn MoonBitToolReflectionCallerClient::trigger_agent_round_trip(Self) -> Unit raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::trigger_canonical_round_trip(Self) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::trigger_optional_round_trip(Self) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::trigger_principal_round_trip(Self) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::trigger_round_trip(Self) -> Unit raise @common.AgentError
@@ -384,9 +393,11 @@ pub fn MoonBitToolStreamingCallerClient::trigger_marker_before_eof(Self, Bytes) 
 pub(all) struct MoonbitReflectionTestClient {
   client : @tool.ToolClient
 }
+pub async fn MoonbitReflectionTestClient::canonical_values(Self, Int64, UInt64, @schema.Duration, @schema.Quantity[ReflectionMeters], String?) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
 pub fn MoonbitReflectionTestClient::drop(Self) -> Unit
 pub async fn MoonbitReflectionTestClient::echo(Self, String) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
 pub fn MoonbitReflectionTestClient::new() -> Self
+pub fn MoonbitReflectionTestClient::new_for(String) -> Self
 pub async fn MoonbitReflectionTestClient::optional(Self, String?) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
 
 pub(all) struct MoonbitStreamingClient {
@@ -394,6 +405,7 @@ pub(all) struct MoonbitStreamingClient {
 }
 pub fn MoonbitStreamingClient::drop(Self) -> Unit
 pub fn MoonbitStreamingClient::new() -> Self
+pub fn MoonbitStreamingClient::new_for(String) -> Self
 pub fn MoonbitStreamingClient::stream(Self, String, @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[UInt64, @tool-core.NoToolError], @tool.ToolError[@tool-core.NoToolError]]
 
 pub(all) enum Priority {
@@ -403,6 +415,8 @@ pub(all) enum Priority {
 } derive(Eq, ToJson, @json.FromJson)
 pub impl @schema.FromSchema for Priority
 pub impl @schema.IntoSchema for Priority
+
+type ReflectionMeters
 
 type RpcExampleAgent
 pub async fn RpcExampleAgent::counter_rpc_example(Self) -> UInt64
