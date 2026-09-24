@@ -186,6 +186,38 @@ pub fn benchmark_registry() -> BenchmarkRegistry {
             >(mode, verbosity, item, primary_only, otlp))
         }),
     );
+    benchmarks_by_name.insert(
+        "streaming-rpc-reconnect",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcReconnect,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-recovery",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcRecovery,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-recovery-siblings",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcRecoverySiblings,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-recovery-nested",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcRecoveryNested,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
     benchmarks_by_name
 }
 
@@ -197,4 +229,82 @@ async fn run_benchmark<B: Benchmark>(
     otlp: bool,
 ) -> BenchmarkResult {
     B::run_benchmark(mode, verbosity, item, primary_only, true, true, otlp).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_test_framework::benchmark::BenchmarkSuite;
+    use test_r::test;
+
+    const STREAMING_NAMES: [&str; 9] = [
+        "streaming-tool",
+        "streaming-rpc",
+        "streaming-rpc-history",
+        "streaming-rpc-cold-indexed",
+        "streaming-rpc-cold-rebuild",
+        "streaming-rpc-reconnect",
+        "streaming-rpc-recovery",
+        "streaming-rpc-recovery-siblings",
+        "streaming-rpc-recovery-nested",
+    ];
+
+    fn suite(raw: &str) -> BenchmarkSuite {
+        serde_yaml::from_str(raw).expect("benchmark suite must parse")
+    }
+
+    fn assert_names_resolve(suite: &BenchmarkSuite) {
+        let registry = benchmark_registry();
+        for item in &suite.benchmarks {
+            assert!(
+                registry.contains_key(item.name.as_str()),
+                "unregistered benchmark {}",
+                item.name
+            );
+        }
+    }
+
+    #[test]
+    fn benchmark_registry_resolves_streaming_suites() {
+        let daily = suite(include_str!("../../benchmark_suites/ci.yaml"));
+        let quick = suite(include_str!("../../benchmark_suites/quick-all.yaml"));
+        let smoke = suite(include_str!("../../benchmark_suites/gol-552-smoke.yaml"));
+
+        assert_names_resolve(&daily);
+        assert_names_resolve(&quick);
+        assert_names_resolve(&smoke);
+
+        for suite in [&daily, &quick, &smoke] {
+            let names = suite
+                .benchmarks
+                .iter()
+                .filter(|item| item.name.starts_with("streaming-"))
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(names, STREAMING_NAMES);
+        }
+
+        let expected_daily = [
+            ("streaming-tool", vec![1, 10], vec![512]),
+            ("streaming-rpc", vec![1, 10], vec![512]),
+            ("streaming-rpc-history", vec![0, 32, 128], vec![512]),
+            ("streaming-rpc-cold-indexed", vec![0, 128], vec![512]),
+            ("streaming-rpc-cold-rebuild", vec![128], vec![512]),
+            ("streaming-rpc-reconnect", vec![129], vec![64]),
+            ("streaming-rpc-recovery", vec![0, 129], vec![64]),
+            ("streaming-rpc-recovery-siblings", vec![129], vec![64]),
+            ("streaming-rpc-recovery-nested", vec![129], vec![32]),
+        ];
+        for (name, sizes, lengths) in expected_daily {
+            let item = daily
+                .benchmarks
+                .iter()
+                .find(|item| item.name == name)
+                .expect("daily streaming benchmark must exist");
+            assert_eq!(item.iterations, 1);
+            assert_eq!(item.cluster_size, vec![1]);
+            assert_eq!(item.size, sizes);
+            assert_eq!(item.length, lengths);
+        }
+    }
 }

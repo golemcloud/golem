@@ -980,17 +980,19 @@ mod tests {
             high_bits: 1,
             low_bits: 2,
         };
-        let mut report = SessionCheckpoint::default();
-        report.acceptance = Some(InvocationAccepted {
-            epoch: 7,
+        let mut report = SessionCheckpoint {
+            acceptance: Some(InvocationAccepted {
+                epoch: 7,
+                ..Default::default()
+            }),
+            result: Some(InvocationSessionResult::default()),
+            completion: Some(InvocationSessionCompletion {
+                outcome: Some(invocation_session_completion::Outcome::Success(
+                    Default::default(),
+                )),
+            }),
             ..Default::default()
-        });
-        report.result = Some(InvocationSessionResult::default());
-        report.completion = Some(InvocationSessionCompletion {
-            outcome: Some(invocation_session_completion::Outcome::Success(
-                Default::default(),
-            )),
-        });
+        };
         report.mappings.insert(
             1,
             DurableStreamMapping {
