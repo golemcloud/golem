@@ -6156,6 +6156,19 @@ async fn failed_ephemeral_invocation_retry_does_not_reexecute(
         .await;
     assert!(second.is_err());
 
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let after_restart = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "increment_remote_then_fail",
+            data_value!("ephemeral_crash_retry_target"),
+        )
+        .await;
+    assert!(after_restart.is_err());
+
     let target_agent_id = agent_id!("Counter", "ephemeral_crash_retry_target");
     let count = executor
         .invoke_and_await_agent(&component, &target_agent_id, "increment", data_value!())

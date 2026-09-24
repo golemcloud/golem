@@ -151,6 +151,47 @@ fn validate_constructor_input_value(
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    async fn config_value_denied(
+        &mut self,
+        path: &[String],
+        is_secret_config: bool,
+        check_wallet: bool,
+    ) -> anyhow::Result<bool> {
+        let binding_denied = self.entity_invocation_scope().is_some_and(|scope| {
+            let policy = scope.activation().policy();
+            !policy
+                .config_keys_readable()
+                .contains(&CanonicalAgentConfigPath::from_path_in_unknown_casing(path))
+                || (is_secret_config
+                    && !policy
+                        .secret_keys_readable()
+                        .contains(&CanonicalAgentSecretPath::from_path_in_unknown_casing(path)))
+        });
+        if binding_denied {
+            return Ok(true);
+        }
+
+        // Snapshot loading executes unpersisted calls without publishing live execution. Normal
+        // tail continuation has already published liveness during durable-call resolution.
+        if !check_wallet {
+            return Ok(false);
+        }
+
+        let targets = config_segments_target(agent_owner(self), path)
+            .map_err(|_| ())
+            .and_then(|target| {
+                let mut targets = vec![target];
+                if is_secret_config {
+                    targets.push(secret_hold_target_for_path(self, path).map_err(|_| ())?);
+                }
+                Ok(targets)
+            });
+        Ok(match targets {
+            Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
+            Err(_) => true,
+        })
+    }
+
     /// Resolve a local agent-config value.
     fn resolve_local_config(
         &self,
@@ -196,17 +237,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         declared_type: &SchemaType,
     ) -> anyhow::Result<SchemaValue> {
         let canonical_path = CanonicalAgentSecretPath::from_path_in_unknown_casing(&path);
-        if self.entity_invocation_scope().is_some_and(|scope| {
-            !scope
-                .activation()
-                .policy()
-                .secret_keys_readable()
-                .contains(&canonical_path)
-        }) {
-            return Err(anyhow!(
-                "Entity invocation is not allowed to read secret config key {path_str}"
-            ));
-        }
 
         // Future automatic-update transforms belong here, where both
         // the component-declared type and the guest-expected type are
@@ -816,36 +846,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let (handle, denied) = match begun.resolve(self).await? {
-            ResolvedCall::Replay(handle) => (handle, false),
+            ResolvedCall::Replay(handle) => (handle, None),
             ResolvedCall::Live(begun) => {
-                let binding_denied = self.entity_invocation_scope().is_some_and(|scope| {
-                    !scope.activation().policy().config_keys_readable().contains(
-                        &CanonicalAgentConfigPath::from_path_in_unknown_casing(&path),
-                    )
-                });
-                // Snapshot loading executes unpersisted calls without publishing live execution.
-                // Normal tail continuation has already published liveness during resolution.
-                let denied = if binding_denied {
-                    true
-                } else if self.state.is_live() {
-                    let targets = config_segments_target(agent_owner(self), &path)
-                        .map_err(|_| ())
-                        .and_then(|target| {
-                            let mut targets = vec![target];
-                            if is_secret_config {
-                                targets.push(
-                                    secret_hold_target_for_path(self, &path).map_err(|_| ())?,
-                                );
-                            }
-                            Ok(targets)
-                        });
-                    match targets {
-                        Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
-                        Err(_) => true,
-                    }
-                } else {
-                    false
-                };
+                let denied = self
+                    .config_value_denied(&path, is_secret_config, self.state.is_live())
+                    .await?;
                 let handle = begun
                     .start_live(
                         self,
@@ -855,13 +860,20 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         },
                     )
                     .await?;
-                (handle, denied)
+                (handle, Some(denied))
             }
         };
 
         let uses_resolver = is_secret_config;
         let response = handle
             .run(self, async move |ctx| {
+                let denied = match denied {
+                    Some(denied) => denied,
+                    None => {
+                        ctx.config_value_denied(&path, is_secret_config, true)
+                            .await?
+                    }
+                };
                 if denied {
                     return Ok(HostResponseGolemAgentGetConfigValue {
                         result: Err("permission denied".to_string()),

@@ -1,17 +1,18 @@
 use capable_streaming_tool_guest_client::CapableStreamingClient;
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
-    AgentStream, InputStream, Principal, ToolInvocation, ToolInvocationStdout, pump_tool_stdin,
-    spawn_local, tool_protocol_error,
+    AgentStream, Config, InputStream, Principal, Secret, ToolInvocation, ToolInvocationStdout,
+    pump_tool_stdin, spawn_local, tool_protocol_error,
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation,
-    decode_typed_schema_value_owned, read_only,
+    ConfigSchema, FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaValue, agent_definition,
+    agent_implementation, decode_typed_schema_value_owned, read_only,
 };
+use secret_policy_probe_tool_guest_client::SecretPolicyProbeClient;
 use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
 use typed_output_stream_tool_guest_client::TypedOutputStreamClient;
@@ -87,6 +88,71 @@ struct RawTypedInput {
     input: AgentStream<TypedInputItem>,
 }
 
+#[derive(ConfigSchema)]
+pub struct ToolSecretCallerConfig {
+    #[config_schema(secret)]
+    pub tool_secret: Secret<String>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct SecretPolicyObservation {
+    pub label: String,
+    pub config_resolved: bool,
+    pub configured_secret_revealed: bool,
+    pub input_secret_revealed: bool,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct SecretPolicyEvidence {
+    pub middleware: Vec<SecretPolicyObservation>,
+    pub leaf_revealed: bool,
+}
+
+#[agent_definition]
+pub trait ToolSecretCaller {
+    fn new(name: String, #[agent_config] config: Config<ToolSecretCallerConfig>) -> Self;
+
+    async fn inspect_secret_policy(&self) -> SecretPolicyEvidence;
+}
+
+struct ToolSecretCallerImpl {
+    config: Config<ToolSecretCallerConfig>,
+}
+
+#[agent_implementation]
+impl ToolSecretCaller for ToolSecretCallerImpl {
+    fn new(_name: String, #[agent_config] config: Config<ToolSecretCallerConfig>) -> Self {
+        Self { config }
+    }
+
+    async fn inspect_secret_policy(&self) -> SecretPolicyEvidence {
+        let value = self
+            .config
+            .get()
+            .expect("secret handle resolution must be allowed for the calling agent")
+            .tool_secret
+            .handle()
+            .expect("secret handle resolution must be allowed for the calling agent");
+        let evidence = SecretPolicyProbeClient::new()
+            .inspect(value)
+            .await
+            .expect("invoke secret policy probe");
+        SecretPolicyEvidence {
+            middleware: evidence
+                .middleware
+                .into_iter()
+                .map(|observation| SecretPolicyObservation {
+                    label: observation.label,
+                    config_resolved: observation.config_resolved,
+                    configured_secret_revealed: observation.configured_secret_revealed,
+                    input_secret_revealed: observation.input_secret_revealed,
+                })
+                .collect(),
+            leaf_revealed: evidence.leaf_revealed,
+        }
+    }
+}
+
 #[derive(IntoSchema)]
 struct RawDirectTypedInput {
     input: AgentStream<TypedInputEvidence>,
@@ -109,6 +175,7 @@ pub trait ToolStreamingCaller {
     fn new(name: String) -> Self;
 
     fn record_native_order(&self, marker: String) -> String;
+    fn replay_probe(&self) -> String;
     #[read_only]
     fn read_owner_file(&self, path: String) -> String;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
@@ -138,6 +205,9 @@ pub trait ToolStreamingCaller {
     async fn raw_modes_and_handles(&self) -> Vec<String>;
     async fn middleware_probe_modes(&self, value: String) -> Vec<String>;
     async fn middleware_probe_once(&self, value: String) -> String;
+    async fn dynamic_mcp_probe(&self, value: String) -> String;
+    async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
+    async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
@@ -312,6 +382,21 @@ fn decode_middleware_probe_result(result: tool_host::InvocationResult) -> String
         decode_typed_schema_value_owned(result.result.expect("middleware probe returns a result"))
             .expect("decode middleware probe result");
     String::from_value(value.value()).expect("middleware probe result is a string")
+}
+
+fn decode_dynamic_mcp_result(result: tool_host::InvocationResult) -> String {
+    let value = decode_typed_schema_value_owned(result.result.expect("MCP tool returns a result"))
+        .expect("decode MCP tool result");
+    let SchemaValue::Record { fields } = value.value() else {
+        panic!("MCP result is a record");
+    };
+    let SchemaValue::Record { fields } = &fields[0] else {
+        panic!("MCP structured result is a record");
+    };
+    let SchemaValue::String(evidence) = &fields[0] else {
+        panic!("MCP evidence is a string");
+    };
+    evidence.clone()
 }
 
 fn raw_typed_output_input(tag: String) -> golem_rust::schema::wit::wire::TypedSchemaValue {
@@ -509,6 +594,10 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .and_then(|mut file| file.write_all(marker.as_bytes()))
             .expect("append native tool invocation order");
         marker
+    }
+
+    fn replay_probe(&self) -> String {
+        "replayed".to_string()
     }
 
     fn read_owner_file(&self, path: String) -> String {
@@ -1037,6 +1126,44 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect("single synchronous middleware probe");
         decode_middleware_probe_result(result)
+    }
+
+    async fn dynamic_mcp_probe(&self, value: String) -> String {
+        let result = ToolRpc::new("middleware-probe")
+            .invoke_and_await(Vec::new(), raw_middleware_probe_input(&value), None, None)
+            .await
+            .expect("invoke dynamic MCP tool through universal middleware");
+        decode_dynamic_mcp_result(result)
+    }
+
+    async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String> {
+        let (stdout_target, stdout) = tool_host::create_stdout();
+        let rpc = ToolRpc::new("middleware-probe");
+        let result = rpc.invoke_and_await(
+            Vec::new(),
+            raw_middleware_probe_input(&value),
+            None,
+            Some(stdout_target),
+        );
+        let (result, stdout) = (result, read_all(stdout)).join().await;
+        vec![
+            decode_dynamic_mcp_result(result.expect("invoke dynamic MCP middleware chain")),
+            String::from_utf8(stdout).expect("MCP stdout is UTF-8"),
+        ]
+    }
+
+    async fn dynamic_mcp_stdout_probe(&self, value: String) -> String {
+        let (stdout_target, stdout) = tool_host::create_stdout();
+        let rpc = ToolRpc::new("middleware-probe");
+        let result = rpc.invoke_and_await(
+            Vec::new(),
+            raw_middleware_probe_input(&value),
+            None,
+            Some(stdout_target),
+        );
+        let (result, stdout) = (result, read_all(stdout)).join().await;
+        result.expect("invoke dynamic MCP middleware stdout probe");
+        String::from_utf8(stdout).expect("MCP stdout is UTF-8")
     }
 
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence> {

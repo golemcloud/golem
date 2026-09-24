@@ -321,6 +321,7 @@ async fn deploy_environment(
         .create_deployment(
             env_id,
             DeploymentCreation {
+                mcp_imports: Vec::new(),
                 current_revision: plan.current_revision,
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion(Uuid::new_v4().to_string()),
@@ -329,6 +330,8 @@ async fn deploy_environment(
                 publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: Default::default(),
+                agent_tool_middleware_bindings: Default::default(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),

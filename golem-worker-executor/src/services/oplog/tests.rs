@@ -17,6 +17,7 @@ use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::{
     OplogArchive, OplogArchiveService, transfer_between_lower_layers,
 };
+use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
@@ -41,7 +42,6 @@ use golem_common::model::{
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
-use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -57,7 +57,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant};
-use test_r::{test, test_dep};
+use test_r::test;
 use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -108,22 +108,6 @@ fn create_test_entry(
         None,
         instance_id,
     )
-}
-
-struct Tracing;
-
-impl Tracing {
-    pub fn init() -> Self {
-        init_tracing(&TracingConfig::test("op-log-tests"), |_output| {
-            golem_common::tracing::filter::boxed::debug_env_with_directives(Vec::new())
-        });
-        Self
-    }
-}
-
-#[test_dep(scope = PerWorker)]
-fn tracing() -> Tracing {
-    Tracing::init()
 }
 
 async fn assert_panics<T>(future: impl Future<Output = T>) {
@@ -251,7 +235,7 @@ impl OplogArchive for RecordingArchive {
     }
 }
 
-fn make_agent_metadata(
+pub(super) fn make_agent_metadata(
     agent_id: AgentId,
     created_by: AccountId,
     environment_id: EnvironmentId,
@@ -284,13 +268,14 @@ fn invocation_wallet_pin() -> InvocationWalletPin {
     }
 }
 
-fn default_last_known_status() -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
+pub(super) fn default_last_known_status()
+-> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
     read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(arc_swap::ArcSwap::from_pointee(
         AgentStatusRecord::default(),
     )))
 }
 
-fn default_execution_status(
+pub(super) fn default_execution_status(
     agent_mode: AgentMode,
 ) -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
     read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(ExecutionStatus::Suspended {
@@ -3060,6 +3045,10 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     assert_eq!(added.len(), 2);
     assert_eq!(added[1].0, added[0].0.next());
     assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(3));
+    let resident = oplog.read_exact(added[0].0, 2).await;
+    assert_eq!(resident, added.iter().cloned().collect());
+    // Threshold handoff is asynchronous; protocol publication uses an explicit barrier.
+    oplog.commit(CommitLevel::Always).await;
     let persisted = service
         .read_exact(
             &owned_agent_id,
@@ -4172,8 +4161,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             ComponentRevision::INITIAL,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry3 = oplog.read(entry3).await.rounded();
 
     let desc = oplog
         .create_snapshot_based_update_description(
@@ -4521,8 +4510,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             ComponentRevision::INITIAL,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry3 = oplog.read(entry3).await.rounded();
 
     let desc = oplog
         .create_snapshot_based_update_description(

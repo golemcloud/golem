@@ -264,9 +264,12 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
                 retry_policy_defaults: Vec::new(),
                 publish_tools: vec![tool_name.clone()],
                 remote_tools: Vec::new(),
+                mcp_imports: Vec::new(),
                 publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 replace_incompatible_agent_secrets: false,
             },
         )
@@ -592,7 +595,7 @@ async fn remote_middleware_release_is_pinned_across_accounts(
         create_app_and_environment(&consumer, "middleware-consumer").await?;
     let middleware_name = ToolMiddlewareName::try_from("audit").unwrap();
     let component_wasm =
-        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/tool_middleware_guest.wasm");
+        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm");
 
     let publisher_component = publisher
         .client
@@ -640,9 +643,12 @@ async fn remote_middleware_release_is_pinned_across_accounts(
                 retry_policy_defaults: Vec::new(),
                 publish_tools: Vec::new(),
                 remote_tools: Vec::new(),
+                mcp_imports: Vec::new(),
                 publish_tool_middlewares: vec![middleware_name.clone()],
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 replace_incompatible_agent_secrets: false,
             },
         )
@@ -820,9 +826,12 @@ environments:
                 retry_policy_defaults: Vec::new(),
                 publish_tools: Vec::new(),
                 remote_tools: Vec::new(),
+                mcp_imports: Vec::new(),
                 publish_tool_middlewares: vec![middleware_name.clone()],
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 replace_incompatible_agent_secrets: false,
             },
         )

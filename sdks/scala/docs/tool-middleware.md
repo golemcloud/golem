@@ -148,20 +148,17 @@ The handles follow the same invocation ownership:
 
 The guest ABI supplies a stdout writer for commands that declare stdout. The SDK copies the selected final stdout into that writer while the structured result is pending, calls `finish` after clean EOF, and calls `fail` if forwarding fails. Middleware receives only the transfer-oriented handles above; it must not finish or fail the host writer itself.
 
-## Choosing a component role
+## Component template
 
-Use the component template matching the exports and host access the component needs:
+Use the `scala` component template for ordinary agents and tools, standalone middleware, and
+components combining them. Its `agent_guest.wasm` base artifact exports all three discovery and
+invocation interfaces and imports the ambient tool host. Categories the component does not define
+return empty discovery lists. The invocation-scoped `underlying` capability remains the way to
+advance the pinned middleware chain; ambient tool calls do not bypass runtime permission checks.
 
-| Template | Base artifact | Use when | Ambient tool host |
-|---|---|---|---|
-| `scala` | `agent_guest.wasm` | The component contains ordinary agents or tools, but no middleware export | Available |
-| `scala-tool-middleware` | `tool_middleware_guest.wasm` | The component contains only tool middleware | Not imported |
-| `scala-agent-tool-middleware` | `agent_tool_middleware_guest.wasm` | The component combines ordinary agents/tools and middleware | Available |
+The artifact is embedded byte-for-byte in both sbt and Mill plugins. `golemPrepare` refreshes the
+`.generated/agent_guest.wasm` file by content hash.
 
-A pure middleware component cannot invoke ambient tools through an ordinary generated `<Tool>Client`; its final WASM intentionally has no `golem:tool/host@0.1.0` import. It can call only the invocation-scoped underlying supplied to the middleware method. Use the combined role only when the same component genuinely needs both export surfaces and ambient tool access.
+## Generated client relationship
 
-The three artifacts are generated from the same WIT/build matrix and embedded byte-for-byte in both sbt and Mill plugins. `golemPrepare` refreshes all three `.generated/*.wasm` files by content hash, while `golem-cli` selects the one named by the component template.
-
-## Future client design
-
-[GOL-484](https://linear.app/golem-cloud/issue/GOL-484/redesign-scala-typed-tool-clients-around-injectable-transports-and) tracks a possible redesign of typed Scala tool clients around injectable transports and failure algebras. That could simplify how ordinary and underlying projections share implementation, but it is not required to author or run middleware with the API described here.
+The generated `<Tool>Client` and `<Tool>Underlying` remain separate nominal APIs for ambient calls and invocation-scoped middleware calls. Code generation backs both with the same internal command paths, canonical input assembly, declared-error codecs, and result codecs, so the two call surfaces encode and decode a tool definition consistently without exposing the transport abstraction to application code.

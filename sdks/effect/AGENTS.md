@@ -50,12 +50,11 @@ separate concerns and must be tested independently.
 - `src/host/`: WIT host `Context.Service` wrappers. This is a private injection seam.
 - `src/{Sqlite,Postgres,Mysql,Ignite}/`: database adapter sources, published through `/sqlite`,
   `/postgres`, `/mysql`, and `/ignite2`.
-- `wit/main.wit`: three worlds: `agent-guest`, `tool-middleware-guest`, and
-  `agent-tool-middleware-guest`.
+- `wit/main.wit`: the single `agent-guest` world for agents, tools, and tool middleware.
 - `golem-types/`: generated ambient declarations for all worlds and host interfaces.
 - `scripts/template-matrix.mjs`: source of truth for world/template/declaration/artifact names.
-- `{agent,tool-middleware,agent-tool-middleware}-template/`: generated wrapper crates.
-- `wasm/`: generated base WASMs for all three worlds.
+- `agent-template/`: generated wrapper crate.
+- `wasm/`: generated base WASM for the default world.
 - `test/`: unit, property, and compile-time tests with host fakes.
 - `integration-test/`: real Golem components and harness.
 

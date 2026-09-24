@@ -16,31 +16,12 @@ import { defineConfig } from "rollup"
  */
 const external = (id) =>
   id === "agent-guest" ||
-  id === "tool-middleware-guest" ||
-  id === "agent-tool-middleware-guest" ||
   id === "node:sqlite" ||
   id === "effect" ||
   id === "@golemcloud/effect-golem" ||
   id.startsWith("@golemcloud/effect-golem/") ||
   id.startsWith("golem:") ||
   id.startsWith("wasi:")
-
-function assertMiddlewareHostNeutral() {
-  return {
-    name: "assert-middleware-host-neutral",
-    generateBundle(_options, bundle) {
-      for (const output of Object.values(bundle)) {
-        if (output.type !== "chunk") continue
-        const forbidden = [...output.imports, ...output.dynamicImports].filter(
-          (id) => id === "golem:tool/host@0.1.0" || id === "node:sqlite",
-        )
-        if (forbidden.length > 0) {
-          this.error(`Middleware bundle reached agent-only hosts:\n${forbidden.join("\n")}`)
-        }
-      }
-    },
-  }
-}
 
 export default defineConfig([
   {
@@ -55,6 +36,33 @@ export default defineConfig([
     // cause Rollup to drop our `export { Effect, Schema, Ref } from "effect"`
     // re-exports. Treat the entry module's re-exports as side-effectful so
     // user components embedded in the base WASM can resolve them.
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["src/**/*", "golem-types/**/*"],
+        tsconfigOverride: {
+          compilerOptions: {
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  {
+    input: "src/Ai.ts",
+    output: {
+      file: "dist/ai.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
     plugins: [
       resolve({ extensions: [".js", ".ts", ".mjs"] }),
       commonjs(),
@@ -97,7 +105,6 @@ export default defineConfig([
           },
         },
       }),
-      assertMiddlewareHostNeutral(),
       terser(),
     ],
   },

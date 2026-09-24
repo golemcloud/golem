@@ -176,12 +176,12 @@ pub mod tool_guest {
     });
 }
 
-/// Typed export accessor for pure tool-middleware components. Imported interfaces and resources
-/// are shared with the primary world so middleware executes against the owner's ordinary hosts.
+/// Typed export accessor for tool-middleware components. Imported interfaces and resources are
+/// shared with the primary world so middleware executes against the owner's ordinary hosts.
 pub mod tool_middleware_guest {
     wasmtime::component::bindgen!({
         path: r"../wit",
-        world: "golem:tool/tool-middleware",
+        world: "golem:tool/tool-middleware-runtime",
         imports: { default: async | trappable },
         exports: { default: async },
         require_store_data_send: true,
@@ -194,6 +194,7 @@ pub mod tool_middleware_guest {
             "golem:api/host@1.5.0": crate::preview2::golem::api1_5_0::host,
             "golem:tool/common": golem_schema::schema::tool::wit::wire,
             "golem:tool/streams": crate::preview2::golem::tool::streams,
+            "golem:tool/host": crate::preview2::golem::tool::host,
             "golem:tool/underlying": crate::preview2::golem::tool::underlying,
         },
     });

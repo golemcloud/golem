@@ -1171,6 +1171,7 @@ impl QuotaService for UnlimitedQuotaService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
     use chrono::Duration as ChronoDuration;
     use golem_common::model::quota::{ResourceLimit, ResourceRateLimit, TimePeriod};
     use golem_common::model::{Pod, RoutingTable, ShardEpoch, ShardId};
@@ -1434,10 +1435,10 @@ mod tests {
 
     /// One span per renewal pass, not one for the lifetime of the renewal loop.
     #[test]
-    async fn renew_all_records_one_closed_span_per_pass() {
+    async fn renew_all_records_one_closed_span_per_pass(tracing: &Tracing) {
         let svc = make_service(MockShardManager::new());
 
-        let recorder = crate::span_test_support::record_spans();
+        let recorder = crate::span_test_support::record_spans(tracing);
         svc.renew_all().await;
 
         recorder.assert_closed_span("quota_renewal");

@@ -73,6 +73,15 @@ export class SchemaRef {
       ? { success: true, value }
       : invalid("schema value does not conform to the expected schema")
   }
+  /** Check whether this root has an unambiguous canonical JSON representation. @since 1.6.0 @category validation */
+  jsonEligibility(): ValidationResult<void> {
+    try {
+      jsonSchema(this.graph, this.root, false)
+      return { success: true, value: undefined }
+    } catch (error) {
+      return invalid(error)
+    }
+  }
   /** Render this root as JSON Schema. @since 1.6.0 @category conversions */
   toJsonSchema(options: { readonly includeDraftMarker?: boolean } = {}): JsonValue {
     const rendered = jsonSchema(this.graph, this.root, false) as Record<string, JsonValue>

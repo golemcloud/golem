@@ -20,8 +20,6 @@ import golem.codegen.discovery.SourceDiscovery
 import golem.codegen.rpc.ToolProjectionIR._
 import golem.codegen.rpc.ToolProjectionRendering.InvocationUnderlying
 
-import scala.collection.mutable
-
 /** Generates nominal typed-underlying and middleware authoring projections. */
 object ToolMiddlewareCodegen {
 
@@ -81,12 +79,7 @@ object ToolMiddlewareCodegen {
   private final class Renderer(tool: Tool, requiredImports: List[String]) {
     private val middlewareName = s"${tool.name}Middleware"
     private val underlyingName = s"${tool.name}Underlying"
-
-    private val modelVals = mutable.LinkedHashMap.empty[String, List[String]]
-    private val errorVals = mutable.LinkedHashMap.empty[String, String]
-
-    private def mangle(input: String): String =
-      input.map(char => if (char.isLetterOrDigit) char else '_')
+    private val projectionName = s"${tool.name}CallProjection"
 
     private def paramDecl(projected: ProjectedParam): String =
       ToolProjectionRendering.paramDecl(projected, InvocationUnderlying)
@@ -117,18 +110,6 @@ object ToolMiddlewareCodegen {
       if (entries.isEmpty) "_root_.scala.Nil"
       else entries.mkString(s"_root_.scala.List(\n$indent  ", s",\n$indent  ", s"\n$indent)")
 
-    private def modelVal(leaf: FlattenedLeaf): String = {
-      val name = s"__model_${mangle(leaf.name)}"
-      modelVals.getOrElseUpdate(name, leaf.commandPath)
-      name
-    }
-
-    private def errorVal(errorType: String): String = {
-      val name = s"__errorSchema_${mangle(errorType)}"
-      errorVals.getOrElseUpdate(name, errorType)
-      name
-    }
-
     private def implementation(leaf: FlattenedLeaf): String = {
       val params       = leaf.underlyingParams
       val valueEntries = params
@@ -138,32 +119,14 @@ object ToolMiddlewareCodegen {
         .find(_.param.isStdin)
         .map(projected => s"_root_.scala.Some(${projected.param.ident})")
         .getOrElse("_root_.scala.None")
-      val model       = modelVal(leaf)
-      val errorSchema = leaf.codec.projectedErrType.map(errorVal)
-      val run         = ToolProjectionRendering.runExpression(
-        InvocationUnderlying,
-        leaf.codec,
-        "__golemRawUnderlying",
-        ToolProjectionRendering.stringList(leaf.commandPath),
-        "__golemInput",
-        stdin,
-        errorSchema,
-        Some("__descriptor")
-      )
-      val decode = ToolProjectionRendering.decodeExpression(
-        InvocationUnderlying,
-        leaf.codec,
-        "__golemResult"
-      )
-
       s"""${methodSignature(leaf, params, None, "    ")} = {
-      val __golemParams = _root_.golem.tool.ToolUnderlyingRuntime.encodeParams(${listExpr(valueEntries, "      ")})
-      val __golemInput = __golemParams.flatMap(__golemValues =>
-        _root_.golem.tool.ToolUnderlyingRuntime.buildInputFromModel($model, __golemValues)
+      val __golemParams = _root_.golem.tool.ToolCallPreparation.encodeParams(${listExpr(valueEntries, "      ")})
+      $projectionName.__start_${leaf.name}(
+        __golemBackend,
+        _root_.scala.Nil,
+        __golemParams,
+        $stdin
       )
-      _root_.golem.tool.ToolUnderlyingRuntime.complete(
-        $run
-      )(__golemResult => $decode)
     }"""
     }
 
@@ -187,28 +150,13 @@ object ToolMiddlewareCodegen {
       sb.append(s"""  val __golemToolName: _root_.scala.Predef.String = "${tool.toolName}"\n""")
       sb.append(s"""  val __golemToolType: _root_.scala.Predef.String = "${tool.fqn}"\n\n""")
       sb.append(
-        s"  private lazy val __descriptor: _root_.scala.Either[_root_.golem.tool.ToolBuildError, _root_.golem.tool.ExtendedToolType] =\n"
-      )
-      sb.append(s"    _root_.golem.runtime.macros.ToolDefinitionMacro.tryMetadata[${tool.name}]\n\n")
-      modelVals.foreach { case (name, commandPath) =>
-        sb.append(
-          s"  private lazy val $name: _root_.scala.Either[_root_.scala.Predef.String, _root_.golem.tool.CanonicalInputModel] =\n"
-        )
-        sb.append(
-          s"    _root_.golem.tool.ToolUnderlyingRuntime.staticInputModel(__descriptor, ${ToolProjectionRendering.stringList(commandPath)})\n\n"
-        )
-      }
-      errorVals.foreach { case (name, errorType) =>
-        sb.append(s"  private lazy val $name: _root_.golem.tool.ToolErrorSchema[$errorType] =\n")
-        sb.append(s"    _root_.golem.runtime.macros.ToolErrorSchemaDerivation.derive[$errorType]\n\n")
-      }
-      sb.append(
         s"  def __golemFromRaw(underlying: _root_.golem.tool.RawToolUnderlying): $underlyingName =\n"
       )
       sb.append("    new Impl(underlying)\n\n")
       sb.append(
         s"  private final class Impl(__golemRawUnderlying: _root_.golem.tool.RawToolUnderlying) extends $underlyingName {\n"
       )
+      sb.append(s"    private val __golemBackend = $projectionName.__underlyingBackend(__golemRawUnderlying)\n\n")
       sb.append(implementations.mkString("\n\n"))
       sb.append("\n  }\n")
       sb.append("}\n\n")

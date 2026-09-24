@@ -35,8 +35,8 @@ describe("registered tool guest runtime", () => {
     class Suffix extends Context.Service<Suffix, { readonly value: string }>()("test/Suffix") {}
     const output = Schema.String.pipe(
       Schema.decodeTo(Schema.String, {
-        decode: SchemaGetter.transformOrFail(Effect.succeed),
-        encode: SchemaGetter.transformOrFail((value) =>
+        decode: SchemaGetter.transformEffect(Effect.succeed),
+        encode: SchemaGetter.transformEffect((value) =>
           Effect.gen(function* () {
             const suffix = yield* Suffix
             return `${value}${suffix.value}`
