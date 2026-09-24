@@ -57,7 +57,7 @@ By now, you are having a security scheme registered with `golem` which enables a
 
 Once the security scheme is registered, enable authentication using the `auth` option on your agent's mount or on individual endpoints:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -88,6 +88,50 @@ export const SecureAgentImpl = SecureAgent.implement({
   },
 });
 ```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Effect, Schema } from "effect"
+import {
+  defineAgent,
+  Http,
+  method,
+  Principal,
+} from "@golemcloud/effect-golem"
+
+const Profile = Schema.Struct({
+  email: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
+})
+
+export const SecureAgent = defineAgent({
+  name: "SecureAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  http: Http.mount("/secure/{name}", { auth: true }),
+  methods: {
+    getProfile: method({
+      input: {},
+      success: Profile,
+      http: [Http.get("/profile")],
+    }),
+  },
+}).implement({
+  init: () => Effect.succeed({}),
+  methods: () => ({
+    getProfile: () =>
+      Effect.gen(function* () {
+        const principal = yield* Principal.Principal
+        if (principal.tag !== "oidc") {
+          return yield* Effect.dieMessage("Expected an OIDC principal")
+        }
+        return { email: principal.val.email, name: principal.val.name }
+      }),
+  }),
+})
+```
+
+`Principal.Principal` provides the current invocation's authenticated caller without adding an HTTP input parameter.
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust

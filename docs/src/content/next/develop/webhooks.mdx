@@ -2,7 +2,7 @@ import {Callout, Tabs} from "nextra/components"
 
 # Webhooks
 
-Golem **webhooks** are built on top of [Golem Promises](/next/develop/promises). They let an agent generate a temporary public URL that, when POSTed to by an external system, delivers the request body to the agent. The agent is durably suspended while waiting, consuming no resources.
+Golem **webhooks** are built on top of [Golem Promises](/next/develop/promises). They let an agent generate a temporary public URL that, when POSTed to by an external system, delivers the request body to the agent. The agent is durably suspended without consuming active compute while it waits. Each URL completes one promise; treat it as a secret, not as a recurring endpoint.
 
 Webhooks are useful for:
 
@@ -23,7 +23,7 @@ To use webhooks, your agent must:
 
 ### Creating a webhook
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         To create a webhook, call `createWebhook`. The returned object provides the public URL and can be awaited to receive the incoming payload:
 
@@ -46,6 +46,27 @@ To use webhooks, your agent must:
         ```
     </Tabs.Tab>
     <Tabs.Tab>
+        `Webhook.create` returns an Effect that allocates the webhook handle. Await `handle.await` and decode JSON through an Effect Schema:
+
+        ```typescript
+        import { Effect, Schema } from "effect"
+        import { Webhook } from "@golemcloud/effect-golem"
+
+        const MyEvent = Schema.Struct({
+          action: Schema.String,
+          resourceId: Schema.String,
+        })
+
+        const waitForCallback = Effect.gen(function* () {
+          const handle = yield* Webhook.create
+          const url = handle.url
+          // Send `url` to the external system to POST to
+          const payload = yield* handle.await
+          return yield* payload.decode(MyEvent)
+        })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
         To create a webhook, call `create_webhook`. The returned object provides the public URL and can be awaited to receive the incoming request:
 
         ```rust
@@ -59,8 +80,8 @@ To use webhooks, your agent must:
         }
 
         async fn wait_for_callback() -> MyEvent {
-            let webhook = create_webhook();
-            let url: String = webhook.url();
+            let webhook = create_webhook().expect("failed to create webhook");
+            let url: String = webhook.url().to_owned();
             // Send `url` to the external system to POST to
             let request = webhook.await;
             let data: MyEvent = request.json().unwrap();
@@ -76,6 +97,7 @@ To use webhooks, your agent must:
         import zio.blocks.schema.Schema
 
         import scala.concurrent.Future
+        import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
         final case class MyEvent(action: String, resourceId: String) derives Schema
 
@@ -84,7 +106,7 @@ To use webhooks, your agent must:
           val url: String = webhook.url
           // Send `url` to the external system to POST to
           webhook.await().map { payload =>
-            val event = payload.json[MyEvent]
+            val event = payload.json[MyEvent]()
             event
           }
         ```
@@ -93,7 +115,7 @@ To use webhooks, your agent must:
         Assuming the `golemcloud/golem_sdk/webhook` package is imported as `@webhook`, call `create` to create a webhook and `wait` to await the incoming payload:
 
         ```moonbit
-        fn wait_for_callback() -> String {
+        async fn wait_for_callback() -> String {
           let webhook = @webhook.create()
           let url = webhook.url()
           // Send `url` to the external system to POST to
@@ -110,7 +132,7 @@ To use webhooks, your agent must:
 When a webhook is created, Golem generates a URL with the following format:
 
 ```
-https://<domain>/<prefix>/<suffix>/<id>
+<scheme>://<domain>/<prefix>/<suffix>/<id>
 ```
 
 - **`<domain>`** — the domain of the HTTP API deployment
@@ -122,7 +144,7 @@ https://<domain>/<prefix>/<suffix>/<id>
 
 You can customize the webhook URL suffix using the `webhookSuffix` annotation on your agent:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         In the TypeScript SDK the suffix is passed as the `webhookSuffix` option of `http.mount(...)` on `defineAgent(...)`:
 
@@ -134,6 +156,25 @@ You can customize the webhook URL suffix using the `webhookSuffix` annotation on
           name: "WorkflowAgent",
           id: { id: z.string() },
           http: http.mount("/workflow/{id}", { webhookSuffix: "/workflow-hooks" }),
+          methods: {
+            // ...
+          },
+        })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Pass `webhookSuffix` to `Http.mount(...)`:
+
+        ```typescript
+        import { Schema } from "effect"
+        import { defineAgent, Http } from "@golemcloud/effect-golem"
+
+        export const WorkflowAgent = defineAgent({
+          name: "WorkflowAgent",
+          id: { id: Schema.String },
+          http: Http.mount("/workflow/{id}", {
+            webhookSuffix: "/workflow-hooks",
+          }),
           methods: {
             // ...
           },
@@ -162,11 +203,7 @@ You can customize the webhook URL suffix using the `webhookSuffix` annotation on
 
 The webhook URL expects a **POST** request with an arbitrary body. When the external system sends the POST request, the awaiting agent resumes and receives the payload.
 
-The payload object provides helpers to access the data in different formats:
-
-- **Raw bytes** — the unprocessed request body
-- **String** — the request body decoded as a UTF-8 string
-- **JSON** — the request body parsed as JSON into a typed value
+All SDKs expose the raw request-body bytes. Text and JSON decoding helpers vary by SDK, as shown in the examples above. Plain TypeScript's generic `json<T>()` parses and casts but does not validate `T`; use a schema validator when the payload is untrusted.
 
 ### Configuring webhook URL in golem.yaml
 
