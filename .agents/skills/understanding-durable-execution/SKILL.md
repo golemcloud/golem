@@ -217,9 +217,12 @@ would create a cycle. Local readiness does not authorize a merely prepared strea
 reconciler folds only through the committed `last_known_status.oplog_idx`. Once its topology cache
 has no dirty sessions and the producer has no active attachments, it parks on committed stream-state
 notifications instead of polling the oplog; active attachments retain the configured renewal
-deadline, and failed recovery retains periodic retry.
+deadline, and failed recovery retains periodic retry. Each reconciler uses a child of the executor
+shutdown token, so graph shutdown stops new periodic passes. Explicit owner retirement, revert, and
+deletion cancel and join the reconciler's in-flight pass; TTL cache retirement does not itself cancel
+or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
-existing-only acquisition, and reciprocal cold topologies.
+existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, and plugin changes never create an absent agent. Delete
