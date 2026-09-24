@@ -27,7 +27,7 @@ const external = (id) =>
 
 const httpFacades = [
   ["effect/unstable/http", "GolemHttp", "effect-http"],
-  ["effect/unstable/httpapi", "GolemHttpApi", "effect-httpapi"],
+  ["./src/effect-httpapi-shared.mjs", "GolemHttpApi", "effect-httpapi"],
 ].map(([specifier, namespace, name]) => ({
   input: `\0${name}`,
   output: { file: `dist/${name}.mjs`, format: "esm" },
@@ -148,7 +148,28 @@ export default defineConfig([
       sourcemap: false,
     },
     treeshake: false,
-    plugins: [resolve({ extensions: [".mjs", ".js"] }), commonjs(), terser()],
+    plugins: [
+      resolve({ extensions: [".mjs", ".js"] }),
+      commonjs(),
+      terser(),
+      {
+        name: "exclude-shared-documentation-assets",
+        generateBundle(_options, bundle) {
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type !== "chunk") continue
+            if (
+              Object.keys(chunk.modules).some((id) =>
+                /[/\\]httpapi[/\\]internal[/\\]httpApi(Scalar|Swagger)\.js$/.test(id),
+              )
+            ) {
+              this.error(
+                "Documentation UI assets must be bundled by applications, not the shared Effect runtime",
+              )
+            }
+          }
+        },
+      },
+    ],
   },
 
   // SqliteClient adapter. Externalizes `effect`, `effect-golem`, and

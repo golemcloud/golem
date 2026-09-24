@@ -8,8 +8,8 @@
  *     resolved values come from the prebuilt base WASM at runtime.
  *   - Does not depend on `golem-typegen`-generated metadata: agents
  *     defined via effect-golem's `defineAgent(...)` are self-describing.
- *   - Bundles `effect` into the user code (the base WASM also embeds its
- *     own copy via `effect-golem`'s bundle).
+ *   - Shares the embedded Effect runtime; documentation UI assets are
+ *     bundled only when the application imports them.
  *
  * Invoked by the build pipeline with these env vars set:
  *   GOLEM_APP_ROOT       — the integration-test/ directory
@@ -22,6 +22,7 @@ import nodeResolve from "@rollup/plugin-node-resolve"
 import typescript from "@rollup/plugin-typescript"
 import process from "node:process"
 import { externalPackages } from "./component-bundle-policy.mjs"
+import { existsSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
@@ -49,8 +50,18 @@ const sharedHttpRuntime = {
             .split(path.sep)
             .join("/")
             .replace(/\.js$/, "")
-        : source.replace(/^effect\//, "")
-    return /^unstable\/(http|httpapi)\/[A-Za-z_$][A-Za-z0-9_$]*$/.test(relative)
+        : source.startsWith("effect/")
+          ? source.slice("effect/".length)
+          : null
+    if (
+      relative === null ||
+      relative === "unstable/httpapi/HttpApiScalar" ||
+      relative === "unstable/httpapi/HttpApiSwagger"
+    )
+      return null
+    return /^(?:unstable\/(http|httpapi)\/)?[A-Za-z_$][A-Za-z0-9_$]*$/.test(relative) &&
+      relative !== "index" &&
+      existsSync(path.join(effectDist, `${relative}.js`))
       ? `${httpFacade}${relative}`
       : null
   },
@@ -59,11 +70,18 @@ const sharedHttpRuntime = {
     const subpath = id.slice(httpFacade.length)
     const separator = subpath.lastIndexOf("/")
     const namespace = subpath.slice(separator + 1)
-    const barrel = `effect/${subpath.slice(0, separator)}`
+    const barrel = separator === -1 ? "effect" : `effect/${subpath.slice(0, separator)}`
     const names = Object.keys(await import(pathToFileURL(path.join(effectDist, `${subpath}.js`))))
     return (
-      `import { ${namespace} as shared } from ${JSON.stringify(barrel)};\n` +
-      names.map((name) => `export const ${name} = shared.${name};`).join("\n")
+      (barrel === "effect/unstable/httpapi"
+        ? `import { GolemHttpApi } from "effect"; const shared = GolemHttpApi.${namespace};\n`
+        : `import { ${namespace} as shared } from ${JSON.stringify(barrel)};\n`) +
+      names
+        .map(
+          (name, index) =>
+            `const sharedExport${index} = /* @__PURE__ */ (() => shared.${name})(); export { sharedExport${index} as ${name} };`,
+        )
+        .join("\n")
     )
   },
 }

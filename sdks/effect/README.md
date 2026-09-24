@@ -330,7 +330,8 @@ are adopted by that request even when their streams are transformed. HEAD and 20
 start body programs; they release already-acquired endpoints and request resources. Put eager
 application resources in `Effect.acquireRelease`/`Effect.addFinalizer`, not solely in an unopened
 stream's `ensuring`. Scope finalizers receive the response's success, failure, or interruption.
-Application failures remain invocation failures; router misses and request parsing failures become
+Effect `Respondable` failures retain their HTTP responses, including HttpApi validation failures.
+Other application failures remain invocation failures; router misses and request parsing failures become
 404 and 400 responses. A late body failure must not be interpreted as successful invocation EOF.
 Raw response bodies other than `Uint8Array`, response `FormData`, and WebSocket upgrades are not
 supported by this adapter.

@@ -54,6 +54,58 @@ const emptyInput = () => schemaValueToWit(v.record([]))
 describe("real Effect HttpApi and generated provider", () => {
   beforeEach(() => __resetAgents())
 
+  it.each(['{"n":"invalid"}', '{"n":23}'])(
+    "preserves HttpApi payload validation for %s",
+    async (payload) => {
+      const api = HttpApi.make("Validation").add(
+        HttpApiGroup.make("items").add(
+          HttpApiEndpoint.post("create", "/items", {
+            payload: Schema.Struct({ n: Schema.Number }),
+            success: Schema.Number,
+          }),
+        ),
+      )
+      const handlers = HttpApiBuilder.group(api, "items", (group) =>
+        group.handle("create", ({ payload }) => Effect.succeed(payload.n)),
+      )
+      const scope = Scope.makeUnsafe()
+      try {
+        const response = await Effect.runPromise(
+          HttpRouter.toHttpEffect(
+            HttpApiBuilder.layer(api).pipe(Layer.provide(handlers), Layer.provide(Platform)),
+          ).pipe(
+            Effect.flatMap((app) =>
+              handleApplication(
+                {
+                  method: "POST",
+                  scheme: "https",
+                  authority: "example.test",
+                  path: "/catalog/items",
+                  query: undefined,
+                  headers: [
+                    { name: "content-type", value: new TextEncoder().encode("application/json") },
+                  ],
+                  body: Stream.succeed(new TextEncoder().encode(payload)),
+                },
+                app,
+                "/catalog",
+              ),
+            ),
+            Scope.provide(scope),
+          ),
+        )
+        expect(response.status).toBe(payload.includes("invalid") ? 400 : 200)
+        const body = new TextDecoder().decode(
+          await Effect.runPromise(Stream.mkUint8Array(response.body)),
+        )
+        if (response.status === 200) expect(JSON.parse(body)).toBe(23)
+        else expect(body).toBe("")
+      } finally {
+        await Effect.runPromise(Scope.close(scope, Exit.void))
+      }
+    },
+  )
+
   it.each(["complete", "drop", "encode-failure"])(
     "registered handler retains its factory scope through %s",
     async (mode) => {

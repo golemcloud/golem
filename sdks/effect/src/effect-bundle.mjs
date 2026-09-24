@@ -8,4 +8,4 @@
 export * from "effect"
 // HTTP facades and applications must use the same scope/hook registries.
 export * as GolemHttp from "effect/unstable/http"
-export * as GolemHttpApi from "effect/unstable/httpapi"
+export * as GolemHttpApi from "./effect-httpapi-shared.mjs"

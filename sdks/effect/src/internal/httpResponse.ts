@@ -4,6 +4,7 @@ import {
   HttpEffect,
   HttpServerError,
   HttpServerRequest,
+  HttpServerRespondable,
   HttpServerResponse,
 } from "effect/unstable/http"
 import {
@@ -117,14 +118,21 @@ export function handleApplication<E, R>(
     let originalHeaders: readonly HttpHeader[] | undefined
     let responseContext = context
     const app = application.pipe(
-      Effect.catch((error) => {
-        if (HttpServerError.isHttpServerError(error)) {
-          if (error.reason._tag === "RouteNotFound")
-            return Effect.succeed(HttpServerResponse.empty({ status: 404 }))
-          if (error.reason._tag === "RequestParseError")
-            return Effect.succeed(HttpServerResponse.empty({ status: 400 }))
+      Effect.catchCause((cause) => {
+        const respondable = (value: unknown) =>
+          HttpServerRespondable.isRespondable(value) ||
+          HttpServerResponse.isHttpServerResponse(value)
+        if (
+          cause.reasons.length > 0 &&
+          cause.reasons.every((reason) =>
+            reason._tag === "Fail"
+              ? respondable(reason.error)
+              : reason._tag === "Die" && respondable(reason.defect),
+          )
+        ) {
+          return Effect.map(HttpServerError.causeResponse(cause), ([response]) => response)
         }
-        return Effect.fail(error)
+        return Effect.failCause(cause)
       }),
       Effect.tap((value) =>
         Effect.sync(() => {

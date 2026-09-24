@@ -32,7 +32,6 @@ const embeddedPackages = new Set([
   "@golemcloud/effect-golem/ignite2",
   "effect",
   "effect/unstable/http",
-  "effect/unstable/httpapi",
   "agent-guest",
 ]);
 
@@ -77,7 +76,10 @@ const effectRootFacadePrefix = "\0golem-effect-root-facade:";
 const effectRedactedFacade = "\0golem-effect-redacted-facade";
 
 const stableEffectModuleName = (source, importer) => {
-  const packageSubpath = /^effect\/((?:unstable\/(?:http|httpapi)\/)?[A-Za-z_$][A-Za-z0-9_$]*)$/.exec(source);
+  const packageSubpath =
+    /^effect\/((?:unstable\/(?:http|httpapi)\/)?[A-Za-z_$][A-Za-z0-9_$]*)$/.exec(
+      source,
+    );
   if (packageSubpath) {
     const moduleName = packageSubpath[1];
     if (
@@ -94,8 +96,15 @@ const stableEffectModuleName = (source, importer) => {
   }
 
   const resolved = path.resolve(path.dirname(importer), source);
-  const relative = path.relative(effectDistDir, resolved).split(path.sep).join("/");
-  if (/^(?:unstable\/(?:http|httpapi)\/)?[A-Za-z_$][A-Za-z0-9_$]*\.js$/.test(relative)) {
+  const relative = path
+    .relative(effectDistDir, resolved)
+    .split(path.sep)
+    .join("/");
+  if (
+    /^(?:unstable\/(?:http|httpapi)\/)?[A-Za-z_$][A-Za-z0-9_$]*\.js$/.test(
+      relative,
+    )
+  ) {
     return relative.slice(0, -3);
   }
 
@@ -117,6 +126,12 @@ const sharedEffectRuntime = () => ({
   name: "golem-shared-effect-runtime",
   resolveId(source, importer) {
     const moduleName = stableEffectModuleName(source, importer);
+    if (
+      moduleName === "unstable/httpapi/HttpApiScalar" ||
+      moduleName === "unstable/httpapi/HttpApiSwagger"
+    ) {
+      return null;
+    }
     if (moduleName) {
       return {
         id: `${effectRootFacadePrefix}${moduleName}`,
@@ -161,9 +176,12 @@ const sharedEffectRuntime = () => ({
     );
     const separator = moduleName.lastIndexOf("/");
     const namespace = moduleName.slice(separator + 1);
-    const barrel = separator === -1 ? "effect" : `effect/${moduleName.slice(0, separator)}`;
+    const barrel =
+      separator === -1 ? "effect" : `effect/${moduleName.slice(0, separator)}`;
     return [
-      `import { ${namespace} as sharedModule } from ${JSON.stringify(barrel)};`,
+      barrel === "effect/unstable/httpapi"
+        ? `import { GolemHttpApi } from "effect"; const sharedModule = GolemHttpApi.${namespace};`
+        : `import { ${namespace} as sharedModule } from ${JSON.stringify(barrel)};`,
       ...validExports.map((name, index) => {
         const localName = `sharedExport${index}`;
         return `const ${localName} = /* @__PURE__ */ (() => sharedModule.${name})(); export { ${localName} as ${name} };`;

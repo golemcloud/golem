@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs"
 import { beforeEach, describe, expect, it } from "vitest"
 import { Context, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
-import { HttpEffect, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import {
+  HttpEffect,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerRespondable,
+  HttpServerResponse,
+} from "effect/unstable/http"
 import { __resetAgents, defineAgent } from "../src/Agent.js"
 import * as GolemRouter from "../src/HttpRouter.js"
 import * as Http from "../src/Http.js"
@@ -68,6 +74,19 @@ const codec = Effect.runSync(toWitCodec(Uint8ArraySchema)).codec
 
 describe("real Effect HTTP application adapter", () => {
   beforeEach(() => __resetAgents())
+
+  it.each(["fail", "die"])("preserves a Respondable %s response", async (kind) => {
+    const error = {
+      [HttpServerRespondable.symbol]: () =>
+        Effect.succeed(HttpServerResponse.text("rejected", { status: 422 })),
+    }
+    const response = await exchange(
+      Effect.succeed(kind === "fail" ? Effect.fail(error) : Effect.die(error)),
+    )
+    expect(response.status).toBe(422)
+    expect(new TextDecoder().decode(await collect(response.body))).toBe("rejected")
+    await response.close()
+  })
 
   it("envelope-extension-and-bytes: preserves the canonical request alongside its local URL", async () => {
     const { input, expect: wanted } = fixture("envelope-extension-and-bytes")
