@@ -2,6 +2,7 @@
 
 componentTemplates:
   moonbit:
+    guestLanguage: moonbit
     presets:
       debug:
         default: true
@@ -51,6 +52,7 @@ componentTemplates:
           - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
   moonbit-tool-middleware:
+    guestLanguage: moonbit
     presets:
       debug:
         default: true
@@ -100,6 +102,7 @@ componentTemplates:
           - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.tool-middleware.wasm"
   moonbit-agent-tool-middleware:
+    guestLanguage: moonbit
     presets:
       debug:
         default: true

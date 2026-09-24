@@ -3002,6 +3002,7 @@
     "ComponentLayerProperties": {
       "type": "object",
       "required": [
+        "guestLanguage",
         "componentWasm",
         "outputWasm",
         "dependencyAgents",
@@ -3018,6 +3019,7 @@
       ],
       "properties": {
         "appliedLayers": { "type": "array", "items": { "type": "string" } },
+        "guestLanguage": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageProperty" },
         "componentWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "outputWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "dependencyAgents": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
@@ -3148,6 +3150,36 @@
       "required": ["componentCustomPresets"],
       "properties": { "componentCustomPresets": { "type": "string" } },
       "additionalProperties": false
+    },
+    "ComponentLayerOptionalGuestLanguageProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/GuestLanguage" }
+          ]
+        },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerOptionalGuestLanguageTraceElem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id", "value"],
+          "properties": {
+            "type": { "const": "override" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "value": { "$ref": "#/definitions/GuestLanguage" }
+          },
+          "additionalProperties": false
+        },
+        { "$ref": "#/definitions/ComponentLayerOptionalStringSkipTraceElem" }
+      ]
     },
     "ComponentLayerOptionalStringProperty": {
       "type": "object",
@@ -3963,7 +3995,7 @@
     },
     "GuestLanguage": {
       "type": "string",
-      "enum": ["TypeScript", "Rust", "Scala", "MoonBit"]
+      "enum": ["TypeScript", "Effect", "Rust", "Scala", "MoonBit"]
     },
     "ComponentView": {
       "type": "object",

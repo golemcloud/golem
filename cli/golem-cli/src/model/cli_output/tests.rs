@@ -1084,6 +1084,11 @@ fn sample_component_layer_properties() -> crate::model::app::ComponentLayerPrope
         golem_common::model::component::ComponentName("component".to_string()),
     );
     let mut properties = crate::model::app::ComponentLayerProperties::default();
+    properties.guest_language.apply_layer(
+        &layer,
+        None,
+        Some(crate::model::language::GuestLanguage::Effect),
+    );
     properties.config.apply_layer(
         &layer,
         None,

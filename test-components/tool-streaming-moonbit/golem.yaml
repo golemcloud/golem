@@ -4,6 +4,7 @@ app: tool-streaming-moonbit
 
 componentTemplates:
   moonbit-test-component:
+    guestLanguage: moonbit
     presets:
       release:
         default: true

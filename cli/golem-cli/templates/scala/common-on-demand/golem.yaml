@@ -2,6 +2,7 @@
 
 componentTemplates:
   scala:
+    guestLanguage: scala
     presets:
       optimized:
         default: true
@@ -37,6 +38,7 @@ componentTemplates:
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
   scala-tool-middleware:
+    guestLanguage: scala
     presets:
       optimized:
         default: true
@@ -72,6 +74,7 @@ componentTemplates:
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
   scala-agent-tool-middleware:
+    guestLanguage: scala
     presets:
       optimized:
         default: true

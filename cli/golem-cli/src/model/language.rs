@@ -96,6 +96,45 @@ impl GuestLanguage {
     }
 }
 
+/// Serde support for optional guest languages in the application manifest, which uses the
+/// language ids (e.g. `ts`) rather than the display names used in structured CLI output.
+pub mod manifest_guest_language {
+    use super::GuestLanguage;
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use strum::IntoEnumIterator;
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<GuestLanguage>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(language) => serializer.serialize_str(language.id()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<GuestLanguage>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|id| {
+                GuestLanguage::iter()
+                    .find(|language| language.id() == id)
+                    .ok_or_else(|| {
+                        let ids = GuestLanguage::iter()
+                            .map(|language| language.id())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        D::Error::custom(format!(
+                            "unknown guest language `{id}`, expected one of: {ids}"
+                        ))
+                    })
+            })
+            .transpose()
+    }
+}
+
 impl fmt::Display for GuestLanguage {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())

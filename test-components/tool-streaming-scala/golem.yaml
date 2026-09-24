@@ -4,6 +4,7 @@ app: tool-streaming-scala
 
 componentTemplates:
   scala-test-component:
+    guestLanguage: scala
     presets:
       release:
         default: true

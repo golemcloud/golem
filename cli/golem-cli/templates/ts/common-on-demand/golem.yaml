@@ -2,6 +2,7 @@
 
 componentTemplates:
   ts:
+    guestLanguage: ts
     presets:
       optimized:
         default: true
@@ -49,6 +50,7 @@ componentTemplates:
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
   ts-tool-middleware:
+    guestLanguage: ts
     presets:
       optimized:
         default: true
@@ -96,6 +98,7 @@ componentTemplates:
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
   ts-agent-tool-middleware:
+    guestLanguage: ts
     presets:
       optimized:
         default: true

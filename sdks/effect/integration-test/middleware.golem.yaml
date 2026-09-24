@@ -8,6 +8,7 @@ environments:
     server: local
 componentTemplates:
   effect-middleware:
+    guestLanguage: effect
     build:
       - command: npx tsc --project "{{ componentDir }}" --noEmit
       - command: npx --no rollup -- -c "{{ appRootDir }}/rollup.config.component.mjs"

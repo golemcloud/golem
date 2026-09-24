@@ -407,7 +407,7 @@ impl SecretCommandHandler {
             let app = app_ctx.application();
             let mut languages: BTreeSet<GuestLanguage> = BTreeSet::new();
             for name in app.component_names() {
-                if let Some(lang) = app.component(name).guess_language() {
+                if let Some(lang) = app.component(name).guest_language() {
                     languages.insert(lang);
                 }
             }

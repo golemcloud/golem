@@ -20,6 +20,7 @@ environments:
 
 componentTemplates:
   moonbit-local:
+    guestLanguage: moonbit
     presets:
       debug:
         default: true
@@ -67,6 +68,7 @@ componentTemplates:
               - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
   moonbit-tool-middleware-local:
+    guestLanguage: moonbit
     presets:
       debug:
         default: true
