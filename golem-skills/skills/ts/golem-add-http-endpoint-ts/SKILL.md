@@ -89,6 +89,40 @@ Endpoint paths are relative to the mount path. To expose a method under multiple
 
 For details on how path variables, query parameters, headers, and request bodies map to method inputs, load the `golem-http-params-ts` skill.
 
+## Durable Stream Route Customization
+
+For a method with stream inputs or outputs, pass `durableStreams` in the endpoint options:
+
+```typescript
+http: http.post('/events', {
+  durableStreams: {
+    slots: [
+      { source: 'input', slot: 'input', name: 'uploads' },
+      {
+        source: 'output',
+        slot: '$result',
+        name: 'events',
+        contentType: 'application/vnd.example.events',
+      },
+    ],
+    allowExternalWrites: true,
+    allowStreamDelete: false,
+    allowInvocationDelete: false,
+    load: {
+      maxConcurrentReadersPerStream: 8,
+      maxAppendRequestsPerSecondPerStream: 25,
+    },
+  },
+}),
+```
+
+- `source` and `slot` select canonical top-level stream slots. `$result` is the only implicit result selector.
+- `name` changes the public URL and OpenAPI name; the canonical name is no longer accepted in the public URL.
+- `contentType` is allowed only for a direct byte stream (`stream<u8>`) and must be a concrete non-text, non-JSON MIME type without parameters or wildcards. JSON-shaped streams stay `application/json`; do not use `text/plain` for `stream<string>`. SSE still uses `text/event-stream` and base64 data.
+- The three `allow*` options default to `true`. Setting one to `false` removes that protocol operation and produces `405` with an exact `Allow` header.
+- The live-reader limit is 1 through 16 and applies to long-poll and SSE. The append limit must be positive and cannot be set when external writes are disabled. A route-local limit rejection is `429` with `Retry-After: 1`.
+- Limits are maintained per route and worker-service node, not as a cluster-wide quota.
+
 ## Phantom Agents
 
 Set `phantomAgent: true` on the mount to create a fresh ephemeral agent instance for each HTTP request. This enables fully parallel request processing:
