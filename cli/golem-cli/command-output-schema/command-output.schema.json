@@ -6389,14 +6389,52 @@
     },
     "HttpEndpointDetails": {
       "type": "object",
-      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions"],
+      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "durableStreams"],
       "properties": {
         "httpMethod": { "$ref": "#/definitions/HttpMethod" },
         "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "headerVars": { "type": "array", "items": { "$ref": "#/definitions/HeaderVariable" } },
         "queryVars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
-        "corsOptions": { "$ref": "#/definitions/CorsOptions" }
+        "corsOptions": { "$ref": "#/definitions/CorsOptions" },
+        "durableStreams": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteOptions" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamRouteOptions": {
+      "type": "object",
+      "required": ["slots", "allowExternalWrites", "allowStreamDelete", "allowInvocationDelete", "load"],
+      "properties": {
+        "slots": { "type": "array", "items": { "$ref": "#/definitions/DurableStreamSlotOptions" } },
+        "allowExternalWrites": { "type": ["boolean", "null"] },
+        "allowStreamDelete": { "type": ["boolean", "null"] },
+        "allowInvocationDelete": { "type": ["boolean", "null"] },
+        "load": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteLoadOptions" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamSlotOptions": {
+      "type": "object",
+      "required": ["source", "name", "contentType"],
+      "properties": {
+        "source": { "$ref": "#/definitions/DurableStreamSlotSource" },
+        "name": { "type": ["string", "null"] },
+        "contentType": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamSlotSource": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "name"], "properties": { "type": { "const": "input" }, "name": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "name"], "properties": { "type": { "const": "output" }, "name": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "DurableStreamRouteLoadOptions": {
+      "type": "object",
+      "required": ["maxConcurrentReadersPerStream", "maxAppendRequestsPerSecondPerStream"],
+      "properties": {
+        "maxConcurrentReadersPerStream": { "type": ["integer", "null"], "minimum": 0 },
+        "maxAppendRequestsPerSecondPerStream": { "type": ["integer", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     },

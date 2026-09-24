@@ -15,7 +15,10 @@
 use crate::base_model::Empty;
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::{
-    AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
+    AgentMode, AgentTypeName, CorsOptions, DurableStreamInputSlotSource,
+    DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
+    DurableStreamSlotOptions, DurableStreamSlotSource, HttpEndpointDetails, HttpMethod,
+    RegisteredAgentTypeImplementer, Snapshotting,
 };
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::model::account::AccountEmail;
@@ -120,7 +123,43 @@ fn sample_agent_type_schema() -> AgentTypeSchema {
                     ..Default::default()
                 },
             ))),
-            http_endpoint: vec![],
+            http_endpoint: vec![HttpEndpointDetails {
+                http_method: HttpMethod::Post(Empty {}),
+                path_suffix: vec![],
+                header_vars: vec![],
+                query_vars: vec![],
+                auth_details: None,
+                cors_options: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+                durable_streams: Some(DurableStreamRouteOptions {
+                    slots: vec![
+                        DurableStreamSlotOptions {
+                            source: DurableStreamSlotSource::Input(DurableStreamInputSlotSource {
+                                name: "events".to_string(),
+                            }),
+                            name: Some("messages".to_string()),
+                            content_type: None,
+                        },
+                        DurableStreamSlotOptions {
+                            source: DurableStreamSlotSource::Output(
+                                DurableStreamOutputSlotSource {
+                                    name: "$result".to_string(),
+                                },
+                            ),
+                            name: None,
+                            content_type: Some("application/vnd.golem.events".to_string()),
+                        },
+                    ],
+                    allow_external_writes: Some(false),
+                    allow_stream_delete: None,
+                    allow_invocation_delete: Some(false),
+                    load: Some(DurableStreamRouteLoadOptions {
+                        max_concurrent_readers_per_stream: Some(8),
+                        max_append_requests_per_second_per_stream: None,
+                    }),
+                }),
+            }],
             read_only: None,
         }],
         dependencies: vec![AgentDependencySchema {

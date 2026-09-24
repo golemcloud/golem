@@ -115,6 +115,31 @@ interface common {
     query-vars:   list<query-variable>,
     auth-details: option<auth-details>,
     cors-options: cors-options,
+    durable-streams: option<durable-stream-route-options>,
+  }
+
+  record durable-stream-route-options {
+    slots: list<durable-stream-slot-options>,
+    allow-external-writes: option<bool>,
+    allow-stream-delete: option<bool>,
+    allow-invocation-delete: option<bool>,
+    load: option<durable-stream-route-load-options>,
+  }
+
+  record durable-stream-slot-options {
+    source: durable-stream-slot-source,
+    name: option<string>,
+    content-type: option<string>,
+  }
+
+  variant durable-stream-slot-source {
+    input(string),
+    output(string),
+  }
+
+  record durable-stream-route-load-options {
+    max-concurrent-readers-per-stream: option<u32>,
+    max-append-requests-per-second-per-stream: option<u32>,
   }
 
   variant http-method {

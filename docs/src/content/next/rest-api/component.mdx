@@ -1564,6 +1564,25 @@ The request body is encoded as multipart/form-data containing metadata and the W
                 "allowedPatterns": [
                   "string"
                 ]
+              },
+              "durableStreams": {
+                "slots": [
+                  {
+                    "source": {
+                      "type": "input",
+                      "name": "string"
+                    },
+                    "name": "string",
+                    "contentType": "string"
+                  }
+                ],
+                "allowExternalWrites": true,
+                "allowStreamDelete": true,
+                "allowInvocationDelete": true,
+                "load": {
+                  "maxConcurrentReadersPerStream": 0,
+                  "maxAppendRequestsPerSecondPerStream": 0
+                }
               }
             }
           ],
@@ -1754,6 +1773,25 @@ The request body is encoded as multipart/form-data containing metadata and the W
                     "allowedPatterns": [
                       "string"
                     ]
+                  },
+                  "durableStreams": {
+                    "slots": [
+                      {
+                        "source": {
+                          "type": "input",
+                          "name": "string"
+                        },
+                        "name": "string",
+                        "contentType": "string"
+                      }
+                    ],
+                    "allowExternalWrites": true,
+                    "allowStreamDelete": true,
+                    "allowInvocationDelete": true,
+                    "load": {
+                      "maxConcurrentReadersPerStream": 0,
+                      "maxAppendRequestsPerSecondPerStream": 0
+                    }
                   }
                 }
               ],

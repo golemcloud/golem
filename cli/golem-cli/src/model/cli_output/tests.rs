@@ -2852,6 +2852,59 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                 .prop_map(|required| golem_common::model::agent::AgentHttpAuthDetails { required }),
         ),
         proptest::collection::vec(arb_small_string(), 0..2),
+        prop_oneof![
+            Just(None),
+            (
+                arb_small_string(),
+                arb_small_string(),
+                proptest::option::of(any::<bool>()),
+                proptest::option::of(any::<bool>()),
+                proptest::option::of(any::<bool>()),
+                proptest::option::of(1u32..=16),
+                proptest::option::of(1u32..=1000),
+            )
+                .prop_map(
+                    |(
+                        input_slot,
+                        output_slot,
+                        allow_external_writes,
+                        allow_stream_delete,
+                        allow_invocation_delete,
+                        max_concurrent_readers_per_stream,
+                        max_append_requests_per_second_per_stream,
+                    )| Some(
+                        golem_common::model::agent::DurableStreamRouteOptions {
+                            slots: vec![
+                            golem_common::model::agent::DurableStreamSlotOptions {
+                                source: golem_common::model::agent::DurableStreamSlotSource::Input(
+                                    golem_common::model::agent::DurableStreamInputSlotSource {
+                                        name: input_slot,
+                                    },
+                                ),
+                                name: Some("messages".to_string()),
+                                content_type: None,
+                            },
+                            golem_common::model::agent::DurableStreamSlotOptions {
+                                source: golem_common::model::agent::DurableStreamSlotSource::Output(
+                                    golem_common::model::agent::DurableStreamOutputSlotSource {
+                                        name: output_slot,
+                                    },
+                                ),
+                                name: None,
+                                content_type: Some("application/octet-stream".to_string()),
+                            },
+                        ],
+                            allow_external_writes,
+                            allow_stream_delete,
+                            allow_invocation_delete,
+                            load: Some(golem_common::model::agent::DurableStreamRouteLoadOptions {
+                                max_concurrent_readers_per_stream,
+                                max_append_requests_per_second_per_stream,
+                            }),
+                        }
+                    ),
+                ),
+        ],
     )
         .prop_map(
             |(
@@ -2861,6 +2914,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                 query_vars,
                 auth_details,
                 allowed_patterns,
+                durable_streams,
             )| {
                 golem_common::model::agent::HttpEndpointDetails {
                     http_method,
@@ -2869,6 +2923,7 @@ fn arb_http_endpoint_details() -> BoxedStrategy<golem_common::model::agent::Http
                     query_vars,
                     auth_details,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
+                    durable_streams,
                 }
             },
         )

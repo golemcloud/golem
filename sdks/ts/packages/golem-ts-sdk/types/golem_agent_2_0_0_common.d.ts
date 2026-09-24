@@ -64,6 +64,31 @@ declare module 'golem:agent/common@2.0.0' {
   export type CorsOptions = {
     allowedPatterns: string[];
   };
+  export type DurableStreamSlotSource =
+  {
+    tag: 'input'
+    val: string
+  } |
+  {
+    tag: 'output'
+    val: string
+  };
+  export type DurableStreamSlotOptions = {
+    source: DurableStreamSlotSource;
+    name?: string;
+    contentType?: string;
+  };
+  export type DurableStreamRouteLoadOptions = {
+    maxConcurrentReadersPerStream?: number;
+    maxAppendRequestsPerSecondPerStream?: number;
+  };
+  export type DurableStreamRouteOptions = {
+    slots: DurableStreamSlotOptions[];
+    allowExternalWrites?: boolean;
+    allowStreamDelete?: boolean;
+    allowInvocationDelete?: boolean;
+    load?: DurableStreamRouteLoadOptions;
+  };
   export type HttpMethod =
   {
     tag: 'get'
@@ -143,6 +168,7 @@ declare module 'golem:agent/common@2.0.0' {
     queryVars: QueryVariable[];
     authDetails?: AuthDetails;
     corsOptions: CorsOptions;
+    durableStreams?: DurableStreamRouteOptions;
   };
   export type AgentMethod = {
     name: string;
