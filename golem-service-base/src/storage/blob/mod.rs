@@ -454,8 +454,16 @@ pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {
 ///
 /// Building the full string before converting it to a `PathBuf` also prevents an absolute-looking
 /// child name from replacing its parent on Windows.
+pub(crate) fn join_blob_key(parent: &str, child: &str) -> String {
+    if parent.is_empty() || parent.ends_with('/') {
+        format!("{parent}{child}")
+    } else {
+        format!("{parent}/{child}")
+    }
+}
+
 pub fn join_blob_path(parent: &str, child: &str) -> PathBuf {
-    PathBuf::from(format!("{parent}/{child}"))
+    PathBuf::from(join_blob_key(parent, child))
 }
 
 pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, Error> {
@@ -485,6 +493,11 @@ mod tests {
         assert_eq!(
             join_blob_path("photos", "animals/cat.png").as_os_str(),
             "photos/animals/cat.png"
+        );
+        assert_eq!(join_blob_path("", "cat.png").as_os_str(), "cat.png");
+        assert_eq!(
+            join_blob_path("photos/", "cat.png").as_os_str(),
+            "photos/cat.png"
         );
     }
 

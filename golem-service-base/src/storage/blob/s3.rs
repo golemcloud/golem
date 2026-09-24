@@ -16,7 +16,7 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_path_is_root,
-    blob_path_to_string, validate_relative_blob_path,
+    blob_path_to_string, join_blob_key, validate_relative_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -149,15 +149,16 @@ impl S3BlobStorage {
         if path.is_empty() {
             Ok(namespace_root)
         } else {
-            Ok(format!("{namespace_root}/{path}"))
+            Ok(join_blob_key(&namespace_root, &path))
         }
     }
 
     fn child_key(parent: &str, child: &str) -> String {
-        format!("{}/{child}", parent.trim_end_matches('/'))
+        join_blob_key(parent, child)
     }
 
     fn listed_path(namespace_root: &str, directory_key: &str, object_key: &str) -> Option<PathBuf> {
+        let directory_key = directory_key.trim_end_matches('/');
         let is_dir_marker = object_key.ends_with("/__dir_marker");
         let parent = object_key.rsplit_once('/').map(|(parent, _)| parent);
         let is_nested = parent != Some(directory_key);
@@ -789,12 +790,11 @@ impl BlobStorage for S3BlobStorage {
             validate_relative_blob_path(path)?;
         }
         let bucket = self.bucket_of(&namespace);
-        let prefix = self.prefix_of(&namespace);
-
+        let namespace_root = self.prefix_of(&namespace);
         let to_delete = paths
             .iter()
             .map(|path| {
-                let key = format!("{prefix}/{}", blob_path_to_string(path)?);
+                let key = self.key_of(&namespace, path)?;
                 ObjectIdentifier::builder()
                     .key(key)
                     .build()
@@ -805,7 +805,7 @@ impl BlobStorage for S3BlobStorage {
         with_retries_customized(
             target_label,
             op_label,
-            Some(format!("{bucket} - {prefix:?}")),
+            Some(format!("{bucket} - {namespace_root:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, to_delete),
             |(client, bucket, to_delete)| {
@@ -1364,6 +1364,15 @@ mod tests {
             key,
             r"root/prefix/4c8c5ff4-2a42-4e81-ac48-e63005f609fd/photos/animals\cat.png"
         );
+        assert_eq!(
+            storage
+                .key_of(
+                    &namespace,
+                    &crate::storage::blob::join_blob_path("photos", "cat.png")
+                )
+                .unwrap(),
+            "root/prefix/4c8c5ff4-2a42-4e81-ac48-e63005f609fd/photos/cat.png"
+        );
 
         let namespace_root = storage.prefix_of(&namespace);
         let directory_key = storage.key_of(&namespace, Path::new("photos")).unwrap();
@@ -1379,6 +1388,16 @@ mod tests {
         );
 
         let trailing_slash_key = storage.key_of(&namespace, Path::new("photos/")).unwrap();
+        assert_eq!(
+            S3BlobStorage::listed_path(
+                &namespace_root,
+                &trailing_slash_key,
+                &format!("{directory_key}/cat.png")
+            )
+            .unwrap()
+            .as_os_str(),
+            "photos/cat.png"
+        );
         assert_eq!(
             S3BlobStorage::child_key(&trailing_slash_key, "__dir_marker"),
             format!("{directory_key}/__dir_marker")

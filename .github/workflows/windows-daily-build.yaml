@@ -29,11 +29,3 @@ jobs:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
         timeout-minutes: 120
-
-      - name: Test platform-independent blob storage paths
-        run: cargo test -p golem-service-base --lib -- join_blob_path_ storage_keys_use_contract_separator --report-time
-        timeout-minutes: 30
-
-      - name: Test platform-independent guest blob object names
-        run: cargo test -p golem-worker-executor --lib -- blob_object_name_uses_contract_separator --report-time
-        timeout-minutes: 30

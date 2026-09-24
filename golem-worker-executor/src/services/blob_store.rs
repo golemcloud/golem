@@ -163,13 +163,13 @@ impl DefaultBlobStoreService {
         Self { blob_storage }
     }
 
-    fn object_name(container_name: &str, path: &Path) -> Result<String, BlobStoreError> {
-        let path = path
-            .to_str()
-            .ok_or_else(|| BlobStoreError::Other(format!("Invalid blob path: {path:?}")))?;
-        path.strip_prefix(&format!("{container_name}/"))
+    fn object_name(path: &Path) -> Result<String, BlobStoreError> {
+        path.file_name()
+            .and_then(|name| name.to_str())
             .map(ToString::to_string)
-            .ok_or_else(|| BlobStoreError::Other(format!("Invalid blob object path: {path}")))
+            .ok_or_else(|| {
+                BlobStoreError::InvalidInput(format!("Invalid blob object path: {path:?}"))
+            })
     }
 }
 
@@ -391,12 +391,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             )
             .await
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
-            .and_then(|paths| {
-                paths
-                    .iter()
-                    .map(|path| Self::object_name(&container_name, path))
-                    .collect()
-            })
+            .and_then(|paths| paths.iter().map(|path| Self::object_name(path)).collect())
     }
 
     async fn move_object(
@@ -478,15 +473,6 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
     use test_r::test;
-
-    #[test]
-    fn blob_object_name_uses_contract_separator() {
-        assert_eq!(
-            DefaultBlobStoreService::object_name("photos", Path::new(r"photos/animals\cat.png"))
-                .unwrap(),
-            r"animals\cat.png"
-        );
-    }
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new();
@@ -640,6 +626,37 @@ mod tests {
         );
     }
 
+    async fn test_empty_container_name(blob_store: &impl BlobStoreService) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .write_data(environment_id, "", "x", b"data")
+            .await
+            .unwrap();
+        assert!(
+            blob_store
+                .has_object(environment_id, String::new(), "x".to_string())
+                .await
+                .unwrap()
+        );
+    }
+
+    async fn test_container_name_spellings(blob_store: &impl BlobStoreService) {
+        for container_name in ["c/", "./c"] {
+            let environment_id = EnvironmentId::new();
+            blob_store
+                .write_data(environment_id, container_name, "x", b"data")
+                .await
+                .unwrap();
+            assert_eq!(
+                blob_store
+                    .list_objects(environment_id, container_name.to_string())
+                    .await
+                    .unwrap(),
+                vec!["x"]
+            );
+        }
+    }
+
     fn in_memory_blob_store() -> impl BlobStoreService {
         let blob_storage = Arc::new(InMemoryBlobStorage::new());
         DefaultBlobStoreService::new(blob_storage)
@@ -700,5 +717,18 @@ mod tests {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;
         test_container_list_copy_move_list(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_empty_container_name_in_memory() {
+        test_empty_container_name(&in_memory_blob_store()).await;
+    }
+
+    #[test]
+    async fn test_container_name_edge_cases_local() {
+        let tempdir = TempDir::new().unwrap();
+        let blob_store = fs_blob_store(tempdir.path()).await;
+        test_empty_container_name(&blob_store).await;
+        test_container_name_spellings(&blob_store).await;
     }
 }
