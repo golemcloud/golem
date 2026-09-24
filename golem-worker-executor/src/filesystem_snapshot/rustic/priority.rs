@@ -35,7 +35,7 @@ pub(super) struct LowPriority {
     pub(super) lower: fn() -> std::io::Result<()>,
     /// Builds the rayon pool of the work, with the name and the thread count.
     pub(super) build_pool:
-        fn(&str, Option<NonZeroUsize>) -> Result<ThreadPool, ThreadPoolBuildError>,
+        fn(&'static str, Option<NonZeroUsize>) -> Result<ThreadPool, ThreadPoolBuildError>,
 }
 
 impl LowPriority {
@@ -53,7 +53,7 @@ impl LowPriority {
     /// Linux the work runs as it is.
     pub(super) fn run<T: Send + 'static>(
         self,
-        name: &str,
+        name: &'static str,
         work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     ) -> anyhow::Result<T> {
         if cfg!(target_os = "linux") {
@@ -67,12 +67,11 @@ impl LowPriority {
     /// of a step gives a warning, and the work runs without that step.
     fn on_own_thread<T: Send + 'static>(
         self,
-        name: &str,
+        name: &'static str,
         work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     ) -> anyhow::Result<T> {
         // The work waits in a slot, so the calling thread can still run it when no thread starts.
         let slot = Arc::new(Mutex::new(Some(work)));
-        let pool_name = name.to_string();
         let spawned = std::thread::Builder::new().name(name.to_string()).spawn({
             let slot = slot.clone();
             move || {
@@ -82,7 +81,7 @@ impl LowPriority {
                         "Failed to lower the CPU priority of filesystem snapshot work, so it runs at the normal priority"
                     );
                 }
-                match (self.build_pool)(&pool_name, self.threads) {
+                match (self.build_pool)(name, self.threads) {
                     Ok(pool) => pool.install(|| run_taken(&slot)),
                     Err(error) => {
                         warn!(
@@ -120,10 +119,9 @@ fn run_taken<T, W: FnOnce() -> anyhow::Result<T>>(slot: &Mutex<Option<W>>) -> an
 
 /// Builds a rayon pool whose threads get the nice value of the calling thread.
 fn build_pool(
-    name: &str,
+    name: &'static str,
     threads: Option<NonZeroUsize>,
 ) -> Result<ThreadPool, ThreadPoolBuildError> {
-    let name = name.to_string();
     ThreadPoolBuilder::new()
         .num_threads(threads.map_or(0, NonZeroUsize::get))
         .thread_name(move |index| format!("{name}-{index}"))
@@ -153,8 +151,10 @@ fn lower_own_priority() -> std::io::Result<()> {
 /// Gives the nice value of the calling thread.
 #[cfg(all(test, target_os = "linux"))]
 pub(super) fn own_nice() -> i32 {
-    // SAFETY: `gettid` has no preconditions, and `getpriority` only reads its arguments.
-    unsafe { libc::getpriority(libc::PRIO_PROCESS, libc::gettid() as libc::id_t) }
+    // SAFETY: `gettid` has no preconditions.
+    let thread = libc::id_t::try_from(unsafe { libc::gettid() }).unwrap();
+    // SAFETY: `getpriority` only reads its arguments.
+    unsafe { libc::getpriority(libc::PRIO_PROCESS, thread) }
 }
 
 #[cfg(all(test, target_os = "linux"))]
