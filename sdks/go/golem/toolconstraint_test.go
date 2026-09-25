@@ -215,3 +215,17 @@ func TestFormatterDeclarationErrors(t *testing.T) {
 		mustDefErr(t, d, "declares formatters but returns no result")
 	})
 }
+
+// A result without declared formatters still names a formatter it declares:
+// the host rejects a default that resolves to none.
+func TestAResultWithoutFormattersGetsTheImplicitOne(t *testing.T) {
+	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) {
+		def := defineToolInto(r, d, "fmt3", ToolSpec{Version: "1.0.0"})
+		cmd := declareCommand[ExportArgs, string](r, d, def, nil, "", ExportArgs{}, nil)
+		handleCommandInto(r, d, cmd, func(*ToolContext, ExportArgs) string { return "" })
+	})
+	res := tool.Commands.Nodes[0].Body.Some().Result.Some()
+	if res.DefaultFormatter != "default" || len(res.Formatters) != 1 || res.Formatters[0].Name != "default" {
+		t.Errorf("formatters %+v, default %q", res.Formatters, res.DefaultFormatter)
+	}
+}

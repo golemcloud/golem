@@ -804,6 +804,12 @@ func panicMessage(r any) string {
 }
 
 func (d *definitions) buildFormatters(ce *commandEntry) []toolCommon.Formatter {
+	if len(ce.opts.result.formatters) == 0 {
+		// A result always renders somehow, and the WIT requires the default to
+		// name a declared formatter, so an undeclared rendering is published as
+		// one formatter of that name — as the other SDKs do.
+		return []toolCommon.Formatter{{Name: implicitFormatter, Doc: docOf("", "")}}
+	}
 	out := make([]toolCommon.Formatter, 0, len(ce.opts.result.formatters))
 	seen := map[string]bool{}
 	for _, f := range ce.opts.result.formatters {
@@ -821,6 +827,9 @@ func (d *definitions) buildFormatters(ce *commandEntry) []toolCommon.Formatter {
 	return out
 }
 
+// implicitFormatter names the formatter of a result that declares none.
+const implicitFormatter = "default"
+
 // defaultFormatter resolves the declared default, which the WIT requires to name
 // one of the declared formatters.
 func (d *definitions) defaultFormatter(ce *commandEntry) string {
@@ -828,7 +837,7 @@ func (d *definitions) defaultFormatter(ce *commandEntry) string {
 	chosen := ce.opts.result.defaultFormatter
 	if chosen == "" {
 		if len(declared) == 0 {
-			return ""
+			return implicitFormatter
 		}
 		return declared[0].Name
 	}
