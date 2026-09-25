@@ -247,6 +247,35 @@ describe('SchemaRef JSON Schema', () => {
   });
 
   it('renders declared bounds for every narrow integer and float family', () => {
+    for (const type of [
+      t.s8({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
+      t.s16({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
+      t.s32({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
+      t.u8({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
+      t.u16({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
+      t.u32({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
+    ]) {
+      expect(schema(type).toJsonSchema()).toMatchObject({
+        minimum: type.body.tag.startsWith('s') ? -12 : 2,
+        maximum: 12,
+      });
+    }
+
+    for (const type of [
+      t.f32({
+        min: { tag: 'float-bits', val: 0xbff0000000000000n },
+        max: { tag: 'float-bits', val: 0x3fe0000000000000n },
+      }),
+      t.f64({
+        min: { tag: 'float-bits', val: 0xbff0000000000000n },
+        max: { tag: 'float-bits', val: 0x3fe0000000000000n },
+      }),
+    ]) {
+      expect(schema(type).toJsonSchema()).toMatchObject({ minimum: -1, maximum: 0.5 });
+    }
+  });
+
+  it('clamps out-of-domain bounds to primitive ranges', () => {
     for (const [type, minimum, maximum] of [
       [
         t.s8({
@@ -288,10 +317,7 @@ describe('SchemaRef JSON Schema', () => {
         2 ** 32 - 1,
       ],
     ] as const) {
-      expect(schema(type).toJsonSchema()).toMatchObject({
-        minimum,
-        maximum,
-      });
+      expect(schema(type).toJsonSchema()).toMatchObject({ minimum, maximum });
     }
 
     expect(
@@ -302,15 +328,6 @@ describe('SchemaRef JSON Schema', () => {
         }),
       ).toJsonSchema(),
     ).toMatchObject({ minimum: -3.4028234663852886e38, maximum: 3.4028234663852886e38 });
-
-    expect(
-      schema(
-        t.f64({
-          min: { tag: 'float-bits', val: 0xbff0000000000000n },
-          max: { tag: 'float-bits', val: 0x3fe0000000000000n },
-        }),
-      ).toJsonSchema(),
-    ).toMatchObject({ minimum: -1, maximum: 0.5 });
   });
 
   it('renders enforceable rich-value allowlists and canonical base64url bytes', () => {

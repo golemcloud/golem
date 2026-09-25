@@ -23,19 +23,67 @@ fn corpus_string(value : Json) -> String raise {
 }
 
 ///|
-fn corpus_count(value : Json) -> Int raise {
+fn conformance_object(
+  value : Json,
+  id : String,
+  context : String,
+) -> Map[String, Json] raise {
   match value {
-    Number(value, ..) => value.to_int()
-    _ => fail("expected conformance JSON number")
+    Object(fields) => fields
+    _ => fail(id + ": expected " + context + " object")
   }
 }
 
 ///|
-fn corpus_bool(value : Json) -> Bool raise {
+fn conformance_array(
+  value : Json,
+  id : String,
+  context : String,
+) -> Array[Json] raise {
+  match value {
+    Array(values) => values
+    _ => fail(id + ": expected " + context + " array")
+  }
+}
+
+///|
+fn conformance_string(
+  value : Json,
+  id : String,
+  context : String,
+) -> String raise {
+  match value {
+    String(value) => value
+    _ => fail(id + ": expected " + context + " string")
+  }
+}
+
+///|
+fn conformance_count(value : Json, id : String, context : String) -> Int raise {
+  match value {
+    Number(value, ..) => value.to_int()
+    _ => fail(id + ": expected " + context + " number")
+  }
+}
+
+///|
+fn conformance_bool(value : Json, id : String, context : String) -> Bool raise {
   match value {
     True => true
     False => false
-    _ => fail("expected conformance JSON boolean")
+    _ => fail(id + ": expected " + context + " boolean")
+  }
+}
+
+///|
+fn conformance_field(
+  fields : Map[String, Json],
+  name : String,
+  id : String,
+) -> Json raise {
+  match fields.get(name) {
+    Some(value) => value
+    None => fail(id + ": missing conformance JSON field " + name)
   }
 }
 
@@ -181,15 +229,40 @@ fn conformance_at_pointer(
 ) -> Json raise {
   match pointer {
     "" => value
-    "/required" => corpus_object(value).get("required").unwrap()
+    "/required" =>
+      conformance_field(
+        conformance_object(value, id, "rendered schema"),
+        "required",
+        id,
+      )
     "/properties/nanoseconds" =>
-      corpus_object(corpus_object(value).get("properties").unwrap())
-      .get("nanoseconds")
-      .unwrap()
+      conformance_field(
+        conformance_object(
+          conformance_field(
+            conformance_object(value, id, "rendered schema"),
+            "properties",
+            id,
+          ),
+          id,
+          "rendered schema properties",
+        ),
+        "nanoseconds",
+        id,
+      )
     "/properties/mantissa" =>
-      corpus_object(corpus_object(value).get("properties").unwrap())
-      .get("mantissa")
-      .unwrap()
+      conformance_field(
+        conformance_object(
+          conformance_field(
+            conformance_object(value, id, "rendered schema"),
+            "properties",
+            id,
+          ),
+          id,
+          "rendered schema properties",
+        ),
+        "mantissa",
+        id,
+      )
     other => fail(id + ": unsupported conformance JSON pointer " + other)
   }
 }
@@ -202,7 +275,7 @@ fn assert_conformance_subset(
 ) -> Unit raise {
   match expected {
     Object(expected_fields) => {
-      let actual_fields = corpus_object(actual)
+      let actual_fields = conformance_object(actual, id, "rendered schema")
       for entry in expected_fields {
         let (name, expected_value) = entry
         let actual_value = match actual_fields.get(name) {
@@ -237,21 +310,27 @@ fn assert_conformance_semantic(
         @model.SchemaTypeBody::Future(None),
         @model.SchemaTypeBody::Stream(None),
       ]
-      let expected_fields = corpus_object(expected)
+      let expected_fields = conformance_object(
+        expected, id, "expected semantic result",
+      )
       guard types.length() ==
-        corpus_count(expected_fields.get("count").unwrap()) else {
+        conformance_count(
+          conformance_field(expected_fields, "count", id),
+          id,
+          "unsupported-leaf count",
+        ) else {
         fail(id + ": unsupported-leaf count differs")
       }
       for body in types {
         assert_conformance_subset(
           test_schema(body).to_json_schema(include_draft_marker=false),
-          expected_fields.get("schema").unwrap(),
+          conformance_field(expected_fields, "schema", id),
           id,
         )
       }
     }
     "all-kinds" => {
-      let corpus_fields = corpus_object(corpus)
+      let corpus_fields = conformance_object(corpus, id, "conformance corpus")
       let supported = [
         "ref", "bool", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32",
         "f64", "char", "string", "record", "variant", "enum", "flags", "tuple", "list",
@@ -259,21 +338,29 @@ fn assert_conformance_semantic(
         "datetime", "duration", "quantity", "union", "secret", "quota-token", "permission-card",
         "future", "stream",
       ]
-      let expected_names = corpus_array(
-        corpus_object(expected).get("names").unwrap(),
-      ).map(corpus_string)
+      let expected_names = conformance_array(
+        conformance_field(
+          conformance_object(expected, id, "expected semantic result"),
+          "names",
+          id,
+        ),
+        id,
+        "expected schema names",
+      ).map(value => conformance_string(value, id, "schema name"))
       guard supported == expected_names else {
         fail(id + ": supported schema kinds differ")
       }
-      guard corpus_array(corpus_fields.get("schemaKinds").unwrap()).map(
-          corpus_string,
-        ) ==
+      guard conformance_array(
+          conformance_field(corpus_fields, "schemaKinds", id),
+          id,
+          "declared schema kinds",
+        ).map(value => conformance_string(value, id, "schema kind")) ==
         expected_names else {
         fail(id + ": declared schema kinds differ")
       }
     }
     "all-restrictions" => {
-      let corpus_fields = corpus_object(corpus)
+      let corpus_fields = conformance_object(corpus, id, "conformance corpus")
       let supported = [
         "numeric-minimum", "numeric-maximum", "numeric-unit", "text-languages", "text-min-length",
         "text-max-length", "text-regex", "binary-mime-types", "binary-min-bytes",
@@ -281,21 +368,31 @@ fn assert_conformance_semantic(
         "url-schemes", "url-hosts", "quantity-base-unit", "quantity-suffixes", "quantity-minimum",
         "quantity-maximum", "union-prefix", "union-suffix", "union-regex", "union-field",
       ]
-      let expected_names = corpus_array(
-        corpus_object(expected).get("names").unwrap(),
-      ).map(corpus_string)
+      let expected_names = conformance_array(
+        conformance_field(
+          conformance_object(expected, id, "expected semantic result"),
+          "names",
+          id,
+        ),
+        id,
+        "expected restriction names",
+      ).map(value => conformance_string(value, id, "restriction name"))
       guard supported == expected_names else {
         fail(id + ": supported restriction kinds differ")
       }
-      guard corpus_array(corpus_fields.get("restrictionKinds").unwrap()).map(
-          corpus_string,
-        ) ==
+      guard conformance_array(
+          conformance_field(corpus_fields, "restrictionKinds", id),
+          id,
+          "declared restriction kinds",
+        ).map(value => conformance_string(value, id, "restriction kind")) ==
         expected_names else {
         fail(id + ": declared restriction kinds differ")
       }
     }
     "graph" => {
-      let expected_fields = corpus_object(expected)
+      let expected_fields = conformance_object(
+        expected, id, "expected semantic result",
+      )
       let referenced = conformance_fixture("optional-record", id)
       let inline = test_schema(
         Record([
@@ -312,11 +409,20 @@ fn assert_conformance_semantic(
       let valid = @model.validate_graph(referenced.graph()).length() == 0
       let equivalent = referenced.pack_json(Json::object({})) ==
         inline.pack_json(Json::object({}))
-      guard valid == corpus_bool(expected_fields.get("valid").unwrap()) else {
+      guard valid ==
+        conformance_bool(
+          conformance_field(expected_fields, "valid", id),
+          id,
+          "graph validity",
+        ) else {
         fail(id + ": graph validity differs")
       }
       guard equivalent ==
-        corpus_bool(expected_fields.get("equivalent").unwrap()) else {
+        conformance_bool(
+          conformance_field(expected_fields, "equivalent", id),
+          id,
+          "graph equivalence",
+        ) else {
         fail(id + ": graph equivalence differs")
       }
     }
@@ -341,7 +447,7 @@ fn conformance_reject_kind(
       try schema.validate_value(value) catch {
         _ => "constraint-violation"
       } noraise {
-        _ => fail("conformance case was accepted: " + id)
+        _ => fail(id + ": conformance case was accepted")
       }
   }
 }
@@ -353,32 +459,46 @@ fn run_conformance_operation(operation : String) -> Unit raise {
   for test_case_json in corpus_array(root.get("cases").unwrap()) {
     let test_case = corpus_object(test_case_json)
     let id = corpus_string(test_case.get("id").unwrap())
-    if corpus_string(test_case.get("operation").unwrap()) == operation {
-      let name = corpus_string(test_case.get("fixture").unwrap())
+    if conformance_string(
+        conformance_field(test_case, "operation", id),
+        id,
+        "operation",
+      ) ==
+      operation {
+      let name = conformance_string(
+        conformance_field(test_case, "fixture", id),
+        id,
+        "fixture",
+      )
       match operation {
         "roundtrip" => {
           let schema = conformance_fixture(name, id)
           let actual = schema.unpack_json(
-            schema.pack_json(test_case.get("input").unwrap()),
+            schema.pack_json(conformance_field(test_case, "input", id)),
           ) catch {
             error => fail(id + ": " + repr(error))
           }
-          guard actual == test_case.get("expected").unwrap() else {
+          guard actual == conformance_field(test_case, "expected", id) else {
             fail(id + ": roundtrip output differs")
           }
         }
         "reject" => {
           let schema = conformance_fixture(name, id)
           let inputs = match test_case.get("inputs") {
-            Some(values) => corpus_array(values)
-            None => [test_case.get("input").unwrap()]
+            Some(values) => conformance_array(values, id, "rejection inputs")
+            None => [conformance_field(test_case, "input", id)]
           }
           for input in inputs {
             let actual = conformance_reject_kind(schema, input, id)
-            let expected = corpus_string(
-              corpus_object(test_case.get("expected").unwrap())
-              .get("kind")
-              .unwrap(),
+            let expected_fields = conformance_object(
+              conformance_field(test_case, "expected", id),
+              id,
+              "expected rejection",
+            )
+            let expected = conformance_string(
+              conformance_field(expected_fields, "kind", id),
+              id,
+              "rejection kind",
             )
             guard actual == expected else {
               fail(id + ": rejection category differs")
@@ -391,20 +511,24 @@ fn run_conformance_operation(operation : String) -> Unit raise {
               conformance_fixture(name, id).to_json_schema(
                 include_draft_marker=false,
               ),
-              corpus_string(test_case.get("path").unwrap()),
+              conformance_string(
+                conformance_field(test_case, "path", id),
+                id,
+                "JSON pointer",
+              ),
               id,
             ),
-            test_case.get("expected").unwrap(),
+            conformance_field(test_case, "expected", id),
             id,
           )
         "semantic" =>
           assert_conformance_semantic(
             name,
-            test_case.get("expected").unwrap(),
+            conformance_field(test_case, "expected", id),
             corpus,
             id,
           )
-        other => fail("unknown requested conformance operation " + other)
+        other => fail(id + ": unknown requested conformance operation " + other)
       }
     }
   }
@@ -442,7 +566,7 @@ test "reflection conformance corpus integrity" {
     }
     declared_seen.push(id)
     guard executed.any(value => value == id) else {
-      fail("undeclared conformance case ID " + id)
+      fail("declared conformance case ID has no case: " + id)
     }
   }
 }

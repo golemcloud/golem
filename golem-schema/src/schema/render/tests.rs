@@ -364,6 +364,94 @@ fn numeric_json_schemas_apply_every_narrow_and_float_bound() {
     };
     let cases = [
         SchemaType::S8 {
+            restrictions: signed(-12, 12),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::S16 {
+            restrictions: signed(-1_200, 1_200),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::S32 {
+            restrictions: signed(-120_000, 120_000),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::U8 {
+            restrictions: unsigned(12, 120),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::U16 {
+            restrictions: unsigned(1_200, 12_000),
+            metadata: MetadataEnvelope::default(),
+        },
+        SchemaType::U32 {
+            restrictions: unsigned(120_000, 1_200_000),
+            metadata: MetadataEnvelope::default(),
+        },
+    ];
+    let expected = [
+        (-12, 12),
+        (-1_200, 1_200),
+        (-120_000, 120_000),
+        (12, 120),
+        (1_200, 12_000),
+        (120_000, 1_200_000),
+    ];
+    for (ty, (min, max)) in cases.into_iter().zip(expected) {
+        let schema = to_json_schema(&SchemaGraph::anonymous(ty.clone()), &ty);
+        assert_eq!(schema["minimum"], min);
+        assert_eq!(schema["maximum"], max);
+    }
+
+    for (ty, min, max) in [
+        (
+            SchemaType::F32 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::float(-1.5).unwrap()),
+                    max: Some(NumericBound::float(2.5).unwrap()),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+            -1.5,
+            2.5,
+        ),
+        (
+            SchemaType::F64 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::float(-3.5).unwrap()),
+                    max: Some(NumericBound::float(4.5).unwrap()),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+            -3.5,
+            4.5,
+        ),
+    ] {
+        let schema = to_json_schema(&SchemaGraph::anonymous(ty.clone()), &ty);
+        assert_eq!(schema["minimum"], min);
+        assert_eq!(schema["maximum"], max);
+    }
+}
+
+#[test]
+fn numeric_json_schemas_clamp_out_of_domain_bounds_to_primitive_ranges() {
+    let signed = |min, max| {
+        Some(NumericRestrictions {
+            min: Some(NumericBound::Signed(min)),
+            max: Some(NumericBound::Signed(max)),
+            unit: None,
+        })
+    };
+    let unsigned = |min, max| {
+        Some(NumericRestrictions {
+            min: Some(NumericBound::Unsigned(min)),
+            max: Some(NumericBound::Unsigned(max)),
+            unit: None,
+        })
+    };
+    let cases = [
+        SchemaType::S8 {
             restrictions: signed(i64::MIN, i64::MAX),
             metadata: MetadataEnvelope::default(),
         },
@@ -402,36 +490,17 @@ fn numeric_json_schemas_apply_every_narrow_and_float_bound() {
         assert_eq!(schema["maximum"], max);
     }
 
-    for (ty, min, max) in [
-        (
-            SchemaType::F32 {
-                restrictions: Some(NumericRestrictions {
-                    min: Some(NumericBound::float(-f64::MAX).unwrap()),
-                    max: Some(NumericBound::float(f64::MAX).unwrap()),
-                    unit: None,
-                }),
-                metadata: MetadataEnvelope::default(),
-            },
-            -(f32::MAX as f64),
-            f32::MAX as f64,
-        ),
-        (
-            SchemaType::F64 {
-                restrictions: Some(NumericRestrictions {
-                    min: Some(NumericBound::float(-3.5).unwrap()),
-                    max: Some(NumericBound::float(4.5).unwrap()),
-                    unit: None,
-                }),
-                metadata: MetadataEnvelope::default(),
-            },
-            -3.5,
-            4.5,
-        ),
-    ] {
-        let schema = to_json_schema(&SchemaGraph::anonymous(ty.clone()), &ty);
-        assert_eq!(schema["minimum"], min);
-        assert_eq!(schema["maximum"], max);
-    }
+    let ty = SchemaType::F32 {
+        restrictions: Some(NumericRestrictions {
+            min: Some(NumericBound::float(-f64::MAX).unwrap()),
+            max: Some(NumericBound::float(f64::MAX).unwrap()),
+            unit: None,
+        }),
+        metadata: MetadataEnvelope::default(),
+    };
+    let schema = to_json_schema(&SchemaGraph::anonymous(ty.clone()), &ty);
+    assert_eq!(schema["minimum"], -(f32::MAX as f64));
+    assert_eq!(schema["maximum"], f32::MAX as f64);
 }
 
 #[test]
@@ -627,7 +696,10 @@ fn assert_semantic_conformance(fixture: &str, expected: &Value, id: &str) {
             ];
             assert_eq!(
                 types.len(),
-                expected["count"].as_u64().unwrap() as usize,
+                expected["count"]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("{id}: missing unsupported-leaves count"))
+                    as usize,
                 "{id}"
             );
             for ty in types {

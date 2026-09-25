@@ -1890,7 +1890,10 @@ mod tests {
                 ];
                 assert_eq!(
                     types.len(),
-                    expected["count"].as_u64().unwrap() as usize,
+                    expected["count"]
+                        .as_u64()
+                        .unwrap_or_else(|| panic!("{id}: missing unsupported-leaves count"))
+                        as usize,
                     "{id}"
                 );
                 for ty in types {
