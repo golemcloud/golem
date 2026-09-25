@@ -2258,7 +2258,7 @@ fn reflection_corpus_drives_generated_runtime_wire_regressions() {
         .join(", ");
     let config_expected = case("config/canonical-entry")["expected"].to_string();
     let request_expected = format!(
-        "{{\"appName\":\"app\",\"envName\":\"env\",\"agentTypeName\":\"ConfigAgent\",\"parameters\":{{\"kind\":\"tuple\",\"value\":{{\"elements\":[]}}}},\"config\":[{config_expected}]}}"
+        "{{\"appName\":\"app\",\"envName\":\"env\",\"agentTypeName\":\"ConfigAgent\",\"parameters\":{{\"kind\":\"tuple\",\"value\":{{\"elements\":[]}}}},\"config\":[{config_expected},{{\"path\":[\"optional\"],\"value\":\"west\"}}]}}"
     );
 
     let mut agent_type = agent(
@@ -2298,13 +2298,54 @@ fn reflection_corpus_drives_generated_runtime_wire_regressions() {
     value: S64Value(9223372036854775807L),
     codec: s64_codec,
   }
+  let option_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"option\",\"value\":{\"inner\":{\"kind\":\"string\",\"value\":{}}}}}",
+  )
+  let option_value = OptionValue(Some(StringValue("west")))
+  assert_eq(
+    option_codec.encode(option_value).stringify(),
+    "{\"$option\":\"some\",\"value\":\"west\"}",
+  )
+  assert_eq(option_codec.encode_canonical(option_value).stringify(), "\"west\"")
+  let variant_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"variant\",\"value\":{\"cases\":[{\"name\":\"payload\",\"payload\":{\"kind\":\"string\",\"value\":{}}}]}}}",
+  )
+  assert_eq(
+    variant_codec
+    .encode_canonical(VariantValue(0, Some(StringValue("value"))))
+    .stringify(),
+    "{\"payload\":\"value\"}",
+  )
+  let result_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"result\",\"value\":{\"spec\":{\"ok\":{\"kind\":\"string\",\"value\":{}}}}}}",
+  )
+  assert_eq(
+    result_codec
+    .encode_canonical(ResultValue(ResultOk(Some(StringValue("ready")))))
+    .stringify(),
+    "{\"ok\":\"ready\"}",
+  )
+  let union_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"union\",\"value\":{\"spec\":{\"branches\":[{\"tag\":\"command\",\"body\":{\"kind\":\"string\",\"value\":{}},\"discriminator\":{\"rule\":\"prefix\",\"value\":{\"prefix\":\"cmd:\"}}}]}}}}",
+  )
+  assert_eq(
+    union_codec
+    .encode_canonical(UnionValue("command", StringValue("cmd:run")))
+    .stringify(),
+    "\"cmd:run\"",
+  )
+  let option_entry = AgentConfigEntry::{
+    path: ["optional"],
+    value: option_value,
+    codec: option_codec,
+  }
   let request = encode_create_agent_request(
     "app",
     "env",
     "ConfigAgent",
     TupleValue([]),
     None,
-    [entry],
+    [entry, option_entry],
   )
   assert_eq(request.stringify(), __REQUEST_EXPECTED__)
 }

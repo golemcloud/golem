@@ -552,17 +552,50 @@ class StreamRuntimeTest extends munit.FunSuite {
     val s64Codec = PublicValueCodec.fromSchemaGraphJson(
       """{"root":{"kind":"s64","value":{}}}"""
     )
+    val optionCodec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"option","value":{"inner":{"kind":"string","value":{}}}}}"""
+    )
+    val optionValue = SchemaValue.OptionValue(Some(SchemaValue.StringValue("west")))
+    assertEquals(optionCodec.encode(optionValue).render, """{"$option":"some","value":"west"}""")
+    assertEquals(optionCodec.encodeCanonical(optionValue).render, """"west"""")
+    val variantCodec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"variant","value":{"cases":[{"name":"payload","payload":{"kind":"string","value":{}}}]}}}"""
+    )
+    assertEquals(
+      variantCodec.encodeCanonical(SchemaValue.VariantValue(0, Some(SchemaValue.StringValue("value")))).render,
+      """{"payload":"value"}"""
+    )
+    val resultCodec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"result","value":{"spec":{"ok":{"kind":"string","value":{}}}}}}"""
+    )
+    assertEquals(
+      resultCodec.encodeCanonical(SchemaValue.ResultValue(SchemaResult.Ok(Some(SchemaValue.StringValue("ready"))))).render,
+      """{"ok":"ready"}"""
+    )
+    val unionCodec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"union","value":{"spec":{"branches":[{"tag":"command","body":{"kind":"string","value":{}},"discriminator":{"rule":"prefix","value":{"prefix":"cmd:"}}}]}}}}"""
+    )
+    assertEquals(
+      unionCodec.encodeCanonical(SchemaValue.UnionValue("command", SchemaValue.StringValue("cmd:run"))).render,
+      """"cmd:run""""
+    )
     val request = CreateAgentRequest(
       "app",
       "env",
       "ConfigAgent",
       SchemaValue.TupleValue(List.empty),
       None,
-      List(AgentConfigEntry(path, SchemaValue.S64Value(Long.MaxValue), s64Codec))
+      List(
+        AgentConfigEntry(path, SchemaValue.S64Value(Long.MaxValue), s64Codec),
+        AgentConfigEntry(List("optional"), optionValue, optionCodec)
+      )
     )
     val envelope = BridgeProtocol.encodeCreateAgentRequest(request)
     val config = Json.asArray(Json.requireField(envelope, "config").toOption.get).toOption.get
-    assertEquals(config, Vector(configExpected))
+    assertEquals(
+      config,
+      Vector(configExpected, Json.parse("""{"path":["optional"],"value":"west"}""").toOption.get)
+    )
     assertEquals(Json.requireField(config.head, "value").toOption.get, Json.string(Long.MaxValue.toString))
   }
 

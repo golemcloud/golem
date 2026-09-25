@@ -118,7 +118,7 @@ object BridgeProtocol {
   private def encodeConfigEntry(entry: AgentConfigEntry): Json =
     Json.obj(
       "path"  -> Json.arr(entry.path.map(Json.string).toVector),
-      "value" -> entry.codec.encode(entry.value)
+      "value" -> entry.codec.encodeCanonical(entry.value)
     )
 
   def decodeCreateAgentResponse(json: Json): Either[String, CreateAgentResponse] =

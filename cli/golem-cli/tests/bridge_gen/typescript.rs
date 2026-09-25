@@ -305,7 +305,7 @@ fn static_and_instance_agent_methods_can_share_names() {
 }
 
 #[test]
-fn external_rest_config_uses_schema_guided_public_json() {
+fn external_rest_config_uses_canonical_json_for_named_non_streaming_values() {
     let dir = TempDir::new().unwrap();
     let target = Utf8Path::from_path(dir.path()).unwrap();
     let mut agent_type = agent(
@@ -313,10 +313,45 @@ fn external_rest_config_uses_schema_guided_public_json() {
         "typescript",
         vec![],
         vec![],
-        vec![],
+        vec![def(
+            "config-shape",
+            SchemaType::record(vec![
+                named_field("maybe-region", SchemaType::option(SchemaType::string())),
+                named_field(
+                    "outcome",
+                    SchemaType::result(ResultSpec {
+                        ok: Some(Box::new(SchemaType::string())),
+                        err: None,
+                    }),
+                ),
+                named_field(
+                    "mode",
+                    SchemaType::variant(vec![
+                        variant_case("off", None),
+                        variant_case("on", Some(SchemaType::string())),
+                    ]),
+                ),
+                named_field(
+                    "target",
+                    SchemaType::union(UnionSpec {
+                        branches: vec![UnionBranch {
+                            tag: "command".to_string(),
+                            body: SchemaType::string(),
+                            discriminator: DiscriminatorRule::Prefix {
+                                prefix: "cmd:".to_string(),
+                            },
+                            metadata: MetadataEnvelope::default(),
+                        }],
+                    }),
+                ),
+            ]),
+        )],
         AgentMode::Durable,
     );
-    agent_type.config = vec![local_config(vec!["limits", "maximum"], SchemaType::u64())];
+    agent_type.config = vec![local_config(
+        vec!["limits", "maximum"],
+        ref_to("config-shape"),
+    )];
     let package_dir = target.join("config-agent-client");
     TypeScriptBridgeGenerator::new_with_mode(
         agent_type,
@@ -329,21 +364,20 @@ fn external_rest_config_uses_schema_guided_public_json() {
     .unwrap();
 
     let source = std::fs::read_to_string(package_dir.join("config-agent-client.ts")).unwrap();
-    let config_lines = source
+    assert!(source.contains("function encodeCanonicalConfigShape(value: ConfigShape): any"));
+    assert!(source.contains("value: encodeCanonicalConfigShape(configLimitsMaximum)"));
+    assert!(
+        source.contains("function encodePublicConfigShape(value: ConfigShape, stream: any): any")
+    );
+    let canonical = source
         .lines()
-        .filter(|line| line.contains(".push({ path: [\"limits\",\"maximum\"]"))
-        .collect::<Vec<_>>();
-    assert!(!config_lines.is_empty(), "missing generated config entry");
-    for line in config_lines {
-        assert!(
-            line.contains(".toString()"),
-            "config is not public JSON: {line}"
-        );
-        assert!(
-            !line.contains("kind:"),
-            "config is tagged schema JSON: {line}"
-        );
-    }
+        .find(|line| line.starts_with("function encodeCanonicalConfigShape"))
+        .expect("missing canonical config encoder");
+    assert!(canonical.contains("'ok' in v ? { ok:"));
+    assert!(canonical.contains("unknown variant"));
+    assert!(canonical.contains("if(v.tag === \"command\") return"));
+    assert!(source.contains("void ("));
+    install_and_build(&package_dir);
 }
 
 #[test]

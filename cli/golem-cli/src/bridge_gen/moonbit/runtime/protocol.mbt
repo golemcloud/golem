@@ -75,7 +75,10 @@ pub(all) struct ResolvedAgent {
 ///|
 fn encode_config_entry(entry : AgentConfigEntry) -> Json raise {
   let path : Array[Json] = entry.path.map(Json::string)
-  obj([("path", Json::array(path)), ("value", entry.codec.encode(entry.value))])
+  obj([
+    ("path", Json::array(path)),
+    ("value", entry.codec.encode_canonical(entry.value)),
+  ])
 }
 
 ///|

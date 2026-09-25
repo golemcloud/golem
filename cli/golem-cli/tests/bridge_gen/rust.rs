@@ -353,7 +353,7 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
 }
 
 #[test]
-fn bridge_rust_external_rest_config_uses_schema_guided_public_json() {
+fn bridge_rust_external_rest_config_uses_canonical_json_and_session_public_json() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
     let mut agent_type = agent(
@@ -386,10 +386,14 @@ fn bridge_rust_external_rest_config_uses_schema_guided_public_json() {
 
     let source = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
     assert!(source.contains(
-        "let __config_json = golem_client::invocation_session::encode_generated_streamless_value("
+        "let __public_config_json = golem_client::invocation_session::encode_generated_streamless_value("
     ));
-    assert!(source.contains("value: __config_json.clone()"));
-    assert!(source.contains("value: __config_json.into()"));
+    assert!(
+        source
+            .contains("let __canonical_config_json = golem_common::schema::render::to_json_value(")
+    );
+    assert!(source.contains("value: __public_config_json"));
+    assert!(source.contains("value: __canonical_config_json.into()"));
     assert!(!source.contains("serde_json::to_value(&__config_value)"));
 }
 
