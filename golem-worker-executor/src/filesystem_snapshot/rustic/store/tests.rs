@@ -18,7 +18,7 @@
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
 use super::super::files::SnapshotFiles;
-use super::super::prune::{Percent, PruneLedger, read_ledger};
+use super::super::prune::{Percent, PruneLedger, read_ledger, write_ledger};
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
@@ -803,14 +803,37 @@ fn data_listings(calls: &[(&'static str, String)]) -> usize {
         .count()
 }
 
+/// Writes a ledger with freed bytes, no marked packs, and a last prune at the time.
+async fn set_last_prune<S: BlobStorage + 'static>(
+    storage: &Arc<S>,
+    scope: &SnapshotScope,
+    last_prune: golem_common::model::Timestamp,
+) {
+    let ledger = PruneLedger {
+        freed_bytes: 1,
+        last_prune: Some(last_prune),
+        awaiting_removal: false,
+    };
+    write_ledger(
+        &SnapshotFiles {
+            storage: storage.clone(),
+            namespace: scope.0.clone(),
+            deadline: Duration::from_secs(2),
+        },
+        &ledger,
+    )
+    .await
+    .unwrap();
+}
+
 #[test]
 async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
+    // The ledger has no marked packs, so only the grace period keeps the first delete from a
+    // listing. The second delete comes after the grace period and lists the packs one time.
+    let grace = Duration::from_secs(3600);
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
-    let store = store(
-        storage.clone(),
-        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
-    );
+    let store = store(storage.clone(), policy(LONG_DEADLINE, NEVER, grace));
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), one_file_tree("second"));
     store
@@ -821,10 +844,18 @@ async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
         .save(&scope, &name("p-2"), second.path(), None)
         .await
         .unwrap();
+    let now = golem_common::model::Timestamp::now_utc();
+    set_last_prune(&storage, &scope, now).await;
     let before_first = storage.calls().len();
 
     store.delete(&scope, &name("p-1")).await.unwrap();
     let before_second = storage.calls().len();
+    set_last_prune(
+        &storage,
+        &scope,
+        golem_common::model::Timestamp::from(now.to_millis().saturating_sub(2 * 3_600_000)),
+    )
+    .await;
     store.delete(&scope, &name("p-2")).await.unwrap();
     let calls = storage.calls();
 
@@ -832,9 +863,8 @@ async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
         (
             data_listings(&calls[before_first..before_second]),
             data_listings(&calls[before_second..]),
-            ledger(&storage, &scope).await.freed_bytes > 0,
         ),
-        (1, 0, true)
+        (0, 1)
     );
 }
 
