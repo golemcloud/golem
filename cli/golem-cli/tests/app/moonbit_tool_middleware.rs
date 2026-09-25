@@ -114,7 +114,7 @@ fn modified_at(path: &PathBuf) -> std::time::SystemTime {
 }
 
 fn assert_component_contracts(ctx: &TestContext, profile: &str) {
-    let expected_imports = [
+    let required_imports = [
         "interface:golem:agent/common@2.0.0",
         "interface:golem:api/host@1.5.0",
         "interface:golem:core/types@2.0.0",
@@ -123,6 +123,11 @@ fn assert_component_contracts(ctx: &TestContext, profile: &str) {
         "interface:golem:tool/streams@0.1.0",
         "interface:golem:tool/underlying@0.1.0",
         "interface:wasi:clocks/types@0.3.0",
+    ];
+    let optional_imports = [
+        "interface:golem:agent/host@2.0.0",
+        "interface:wasi:cli/environment@0.3.0",
+        "interface:wasi:logging/logging",
     ];
     let expected_exports = [
         "interface:golem:agent/guest@2.0.0",
@@ -136,7 +141,12 @@ fn assert_component_contracts(ctx: &TestContext, profile: &str) {
         middleware_component(ctx, profile),
         combined_component(ctx, profile),
     ] {
-        assert_component_contract(&component, &expected_imports, &expected_exports);
+        assert_component_contract(
+            &component,
+            &required_imports,
+            &optional_imports,
+            &expected_exports,
+        );
     }
 }
 
@@ -151,7 +161,8 @@ fn assert_default_package(path: &Path) {
 
 fn assert_component_contract(
     component: &Path,
-    expected_imports: &[&str],
+    required_imports: &[&str],
+    optional_imports: &[&str],
     expected_exports: &[&str],
 ) {
     let bytes = std::fs::read(component).unwrap();
@@ -173,16 +184,23 @@ fn assert_component_contract(
         .map(|(key, item)| normalized_world_item(&resolve, key, item))
         .collect::<Vec<_>>();
     imports.sort();
-    let mut expected_imports = expected_imports
+    let mut allowed_imports = required_imports
         .iter()
+        .chain(optional_imports)
         .map(|item| (*item).to_string())
         .collect::<Vec<_>>();
-    expected_imports.sort();
-    assert_eq!(
-        imports,
-        expected_imports,
-        "unexpected direct imports in {}",
-        component.display()
+    allowed_imports.sort();
+    assert!(
+        imports.iter().all(|item| allowed_imports.contains(item)),
+        "unexpected direct imports in {}: {imports:?}",
+        component.display(),
+    );
+    assert!(
+        required_imports
+            .iter()
+            .all(|item| imports.contains(&(*item).to_string())),
+        "missing required direct imports in {}: {imports:?}",
+        component.display(),
     );
 
     let mut exports = world

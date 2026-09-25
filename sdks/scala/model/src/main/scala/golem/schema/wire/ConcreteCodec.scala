@@ -245,6 +245,23 @@ object ConcreteCodec {
     scalar[String](WitSchemaTypeBody.StringType)(WitSchemaValueNode.StringValue.apply) {
       case WitSchemaValueNode.StringValue(value) => value
     }
+  val bytes: ConcreteCodec[Array[Byte]] = new ConcreteCodec[Array[Byte]] {
+    def write(value: Array[Byte], out: WireValues): Int =
+      out.add(
+        WitSchemaValueNode.ListValue(
+          value.iterator.map(byte => out.add(WitSchemaValueNode.U8Value(byte & 255))).toVector
+        )
+      )
+    def read(in: WireValuesReader, index: Int): Array[Byte] = in.at(index) {
+      case WitSchemaValueNode.ListValue(values) =>
+        values.iterator
+          .map(value =>
+            in.at(value) { case WitSchemaValueNode.U8Value(byte) if byte >= 0 && byte <= 255 => byte.toByte }
+          )
+          .toArray
+    }
+    def describe(out: WireTypes): Int = out.add(WitSchemaTypeBody.ListType(ubyte.describe(out)))
+  }
 
   val path: ConcreteCodec[GolemPath] = scalar[GolemPath](
     WitSchemaTypeBody.PathType(PathSpec(PathDirection.InOut, PathKind.Any))

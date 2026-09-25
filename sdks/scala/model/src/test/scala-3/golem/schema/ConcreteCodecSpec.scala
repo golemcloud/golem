@@ -77,6 +77,24 @@ object ConcreteCodecSpec extends ZIOSpecDefault {
         ).isFailure
       )
     },
+    test("byte arrays use the HTTP contract's unsigned byte list") {
+      val codec    = ConcreteCodec.derived[Array[Byte]]
+      val value    = Array[Byte](0, -1, 127, -128)
+      val encoded  = codec.encodeValue(value)
+      val elements = encoded.valueNodes(encoded.root) match {
+        case WitSchemaValueNode.ListValue(elements) => elements
+        case _                                      => throw new AssertionError("expected byte list")
+      }
+      assertTrue(
+        elements.map(encoded.valueNodes) == Vector(
+          WitSchemaValueNode.U8Value(0),
+          WitSchemaValueNode.U8Value(255),
+          WitSchemaValueNode.U8Value(127),
+          WitSchemaValueNode.U8Value(128)
+        ),
+        codec.decode(encoded).sameElements(value)
+      )
+    },
     test("decoding uses concrete structure, not a supplied graph") {
       val codec = ConcreteCodec.derived[(Int, Option[List[String]])]
       val good  =

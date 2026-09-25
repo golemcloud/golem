@@ -273,10 +273,10 @@ export function staticTools(config, runtime) {
     let write;
     let tag = `${body.tag}-value`;
     if (codec.isUnit) {
-      tag = 'tuple-value';
+      tag = 'record-value';
       read = 'if(n.val.length)throw new TypeError("expected unit");return undefined;';
       write =
-        'if(v!==undefined)throw new TypeError("expected unit");return w.add({tag:"tuple-value",val:[]});';
+        'if(v!==undefined)throw new TypeError("expected unit");return w.add({tag:"record-value",val:[]});';
     } else if (body.tag === 'record' || body.tag === 'tuple') {
       const items = codec.sourceSchema?._def?.items;
       const fields =
@@ -307,7 +307,7 @@ export function staticTools(config, runtime) {
       if (multimodal) {
         const cases = multimodal.cases.map((entry) => emit(entry.codec));
         const names = multimodal.cases.map((entry) => entry.name);
-        write = `if(!Array.isArray(v))throw new TypeError("expected multimodal list");return w.add({tag:"list-value",val:v.map(x=>{const i=${literal(names)}.indexOf(x?.tag);if(i<0)throw new TypeError("unknown multimodal case");return w.add({tag:"variant-value",val:{case_:i,payload:[${cases.join(',')}][i].write(x.value,w)}})});`;
+        write = `if(!Array.isArray(v))throw new TypeError("expected multimodal list");return w.add({tag:"list-value",val:v.map(x=>{const i=${literal(names)}.indexOf(x?.tag);if(i<0)throw new TypeError("unknown multimodal case");return w.add({tag:"variant-value",val:{case_:i,payload:[${cases.join(',')}][i].write(x.value,w)}});})});`;
         read = `if(!Array.isArray(n.val))throw new TypeError("invalid multimodal list");return n.val.map(i=>r.node(i,"variant-value",x=>{const c=x.val.case_;if(!Number.isInteger(c)||c<0||c>=${cases.length}||x.val.payload===undefined)throw new TypeError("invalid multimodal case");return {tag:${literal(names)}[c],value:[${cases.join(',')}][c].read(r,x.val.payload)}}));`;
       } else {
         write = `if(${ctor ? `!(v instanceof ${ctor})` : '!Array.isArray(v)'}${length})throw new TypeError("expected list");return w.add({tag:${literal(tag)},val:Array.from(v,x=>${c}.write(x,w))});`;
@@ -321,14 +321,17 @@ export function staticTools(config, runtime) {
     } else if (body.tag === 'result') {
       const ok = codec.resultOk ?? (body.ok && child(body.ok));
       const err = codec.resultErr ?? (body.err && child(body.err));
-      const arm = (c) => (c && !c.isUnit ? emit(c) : undefined);
+      const arm = (c) => (c ? emit(c) : undefined);
       const arms = [arm(ok), arm(err)];
       const writes = arms.map((c) => (c ? `${c}.write(v.val,w)` : 'undefined'));
-      const reads = arms.map((c) =>
-        c
-          ? `${c}.read(r,n.val.val)`
-          : '(n.val.val===undefined?undefined:(()=>{throw new TypeError("unexpected result payload")})())',
-      );
+      const reads = [ok, err].map((codec, i) => {
+        const c = arms[i];
+        return c
+          ? codec?.isUnit
+            ? `(n.val.val===undefined?undefined:${c}.read(r,n.val.val))`
+            : `${c}.read(r,n.val.val)`
+          : '(n.val.val===undefined?undefined:(()=>{throw new TypeError("unexpected result payload")})())';
+      });
       write = `if(!v||(v.tag!=="ok"&&v.tag!=="err"))throw new TypeError("expected result");if((v.tag==="ok"?${!arms[0]}:${!arms[1]})&&v.val!==undefined)throw new TypeError("unexpected result payload");return w.add({tag:"result-value",val:{tag:v.tag==="ok"?"ok-value":"err-value",val:v.tag==="ok"?${writes[0]}:${writes[1]}}});`;
       read = `if(n.val.tag!=="ok-value"&&n.val.tag!=="err-value")throw new TypeError("unknown result arm");return n.val.tag==="ok-value"?{tag:"ok",val:${reads[0]}}:{tag:"err",val:${reads[1]}};`;
     } else if (body.tag === 'map') {

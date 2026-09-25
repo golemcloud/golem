@@ -48,12 +48,12 @@ const sourcePlugin = {
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
       }).outputText
     if (!id.startsWith(sdk + "/")) return null
-    return ts.transpileModule(
-      readFileSync(id.replace(sdk, resolve(root, "src")).replace(/\.js$/, ".ts"), "utf8"),
-      {
-        compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
-      },
-    ).outputText
+    if (id.startsWith(resolve(sdk, "internal/component") + "/")) return null
+    const source = id.replace(sdk, resolve(root, "src")).replace(/\.js$/, ".ts")
+    if (!existsSync(source)) return null
+    return ts.transpileModule(readFileSync(source, "utf8"), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+    }).outputText
   },
 }
 

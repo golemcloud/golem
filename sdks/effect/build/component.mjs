@@ -8,6 +8,7 @@ const entry = "\0golem-effect-component"
 const packageName = "@golemcloud/effect-golem"
 const publicEntries = new Map([
   [packageName, "index.js"],
+  [`${packageName}/HttpRouter`, "internal/component/HttpRouter.js"],
   [`${packageName}/middleware`, "Middleware.js"],
   [`${packageName}/sqlite`, "Sqlite/SqliteClient.js"],
   [`${packageName}/postgres`, "Postgres/PgClient.js"],
@@ -23,9 +24,16 @@ const publicEntries = new Map([
 export async function componentConfiguration(rollup, options) {
   if (typeof options.input !== "string") throw new Error("Expected one component entrypoint")
   const input = resolve(options.input)
+  let usesSourceHttpRouter = false
   const sdk = {
     name: "golem-effect-sdk-source",
     resolveId(source) {
+      if (source === `${packageName}/HttpRouter`) usesSourceHttpRouter = true
+      if (source === packageName)
+        return {
+          id: join(sdkSource, usesSourceHttpRouter ? "internal/component/index.js" : "index.js"),
+          moduleSideEffects: false,
+        }
       const path = publicEntries.get(source)
       if (path) return { id: join(sdkSource, path), moduleSideEffects: false }
       if (source.startsWith(sdkSource + sep)) return { id: source, moduleSideEffects: false }

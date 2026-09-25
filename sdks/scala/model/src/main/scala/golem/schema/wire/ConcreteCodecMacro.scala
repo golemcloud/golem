@@ -65,8 +65,9 @@ private[wire] object ConcreteCodecMacro {
         case '[List[t]]                => '{ ConcreteCodec.list(${ build[t](registry, next) }) }
         case '[Vector[t]]              =>
           '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Vector[t]](_.toVector, _.toList) }
-        case '[Seq[t]]   => '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Seq[t]](identity, _.toList) }
-        case '[Array[t]] =>
+        case '[Seq[t]]      => '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Seq[t]](identity, _.toList) }
+        case '[Array[Byte]] => '{ ConcreteCodec.bytes }
+        case '[Array[t]]    =>
           val tag =
             Expr.summon[scala.reflect.ClassTag[t]].getOrElse(report.errorAndAbort(s"No ClassTag for ${Type.show[t]}"))
           '{ ConcreteCodec.list(${ build[t](registry, next) }).xmap[Array[t]](_.toArray(using $tag), _.toList) }

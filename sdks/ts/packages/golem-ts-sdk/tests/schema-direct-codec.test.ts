@@ -72,11 +72,12 @@ describe('direct flat-wire schema codecs', () => {
     expect(() => directSchemaValueToWit(compileSchema(z.string()), 7)).toThrow(/declared schema/);
   });
 
-  it('encodes result<Unit> arms without a payload node', () => {
+  it('encodes result<Unit> arms as an empty-record payload', () => {
     const codec = compileSchema(s.result(z.void(), z.string()));
     const wire = directSchemaValueToWit(codec, Result.ok(undefined));
     expect(wire.valueNodes).toEqual([
-      { tag: 'result-value', val: { tag: 'ok-value', val: undefined } },
+      { tag: 'record-value', val: [] },
+      { tag: 'result-value', val: { tag: 'ok-value', val: 0 } },
     ]);
     expect(directSchemaValueFromWit(codec, wire)).toEqual(Result.ok(undefined));
   });

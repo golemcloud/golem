@@ -5,6 +5,8 @@ use golem_schema::schema::wit::{
     GuestPermissionCardHandle, GuestQuotaTokenHandle, GuestSecretHandle, wire,
 };
 use golem_schema_derive::{FromWire, IntoWire, WireSchema};
+use std::collections::HashMap;
+use std::ops::Bound;
 use test_r::test;
 
 #[test]
@@ -129,6 +131,36 @@ fn rich_values_and_nominal_ids_use_direct_wire_shapes() {
         })
         .is_err()
     );
+}
+
+#[test]
+fn standard_maps_and_bounds_roundtrip_directly() {
+    let value = HashMap::from([
+        ("lower".to_string(), Bound::Included(-4i32)),
+        ("upper".to_string(), Bound::Excluded(19i32)),
+        ("none".to_string(), Bound::Unbounded),
+    ]);
+    let encoded = encode(&value).unwrap();
+    assert_eq!(
+        decode::<HashMap<String, Bound<i32>>>(encoded).unwrap(),
+        value
+    );
+
+    let graph = schema::<Bound<i32>>();
+    let wire::SchemaTypeBody::VariantType(cases) = &graph.type_nodes[graph.root as usize].body
+    else {
+        panic!("expected bound variant schema");
+    };
+    assert_eq!(
+        cases
+            .iter()
+            .map(|case| case.name.as_str())
+            .collect::<Vec<_>>(),
+        ["included", "excluded", "unbounded"]
+    );
+    assert!(cases[0].payload.is_some());
+    assert!(cases[1].payload.is_some());
+    assert!(cases[2].payload.is_none());
 }
 
 #[cfg(feature = "url")]

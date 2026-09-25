@@ -327,6 +327,29 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
     const ok = child(codec.resultOk);
     const err = child(codec.resultErr);
     if (!ok || !err) return undefined;
+    const writeArm = (
+      arm: SchemaCodec,
+      direct: DirectSchemaCodec,
+      value: unknown,
+      writer: SchemaValueWriter,
+    ) => {
+      if (!arm.isUnit) return direct.write(value, writer);
+      if (value !== undefined) throw new TypeError('unit value must be undefined');
+      return writer.add({ tag: 'record-value', val: [] });
+    };
+    const readArm = (
+      arm: SchemaCodec,
+      direct: DirectSchemaCodec,
+      reader: SchemaValueReader,
+      index: number | undefined,
+    ) => {
+      if (!arm.isUnit || index === undefined) return direct.read(reader, index);
+      return reader.node(index, 'record-value', (node) => {
+        if ((node as Extract<WireValueNode, { tag: 'record-value' }>).val.length !== 0)
+          throw new TypeError('unit result arm must be an empty record');
+        return undefined;
+      });
+    };
     return {
       write: (value, writer) => {
         const result = value as { tag: 'ok' | 'err'; val: unknown };
@@ -334,7 +357,9 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
           throw new TypeError('result value must have an ok or err tag');
         }
         const val =
-          result.tag === 'ok' ? ok.write(result.val, writer) : err.write(result.val, writer);
+          result.tag === 'ok'
+            ? writeArm(codec.resultOk!, ok, result.val, writer)
+            : writeArm(codec.resultErr!, err, result.val, writer);
         return writer.add({
           tag: 'result-value',
           val: { tag: result.tag === 'ok' ? 'ok-value' : 'err-value', val },
@@ -344,8 +369,8 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
         reader.node(index, 'result-value', (node) => {
           const result = (node as Extract<WireValueNode, { tag: 'result-value' }>).val;
           return result.tag === 'ok-value'
-            ? Result.ok(ok.read(reader, result.val))
-            : Result.err(err.read(reader, result.val));
+            ? Result.ok(readArm(codec.resultOk!, ok, reader, result.val))
+            : Result.err(readArm(codec.resultErr!, err, reader, result.val));
         }),
     };
   }

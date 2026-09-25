@@ -225,6 +225,26 @@ describe('static component exports', () => {
       await runtime.guest.invoke('configured', structuredClone(unit), { tag: 'anonymous' }),
     ).toEqual({ valueNodes: [{ tag: 'string-value', val: 'present:value2' }], root: 0 });
     expect(secretDrops).toBe(2);
+    expect(
+      await runtime.guest.invoke(
+        'unitResult',
+        {
+          valueNodes: [
+            { tag: 'record-value', val: [] },
+            { tag: 'result-value', val: { tag: 'ok-value', val: 0 } },
+            { tag: 'record-value', val: [1] },
+          ],
+          root: 2,
+        },
+        { tag: 'anonymous' },
+      ),
+    ).toEqual({
+      valueNodes: [
+        { tag: 'record-value', val: [] },
+        { tag: 'result-value', val: { tag: 'ok-value', val: 0 } },
+      ],
+      root: 1,
+    });
     const remote = await runtime.guest.invoke(
       'remote',
       {

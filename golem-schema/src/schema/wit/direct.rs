@@ -424,7 +424,7 @@ impl<K: WireSchema, V: WireSchema> WireSchema for BTreeMap<K, V> {
 }
 
 macro_rules! wire_map {
-    ($map:ident) => {
+    ($map:ident, $($key_bound:tt)+) => {
         impl<K: IntoWire, V: IntoWire> IntoWire for $map<K, V> {
             fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
                 for (key, value) in self {
@@ -453,7 +453,7 @@ macro_rules! wire_map {
                 Ok(writer.push(wire::SchemaValueNode::MapValue(entries)))
             }
         }
-        impl<K: FromWire + Ord, V: FromWire> FromWire for $map<K, V> {
+        impl<K: FromWire + $($key_bound)+, V: FromWire> FromWire for $map<K, V> {
             fn read_wire(
                 reader: &mut WireReader,
                 index: ValueNodeIndex,
@@ -474,7 +474,36 @@ macro_rules! wire_map {
         }
     };
 }
-wire_map!(BTreeMap);
+wire_map!(BTreeMap, Ord);
+wire_map!(HashMap, Eq + std::hash::Hash);
+
+impl<T: WireSchema> WireSchema for std::ops::Bound<T> {
+    fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+        T::contains_stream(seen)
+    }
+
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        let included = T::append_schema(builder);
+        let excluded = T::append_schema(builder);
+        builder.push(wire::SchemaTypeBody::VariantType(vec![
+            wire::VariantCaseType {
+                name: "included".to_string(),
+                payload: Some(included),
+                metadata: empty_metadata(),
+            },
+            wire::VariantCaseType {
+                name: "excluded".to_string(),
+                payload: Some(excluded),
+                metadata: empty_metadata(),
+            },
+            wire::VariantCaseType {
+                name: "unbounded".to_string(),
+                payload: None,
+                metadata: empty_metadata(),
+            },
+        ]))
+    }
+}
 
 macro_rules! wire_schema_tuple {
     ($($ty:ident),+) => { impl<$($ty: WireSchema),+> WireSchema for ($($ty,)+) {
@@ -1097,6 +1126,51 @@ impl<T: FromWire, E: FromWire> FromWire for Result<T, E> {
                 E::read_result_payload(reader, index).map(Err)
             }
             _ => Err(WireError::Shape("result")),
+        }
+    }
+}
+
+impl<T: IntoWire> IntoWire for std::ops::Bound<T> {
+    fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
+        match self {
+            std::ops::Bound::Included(value) | std::ops::Bound::Excluded(value) => {
+                value.preflight(resources)
+            }
+            std::ops::Bound::Unbounded => Ok(()),
+        }
+    }
+
+    async fn prepare_wire(&self) -> Result<(), WireError> {
+        match self {
+            std::ops::Bound::Included(value) | std::ops::Bound::Excluded(value) => {
+                value.prepare_wire().await
+            }
+            std::ops::Bound::Unbounded => Ok(()),
+        }
+    }
+
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        let (case, payload) = match self {
+            std::ops::Bound::Included(value) => (0, Some(value.write_wire(writer)?)),
+            std::ops::Bound::Excluded(value) => (1, Some(value.write_wire(writer)?)),
+            std::ops::Bound::Unbounded => (2, None),
+        };
+        Ok(writer.push(wire::SchemaValueNode::VariantValue(
+            wire::VariantValuePayload { case, payload },
+        )))
+    }
+}
+
+impl<T: FromWire> FromWire for std::ops::Bound<T> {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        let wire::SchemaValueNode::VariantValue(value) = reader.take(index)? else {
+            return Err(WireError::Shape("bound variant"));
+        };
+        match (value.case, value.payload) {
+            (0, Some(index)) => T::read_wire(reader, index).map(std::ops::Bound::Included),
+            (1, Some(index)) => T::read_wire(reader, index).map(std::ops::Bound::Excluded),
+            (2, None) => Ok(std::ops::Bound::Unbounded),
+            _ => Err(WireError::Shape("bound case")),
         }
     }
 }
