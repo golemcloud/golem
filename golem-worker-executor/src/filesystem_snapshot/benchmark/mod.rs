@@ -25,15 +25,22 @@
 //! scenario, a CPU setting and a tree are the repositories of its agents (see [`agents`]).
 
 mod agents;
+mod capture;
 pub mod cli;
 mod concurrent;
+mod history;
 mod measure;
 mod report;
 mod requests;
+mod scopes;
+mod sqlite;
 mod trees;
 mod volume;
 
-use super::rustic::{PhaseTime, Repository, RepositoryKey, STORAGE_CALL_DEADLINE};
+use super::rustic::{
+    ChangeDetection, Chunking, Compression, InspectReport, PhaseTime, Repository, RepositoryKey,
+    RepositorySettings, STORAGE_CALL_DEADLINE, SaveSettings,
+};
 use super::{SnapshotName, SnapshotScope};
 use agents::{AgentStorage, FIRST_AGENT};
 use golem_common::model::environment::EnvironmentId;
@@ -42,13 +49,14 @@ use measure::measure;
 use report::{FORMAT, Outcome, PhaseResult, PhaseWall, StepRecord, TreeFacts, millis};
 use requests::MeasuredBlobStorage;
 use serde::Serialize;
-use serde_json::{Value, json};
-use std::num::NonZeroUsize;
+use serde_json::{Map, Value, json};
+use std::num::{NonZeroI32, NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use trees::{
-    FILES_1G, FILES_128M, FILES_TINY, OBJECTS_1G, OBJECTS_128M, SQLITE_1G, SQLITE_TINY, TreeSpec,
+    COMPRESSIBLE_1G, FILES_1G, FILES_128M, FILES_TINY, MODULES_128M, OBJECTS_1G, OBJECTS_128M,
+    SQLITE_1G, SQLITE_TINY, TreeSpec,
 };
 use uuid::Uuid;
 
@@ -75,7 +83,75 @@ struct Scenario {
 struct Phase {
     name: &'static str,
     kind: PhaseKind,
+    variant: &'static Variant,
 }
+
+/// The repository that a phase uses, and the settings of its repositories and its saves.
+#[derive(Debug)]
+struct Variant {
+    /// The agent whose repository the phase uses.
+    agent: &'static str,
+    /// The phase whose result holds the hash that a restore of the phase compares with.
+    save_phase: &'static str,
+    /// The settings of the repositories and the saves of the phase. `None` is the defaults, and
+    /// then the steps of the phase record no settings.
+    settings: Option<Settings>,
+}
+
+impl Variant {
+    const fn new(agent: &'static str, save_phase: &'static str, settings: Settings) -> Self {
+        Self {
+            agent,
+            save_phase,
+            settings: Some(settings),
+        }
+    }
+}
+
+/// The settings of a repository that a save makes, and of each save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Settings {
+    repository: RepositorySettings,
+    save: SaveSettings,
+}
+
+impl Settings {
+    const DEFAULT: Self = Self {
+        repository: RepositorySettings::DEFAULT,
+        save: SaveSettings::DEFAULT,
+    };
+
+    /// The defaults, with the number of threads of each stage of a save.
+    const fn save_threads(threads: usize) -> Self {
+        Self {
+            save: SaveSettings {
+                threads: NonZeroUsize::new(threads),
+                ..SaveSettings::DEFAULT
+            },
+            ..Self::DEFAULT
+        }
+    }
+
+    /// The defaults, with the settings of the repository.
+    const fn repository(repository: RepositorySettings) -> Self {
+        Self {
+            repository,
+            ..Self::DEFAULT
+        }
+    }
+}
+
+/// The variant of the phases of the earlier scenarios: the repository of the first agent, the
+/// defaults, and no settings in the steps.
+const BASE: Variant = Variant {
+    agent: FIRST_AGENT,
+    save_phase: "save",
+    settings: None,
+};
+
+/// The variant of most phases of the later scenarios: the repository of the first agent and the
+/// defaults, which the steps record.
+const DEFAULTS: Variant = Variant::new(FIRST_AGENT, "save", Settings::DEFAULT);
 
 /// What a phase does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,13 +170,42 @@ enum PhaseKind {
         reader_threads: Option<NonZeroUsize>,
     },
     /// The cold saves of `agents` agents at the same time, a small change of the tree of each
-    /// agent, and then the warm saves of the agents at the same time.
+    /// agent, and then the warm saves of the agents at the same time. The repository of each agent
+    /// has the number of the agent after `x<agents>-`.
     ConcurrentSave { agents: usize },
+    /// The phase of [`PhaseKind::ConcurrentSave`], in which the repository of each agent has the
+    /// number of the agent after the name of the phase and `-`.
+    NamedConcurrentSave { agents: usize },
+    /// A reflink capture of a new tree, a cold save, and two warm saves of a later capture, one
+    /// with each change detection (see [`capture`]).
+    Capture,
+    /// Twelve saves with a different change each, a forget of all but the two newest snapshots,
+    /// and the open of the repository after 1, 11 and 12 saves (see [`history`]).
+    History,
+    /// A copy of the repository of the history phase, two prunes with no grace period, an open
+    /// and a restore (see [`history`]).
+    Prune { fast_repack: bool },
+    /// Saves after a clustered and after a scattered change of a SQLite tree (see [`sqlite`]).
+    SqliteChanges,
+    /// The cold saves of `saves` agents and the cold restores of `restores` agents, all at the
+    /// same time, with the number of reader threads of each restore.
+    Mixed {
+        saves: usize,
+        restores: usize,
+        reader_threads: Option<NonZeroUsize>,
+    },
+    /// A copy of the repository of the save phase to another agent, and its deletion (see
+    /// [`scopes`]).
+    Scopes,
+    /// The phase of [`PhaseKind::Save`], and then an open of the repository, whose record gives
+    /// the settings that the repository has.
+    SaveAndOpen,
 }
 
 const SAVE: Phase = Phase {
     name: "save",
     kind: PhaseKind::Save,
+    variant: &BASE,
 };
 
 const fn restore(name: &'static str, reader_threads: usize) -> Phase {
@@ -109,6 +214,7 @@ const fn restore(name: &'static str, reader_threads: usize) -> Phase {
         kind: PhaseKind::Restore {
             reader_threads: NonZeroUsize::new(reader_threads),
         },
+        variant: &BASE,
     }
 }
 
@@ -119,6 +225,7 @@ const fn concurrent_restore(name: &'static str, agents: usize, reader_threads: u
             agents,
             reader_threads: NonZeroUsize::new(reader_threads),
         },
+        variant: &BASE,
     }
 }
 
@@ -126,6 +233,7 @@ const fn concurrent_save(name: &'static str, agents: usize) -> Phase {
     Phase {
         name,
         kind: PhaseKind::ConcurrentSave { agents },
+        variant: &BASE,
     }
 }
 
@@ -136,6 +244,7 @@ const BASE_PHASES: &[Phase] = &[
         kind: PhaseKind::Restore {
             reader_threads: None,
         },
+        variant: &BASE,
     },
 ];
 
@@ -188,6 +297,215 @@ const CONCURRENT_SAVE_PHASES: &[Phase] = &[
     concurrent_save("save-x8", 8),
 ];
 
+/// A phase of a later scenario with the defaults, which its steps record.
+const fn with_defaults(name: &'static str, kind: PhaseKind) -> Phase {
+    Phase {
+        name,
+        kind,
+        variant: &DEFAULTS,
+    }
+}
+
+/// A save phase of a later scenario: a cold save, a small change and a warm save into the
+/// repository of the variant, and an open of the repository.
+const fn save_phase(name: &'static str, variant: &'static Variant) -> Phase {
+    Phase {
+        name,
+        kind: PhaseKind::SaveAndOpen,
+        variant,
+    }
+}
+
+const DEFAULT_PHASES: &[Phase] = &[
+    with_defaults("save", PhaseKind::Save),
+    with_defaults(
+        "restore",
+        PhaseKind::Restore {
+            reader_threads: None,
+        },
+    ),
+];
+
+const CAPTURE_PHASES: &[Phase] = &[with_defaults("capture", PhaseKind::Capture)];
+
+/// The phase of the saves that the prune phases prune.
+const HISTORY: Phase = with_defaults("history", PhaseKind::History);
+
+/// A prune phase, which prunes a copy of the repository of the history phase in the repository of
+/// the agent with the name of the phase.
+const fn prune_phase(name: &'static str, variant: &'static Variant, fast_repack: bool) -> Phase {
+    Phase {
+        name,
+        kind: PhaseKind::Prune { fast_repack },
+        variant,
+    }
+}
+
+const PRUNE: Variant = Variant::new("prune", "history", Settings::DEFAULT);
+const PRUNE_FAST_REPACK: Variant = Variant::new("prune-fast-repack", "history", Settings::DEFAULT);
+
+const PRUNE_PHASES: &[Phase] = &[
+    HISTORY,
+    prune_phase("prune", &PRUNE, false),
+    prune_phase("prune-fast-repack", &PRUNE_FAST_REPACK, true),
+];
+
+const REPOSITORY_OPEN_PHASES: &[Phase] = &[HISTORY, prune_phase("prune", &PRUNE, false)];
+
+/// A phase of 4 concurrent saves whose repositories have the name of the phase as prefix.
+const fn save_threads_phase(name: &'static str, variant: &'static Variant) -> Phase {
+    Phase {
+        name,
+        kind: PhaseKind::NamedConcurrentSave { agents: 4 },
+        variant,
+    }
+}
+
+const SAVE_THREADS_1: Variant = Variant::new(FIRST_AGENT, "save", Settings::save_threads(1));
+const SAVE_THREADS_2: Variant = Variant::new(FIRST_AGENT, "save", Settings::save_threads(2));
+const SAVE_THREADS_4: Variant = Variant::new(FIRST_AGENT, "save", Settings::save_threads(4));
+
+const SAVE_THREADS_PHASES: &[Phase] = &[
+    save_threads_phase("save-x4-t1", &SAVE_THREADS_1),
+    save_threads_phase("save-x4-t2", &SAVE_THREADS_2),
+    save_threads_phase("save-x4-t4", &SAVE_THREADS_4),
+    save_threads_phase("save-x4-tdefault", &DEFAULTS),
+];
+
+/// The number of saves and of restores of a mixed phase.
+const MIXED_SAVES: usize = 4;
+const MIXED_RESTORES: usize = 4;
+
+/// A mixed phase: the saves have the save threads of the variant, and the restores have the
+/// reader threads.
+const fn mixed_phase(
+    name: &'static str,
+    variant: &'static Variant,
+    reader_threads: usize,
+) -> Phase {
+    Phase {
+        name,
+        kind: PhaseKind::Mixed {
+            saves: MIXED_SAVES,
+            restores: MIXED_RESTORES,
+            reader_threads: NonZeroUsize::new(reader_threads),
+        },
+        variant,
+    }
+}
+
+const MIXED_PHASES: &[Phase] = &[
+    with_defaults("save", PhaseKind::Save),
+    mixed_phase("mixed-s2-r2", &SAVE_THREADS_2, 2),
+    mixed_phase("mixed-s2-r4", &SAVE_THREADS_2, 4),
+    mixed_phase("mixed-s4-r2", &SAVE_THREADS_4, 2),
+    mixed_phase("mixed-s4-r4", &SAVE_THREADS_4, 4),
+];
+
+/// The settings of a repository with fixed chunks of 64 KiB, which are 16 SQLite pages.
+const FIXED_64K: RepositorySettings = RepositorySettings {
+    chunking: match NonZeroU32::new(64 * 1024) {
+        Some(size) => Chunking::Fixed(size),
+        None => Chunking::Rabin,
+    },
+    ..RepositorySettings::DEFAULT
+};
+
+const SQLITE_RABIN: Variant = Variant::new("rabin", "save-rabin", Settings::DEFAULT);
+const SQLITE_FIXED_64K: Variant = Variant::new(
+    "fixed-64k",
+    "save-fixed-64k",
+    Settings::repository(FIXED_64K),
+);
+
+const SQLITE_CHANGES_PHASES: &[Phase] = &[
+    Phase {
+        name: "save-rabin",
+        kind: PhaseKind::SqliteChanges,
+        variant: &SQLITE_RABIN,
+    },
+    Phase {
+        name: "restore-rabin",
+        kind: PhaseKind::Restore {
+            reader_threads: None,
+        },
+        variant: &SQLITE_RABIN,
+    },
+    Phase {
+        name: "save-fixed-64k",
+        kind: PhaseKind::SqliteChanges,
+        variant: &SQLITE_FIXED_64K,
+    },
+    Phase {
+        name: "restore-fixed-64k",
+        kind: PhaseKind::Restore {
+            reader_threads: None,
+        },
+        variant: &SQLITE_FIXED_64K,
+    },
+];
+
+/// The compression with the zstd level, or no compression for the level 0.
+const fn zstd_level(level: i32) -> Compression {
+    match NonZeroI32::new(level) {
+        Some(level) => Compression::Level(level),
+        None => Compression::Off,
+    }
+}
+
+const CPU_DEFAULT: Variant = Variant::new("default", "save-default", Settings::DEFAULT);
+const CPU_VERIFY_OFF: Variant = Variant::new(
+    "verify-off",
+    "save-verify-off",
+    Settings::repository(RepositorySettings {
+        extra_verify: false,
+        ..RepositorySettings::DEFAULT
+    }),
+);
+const CPU_ZSTD_OFF: Variant = Variant::new(
+    "zstd-off",
+    "save-zstd-off",
+    Settings::repository(RepositorySettings {
+        compression: Compression::Off,
+        ..RepositorySettings::DEFAULT
+    }),
+);
+const CPU_ZSTD_1: Variant = Variant::new(
+    "zstd-1",
+    "save-zstd-1",
+    Settings::repository(RepositorySettings {
+        compression: zstd_level(1),
+        ..RepositorySettings::DEFAULT
+    }),
+);
+const CPU_ZSTD_9: Variant = Variant::new(
+    "zstd-9",
+    "save-zstd-9",
+    Settings::repository(RepositorySettings {
+        compression: zstd_level(9),
+        ..RepositorySettings::DEFAULT
+    }),
+);
+
+const CPU_OPTIONS_PHASES: &[Phase] = &[
+    save_phase("save-default", &CPU_DEFAULT),
+    save_phase("save-verify-off", &CPU_VERIFY_OFF),
+    save_phase("save-zstd-off", &CPU_ZSTD_OFF),
+    save_phase("save-zstd-1", &CPU_ZSTD_1),
+    save_phase("save-zstd-9", &CPU_ZSTD_9),
+];
+
+const SCOPES_PHASES: &[Phase] = &[
+    with_defaults("save", PhaseKind::Save),
+    with_defaults("scopes", PhaseKind::Scopes),
+];
+
+/// The five trees of the base scenario.
+const BASE_TREES: &[TreeSpec] = &[FILES_128M, FILES_1G, SQLITE_1G, OBJECTS_128M, OBJECTS_1G];
+
+/// The 1 GiB trees of the prune and repository open scenarios.
+const HISTORY_TREES: &[TreeSpec] = &[FILES_1G, SQLITE_1G, OBJECTS_1G];
+
 /// The scenarios of the benchmark.
 const SCENARIOS: &[Scenario] = &[
     Scenario {
@@ -236,6 +554,60 @@ const SCENARIOS: &[Scenario] = &[
         name: "concurrent-save",
         trees: &[FILES_128M, FILES_1G, SQLITE_1G],
         phases: CONCURRENT_SAVE_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "capture",
+        trees: BASE_TREES,
+        phases: CAPTURE_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "prune",
+        trees: HISTORY_TREES,
+        phases: PRUNE_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "save-threads",
+        trees: &[FILES_1G, SQLITE_1G],
+        phases: SAVE_THREADS_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "mixed",
+        trees: &[FILES_1G],
+        phases: MIXED_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "repository-open",
+        trees: HISTORY_TREES,
+        phases: REPOSITORY_OPEN_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "sqlite-changes",
+        trees: &[SQLITE_1G],
+        phases: SQLITE_CHANGES_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "tree-shape",
+        trees: &[FILES_128M, MODULES_128M],
+        phases: DEFAULT_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "cpu-options",
+        trees: &[COMPRESSIBLE_1G],
+        phases: CPU_OPTIONS_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "scopes",
+        trees: BASE_TREES,
+        phases: SCOPES_PHASES,
         memory_limited_phases: &[],
     },
 ];
@@ -367,7 +739,20 @@ impl PhaseContext {
         )
     }
 
-    /// Gives the repository of the agent.
+    fn variant(&self) -> &'static Variant {
+        self.selection.phase.variant
+    }
+
+    fn settings(&self) -> Settings {
+        self.variant().settings.unwrap_or(Settings::DEFAULT)
+    }
+
+    /// Gives the settings of each save of the phase.
+    fn save_settings(&self) -> SaveSettings {
+        self.settings().save
+    }
+
+    /// Gives the repository of the agent, which a save makes with the settings of the phase.
     fn agent_repository(&self, agent: &str) -> Repository {
         Repository::new(
             Arc::new(AgentStorage::new(self.storage.clone(), agent)),
@@ -375,11 +760,12 @@ impl PhaseContext {
             repository_key(&self.run_id),
             STORAGE_CALL_DEADLINE,
         )
+        .with_settings(self.settings().repository)
     }
 
-    /// Gives the repository of the first agent.
+    /// Gives the repository of the agent of the variant of the phase.
     fn repository(&self) -> Repository {
-        self.agent_repository(FIRST_AGENT)
+        self.agent_repository(self.variant().agent)
     }
 
     fn result_path(&self, phase: &str) -> Box<Path> {
@@ -436,6 +822,11 @@ async fn run_phase(
         .await;
     let environment = with_warm_up(environment, millis(started.elapsed()), warm_up.err());
     let outcome = run_kind(&context, selection.phase.kind).await;
+    let steps = outcome
+        .steps
+        .into_iter()
+        .map(|step| with_settings(step, selection.phase.variant))
+        .collect::<Box<[_]>>();
     let environment = with_cgroup_value(environment, "memory_events_end", measure::memory_events());
     let result = PhaseResult {
         format: FORMAT,
@@ -447,7 +838,7 @@ async fn run_phase(
         environment,
         volume,
         tree_facts: outcome.tree_facts,
-        steps: outcome.steps.into_boxed_slice(),
+        steps,
         outcome: outcome.outcome,
     };
     let written = write_result(&context, &result).await;
@@ -463,7 +854,135 @@ async fn run_kind(context: &PhaseContext, kind: PhaseKind) -> PhaseOutcome {
             agents,
             reader_threads,
         } => concurrent::concurrent_restore(context, agents, reader_threads).await,
-        PhaseKind::ConcurrentSave { agents } => concurrent::concurrent_save(context, agents).await,
+        PhaseKind::ConcurrentSave { agents } => {
+            concurrent::concurrent_save(context, agents, &format!("x{agents}")).await
+        }
+        PhaseKind::NamedConcurrentSave { agents } => {
+            concurrent::concurrent_save(context, agents, context.selection.phase.name).await
+        }
+        PhaseKind::Capture => capture::capture(context).await,
+        PhaseKind::History => history::history(context).await,
+        PhaseKind::Prune { fast_repack } => history::prune(context, fast_repack).await,
+        PhaseKind::SqliteChanges => with_open(context, sqlite::sqlite_changes(context).await).await,
+        PhaseKind::Mixed {
+            saves,
+            restores,
+            reader_threads,
+        } => concurrent::mixed(context, saves, restores, reader_threads).await,
+        PhaseKind::Scopes => scopes::scopes(context).await,
+        PhaseKind::SaveAndOpen => with_open(context, base_save(context).await).await,
+    }
+}
+
+/// Gives the outcome of a save phase with an open of the repository of the phase after it. The
+/// open finds the warm save, and its record gives the settings that the repository has. A save
+/// phase that failed gets a skipped open, and an open that fails or finds no repository fails the
+/// phase.
+async fn with_open(context: &PhaseContext, saved: PhaseOutcome) -> PhaseOutcome {
+    if saved.outcome != Outcome::Ok {
+        return PhaseOutcome {
+            steps: saved
+                .steps
+                .into_iter()
+                .chain(std::iter::once(StepRecord::skipped("open")))
+                .collect(),
+            ..saved
+        };
+    }
+    let repository = context.repository();
+    let (record, inspected) = measure("open", &context.storage, async {
+        repository.inspect(&snapshot_name(WARM_SAVE)?).await
+    })
+    .await;
+    let mut steps = saved.steps;
+    steps.push(inspect_record(record, &inspected));
+    if matches!(inspected, Ok(Some(_))) {
+        PhaseOutcome { steps, ..saved }
+    } else {
+        failed(saved.tree_facts, steps, "open", &[])
+    }
+}
+
+/// Gives the record of an open with what it found: the number of snapshots, whether a snapshot
+/// has the name, and the settings of the repository, as its config file gives them.
+fn inspect_record(
+    record: StepRecord,
+    inspected: &anyhow::Result<Option<InspectReport>>,
+) -> StepRecord {
+    match inspected {
+        Ok(Some(report)) => record.with_details(
+            json!({
+                "snapshots": report.snapshots,
+                "found": report.found,
+                "settings": repository_parameters(&report.settings),
+            }),
+            phase_walls(&report.phases),
+        ),
+        Ok(None) => record.with_details(json!({ "repository": null }), Box::default()),
+        Err(_) => record,
+    }
+}
+
+/// Gives the step with the settings of the variant in its parameters. A parameter that the step
+/// already has stays. A variant without settings leaves the step as it is.
+fn with_settings(step: StepRecord, variant: &Variant) -> StepRecord {
+    match (variant.settings, step.parameters.clone()) {
+        (Some(settings), Value::Object(parameters)) => {
+            let merged = settings_parameters(&settings)
+                .into_iter()
+                .chain(parameters)
+                .collect::<Map<_, _>>();
+            step.with_parameters(Value::Object(merged))
+        }
+        _ => step,
+    }
+}
+
+/// Gives the settings as step parameters. A setting that is not set is `null`.
+fn settings_parameters(settings: &Settings) -> Map<String, Value> {
+    [
+        ("save_threads", json!(settings.save.threads)),
+        (
+            "change_detection",
+            json!(change_detection_name(settings.save.detection)),
+        ),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value))
+    .chain(repository_parameters(&settings.repository))
+    .collect()
+}
+
+/// Gives the settings of a repository as step parameters. A setting that is not set is `null`:
+/// the default compression is the zstd level that rustic chooses when the config file has none.
+fn repository_parameters(repository: &RepositorySettings) -> Map<String, Value> {
+    [
+        (
+            "chunker",
+            match repository.chunking {
+                Chunking::Rabin => json!("rabin"),
+                Chunking::Fixed(size) => json!(format!("fixed-{size}")),
+            },
+        ),
+        (
+            "compression",
+            match repository.compression {
+                Compression::Default => Value::Null,
+                Compression::Off => json!("off"),
+                Compression::Level(level) => json!(level.get()),
+            },
+        ),
+        ("extra_verify", json!(repository.extra_verify)),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value))
+    .collect()
+}
+
+fn change_detection_name(detection: ChangeDetection) -> &'static str {
+    match detection {
+        ChangeDetection::Ctime => "ctime",
+        ChangeDetection::SizeMtime => "size-mtime",
     }
 }
 
@@ -533,6 +1052,8 @@ fn phase_name(phase: super::rustic::OperationPhase) -> &'static str {
         OperationPhase::Backup => "backup",
         OperationPhase::RestorePlan => "restore_plan",
         OperationPhase::Restore => "restore",
+        OperationPhase::PrunePlan => "prune_plan",
+        OperationPhase::Prune => "prune",
     }
 }
 
@@ -573,11 +1094,12 @@ async fn base_save(context: &PhaseContext) -> PhaseOutcome {
     let repository = context.repository();
     let facts = TreeFacts {
         name: spec.name,
-        content: Some("incompressible"),
+        content: Some(spec.content.label()),
         page_cache: Some("dropped"),
         ..TreeFacts::default()
     };
     let storage = &context.storage;
+    let settings = context.save_settings();
 
     let (record, generated) = measure("generate_tree", storage, trees::generate(spec, &tree)).await;
     let mut steps = vec![record];
@@ -597,7 +1119,9 @@ async fn base_save(context: &PhaseContext) -> PhaseOutcome {
     };
 
     let (record, cold) = measure("cold_save", storage, async {
-        repository.save(&snapshot_name(COLD_SAVE)?, &tree).await
+        repository
+            .save_with(&snapshot_name(COLD_SAVE)?, &tree, settings)
+            .await
     })
     .await;
     steps.push(save_record(record, &cold));
@@ -628,7 +1152,9 @@ async fn base_save(context: &PhaseContext) -> PhaseOutcome {
     };
 
     let (record, warm) = measure("warm_save", storage, async {
-        repository.save(&snapshot_name(WARM_SAVE)?, &tree).await
+        repository
+            .save_with(&snapshot_name(WARM_SAVE)?, &tree, settings)
+            .await
     })
     .await;
     steps.push(save_record(record, &warm));
@@ -765,7 +1291,8 @@ fn without_save(
     }
 }
 
-/// Reads the hash after the change from the result of the save phase.
+/// Reads the hash after the change from the result of the save phase of the variant of the
+/// phase.
 async fn saved_hash(context: &PhaseContext) -> anyhow::Result<Box<str>> {
     let saved = context
         .storage
@@ -773,7 +1300,7 @@ async fn saved_hash(context: &PhaseContext) -> anyhow::Result<Box<str>> {
             TARGET_LABEL,
             "result",
             results_namespace(),
-            &context.result_path("save"),
+            &context.result_path(context.variant().save_phase),
         )
         .await?
         .ok_or_else(|| anyhow::anyhow!("the save phase wrote no result"))?;

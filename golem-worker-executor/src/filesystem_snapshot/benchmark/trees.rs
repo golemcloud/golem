@@ -14,9 +14,10 @@
 
 //! The trees of the benchmark: how a tree is made, how it changes, and its hash.
 //!
-//! The content of a tree does not compress. After each write, the pages of the written files leave
-//! the page cache, so a save reads them from the volume. The upload of a reflink capture reads its
-//! files from the volume too, because a clone does not share the page cache of its source.
+//! The content of a tree does not compress, unless the tree has compressible content. After each
+//! write, the pages of the written files leave the page cache, so a save reads them from the
+//! volume. The upload of a reflink capture reads its files from the volume too, because a clone
+//! does not share the page cache of its source.
 
 use anyhow::Context;
 use futures::{StreamExt, TryStreamExt};
@@ -48,11 +49,40 @@ const CHANGED_ROWS: u64 = 100;
 /// trees.
 const FILES_PER_DIRECTORY: u64 = 100;
 
+/// The directories of the first level of a modules tree. Each has 10 directories, and each of
+/// those has 10 directories that hold the files.
+const MODULE_PACKAGES: u64 = 25;
+const MODULE_FANOUT: u64 = 10;
+
+/// The bytes of a block of compressible content. Its second half is zero.
+const COMPRESSIBLE_BLOCK: usize = 64;
+
 /// A tree that the benchmark makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TreeSpec {
     pub(super) name: &'static str,
     pub(super) shape: TreeShape,
+    pub(super) content: Content,
+}
+
+/// What the files of a tree hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Content {
+    /// Bytes that do not compress.
+    Incompressible,
+    /// Blocks of 64 bytes, each with 32 bytes that do not compress and 32 zero bytes, so zstd
+    /// makes them about half as large.
+    Compressible,
+}
+
+impl Content {
+    /// Gives the name of the content, which the result records.
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Content::Incompressible => "incompressible",
+            Content::Compressible => "compressible",
+        }
+    }
 }
 
 /// What a tree holds.
@@ -69,6 +99,10 @@ pub(super) enum TreeShape {
     /// Files and directories that are `objects` filesystem objects together with the root, in
     /// the layout that [`limit_layout`] gives. Its small change keeps the number of objects.
     ObjectLimit { objects: u64, bytes: u64 },
+    /// Files of about the same size in many small directories, as a `node_modules` tree has
+    /// them: the files fill the directories of the third level of [`MODULE_PACKAGES`] directories
+    /// with [`MODULE_FANOUT`] directories each, which again have [`MODULE_FANOUT`] directories.
+    Modules { files: u64, bytes: u64 },
 }
 
 pub(super) const FILES_128M: TreeSpec = TreeSpec {
@@ -78,6 +112,7 @@ pub(super) const FILES_128M: TreeSpec = TreeSpec {
         directories: 100,
         bytes: 128 * MIB,
     },
+    content: Content::Incompressible,
 };
 
 pub(super) const FILES_1G: TreeSpec = TreeSpec {
@@ -87,6 +122,7 @@ pub(super) const FILES_1G: TreeSpec = TreeSpec {
         directories: 100,
         bytes: 1024 * MIB,
     },
+    content: Content::Incompressible,
 };
 
 /// The tree at the object limit of an agent with 128 MiB of storage: 8,192 objects.
@@ -96,6 +132,7 @@ pub(super) const OBJECTS_128M: TreeSpec = TreeSpec {
         objects: 8_192,
         bytes: 128 * MIB,
     },
+    content: Content::Incompressible,
 };
 
 /// The tree at the object limit of an agent with 1 GiB of storage: 32,768 objects.
@@ -105,11 +142,34 @@ pub(super) const OBJECTS_1G: TreeSpec = TreeSpec {
         objects: 32_768,
         bytes: 1024 * MIB,
     },
+    content: Content::Incompressible,
 };
 
 pub(super) const SQLITE_1G: TreeSpec = TreeSpec {
     name: "sqlite-1g",
     shape: TreeShape::Sqlite { bytes: 1024 * MIB },
+    content: Content::Incompressible,
+};
+
+/// The 10,000 files and 128 MiB of [`FILES_128M`] in 2,775 directories, 3 levels deep.
+pub(super) const MODULES_128M: TreeSpec = TreeSpec {
+    name: "modules-128m",
+    shape: TreeShape::Modules {
+        files: 10_000,
+        bytes: 128 * MIB,
+    },
+    content: Content::Incompressible,
+};
+
+/// The layout of [`FILES_1G`], with content that compresses to about half its size.
+pub(super) const COMPRESSIBLE_1G: TreeSpec = TreeSpec {
+    name: "compressible-1g",
+    shape: TreeShape::Files {
+        files: 10_000,
+        directories: 100,
+        bytes: 1024 * MIB,
+    },
+    content: Content::Compressible,
 };
 
 pub(super) const FILES_TINY: TreeSpec = TreeSpec {
@@ -119,11 +179,13 @@ pub(super) const FILES_TINY: TreeSpec = TreeSpec {
         directories: 10,
         bytes: MIB,
     },
+    content: Content::Incompressible,
 };
 
 pub(super) const SQLITE_TINY: TreeSpec = TreeSpec {
     name: "sqlite-tiny",
     shape: TreeShape::Sqlite { bytes: 4 * MIB },
+    content: Content::Incompressible,
 };
 
 /// The number of files, directories and bytes of a tree, not counting its root.
@@ -148,52 +210,50 @@ pub(super) const fn limit_layout(objects: u64) -> (u64, u64) {
 /// Makes the tree in the directory `root`, which must not exist.
 pub(super) async fn generate(spec: &TreeSpec, root: &Path) -> anyhow::Result<TreeCounts> {
     std::fs::create_dir(root).with_context(|| format!("create the tree {}", root.display()))?;
-    match spec.shape {
-        TreeShape::Files {
-            files,
-            directories,
-            bytes,
-        } => {
-            in_blocking(root, move |root| {
-                generate_files(root, files, directories, bytes)
-            })
-            .await
+    match tree_content(spec) {
+        TreeContent::Files(files) => {
+            in_blocking(root, move |root| generate_files(root, &files)).await
         }
-        TreeShape::ObjectLimit { objects, bytes } => {
-            let (files, directories) = limit_layout(objects);
-            in_blocking(root, move |root| {
-                generate_files(root, files, directories, bytes)
-            })
-            .await
-        }
-        TreeShape::Sqlite { bytes } => generate_database(&root.join(DATABASE), bytes).await,
+        TreeContent::Sqlite { bytes } => generate_database(&root.join(DATABASE), bytes).await,
     }?;
     settle(root)?;
     Ok(count(root)?)
 }
 
-/// Changes a small part of the tree in `root`, and gives what changed.
+/// Changes a small part of the tree in `root`, and gives what changed. It is the first round of
+/// [`change_round`].
 pub(super) async fn change(spec: &TreeSpec, root: &Path) -> anyhow::Result<Value> {
-    let change = match spec.shape {
-        TreeShape::Files {
-            files,
-            directories,
-            bytes,
-        } => {
-            in_blocking(root, move |root| {
-                change_files(root, files, directories, bytes, Replace::No)
-            })
-            .await?
+    change_round(spec, root, 1).await
+}
+
+/// Changes a small part of the tree in `root` for the round, and gives what changed. Each round
+/// from 1 to 255 writes other content.
+///
+/// A files tree gets new content in the same files in each round, and one new file. A tree at the
+/// object limit also loses one file in each round, so it keeps its number of objects. A SQLite
+/// tree gets new payload in rows spread over the database.
+pub(super) async fn change_round(spec: &TreeSpec, root: &Path, round: u8) -> anyhow::Result<Value> {
+    let change = match tree_content(spec) {
+        TreeContent::Files(files) => {
+            in_blocking(root, move |root| change_files(root, &files, round)).await?
         }
-        TreeShape::ObjectLimit { objects, bytes } => {
-            let (files, directories) = limit_layout(objects);
-            in_blocking(root, move |root| {
-                change_files(root, files, directories, bytes, Replace::Yes)
-            })
-            .await?
+        TreeContent::Sqlite { .. } => {
+            change_database(&root.join(DATABASE), SqliteChange::Scattered).await?
         }
-        TreeShape::Sqlite { .. } => change_database(&root.join(DATABASE)).await?,
     };
+    settle(root)?;
+    Ok(change)
+}
+
+/// Gives new payload to 100 consecutive rows in the middle of the database of a SQLite tree, and
+/// gives what changed. The rows are on about 34 consecutive pages.
+pub(super) async fn change_clustered(spec: &TreeSpec, root: &Path) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        matches!(tree_content(spec), TreeContent::Sqlite { .. }),
+        "the tree {} has no database",
+        spec.name
+    );
+    let change = change_database(&root.join(DATABASE), SqliteChange::Clustered).await?;
     settle(root)?;
     Ok(change)
 }
@@ -207,7 +267,84 @@ async fn in_blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(move || work(&root)).await?
 }
 
-/// Gives the path of the file with the index, relative to the root of the tree.
+/// Where the files of a tree are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Layout {
+    /// The files fill `directories` directories below the root in their order.
+    Flat { files: u64, directories: u64 },
+    /// The files fill the directories of the third level of a modules tree in their order.
+    Modules { files: u64 },
+}
+
+impl Layout {
+    fn files(self) -> u64 {
+        match self {
+            Layout::Flat { files, .. } | Layout::Modules { files } => files,
+        }
+    }
+
+    /// Gives the path of the file with the index, relative to the root of the tree.
+    pub(super) fn path(self, index: u64) -> Box<Path> {
+        match self {
+            Layout::Flat { files, directories } => file_path(index, files, directories),
+            Layout::Modules { files } => {
+                let leaves = MODULE_PACKAGES * MODULE_FANOUT * MODULE_FANOUT;
+                let leaf = index / files.div_ceil(leaves).max(1);
+                PathBuf::from(format!(
+                    "p{:02}/s{}/l{}/f{index:05}",
+                    leaf / (MODULE_FANOUT * MODULE_FANOUT),
+                    leaf / MODULE_FANOUT % MODULE_FANOUT,
+                    leaf % MODULE_FANOUT
+                ))
+                .into_boxed_path()
+            }
+        }
+    }
+}
+
+/// The files of a tree that is not a SQLite tree.
+#[derive(Clone, Copy, Debug)]
+struct Files {
+    layout: Layout,
+    bytes: u64,
+    replace: Replace,
+    content: Content,
+}
+
+/// What a tree holds: files, or one SQLite database.
+#[derive(Clone, Copy, Debug)]
+enum TreeContent {
+    Files(Files),
+    /// One SQLite database of at least the size.
+    Sqlite {
+        bytes: u64,
+    },
+}
+
+/// Gives what the tree holds.
+fn tree_content(spec: &TreeSpec) -> TreeContent {
+    let (layout, bytes, replace) = match spec.shape {
+        TreeShape::Files {
+            files,
+            directories,
+            bytes,
+        } => (Layout::Flat { files, directories }, bytes, Replace::No),
+        TreeShape::ObjectLimit { objects, bytes } => {
+            let (files, directories) = limit_layout(objects);
+            (Layout::Flat { files, directories }, bytes, Replace::Yes)
+        }
+        TreeShape::Modules { files, bytes } => (Layout::Modules { files }, bytes, Replace::No),
+        TreeShape::Sqlite { bytes } => return TreeContent::Sqlite { bytes },
+    };
+    TreeContent::Files(Files {
+        layout,
+        bytes,
+        replace,
+        content: spec.content,
+    })
+}
+
+/// Gives the path of the file with the index in a flat tree, relative to the root of the tree.
 fn file_path(index: u64, files: u64, directories: u64) -> Box<Path> {
     let per_directory = files.div_ceil(directories.max(1)).max(1);
     PathBuf::from(format!("d{:03}/f{index:05}", index / per_directory)).into_boxed_path()
@@ -218,34 +355,68 @@ fn file_size(index: u64, files: u64, bytes: u64) -> u64 {
     bytes / files.max(1) + u64::from(index < bytes % files.max(1))
 }
 
-/// Gives `size` bytes that do not compress, the same for the same path and generation.
-fn content(path: &Path, generation: u8, size: u64) -> io::Result<Box<[u8]>> {
+/// Gives `size` bytes of the content, the same for the same path and generation.
+fn content(path: &Path, generation: u8, size: u64, kind: Content) -> io::Result<Box<[u8]>> {
     let mut content = vec![0; usize::try_from(size).map_err(io::Error::other)?].into_boxed_slice();
     blake3::Hasher::new_derive_key("golem fs-snapshot benchmark file content")
         .update(&[generation])
         .update(path.as_os_str().as_bytes())
         .finalize_xof()
         .fill(&mut content);
+    if kind == Content::Compressible {
+        content.chunks_mut(COMPRESSIBLE_BLOCK).for_each(|block| {
+            block
+                .iter_mut()
+                .skip(COMPRESSIBLE_BLOCK / 2)
+                .for_each(|byte| *byte = 0)
+        });
+    }
     Ok(content)
 }
 
-fn write_file(root: &Path, relative: &Path, generation: u8, size: u64) -> io::Result<()> {
+fn write_file(
+    root: &Path,
+    relative: &Path,
+    generation: u8,
+    size: u64,
+    kind: Content,
+) -> io::Result<()> {
     let path = root.join(relative);
-    std::fs::write(&path, content(relative, generation, size)?)?;
+    std::fs::write(&path, content(relative, generation, size, kind)?)?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
 }
 
-fn generate_files(root: &Path, files: u64, directories: u64, bytes: u64) -> anyhow::Result<()> {
-    (0..files).try_for_each(|index| {
-        let relative = file_path(index, files, directories);
+/// Makes each directory of the relative path below `root` that does not exist, with the
+/// permission bits `0o755`.
+fn make_directories(root: &Path, relative: &Path) -> io::Result<()> {
+    relative
+        .ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .collect::<Box<[_]>>()
+        .iter()
+        .rev()
+        .map(|ancestor| root.join(ancestor))
+        .filter(|directory| !directory.exists())
+        .try_for_each(|directory| {
+            std::fs::create_dir(&directory)?;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755))
+        })
+}
+
+fn generate_files(root: &Path, files: &Files) -> anyhow::Result<()> {
+    let count = files.layout.files();
+    (0..count).try_for_each(|index| {
+        let relative = files.layout.path(index);
         if let Some(parent) = relative.parent() {
-            let directory = root.join(parent);
-            if !directory.exists() {
-                std::fs::create_dir(&directory)?;
-                std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755))?;
-            }
+            make_directories(root, parent)?;
         }
-        write_file(root, &relative, 0, file_size(index, files, bytes))
+        write_file(
+            root,
+            &relative,
+            0,
+            file_size(index, count, files.bytes),
+            files.content,
+        )
     })?;
     Ok(())
 }
@@ -253,46 +424,65 @@ fn generate_files(root: &Path, files: u64, directories: u64, bytes: u64) -> anyh
 /// Whether the small change of a files tree replaces a file, or only adds one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Replace {
-    /// The change deletes the last file, and adds a file with a new name in its directory. So
-    /// the tree keeps its number of objects.
+    /// The change deletes a file, and adds a file with a new name in its directory. So the tree
+    /// keeps its number of objects.
     Yes,
     /// The change adds a file in the first directory.
     No,
 }
 
-fn change_files(
-    root: &Path,
-    files: u64,
-    directories: u64,
-    bytes: u64,
-    replace: Replace,
-) -> anyhow::Result<Value> {
-    let step = (files / CHANGED_FILES).max(1);
-    let rewritten = (0..CHANGED_FILES.min(files))
+/// Gives the file name of the round: the name, and for a round after the first, the name with
+/// the round.
+fn file_name_of_round(name: &str, round: u8) -> String {
+    if round == 1 {
+        name.to_string()
+    } else {
+        format!("{name}-{round}")
+    }
+}
+
+fn change_files(root: &Path, files: &Files, round: u8) -> anyhow::Result<Value> {
+    let count = files.layout.files();
+    let size = |index| file_size(index, count, files.bytes);
+    let step = (count / CHANGED_FILES).max(1);
+    let rewritten = (0..CHANGED_FILES.min(count))
         .map(|position| position * step)
         .try_fold(0_u64, |written, index| {
-            let size = file_size(index, files, bytes);
-            write_file(root, &file_path(index, files, directories), 1, size)
-                .map(|()| written + size)
+            write_file(
+                root,
+                &files.layout.path(index),
+                round,
+                size(index),
+                files.content,
+            )
+            .map(|()| written + size(index))
         })?;
-    // The added file has the size of the file with the index.
-    let (added_path, added_index, deleted) = match replace {
+    // The added file has the size of the file with the index. Round `k` deletes the `k`-th file
+    // from the end.
+    let (added_path, added_index, deleted) = match files.replace {
         Replace::Yes => {
-            let last = files.saturating_sub(1);
-            let path = file_path(last, files, directories);
+            let deleted = count.saturating_sub(u64::from(round));
+            let path = files.layout.path(deleted);
             std::fs::remove_file(root.join(&path))?;
-            (path.with_file_name("replaced"), last, 1)
+            (
+                path.with_file_name(file_name_of_round("replaced", round)),
+                deleted,
+                1,
+            )
         }
         Replace::No => (
-            file_path(0, files, directories).with_file_name("added"),
+            files
+                .layout
+                .path(0)
+                .with_file_name(file_name_of_round("added", round)),
             0,
             0,
         ),
     };
-    let added = file_size(added_index, files, bytes);
-    write_file(root, &added_path, 0, added)?;
+    let added = size(added_index);
+    write_file(root, &added_path, 0, added, files.content)?;
     Ok(json!({
-        "files_rewritten": CHANGED_FILES.min(files),
+        "files_rewritten": CHANGED_FILES.min(count),
         "files_added": 1,
         "files_deleted": deleted,
         "rows_updated": 0,
@@ -339,15 +529,28 @@ async fn generate_database(path: &Path, bytes: u64) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Updates the payload of rows spread over the database.
-async fn change_database(path: &Path) -> anyhow::Result<Value> {
+/// Which rows a change of a database updates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SqliteChange {
+    /// Rows spread over the whole table.
+    Scattered,
+    /// Consecutive rows in the middle of the table.
+    Clustered,
+}
+
+/// Updates the payload of [`CHANGED_ROWS`] rows of the database.
+async fn change_database(path: &Path, pattern: SqliteChange) -> anyhow::Result<Value> {
     let mut connection = connect(path).await?;
     let last: i64 = sqlx::query_scalar("SELECT max(id) FROM rows")
         .fetch_one(&mut connection)
         .await?;
-    let step = (last / CHANGED_ROWS as i64).max(1);
-    let ids = (0..CHANGED_ROWS as i64)
-        .map(|position| (1 + position * step).to_string())
+    let rows = CHANGED_ROWS as i64;
+    let (first, step) = match pattern {
+        SqliteChange::Scattered => (1, (last / rows).max(1)),
+        SqliteChange::Clustered => ((last / 2).max(1), 1),
+    };
+    let ids = (0..rows)
+        .map(|position| (first + position * step).to_string())
         .collect::<Vec<_>>()
         .join(",");
     let updated = sqlx::query(&format!(
@@ -384,23 +587,43 @@ impl CopyCounts {
     }
 }
 
+/// Whether a copy of a tree keeps the modification times of its entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Times {
+    /// Each file and directory of the copy, and its root, gets the modification time of its
+    /// source, as the capture of an agent tree gives them.
+    Keep,
+    /// The copy does not keep the modification times.
+    Drop,
+}
+
 /// Copies the tree `from` into the directory `to`, which must not exist, with the permission
-/// bits of each entry. A file is a reflink of its source where the filesystem has reflinks
-/// (`FICLONE`, for example on XFS), and a copy of its bytes where it does not. The copy does not
-/// keep the modification times.
-pub(super) fn copy_tree(from: &Path, to: &Path) -> anyhow::Result<CopyCounts> {
+/// bits of each entry, and with the modification times when `times` keeps them. A file is a
+/// reflink of its source where the filesystem has reflinks (`FICLONE`, for example on XFS), and a
+/// copy of its bytes where it does not. The copy does not sync the volume.
+pub(super) fn copy_tree(from: &Path, to: &Path, times: Times) -> anyhow::Result<CopyCounts> {
     std::fs::create_dir(to).with_context(|| format!("create the tree {}", to.display()))?;
-    Ok(walk(
+    let (counts, directories) = walk(
         from,
-        CopyCounts::default(),
-        &mut |counts, path, metadata| {
+        (CopyCounts::default(), Vec::new()),
+        &mut |(counts, mut directories), path, metadata| {
             let target = to.join(path.strip_prefix(from).map_err(io::Error::other)?);
             if metadata.is_dir() {
                 std::fs::create_dir(&target)?;
                 std::fs::set_permissions(&target, metadata.permissions())?;
-                Ok(counts)
+                if times == Times::Keep {
+                    directories.push((target, metadata.modified()?));
+                }
+                Ok((counts, directories))
             } else if metadata.is_file() {
-                copy_file(path, &target, metadata).map(|reflinked| {
+                let reflinked = copy_file(path, &target, metadata)?;
+                if times == Times::Keep {
+                    File::options()
+                        .write(true)
+                        .open(&target)?
+                        .set_modified(metadata.modified()?)?;
+                }
+                Ok((
                     counts.with(if reflinked {
                         CopyCounts {
                             reflinked: 1,
@@ -411,8 +634,9 @@ pub(super) fn copy_tree(from: &Path, to: &Path) -> anyhow::Result<CopyCounts> {
                             reflinked: 0,
                             copied: 1,
                         }
-                    })
-                })
+                    }),
+                    directories,
+                ))
             } else {
                 Err(io::Error::other(format!(
                     "the tree has an entry that is not a file or a directory: {}",
@@ -420,7 +644,17 @@ pub(super) fn copy_tree(from: &Path, to: &Path) -> anyhow::Result<CopyCounts> {
                 )))
             }
         },
-    )?)
+    )?;
+    if times == Times::Keep {
+        // A directory gets its time after its entries, which change it, and the root last.
+        directories
+            .iter()
+            .rev()
+            .map(|(directory, modified)| (directory.as_path(), *modified))
+            .chain(std::iter::once((to, std::fs::metadata(from)?.modified()?)))
+            .try_for_each(|(directory, modified)| File::open(directory)?.set_modified(modified))?;
+    }
+    Ok(counts)
 }
 
 /// Copies the file `from` to the new file `to`, and tells whether the copy is a reflink.
@@ -546,10 +780,13 @@ fn walk<T>(
 #[cfg(test)]
 mod tests {
     use super::{
-        FILES_TINY, MIB, SQLITE_TINY, TreeCounts, TreeShape, TreeSpec, change, copy_tree,
-        file_path, file_size, generate, limit_layout, tree_hash, walk,
+        COMPRESSIBLE_1G, COMPRESSIBLE_BLOCK, Content, DATABASE, FILES_1G, FILES_128M, FILES_TINY,
+        Layout, MIB, MODULES_128M, SQLITE_TINY, Times, TreeCounts, TreeShape, TreeSpec, change,
+        change_clustered, change_round, connect, content, copy_tree, file_path, file_size,
+        generate, limit_layout, tree_hash, walk,
     };
     use pretty_assertions::assert_eq;
+    use sqlx::Connection;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
@@ -562,6 +799,7 @@ mod tests {
             objects: 128,
             bytes: MIB,
         },
+        content: Content::Incompressible,
     };
 
     fn hash(root: &Path) -> Box<str> {
@@ -666,7 +904,7 @@ mod tests {
         std::fs::set_permissions(root.join("d001"), std::fs::Permissions::from_mode(0o700))
             .unwrap();
 
-        let counts = copy_tree(&root, &copy).unwrap();
+        let counts = copy_tree(&root, &copy, Times::Drop).unwrap();
 
         assert_eq!(
             (counts.reflinked + counts.copied, contents(&copy)),
@@ -848,6 +1086,239 @@ mod tests {
                 .map(|hash| *hash == original)
                 .collect::<Vec<_>>(),
             vec![true, false, false, false, false, false, false]
+        );
+    }
+
+    #[test]
+    async fn a_copy_that_keeps_the_times_has_the_hash_of_its_source_and_new_inodes() {
+        let work = tempfile::tempdir().unwrap();
+        let root = work.path().join("tree");
+        let kept = work.path().join("kept");
+        let dropped = work.path().join("dropped");
+        generate(&FILES_TINY, &root).await.unwrap();
+        let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        walk(&root, (), &mut |(), path, _| {
+            std::fs::File::open(path).and_then(|file| file.set_modified(old))
+        })
+        .unwrap();
+        std::fs::File::open(&root)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let inode = |root: &Path| std::fs::metadata(root.join("d000/f00000")).unwrap().ino();
+
+        let counts = copy_tree(&root, &kept, Times::Keep).unwrap();
+        copy_tree(&root, &dropped, Times::Drop).unwrap();
+
+        assert_eq!(
+            (
+                counts.reflinked + counts.copied,
+                hash(&kept) == hash(&root),
+                hash(&dropped) == hash(&root),
+                std::fs::metadata(&kept).unwrap().modified().unwrap(),
+                inode(&kept) == inode(&root),
+            ),
+            (100, true, false, old, false)
+        );
+    }
+
+    #[test]
+    async fn each_round_of_a_change_writes_other_content_and_keeps_the_object_limit() {
+        let work = tempfile::tempdir().unwrap();
+        let files = work.path().join("files");
+        let objects = work.path().join("objects");
+        generate(&FILES_TINY, &files).await.unwrap();
+        generate(&OBJECTS_TINY, &objects).await.unwrap();
+
+        let rounds = futures::future::join_all(
+            [(&FILES_TINY, &files), (&OBJECTS_TINY, &objects)].map(|(spec, root)| async move {
+                let first = change_round(spec, root, 1).await.unwrap();
+                let after_first = tree_hash(root).unwrap();
+                change_round(spec, root, 2).await.unwrap();
+                let after_second = tree_hash(root).unwrap();
+                (
+                    first["files_rewritten"].as_u64(),
+                    first["bytes"].as_u64(),
+                    after_first.0 != after_second.0,
+                    after_first.1.files,
+                    after_second.1.files,
+                )
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            (
+                rounds,
+                files.join("d000/added-2").exists(),
+                objects.join("d001/replaced-2").exists(),
+                objects.join("d001/f00123").exists(),
+            ),
+            (
+                // FILES_TINY: the files 0, 10, ..., 70 have 10,486 bytes and the files 80 and 90
+                // have 10,485, and the added file has the 10,486 bytes of the file 0.
+                // OBJECTS_TINY: the files 0, 12, ..., 72 have 8,389 bytes, the files 84, 96 and
+                // 108 have 8,388, and the added file has the 8,388 bytes of the file 124.
+                vec![
+                    (
+                        Some(10),
+                        Some(8 * 10_486 + 2 * 10_485 + 10_486),
+                        true,
+                        101,
+                        102
+                    ),
+                    (
+                        Some(10),
+                        Some(7 * 8_389 + 3 * 8_388 + 8_388),
+                        true,
+                        125,
+                        125
+                    ),
+                ],
+                true,
+                true,
+                false,
+            )
+        );
+    }
+
+    #[test]
+    async fn a_modules_tree_has_its_files_in_three_levels_of_small_directories() {
+        let work = tempfile::tempdir().unwrap();
+        let root = work.path().join("tree");
+        let spec = TreeSpec {
+            name: "modules-small",
+            shape: TreeShape::Modules {
+                files: 10_000,
+                bytes: 10_000,
+            },
+            content: Content::Incompressible,
+        };
+        let layout = Layout::Modules { files: 10_000 };
+
+        let counts = generate(&spec, &root).await.unwrap();
+
+        assert_eq!(
+            (counts, layout.path(0), layout.path(4), layout.path(9_999),),
+            (
+                TreeCounts {
+                    files: 10_000,
+                    directories: 2_775,
+                    bytes: 10_000,
+                },
+                Path::new("p00/s0/l0/f00000").into(),
+                Path::new("p00/s0/l1/f00004").into(),
+                Path::new("p24/s9/l9/f09999").into(),
+            )
+        );
+    }
+
+    #[test]
+    fn compressible_content_has_a_zero_second_half_in_each_block() {
+        let compressible = content(Path::new("f"), 0, 1_000, Content::Compressible).unwrap();
+        let incompressible = content(Path::new("f"), 0, 1_000, Content::Incompressible).unwrap();
+        let zero_halves = |content: &[u8]| {
+            content.chunks(COMPRESSIBLE_BLOCK).all(|block| {
+                block
+                    .iter()
+                    .skip(COMPRESSIBLE_BLOCK / 2)
+                    .all(|byte| *byte == 0)
+            })
+        };
+
+        assert_eq!(
+            (
+                compressible.len(),
+                zero_halves(&compressible),
+                zero_halves(&incompressible),
+                compressible
+                    .chunks(COMPRESSIBLE_BLOCK)
+                    .zip(incompressible.chunks(COMPRESSIBLE_BLOCK))
+                    .all(|(left, right)| left[..COMPRESSIBLE_BLOCK / 2]
+                        == right[..COMPRESSIBLE_BLOCK / 2]),
+            ),
+            (1_000, true, false, true)
+        );
+    }
+
+    #[test]
+    async fn a_scattered_and_a_clustered_change_update_the_rows_of_their_pattern() {
+        let work = tempfile::tempdir().unwrap();
+        let root = work.path().join("tree");
+        let files = work.path().join("files");
+        generate(&SQLITE_TINY, &root).await.unwrap();
+        generate(&FILES_TINY, &files).await.unwrap();
+        let payloads = async |root: &Path| {
+            let mut connection = connect(&root.join(DATABASE)).await.unwrap();
+            let rows: Vec<(i64, Vec<u8>)> =
+                sqlx::query_as("SELECT id, payload FROM rows ORDER BY id")
+                    .fetch_all(&mut connection)
+                    .await
+                    .unwrap();
+            connection.close().await.unwrap();
+            rows
+        };
+        let updated = |before: &[(i64, Vec<u8>)], after: &[(i64, Vec<u8>)]| {
+            before
+                .iter()
+                .zip(after)
+                .filter(|(old, new)| old.1 != new.1)
+                .map(|(old, _)| old.0)
+                .collect::<Vec<_>>()
+        };
+        let before = payloads(&root).await;
+        let last = before.last().unwrap().0;
+
+        let scattered = change(&SQLITE_TINY, &root).await.unwrap();
+        let after_scattered = payloads(&root).await;
+        let clustered = change_clustered(&SQLITE_TINY, &root).await.unwrap();
+        let after_clustered = payloads(&root).await;
+        let refused = change_clustered(&FILES_TINY, &files).await;
+
+        assert_eq!(
+            (
+                scattered["rows_updated"].as_u64(),
+                updated(&before, &after_scattered),
+                clustered["rows_updated"].as_u64(),
+                updated(&after_scattered, &after_clustered),
+                refused.is_err()
+            ),
+            (
+                Some(100),
+                (0..100)
+                    .map(|row| 1 + row * (last / 100))
+                    .collect::<Vec<_>>(),
+                Some(100),
+                (last / 2..last / 2 + 100).collect::<Vec<_>>(),
+                true
+            )
+        );
+    }
+
+    #[test]
+    fn the_later_trees_have_the_files_and_bytes_of_the_trees_that_they_follow() {
+        let (modules_files, modules_bytes) = match MODULES_128M.shape {
+            TreeShape::Modules { files, bytes } => (files, bytes),
+            _ => (0, 0),
+        };
+        let (files_files, files_bytes) = match FILES_128M.shape {
+            TreeShape::Files { files, bytes, .. } => (files, bytes),
+            _ => (1, 1),
+        };
+
+        assert_eq!(
+            (
+                (modules_files, modules_bytes),
+                COMPRESSIBLE_1G.shape,
+                COMPRESSIBLE_1G.content,
+                FILES_1G.content,
+            ),
+            (
+                (files_files, files_bytes),
+                FILES_1G.shape,
+                Content::Compressible,
+                Content::Incompressible,
+            )
         );
     }
 }

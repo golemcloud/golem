@@ -196,7 +196,19 @@ async fn restore_agents(
         return failed(facts, steps, "concurrent_restore", &["hash_trees"]);
     }
 
-    let (record, hashed) = measure("hash_trees", storage, hash_trees(&targets)).await;
+    compare_hashes(context, facts, steps, &targets, &expected).await
+}
+
+/// Measures the hash of each restored tree, compares each hash with the expected hash, and gives
+/// the outcome of the phase with the record of that step.
+async fn compare_hashes(
+    context: &PhaseContext,
+    facts: TreeFacts,
+    mut steps: Vec<StepRecord>,
+    targets: &[PathBuf],
+    expected: &str,
+) -> PhaseOutcome {
+    let (record, hashed) = measure("hash_trees", &context.storage, hash_trees(targets)).await;
     let Ok(hashes) = hashed else {
         steps.push(record);
         return failed(facts, steps, "hash_trees", &[]);
@@ -253,23 +265,26 @@ async fn hash_trees(roots: &[PathBuf]) -> anyhow::Result<Box<[(Box<str>, trees::
 /// saves of all agents at the same time, the small change of each tree, and the warm saves of all
 /// agents at the same time.
 ///
-/// Each agent of the phase has a repository of its own, which the other phases of the scenario do
-/// not use, so each cold save makes a repository. The copies of the tree are reflinks where the
-/// volume has them. After the copies, no page of a tree is in the page cache, so each save reads
-/// its tree from the volume.
-pub(super) async fn concurrent_save(context: &PhaseContext, agents: usize) -> PhaseOutcome {
+/// Each agent of the phase has a repository of its own, whose name is the number of the agent
+/// after `prefix`. The other phases of the scenario do not use these repositories, so each cold
+/// save makes a repository. The copies of the tree are reflinks where the volume has them. After
+/// the copies, no page of a tree is in the page cache, so each save reads its tree from the
+/// volume.
+pub(super) async fn concurrent_save(
+    context: &PhaseContext,
+    agents: usize,
+    prefix: &str,
+) -> PhaseOutcome {
     let spec = context.selection.tree;
     let storage = &context.storage;
-    let roots = (0..agents)
-        .map(|agent| context.work_dir.join("trees").join(agent.to_string()))
-        .collect::<Box<[_]>>();
+    let roots = tree_roots(context, agents);
     let names = (0..agents)
-        .map(|agent| format!("x{agents}-{agent}"))
+        .map(|agent| format!("{prefix}-{agent}"))
         .collect::<Box<[_]>>();
     let parameters = json!({ "agents": agents });
     let facts = TreeFacts {
         name: spec.name,
-        content: Some("incompressible"),
+        content: Some(spec.content.label()),
         page_cache: Some("dropped"),
         ..TreeFacts::default()
     };
@@ -280,14 +295,8 @@ pub(super) async fn concurrent_save(context: &PhaseContext, agents: usize) -> Ph
         "concurrent_warm_save",
     ];
 
-    let (record, generated) = measure("generate_tree", storage, async {
-        let first = roots
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("a phase of agents needs one agent or more"))?;
-        std::fs::create_dir_all(context.work_dir.join("trees"))?;
-        trees::generate(spec, first).await
-    })
-    .await;
+    let (record, generated) =
+        measure("generate_tree", storage, generate_first(context, &roots)).await;
     let mut steps = vec![record];
     let Ok(counts) = generated else {
         return failed(facts, steps, "generate_tree", &later);
@@ -364,17 +373,39 @@ pub(super) async fn concurrent_save(context: &PhaseContext, agents: usize) -> Ph
     }
 }
 
+/// Gives the root of the tree of each of the agents.
+fn tree_roots(context: &PhaseContext, agents: usize) -> Box<[PathBuf]> {
+    (0..agents)
+        .map(|agent| context.work_dir.join("trees").join(agent.to_string()))
+        .collect()
+}
+
+/// Makes the tree of the phase at the first root.
+async fn generate_first(
+    context: &PhaseContext,
+    roots: &[PathBuf],
+) -> anyhow::Result<trees::TreeCounts> {
+    let first = roots
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("a phase of agents needs one agent or more"))?;
+    std::fs::create_dir_all(context.work_dir.join("trees"))?;
+    trees::generate(context.selection.tree, first).await
+}
+
 /// Copies the first tree to each other root, and then removes the pages of each tree from the
 /// page cache.
 async fn copy_trees(roots: &[PathBuf]) -> anyhow::Result<CopyCounts> {
     let roots = roots.to_vec();
     tokio::task::spawn_blocking(move || {
         let counts = match roots.split_first() {
-            Some((first, others)) => others
-                .iter()
-                .try_fold(CopyCounts::default(), |counts, root| {
-                    trees::copy_tree(first, root).map(|copied| counts.with(copied))
-                })?,
+            Some((first, others)) => {
+                others
+                    .iter()
+                    .try_fold(CopyCounts::default(), |counts, root| {
+                        trees::copy_tree(first, root, trees::Times::Drop)
+                            .map(|copied| counts.with(copied))
+                    })?
+            }
             None => CopyCounts::default(),
         };
         roots.iter().try_for_each(|root| trees::settle(root))?;
@@ -393,9 +424,13 @@ async fn save_agents(
 ) -> anyhow::Result<Box<[AgentRun<SaveReport>]>> {
     let name = snapshot_name(snapshot)?;
     let name = &name;
+    let settings = context.save_settings();
     Ok(
         batch(names.iter().zip(roots).map(|(agent, root)| async move {
-            context.agent_repository(agent).save(name, root).await
+            context
+                .agent_repository(agent)
+                .save_with(name, root, settings)
+                .await
         }))
         .await,
     )
@@ -409,27 +444,178 @@ fn save_batch_record(
     runs: &anyhow::Result<Box<[AgentRun<SaveReport>]>>,
 ) -> StepRecord {
     match runs {
-        Ok(runs) => {
-            let reports = runs
-                .iter()
-                .filter_map(|run| run.result.as_ref().ok())
-                .collect::<Box<[_]>>();
-            let mut details = batch_details(runs);
-            details.insert(
-                "data_added".to_string(),
-                json!(reports.iter().map(|report| report.data_added).sum::<u64>()),
-            );
-            details.insert(
-                "data_added_packed".to_string(),
-                json!(
-                    reports
-                        .iter()
-                        .map(|report| report.data_added_packed)
-                        .sum::<u64>()
-                ),
-            );
-            batch_record(record, parameters, details)
-        }
+        Ok(runs) => batch_record(record, parameters, save_batch_details(runs)),
         Err(_) => record.with_parameters(parameters),
     }
+}
+
+/// Gives the details of a batch of saves, and the sums of the data that the saves added.
+fn save_batch_details(runs: &[AgentRun<SaveReport>]) -> Map<String, Value> {
+    let reports = runs
+        .iter()
+        .filter_map(|run| run.result.as_ref().ok())
+        .collect::<Box<[_]>>();
+    let mut details = batch_details(runs);
+    details.insert(
+        "data_added".to_string(),
+        json!(reports.iter().map(|report| report.data_added).sum::<u64>()),
+    );
+    details.insert(
+        "data_added_packed".to_string(),
+        json!(
+            reports
+                .iter()
+                .map(|report| report.data_added_packed)
+                .sum::<u64>()
+        ),
+    );
+    details
+}
+
+/// A mixed phase: the repository of the first agent goes to each of `restores` agents that has
+/// none, then `saves` agents save a new tree cold and the `restores` agents restore the warm save
+/// cold, all at the same time, and the hash of each restored tree is compared with the hash that
+/// the save phase recorded.
+///
+/// The saves use the save threads of the variant of the phase, and the restores use
+/// `reader_threads`. So the step gives the memory of one choice of both values. The time of a
+/// restore is the time until its files are readable, not until they are durable, because nothing
+/// syncs the volume. The phase deletes the restored trees at its end.
+pub(super) async fn mixed(
+    context: &PhaseContext,
+    saves: usize,
+    restores: usize,
+    reader_threads: Option<NonZeroUsize>,
+) -> PhaseOutcome {
+    let into = context.work_dir.join("restore");
+    let outcome = mix(context, saves, restores, reader_threads, &into).await;
+    let _ = tokio::fs::remove_dir_all(&into).await;
+    outcome
+}
+
+async fn mix(
+    context: &PhaseContext,
+    saves: usize,
+    restores: usize,
+    reader_threads: Option<NonZeroUsize>,
+    into: &Path,
+) -> PhaseOutcome {
+    let storage = &context.storage;
+    let spec = context.selection.tree;
+    let facts = TreeFacts {
+        name: spec.name,
+        content: Some(spec.content.label()),
+        page_cache: Some("dropped"),
+        ..TreeFacts::default()
+    };
+    let parameters = json!({
+        "saves": saves,
+        "restores": restores,
+        "reader_threads": reader_threads,
+    });
+    let later = ["generate_tree", "copy_trees", "mixed", "hash_trees"];
+    let expected = match saved_hash(context).await {
+        Ok(expected) => expected,
+        Err(error) => {
+            return without_save(
+                facts,
+                &error,
+                &[
+                    "copy_scopes",
+                    "generate_tree",
+                    "copy_trees",
+                    "mixed",
+                    "hash_trees",
+                ],
+            );
+        }
+    };
+
+    let (record, copied) = measure(
+        "copy_scopes",
+        storage,
+        copy_first_agent(storage.as_ref(), &context.scope().0, restores + 1),
+    )
+    .await;
+    let mut steps = vec![record.with_details(
+        copied.as_ref().ok().cloned().unwrap_or(Value::Null),
+        Box::default(),
+    )];
+    if copied.is_err() {
+        return failed(facts, steps, "copy_scopes", &later);
+    }
+
+    let roots = tree_roots(context, saves);
+    let (record, generated) =
+        measure("generate_tree", storage, generate_first(context, &roots)).await;
+    steps.push(record);
+    let Ok(counts) = generated else {
+        return failed(facts, steps, "generate_tree", &later[1..]);
+    };
+    let facts = TreeFacts {
+        files: Some(counts.files),
+        directories: Some(counts.directories),
+        bytes: Some(counts.bytes),
+        ..facts
+    };
+    let (record, copied) = measure("copy_trees", storage, copy_trees(&roots)).await;
+    steps.push(record);
+    if copied.is_err() {
+        return failed(facts, steps, "copy_trees", &later[2..]);
+    }
+
+    let names = (0..saves)
+        .map(|agent| format!("{}-{agent}", context.selection.phase.name))
+        .collect::<Box<[_]>>();
+    let targets = (1..=restores)
+        .map(|agent| into.join(agent.to_string()))
+        .collect::<Box<[_]>>();
+    let (record, ran) = measure("mixed", storage, async {
+        targets.iter().try_for_each(std::fs::create_dir_all)?;
+        let name = snapshot_name(WARM_SAVE)?;
+        let name = &name;
+        let restoring = batch(
+            targets
+                .iter()
+                .enumerate()
+                .map(|(index, target)| async move {
+                    context
+                        .agent_repository(&(index + 1).to_string())
+                        .restore(name, target, reader_threads)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("no snapshot has the name {WARM_SAVE}"))
+                }),
+        );
+        let (saved, restored) =
+            futures::join!(save_agents(context, &names, &roots, COLD_SAVE), restoring);
+        Ok((saved?, restored))
+    })
+    .await;
+    let failed_mix = match &ran {
+        Ok((saved, restored)) => {
+            let save_details = save_batch_details(saved);
+            let restore_details = batch_details(restored);
+            let first_error = save_details
+                .get("first_error")
+                .filter(|error| !error.is_null())
+                .or_else(|| restore_details.get("first_error"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let mut details = Map::new();
+            details.insert("first_error".to_string(), first_error);
+            details.insert("saves".to_string(), Value::Object(save_details));
+            details.insert("restores".to_string(), Value::Object(restore_details));
+            steps.push(batch_record(record, parameters, details));
+            !(saved.iter().all(|run| run.result.is_ok())
+                && restored.iter().all(|run| run.result.is_ok()))
+        }
+        Err(_) => {
+            steps.push(record.with_parameters(parameters));
+            true
+        }
+    };
+    if failed_mix {
+        return failed(facts, steps, "mixed", &later[3..]);
+    }
+    compare_hashes(context, facts, steps, &targets, &expected).await
 }

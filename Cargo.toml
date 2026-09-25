@@ -84,6 +84,7 @@ bit-vec = { version = "0.6.3", features = ["serde"] }
 bitflags = "2.6.0"
 blake3 = { version = "1.8.2", features = ["rayon"] }
 bytes = "1.10.1"
+bytesize = "2.7.0"
 camino = "1.1.10"
 cap-fs-ext = "3.4.5" # keep in sync with wasmtime
 cap-std = "3.4.5" # keep in sync with wasmtime
@@ -344,7 +345,7 @@ wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 # The head of the branch `golem-rustic_core-v0.13.0` of the fork.
-rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "b4ee9228ccb09f3babddbce24b032a0bb123d7ca" }
+rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "b1f72158c3b07c2efb8c546aa9d2aaff0819ea95" }
 
 [profile.dev]
 panic = "abort"
