@@ -217,8 +217,9 @@ impl RusticSnapshotStore {
     /// Cancels each operation, so each running storage call ends and no new call starts, and later
     /// operations give `Storage`. A publish that starts before the cancel runs to its end. A save
     /// that reaches its publish after the cancel publishes nothing and gives `Storage`. The call
-    /// waits until no blocking task, backend, publish or delete of a dropped publish remains. The runtime must not drop before it
-    /// returns, because a storage call after its time driver stops aborts the process.
+    /// waits until no blocking task, backend, publish or delete of a dropped publish remains. The
+    /// runtime must not drop before it returns, because a storage call after its time driver stops
+    /// aborts the process.
     pub(crate) async fn shut_down(&self) {
         self.root.cancel();
         self.tracker.close();
