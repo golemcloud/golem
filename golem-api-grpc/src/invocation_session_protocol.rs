@@ -98,7 +98,6 @@ pub struct InvocationSessionState {
     resume_attempt_id: Option<crate::proto::golem::common::Uuid>,
     resume_callee_fingerprint: Option<crate::proto::golem::common::Uuid>,
     resume_accepted_epoch: Option<u64>,
-    terminal_resume_cursors: HashSet<(u64, u64)>,
     has_result: bool,
     inputs: HashMap<u64, InputState>,
     outputs: HashMap<u64, OutputState>,
@@ -123,7 +122,6 @@ impl Default for InvocationSessionState {
             resume_attempt_id: None,
             resume_callee_fingerprint: None,
             resume_accepted_epoch: None,
-            terminal_resume_cursors: HashSet::new(),
             has_result: false,
             inputs: HashMap::new(),
             outputs: HashMap::new(),
@@ -420,25 +418,6 @@ impl InvocationSessionState {
 
     pub fn all_inputs_terminal(&self) -> bool {
         self.inputs.values().all(|state| state.terminal)
-    }
-
-    pub fn mark_terminal_resume_cursor(
-        &mut self,
-        durable_stream_id: (u64, u64),
-    ) -> Result<(), String> {
-        if !matches!(self.phase, SessionPhase::AwaitDecision { resume: true }) {
-            return Err(
-                "terminal resume cursors can only be marked before resume acceptance".to_string(),
-            );
-        }
-        match self.resume_cursors.get(&durable_stream_id) {
-            Some(Some(_)) => {
-                self.terminal_resume_cursors.insert(durable_stream_id);
-                Ok(())
-            }
-            Some(None) => Err("a stream-start resume cursor cannot be terminal".to_string()),
-            None => Err("terminal resume cursor was not requested".to_string()),
-        }
     }
 
     fn validate_request(
@@ -782,6 +761,20 @@ impl InvocationSessionState {
             {
                 return Err("resume cursor may only name an output stream".to_string());
             }
+            let mut terminal_resume_cursors = HashSet::new();
+            for id in &accepted.terminal_cursor_stream_ids {
+                let id = (id.high_bits, id.low_bits);
+                if !terminal_resume_cursors.insert(id) {
+                    return Err("duplicate terminal resume cursor".to_string());
+                }
+                match self.resume_cursors.get(&id) {
+                    Some(Some(_)) => {}
+                    Some(None) => {
+                        return Err("a stream-start resume cursor cannot be terminal".to_string());
+                    }
+                    None => return Err("terminal resume cursor was not requested".to_string()),
+                }
+            }
             for mapping in &accepted.stream_mappings {
                 let durable_stream_id = mapping_stream_id(mapping)?;
                 match mapping.role() {
@@ -817,7 +810,7 @@ impl InvocationSessionState {
                         );
                     }
                     StreamMappingRole::Output => {
-                        let terminal = self.terminal_resume_cursors.contains(&durable_stream_id);
+                        let terminal = terminal_resume_cursors.contains(&durable_stream_id);
                         self.outputs.insert(
                             mapping.transport_stream_id,
                             OutputState {
@@ -844,6 +837,9 @@ impl InvocationSessionState {
             self.accepted_epoch = Some(accepted.epoch);
             self.phase = SessionPhase::Active;
             return Ok(());
+        }
+        if !accepted.terminal_cursor_stream_ids.is_empty() {
+            return Err("terminal cursors require resume acceptance".to_string());
         }
         let durable_acceptance = accepted.joined_origin_observer
             || !self.inputs.is_empty()
@@ -3133,15 +3129,59 @@ mod tests {
                 last_observed_offset: Some(durable_offset(1)),
             }]))
             .unwrap();
-        state.mark_terminal_resume_cursor((0, 107)).unwrap();
-        state
-            .validate_response(&resumed_acceptance(vec![mapping(
-                7,
-                StreamMappingRole::Output,
-            )]))
-            .unwrap();
+        let mut acceptance = resumed_acceptance(vec![mapping(7, StreamMappingRole::Output)]);
+        let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response.as_mut()
+        else {
+            unreachable!()
+        };
+        accepted.terminal_cursor_stream_ids = vec![uuid(107)];
+        state.validate_response(&acceptance).unwrap();
         state.validate_response(&result(stream(7))).unwrap();
         state.validate_response(&success()).unwrap();
+    }
+
+    #[test]
+    fn terminal_resume_cursors_require_unique_requested_output_offsets() {
+        for invalid in 0..6 {
+            let mut state = InvocationSessionState::default();
+            let cursor = StreamCursor {
+                stream_id: Some(uuid(107)),
+                last_observed_offset: (invalid != 0).then(|| durable_offset(1)),
+            };
+            if invalid == 5 {
+                state
+                    .validate_public_request(&public_start(record(Vec::new())))
+                    .unwrap();
+            } else {
+                state
+                    .validate_public_request(&resume_attach(vec![cursor]))
+                    .unwrap();
+            }
+            let mut acceptance = if invalid == 5 {
+                accepted()
+            } else {
+                resumed_acceptance(vec![mapping(7, StreamMappingRole::Output)])
+            };
+            let Some(invocation_response::Response::Accepted(accepted)) =
+                acceptance.response.as_mut()
+            else {
+                unreachable!()
+            };
+            accepted.terminal_cursor_stream_ids = match invalid {
+                1 => vec![uuid(108)],
+                2 => vec![uuid(107), uuid(107)],
+                _ => vec![uuid(107)],
+            };
+            if invalid == 3 {
+                accepted.stream_mappings.clear();
+            } else if invalid == 4 {
+                accepted.stream_mappings[0].role = StreamMappingRole::Input as i32;
+            }
+            assert!(
+                state.validate_response(&acceptance).is_err(),
+                "case {invalid}"
+            );
+        }
     }
 
     #[test]
@@ -3620,13 +3660,13 @@ mod tests {
                 last_observed_offset: Some(durable_offset(6)),
             }]))
             .unwrap();
-        state.mark_terminal_resume_cursor((0, 109)).unwrap();
-        state
-            .validate_response(&resumed_acceptance(vec![mapping(
-                9,
-                StreamMappingRole::Output,
-            )]))
-            .unwrap();
+        let mut acceptance = resumed_acceptance(vec![mapping(9, StreamMappingRole::Output)]);
+        let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response.as_mut()
+        else {
+            unreachable!()
+        };
+        accepted.terminal_cursor_stream_ids = vec![uuid(109)];
+        state.validate_response(&acceptance).unwrap();
         state.validate_response(&result(stream(9))).unwrap();
         let mut terminal = cancel(9, StreamCancelRole::OutputProducer, 7);
         terminal.epoch = 2;

@@ -616,7 +616,6 @@ async fn unloaded_workers_are_evicted_after_ttl_only_when_exclusively_cached(
         TestExecutorOverrides {
             configure: Some(Arc::new(|config| {
                 config.active_agents.ttl = TEST_TTL;
-                config.durable_stream.renewal_interval = Duration::from_millis(5);
                 config.durable_stream.reconciliation_interval = Duration::from_millis(5);
             })),
             ..TestExecutorOverrides::default()

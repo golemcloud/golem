@@ -1704,7 +1704,7 @@ pub mod durable_stream {
             record_backpressure();
             record_attempt("resume", "accepted", Some(2));
             record_journal_lag(1);
-            record_attachment_operation("renew", "committed");
+            record_attachment_operation("activate", "committed");
             record_lease_remaining(20_000);
             record_reconciliation("active");
             record_cascade("complete");

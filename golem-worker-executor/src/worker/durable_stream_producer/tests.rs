@@ -22,6 +22,37 @@ fn unused_commit() -> DurableStreamCommit {
 
 #[test]
 #[test_r::timeout("10s")]
+async fn first_load_and_retirement_wake_parked_recovery() {
+    let slot = Arc::new(DurableStreamProducerSlot::default());
+    let mut changed = Box::pin(slot.changed().notified());
+    changed.as_mut().enable();
+    assert!(!slot.has_history());
+    let (release, released) = tokio::sync::oneshot::channel();
+    let loading = tokio::spawn({
+        let slot = slot.clone();
+        async move {
+            slot.get_or_load(unused_commit(), || async move {
+                released.await.unwrap();
+                load().await
+            })
+            .await
+        }
+    });
+    changed.await;
+    assert!(slot.has_history());
+    assert!(!loading.is_finished());
+    release.send(()).unwrap();
+    loading.await.unwrap().unwrap();
+
+    let mut changed = Box::pin(slot.changed().notified());
+    changed.as_mut().enable();
+    assert!(slot.try_retire_quiescent());
+    changed.await;
+    assert!(slot.is_retired());
+}
+
+#[test]
+#[test_r::timeout("10s")]
 async fn nested_lookup_does_not_wait_for_its_own_activity_to_drain() {
     for external_reload in [false, true] {
         let slot = Arc::new(DurableStreamProducerSlot::default());

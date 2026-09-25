@@ -58,11 +58,11 @@ use golem_common::model::{AgentInvocationPayload, OwnedAgentId};
 use golem_schema::schema::SchemaFingerprintV1;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{test, timeout};
-use tokio::sync::{Barrier, Notify, oneshot};
+use tokio::sync::{Barrier, Notify, Semaphore, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -844,12 +844,14 @@ async fn publication_waits_until_admitted_session_lock_is_released() {
                     let _guard = lock.lock().await;
                     admission
                         .submit(move |_, context| async move {
+                            context.begin_lifecycle_publication().await?;
                             context.defer_publication(Box::pin(async move {
                                 Ok(publication.await.unwrap())
                             }));
                             Ok::<(), StreamStoreError>(())
                         })
                         .await?;
+                    admission.wait_published().await?;
                     written.send(()).unwrap();
                     Ok::<(), StreamStoreError>(())
                 })
@@ -870,8 +872,240 @@ async fn publication_waits_until_admitted_session_lock_is_released() {
         } else {
             assert_eq!(live.owned_operations.available_permits(), 15);
         }
+        assert_eq!(
+            live.observe_publication(async { Ok(37) }).await.unwrap(),
+            37
+        );
         published.send(Ok(())).unwrap();
         operation.await.unwrap().unwrap();
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn lifecycle_publication_gate_joins_all_tails_without_retaining_inactive_contexts() {
+    for fail_first_tail in [false, true] {
+        let owner = identity();
+        let releases = [Arc::new(Semaphore::new(0)), Arc::new(Semaphore::new(0))];
+        let completed = Arc::new(AtomicUsize::new(0));
+        let next_tail = Arc::new(AtomicUsize::new(0));
+        let (tail_done, mut completions) = tokio::sync::mpsc::unbounded_channel();
+        let commit: DurableStreamCommit = Arc::new({
+            let releases = releases.clone();
+            let completed = completed.clone();
+            move |receipt| {
+                let tail = next_tail.fetch_add(1, Ordering::SeqCst);
+                let release = releases[tail].clone();
+                let completed = completed.clone();
+                let tail_done = tail_done.clone();
+                Box::pin(async move {
+                    receipt.unwrap().send(Ok(())).unwrap();
+                    release.acquire().await.unwrap().forget();
+                    completed.fetch_add(1, Ordering::SeqCst);
+                    tail_done.send(tail).unwrap();
+                    assert!(!(fail_first_tail && tail == 0), "publication failed");
+                })
+            }
+        });
+        let live = DurableStreamStore::load_with_commit(
+            Arc::new(TestOplog::default()),
+            owner.environment_id,
+            owner.agent_id,
+            owner.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let (returned, context) = oneshot::channel();
+        let caller = tokio::spawn({
+            let live = live.clone();
+            async move {
+                live.run_admitted(None, 0, false, move |_, admission| async move {
+                    let context = admission
+                        .submit(|owner, context| async move {
+                            context.begin_lifecycle_publication().await?;
+                            context
+                                .run_nested(|_, nested| async move {
+                                    nested.begin_lifecycle_publication().await
+                                })
+                                .await?;
+                            owner.commit(&context).await?;
+                            owner.commit(&context).await?;
+                            context.finish_durable_effect();
+                            Ok::<_, StreamStoreError>(context)
+                        })
+                        .await?;
+                    returned.send(context).ok().unwrap();
+                    Ok::<_, StreamStoreError>(())
+                })
+                .await
+            }
+        });
+        let inactive_context = context.await.unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        let observed = Arc::new(AtomicBool::new(false));
+        let observation = live.observe_publication({
+            let observed = observed.clone();
+            let completed = completed.clone();
+            async move {
+                observed.store(true, Ordering::SeqCst);
+                Ok(completed.load(Ordering::SeqCst))
+            }
+        });
+        tokio::pin!(observation);
+        assert!(futures::poll!(&mut observation).is_pending());
+        let (entered, entering) = oneshot::channel();
+        let second = tokio::spawn({
+            let live = live.clone();
+            async move {
+                live.run_lifecycle(None, 0, |_, context| async move {
+                    entered.send(()).unwrap();
+                    context.begin_lifecycle_publication().await?;
+                    Ok::<_, StreamStoreError>(42)
+                })
+                .await
+            }
+        });
+        entering.await.unwrap();
+        assert!(!second.is_finished());
+        releases[0].add_permits(1);
+        assert_eq!(completions.recv().await, Some(0));
+        if fail_first_tail {
+            live.retirement.cancelled().await;
+        }
+        assert!(live.publication_gate.try_lock().is_err());
+        assert!(futures::poll!(&mut observation).is_pending());
+        releases[1].add_permits(1);
+        assert_eq!(completions.recv().await, Some(1));
+        if fail_first_tail {
+            assert_eq!(observation.await, Err(StreamStoreError::RecoveryRequired));
+            assert!(!observed.load(Ordering::SeqCst));
+            assert_eq!(
+                second.await.unwrap(),
+                Err(StreamStoreError::RecoveryRequired)
+            );
+        } else {
+            assert_eq!(observation.await.unwrap(), 2);
+            assert!(observed.load(Ordering::SeqCst));
+            assert_eq!(second.await.unwrap().unwrap(), 42);
+        }
+        drop(inactive_context);
+        live.wait_durable_drained().await;
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn failed_publication_observation_fences_queued_writes_before_releasing_gate() {
+    for panic in [false, true] {
+        let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+        let (release, released) = oneshot::channel();
+        let observation = live.observe_publication(async move {
+            released.await.unwrap();
+            assert!(!panic, "status actor lost");
+            Err::<(), _>(StreamStoreError::Oplog(
+                "status reconstruction failed".into(),
+            ))
+        });
+        tokio::pin!(observation);
+        assert!(futures::poll!(&mut observation).is_pending());
+        let wrote = Arc::new(AtomicBool::new(false));
+        let (entered, entering) = oneshot::channel();
+        let writer = tokio::spawn({
+            let live = live.clone();
+            let wrote = wrote.clone();
+            async move {
+                live.run_lifecycle(None, 0, move |_, context| async move {
+                    entered.send(()).unwrap();
+                    context.begin_lifecycle_publication().await?;
+                    wrote.store(true, Ordering::SeqCst);
+                    Ok::<_, StreamStoreError>(())
+                })
+                .await
+            }
+        });
+        entering.await.unwrap();
+        release.send(()).unwrap();
+        let error = observation.await.unwrap_err();
+        assert!(matches!(error, StreamStoreError::Oplog(_)));
+        assert_eq!(
+            writer.await.unwrap(),
+            Err(StreamStoreError::RecoveryRequired)
+        );
+        assert!(!wrote.load(Ordering::SeqCst));
+        assert!(live.publication_gate.try_lock().is_ok());
+        live.wait_durable_drained().await;
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn guarded_publication_wait_survives_caller_cancellation_after_submit() {
+    for fail_write in [false, true] {
+        let identity = identity();
+        let release = Arc::new(Notify::new());
+        let folded = Arc::new(AtomicBool::new(false));
+        let commit: DurableStreamCommit = Arc::new({
+            let release = release.clone();
+            let folded = folded.clone();
+            move |receipt| {
+                let release = release.clone();
+                let folded = folded.clone();
+                Box::pin(async move {
+                    receipt.unwrap().send(Ok(())).unwrap();
+                    release.notified().await;
+                    folded.store(true, Ordering::Release);
+                })
+            }
+        });
+        let live = DurableStreamStore::load_with_commit(
+            Arc::new(TestOplog::default()),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let lock = live.session_lock(&identity.invocation);
+        let (written, write_done) = oneshot::channel();
+        let caller = tokio::spawn({
+            let live = live.clone();
+            let lock = lock.clone();
+            async move {
+                live.run_admitted(None, 0, true, move |_, admission| async move {
+                    let _guard = lock.lock().await;
+                    let outcome = admission
+                        .submit(move |owner, context| async move {
+                            owner.commit(&context).await?;
+                            context.finish_durable_effect();
+                            if fail_write {
+                                Err(StreamStoreError::Oplog("write failed after commit".into()))
+                            } else {
+                                Ok(())
+                            }
+                        })
+                        .await;
+                    written.send(()).unwrap();
+                    admission.wait_published().await?;
+                    outcome
+                })
+                .await
+            }
+        });
+        write_done.await.unwrap();
+        assert!(!folded.load(Ordering::Acquire));
+        assert!(lock.try_lock().is_err());
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        assert!(lock.try_lock().is_err());
+        release.notify_one();
+        let _guard = lock.lock().await;
+        assert!(folded.load(Ordering::Acquire));
+        live.wait_durable_drained().await;
     }
 }
 
@@ -1669,7 +1903,6 @@ async fn reconcile(
     producer
         .reconcile_attachments_configured(
             now_millis,
-            golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RENEWAL_TARGET_MILLIS,
             golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_BATCH_SIZE,
             probe,
         )
@@ -2098,38 +2331,51 @@ async fn attachment_lifecycle_is_idempotent_fenced_and_rebuildable() {
             .replayed
     );
     assert_eq!(oplog.committed_length(), after_activate);
+    assert_eq!(
+        live.attachment_view(&key)
+            .await
+            .unwrap()
+            .lease_expires_at_millis,
+        None
+    );
     assert!(
         live.read_attached_segment(&key, &handle, 121, None, None)
             .await
             .unwrap()
             .is_empty()
     );
+    assert!(
+        live.read_attached_segment(&key, &handle, u64::MAX, None, None,)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(oplog.committed_length(), after_activate);
+    live.write_items(
+        None,
+        handle.stream_id,
+        0,
+        StreamItemsPayload::PackedU8(vec![13, 29]),
+    )
+    .await
+    .unwrap();
+    let before_read = oplog.committed_length();
+    drop(live);
+    let live = producer(oplog.clone(), &identity, None).await;
+    let events = live
+        .read_attached_segment(&key, &handle, u64::MAX, None, None)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 2);
     assert_eq!(
-        live.read_attached_segment(
-            &key,
-            &handle,
-            120 + STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
-            None,
-            None,
-        )
-        .await,
-        Err(StreamStoreError::LeaseExpired)
+        events[0].payload,
+        CommittedProducerStreamEventPayload::PackedU8(13)
     );
-    assert!(
-        !live
-            .renew_attachment(key.clone(), 130)
-            .await
-            .unwrap()
-            .replayed
+    assert_eq!(
+        events[1].payload,
+        CommittedProducerStreamEventPayload::PackedU8(29)
     );
-    let after_renew = oplog.committed_length();
-    assert!(
-        live.renew_attachment(key.clone(), 130)
-            .await
-            .unwrap()
-            .replayed
-    );
-    assert_eq!(oplog.committed_length(), after_renew);
+    assert_eq!(oplog.committed_length(), before_read);
     assert!(
         !live
             .finalize_attachment(
@@ -2377,7 +2623,6 @@ async fn attachment_prepare_advances_epochs_from_every_remote_recovery_state() {
         for result in [
             live.prepare_attachment(old.clone(), 112).await.map(|_| ()),
             live.activate_attachment(old.clone(), 112).await.map(|_| ()),
-            live.renew_attachment(old.clone(), 112).await.map(|_| ()),
             live.finalize_attachment(
                 old.clone(),
                 StreamAttachmentFinalizationReason::ConsumerFinalized,
@@ -2664,7 +2909,7 @@ async fn producer_rejects_handles_with_altered_non_identity_metadata_before_atta
 }
 
 #[test]
-async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
+async fn deletion_is_fail_closed_for_prepared_and_quiet_active_references() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog, &identity, None).await;
@@ -2681,16 +2926,11 @@ async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
             if dependents == std::slice::from_ref(&key)
     ));
     live.activate_attachment(key.clone(), 110).await.unwrap();
-    assert_eq!(
-        live.read_attached_segment(
-            &key,
-            &first,
-            110 + STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
-            None,
-            None,
-        )
-        .await,
-        Err(StreamStoreError::LeaseExpired)
+    assert!(
+        live.read_attached_segment(&key, &first, u64::MAX, None, None,)
+            .await
+            .unwrap()
+            .is_empty()
     );
     assert!(matches!(
         live.commit_deletion_barrier(1_000, true).await,
@@ -2817,7 +3057,7 @@ async fn deleting_producer_restarts_without_renewing_before_cascade_retry() {
     };
     assert_eq!(
         restarted
-            .reconcile_attachments_configured(1_000, 1, 256, &probe)
+            .reconcile_attachments_configured(1_000, 256, &probe)
             .await
             .unwrap(),
         0
@@ -5991,6 +6231,226 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
 }
 
 #[test]
+async fn reverted_result_replay_preserves_foreign_handles_without_live_authority() {
+    for mixed in [false, true] {
+        for retained_stage in 0..3 {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let before_source = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            let live = producer(oplog.clone(), &identity, None).await;
+            let source_request = root_registration(&identity);
+            let stale = live
+                .register(None, source_request.clone())
+                .await
+                .unwrap()
+                .value;
+            let after_source = oplog.current_oplog_index().await;
+            let mut request = source_request.clone();
+            let StreamRegistrationCoordinate::Root {
+                recursive_value_path,
+                ..
+            } = &mut request.coordinate
+            else {
+                unreachable!()
+            };
+            recursive_value_path.push(StreamValuePathStep::RecordField(1));
+            let outputs = |handle, cancellation_epoch| {
+                let mut outputs = Vec::new();
+                if mixed {
+                    outputs.push(ProducerOutputRegistration {
+                        transport_stream_id: 31,
+                        source: ProducerOutputSource::New(request.clone()),
+                        cancellation_epoch,
+                    });
+                }
+                outputs.push(ProducerOutputRegistration {
+                    transport_stream_id: 12,
+                    source: ProducerOutputSource::Existing(handle),
+                    cancellation_epoch,
+                });
+                outputs
+            };
+            let original = live
+                .register_result_streams(
+                    None,
+                    identity.invocation.clone(),
+                    vec![4, 5],
+                    outputs(stale.clone(), None),
+                    None,
+                )
+                .await
+                .unwrap();
+            let after_result = oplog.current_oplog_index().await;
+            oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
+            let cut = DurableStreamStore::prepare_fork_cut(
+                oplog.as_ref(),
+                (&owner, identity.fingerprint),
+                (&owner, identity.fingerprint),
+                oplog.current_oplog_index().await,
+                [before_source, after_source, after_result][retained_stage],
+                None,
+                [0; 32],
+                true,
+            )
+            .await
+            .unwrap();
+            let marker = DurableStreamOplogRecord::Session(
+                None,
+                Box::new(StreamSessionRecord::ForkCut(cut.clone())),
+            )
+            .into_inline_entry();
+            oplog
+                .add_pair(
+                    OplogEntry::revert(cut.revert.unwrap()),
+                    Box::new(move |_| marker),
+                )
+                .await
+                .unwrap();
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            drop(live);
+            let recovered = producer(oplog.clone(), &identity, None).await;
+            let tip = oplog.current_oplog_index().await;
+            let commits = oplog.commit_count();
+            let result = recovered
+                .register_result_streams(
+                    None,
+                    identity.invocation.clone(),
+                    vec![4, 5],
+                    outputs(stale.clone(), Some(7)),
+                    None,
+                )
+                .await;
+            if retained_stage == 2 {
+                let replay = result.unwrap();
+                assert_eq!(replay.session_record, original.session_record);
+                assert_eq!(replay.handles.len(), usize::from(mixed));
+                for handle in replay.handles {
+                    assert_eq!(handle.producer_generation, recovered.generation());
+                    assert_ne!(handle.producer_generation, stale.producer_generation);
+                }
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![4, 5],
+                            outputs(stale.clone(), Some(0)),
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::InvalidAttachmentState
+                );
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![9, 5],
+                            outputs(stale.clone(), None),
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::RegistrationDivergence
+                );
+                let refreshed = recovered
+                    .handle_for_coordinate(&source_request.coordinate)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![4, 5],
+                            outputs(refreshed.clone(), None),
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::RegistrationDivergence
+                );
+                let mut changed_mapping = outputs(stale.clone(), None);
+                changed_mapping.last_mut().unwrap().transport_stream_id = 13;
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![4, 5],
+                            changed_mapping,
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::RegistrationDivergence
+                );
+                if mixed {
+                    let mut changed_registration = outputs(stale.clone(), None);
+                    let ProducerOutputSource::New(request) = &mut changed_registration[0].source
+                    else {
+                        unreachable!()
+                    };
+                    request.element_schema_fingerprint = SchemaFingerprintV1([99; 32]);
+                    assert_eq!(
+                        recovered
+                            .register_result_streams(
+                                None,
+                                identity.invocation.clone(),
+                                vec![4, 5],
+                                changed_registration,
+                                None,
+                            )
+                            .await
+                            .unwrap_err(),
+                        StreamStoreError::InvalidHandle
+                    );
+                }
+                // Cancellation hints on exact replay must not change an open source.
+                let head = recovered.stream_head(&refreshed).await.unwrap();
+                assert!(!head.closed && !head.cancelled);
+                assert_eq!(
+                    recovered
+                        .local_binding(12, &stale, SessionStreamRole::Output)
+                        .await,
+                    Err(StreamStoreError::InvalidHandle)
+                );
+            } else {
+                // Includes a discarded source and a mixed new registration: neither may write.
+                assert_eq!(result.unwrap_err(), StreamStoreError::InvalidHandle);
+            }
+            assert_eq!(oplog.current_oplog_index().await, tip);
+            assert_eq!(oplog.commit_count(), commits);
+            recovered
+                .commit_deletion_barrier(1_000, true)
+                .await
+                .unwrap();
+            let tip = oplog.current_oplog_index().await;
+            let commits = oplog.commit_count();
+            assert_eq!(
+                recovered
+                    .register_result_streams(
+                        None,
+                        identity.invocation.clone(),
+                        vec![4, 5],
+                        outputs(stale, Some(7)),
+                        None,
+                    )
+                    .await
+                    .unwrap_err(),
+                StreamStoreError::ProducerDeleting
+            );
+            assert_eq!(oplog.current_oplog_index().await, tip);
+            assert_eq!(oplog.commit_count(), commits);
+        }
+    }
+}
+
+#[test]
 async fn result_registration_cancels_outputs_before_publishing_the_result() {
     for new_output in [false, true] {
         let identity = identity();
@@ -7570,6 +8030,101 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
     notification.await;
     assert!(folded.load(Ordering::Acquire));
     live.wait_durable_drained().await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn stream_terminals_wake_session_recovery_after_fold_but_items_do_not() {
+    for cancel in [false, true] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let block = Arc::new(AtomicBool::new(false));
+        let committed = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let folded = Arc::new(AtomicBool::new(false));
+        let commit: DurableStreamCommit = Arc::new({
+            let oplog = oplog.clone();
+            let block = block.clone();
+            let committed = committed.clone();
+            let release = release.clone();
+            let folded = folded.clone();
+            move |receipt| {
+                let oplog = oplog.clone();
+                let block = block.clone();
+                let committed = committed.clone();
+                let release = release.clone();
+                let folded = folded.clone();
+                Box::pin(async move {
+                    oplog.commit(CommitLevel::Always).await.unwrap();
+                    if let Some(receipt) = receipt {
+                        let _ = receipt.send(Ok(()));
+                    }
+                    if block.swap(false, Ordering::AcqRel) {
+                        committed.notify_one();
+                        release.notified().await;
+                        folded.store(true, Ordering::Release);
+                    }
+                })
+            }
+        });
+        let live = DurableStreamStore::load_with_commit(
+            oplog,
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let handle = live
+            .register(None, root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        live.wait_durable_drained().await;
+        let mut notification = Box::pin(live.session_records_changed().notified());
+        notification.as_mut().enable();
+        live.write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::Values(vec![vec![3]]),
+        )
+        .await
+        .unwrap();
+        live.wait_durable_drained().await;
+        assert!(futures::poll!(notification.as_mut()).is_pending());
+
+        block.store(true, Ordering::Release);
+        let caller = tokio::spawn({
+            let live = live.clone();
+            async move {
+                if cancel {
+                    live.cancel_open(
+                        None,
+                        handle.stream_id,
+                        StreamCancelRole::InputConsumer,
+                        StreamCancelReason::GuestDrop,
+                        None,
+                    )
+                    .await
+                } else {
+                    live.end_open(None, handle.stream_id, StreamEndResult::Ok)
+                        .await
+                }
+            }
+        });
+        committed.notified().await;
+        assert!(futures::poll!(notification.as_mut()).is_pending());
+        assert!(!folded.load(Ordering::Acquire));
+        caller.abort();
+        let _ = caller.await;
+        release.notify_one();
+        notification.await;
+        assert!(folded.load(Ordering::Acquire));
+        live.wait_durable_drained().await;
+    }
 }
 
 #[test]

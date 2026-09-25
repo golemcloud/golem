@@ -33,7 +33,26 @@ pub trait WorkerExecutor: Send + Sync {
 
     fn grpc_port(&self) -> u16;
 
-    async fn kill(&self);
+    /// Hard kill and reap the owned child before the deadline. Unsupported
+    /// executors fail closed; absence of a child handle is not proof of exit.
+    async fn kill_and_wait(&self, _deadline: tokio::time::Instant) -> anyhow::Result<()> {
+        anyhow::bail!("kill-and-wait requires a spawned worker executor")
+    }
+
+    fn is_reaped(&self) -> bool {
+        false
+    }
+
+    /// Holds the lifecycle lock only if this process has been reaped, preventing
+    /// concurrent restart while test code alters derived storage.
+    async fn lock_reaped(&self) -> anyhow::Result<Box<dyn Send + Sync>> {
+        anyhow::bail!("storage mutation requires a reaped spawned executor")
+    }
+
+    /// URL and generation of the spawned process, for reset-aware metrics.
+    fn metrics_endpoint(&self) -> Option<(String, u64)> {
+        None
+    }
 
     async fn restart(&self);
 

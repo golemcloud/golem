@@ -434,7 +434,6 @@ impl StreamForkLineage {
                 record,
                 StreamSessionRecord::AttachmentPrepared(_)
                     | StreamSessionRecord::AttachmentActivated(_)
-                    | StreamSessionRecord::AttachmentRenewed(_)
                     | StreamSessionRecord::AttachmentFinalized(_)
                     | StreamSessionRecord::TopologyPrepared(_)
                     | StreamSessionRecord::TopologyActivated(_)

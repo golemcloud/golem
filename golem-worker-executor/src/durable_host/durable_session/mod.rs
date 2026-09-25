@@ -55,13 +55,15 @@ use golem_common::base_model::durable_stream::{
     StreamCallerAttemptRecord, StreamCancelReason, StreamCancelRole,
     StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
     StreamConsumerItemValueRecord, StreamConsumerTerminal, StreamConsumerTerminalRecord,
-    StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamOffset, StreamRecordReference,
-    StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamResumeOperation,
-    StreamRootKind, StreamSessionDetachedRecord, StreamSessionInvocationResultRecord,
-    StreamSessionKey, StreamSessionMapping, StreamSessionMappingRecord,
-    StreamSessionMappingUpdateRecord, StreamSessionRecord, StreamSessionResumeAttemptRecord,
-    StreamSlotTombstonedRecord, StreamSourceKind, StreamTopologyActivatedRecord,
-    StreamTopologyPreparedRecord, StreamValuePathStep,
+    StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamOffset,
+    StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
+    StreamReaderForwardPublication, StreamRecordReference, StreamRegistrationCoordinate,
+    StreamRegistrationInvocation, StreamResumeOperation, StreamRootKind,
+    StreamSessionDetachedRecord, StreamSessionInvocationResultRecord, StreamSessionKey,
+    StreamSessionMapping, StreamSessionMappingRecord, StreamSessionMappingUpdateRecord,
+    StreamSessionRecord, StreamSessionResumeAttemptRecord, StreamSlotTombstonedRecord,
+    StreamSourceKind, StreamTopologyActivatedRecord, StreamTopologyPreparedRecord,
+    StreamValuePathStep,
 };
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
@@ -1330,6 +1332,10 @@ impl StreamSession {
         // validation so another output pump cannot observe coverage before the mappings exist.
         let mut covered = self.recovered_mappings_through.lock().await;
         let metadata = self.current_control_metadata().await?;
+        self.next_transport_stream_id.fetch_max(
+            metadata.next_reserved_transport_stream_id()?,
+            Ordering::AcqRel,
+        );
         let RecoveredMappings {
             covered_through: horizon,
             mappings,
@@ -1639,6 +1645,7 @@ impl StreamSession {
             .has_persisted_mapping(&binding))
     }
 
+    #[cfg(test)]
     async fn ensure_nested_mapping(
         &self,
         context: Option<&Arc<StreamWriteAdmission>>,
@@ -1657,12 +1664,14 @@ impl StreamSession {
             .await
     }
 
+    #[cfg(test)]
     async fn ensure_nested_mapping_under_lock(
         &self,
         admission: &Arc<StreamWriteAdmission>,
         handle: DurableStreamHandle,
         role: SessionStreamRole,
     ) -> Result<StreamSessionMappingRecord, SessionError> {
+        self.recover_session_mappings().await?;
         if let Some(mapping) =
             self.mapping_for_reference(&StreamRecordReference::Foreign(handle.clone()), role)
         {
@@ -1673,7 +1682,18 @@ impl StreamSession {
             handle,
             role,
         };
+        self.activate_nested_mapping_under_lock(admission, mapping.clone())
+            .await?;
+        Ok(mapping)
+    }
+
+    async fn activate_nested_mapping_under_lock(
+        &self,
+        admission: &Arc<StreamWriteAdmission>,
+        mapping: StreamSessionMappingRecord,
+    ) -> Result<(), StreamStoreError> {
         if self.producer.owns_handle_identity(&mapping.handle) {
+            self.producer.validate_handle(&mapping.handle).await?;
             let binding = StreamBindingRecord::foreign(&mapping);
             let session = self.clone();
             let persisted_binding = binding.clone();
@@ -1687,12 +1707,17 @@ impl StreamSession {
             self.insert_binding_mapping(binding, mapping.clone())?;
         } else {
             let rpc = self.rpc.clone().ok_or_else(|| {
-                "foreign durable stream control routing is unavailable".to_string()
+                StreamStoreError::Oplog(
+                    "foreign durable stream control routing is unavailable".to_string(),
+                )
             })?;
             let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
-                "foreign durable stream consumer authorization is unavailable".to_string()
+                StreamStoreError::Oplog(
+                    "foreign durable stream consumer authorization is unavailable".to_string(),
+                )
             })?;
-            let attachment = self.attachment_key(&mapping.handle, self.reader_epoch().await?)?;
+            let epoch = self.reader_epoch().await?;
+            let attachment = self.attachment_key(&mapping.handle, epoch)?;
             let control = RoutedStreamAttachmentControl::new(rpc, mapping.clone(), auth_ctx);
             self.activate_forwarded_mapping_under_lock(
                 admission,
@@ -1703,7 +1728,7 @@ impl StreamSession {
             )
             .await?;
         }
-        Ok(mapping)
+        Ok(())
     }
 
     /// Attaches a fingerprint-validated foreign handle and returns its transport mapping.
@@ -2692,7 +2717,7 @@ impl StreamSession {
         struct PendingInput {
             path: Vec<StreamValuePathStep>,
             endpoint: Option<LiveStreamEndpoint>,
-            forwarded_handle: Option<DurableStreamHandle>,
+            forwarded_input: Option<ForwardedDurableInput>,
             element_type: SchemaType,
             element_schema_fingerprint: SchemaFingerprintV1,
         }
@@ -2711,8 +2736,8 @@ impl StreamSession {
                 let element_schema_fingerprint =
                     schema_fingerprint_v1(&graph, element).map_err(|error| error.to_string())?;
                 let forwarded = forwarded_durable_input_reference(stream)?;
-                let (endpoint, forwarded_handle) = match forwarded {
-                    Some(forwarded) => (None, Some(forwarded.take(stream)?.handle)),
+                let (endpoint, forwarded_input) = match forwarded {
+                    Some(forwarded) => (None, Some(forwarded.take(stream)?)),
                     None => (
                         Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
                         None,
@@ -2721,7 +2746,7 @@ impl StreamSession {
                 pending.push(PendingInput {
                     path: path.to_vec(),
                     endpoint,
-                    forwarded_handle,
+                    forwarded_input,
                     element_type: element.cloned().unwrap_or_else(SchemaType::u8),
                     element_schema_fingerprint,
                 });
@@ -2748,9 +2773,39 @@ impl StreamSession {
         for (transport_stream_id, pending) in pending.into_iter().enumerate() {
             let transport_stream_id = u64::try_from(transport_stream_id)
                 .map_err(|_| "durable input transport stream id overflow".to_string())?;
-            let local = pending.forwarded_handle.is_none();
-            let handle = if let Some(handle) = pending.forwarded_handle {
-                handle
+            let local = pending.forwarded_input.is_none();
+            let handle = if let Some(forwarded) = pending.forwarded_input {
+                let mapping = StreamSessionMappingRecord {
+                    transport_stream_id,
+                    handle: forwarded.handle.clone(),
+                    role: SessionStreamRole::Input,
+                };
+                let destination = match &self.session_reference {
+                    StreamRegistrationInvocation::Local(_) => {
+                        StreamReaderForwardDestination::SessionBinding {
+                            session_key: self.session_reference.clone(),
+                            binding: StreamBindingRecord::foreign(&mapping),
+                            publication: StreamReaderForwardPublication::InvocationInput,
+                        }
+                    }
+                    StreamRegistrationInvocation::Remote(_) => {
+                        StreamReaderForwardDestination::InvocationInput {
+                            invocation: self.session_key.clone(),
+                            mapping,
+                        }
+                    }
+                };
+                let (_, intent) = forwarded
+                    .prepare_forward_owned(context, self, destination)
+                    .await?;
+                match intent.destination {
+                    StreamReaderForwardDestination::SessionBinding { binding, .. } => {
+                        self.producer.materialize_binding(&binding).await?.handle
+                    }
+                    StreamReaderForwardDestination::InvocationInput { mapping, .. } => {
+                        mapping.handle
+                    }
+                }
             } else {
                 let request = ProducerRegistrationRequest {
                     entity_parent_start_index: self.entity_parent_start_index,
@@ -2943,10 +2998,10 @@ impl StreamSession {
         } else {
             None
         };
-        struct PendingOutput {
+        struct PendingOutput<F> {
             path: Vec<StreamValuePathStep>,
             endpoint: Option<LiveStreamEndpoint>,
-            forwarded_handle: Option<DurableStreamHandle>,
+            forwarded: Option<F>,
             registered_transport_id: Option<u64>,
             element_type: SchemaType,
             element_schema_fingerprint: SchemaFingerprintV1,
@@ -2971,8 +3026,8 @@ impl StreamSession {
                         output.transport_stream_id
                     })
                     .ok();
-                let (endpoint, forwarded_handle) = match forwarded {
-                    Some(forwarded) => (None, Some(forwarded.take(stream)?.handle)),
+                let (endpoint, forwarded) = match forwarded {
+                    Some(forwarded) => (None, Some(forwarded.take(stream)?)),
                     None if registered_transport_id.is_some() => (None, None),
                     None => (
                         Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
@@ -2999,7 +3054,7 @@ impl StreamSession {
                 pending.push(PendingOutput {
                     path: path.to_vec(),
                     endpoint,
-                    forwarded_handle,
+                    forwarded,
                     registered_transport_id,
                     element_type: element.cloned().unwrap_or_else(SchemaType::u8),
                     element_schema_fingerprint,
@@ -3010,6 +3065,39 @@ impl StreamSession {
                 Ok(canonical_handle_index)
             })?;
 
+        let session = self.clone();
+        let pending = admission
+            .submit(move |_, context| async move {
+                let mut prepared = Vec::with_capacity(pending.len());
+                for (handle_index, output) in pending.into_iter().enumerate() {
+                    let forwarded = match output.forwarded {
+                        Some(forwarded) => Some(
+                            forwarded
+                                .prepare_mapping_owned(
+                                    &context,
+                                    &session,
+                                    SessionStreamRole::Output,
+                                    StreamReaderForwardPublication::InvocationResult {
+                                        handle_index: handle_index as u64,
+                                    },
+                                )
+                                .await?,
+                        ),
+                        None => None,
+                    };
+                    prepared.push(PendingOutput {
+                        path: output.path,
+                        endpoint: output.endpoint,
+                        forwarded,
+                        registered_transport_id: output.registered_transport_id,
+                        element_type: output.element_type,
+                        element_schema_fingerprint: output.element_schema_fingerprint,
+                        cancelled: output.cancelled,
+                    });
+                }
+                Ok::<_, SessionError>(prepared)
+            })
+            .await?;
         let session_mapping = StreamSessionMapping {
             session_key: self.session_key.clone(),
             attachment_id: golem_common::model::durable_stream::AttachmentId::primary(
@@ -3022,7 +3110,7 @@ impl StreamSession {
         };
         let requests = pending
             .iter()
-            .filter(|pending| pending.forwarded_handle.is_none())
+            .filter(|pending| pending.forwarded.is_none())
             .map(|pending| ProducerRegistrationRequest {
                 entity_parent_start_index: self.entity_parent_start_index,
                 coordinate: StreamRegistrationCoordinate::Root {
@@ -3041,9 +3129,9 @@ impl StreamSession {
         let mut new_stream_count = pending
             .iter()
             .filter(|pending| {
-                pending.forwarded_handle.as_ref().is_some_and(|handle| {
+                pending.forwarded.as_ref().is_some_and(|mapping| {
                     self.mapping_for_reference(
-                        &StreamRecordReference::Foreign(handle.clone()),
+                        &StreamRecordReference::Foreign(mapping.handle.clone()),
                         SessionStreamRole::Output,
                     )
                     .is_none()
@@ -3068,21 +3156,13 @@ impl StreamSession {
         let mut transport_stream_ids = Vec::with_capacity(pending.len());
         let mut request_index = 0usize;
         for pending in &pending {
-            let transport_stream_id = if let Some(handle) = &pending.forwarded_handle {
-                let source = StreamRecordReference::Foreign(handle.clone());
-                if pending.cancelled || existing_intents.contains(&source) {
-                    self.mapping_for_reference(&source, SessionStreamRole::Output)
-                        .map(|mapping| Ok(mapping.transport_stream_id))
-                        .unwrap_or_else(|| self.allocate_transport_stream_id())?
-                } else {
-                    self.ensure_nested_mapping_under_lock(
-                        admission,
-                        handle.clone(),
-                        SessionStreamRole::Output,
-                    )
-                    .await?
-                    .transport_stream_id
+            let transport_stream_id = if let Some(mapping) = &pending.forwarded {
+                let source = StreamRecordReference::Foreign(mapping.handle.clone());
+                if first_result && !pending.cancelled && !existing_intents.contains(&source) {
+                    self.activate_nested_mapping_under_lock(admission, mapping.clone())
+                        .await?;
                 }
+                mapping.transport_stream_id
             } else {
                 let request = &requests[request_index];
                 request_index += 1;
@@ -3136,13 +3216,14 @@ impl StreamSession {
                     transport_stream_id,
                     cancellation_epoch: cancellation_epoch.filter(|_| {
                         pending.cancelled
-                            && !pending.forwarded_handle.as_ref().is_some_and(|handle| {
-                                existing_intents
-                                    .contains(&StreamRecordReference::Foreign(handle.clone()))
+                            && !pending.forwarded.as_ref().is_some_and(|mapping| {
+                                existing_intents.contains(&StreamRecordReference::Foreign(
+                                    mapping.handle.clone(),
+                                ))
                             })
                     }),
-                    source: match &pending.forwarded_handle {
-                        Some(handle) => ProducerOutputSource::Existing(handle.clone()),
+                    source: match &pending.forwarded {
+                        Some(mapping) => ProducerOutputSource::Existing(mapping.handle.clone()),
                         None => ProducerOutputSource::New(
                             requests
                                 .next()
@@ -3177,8 +3258,8 @@ impl StreamSession {
         let mut drains = Vec::with_capacity(pending.len());
         let mut owned_handles = owned_handles.into_iter();
         for (pending, transport_stream_id) in pending.into_iter().zip(transport_stream_ids) {
-            let (handle, local) = match pending.forwarded_handle {
-                Some(handle) => (handle, false),
+            let (handle, local) = match pending.forwarded {
+                Some(mapping) => (mapping.handle, false),
                 None => (
                     owned_handles
                         .next()
@@ -3211,6 +3292,7 @@ impl StreamSession {
                 });
             }
         }
+        admission.wait_published().await?;
         drop(session_guard);
 
         Ok(MaterializedResult {
@@ -3781,11 +3863,21 @@ impl StreamSession {
             next_sequence = event.offset.saturating_add(1);
             let result = match event.payload {
                 LiveStreamEventPayload::Item(value) => {
-                    struct NestedOutput {
+                    struct NestedOutput<F> {
                         endpoint: Option<LiveStreamEndpoint>,
-                        forwarded_handle: Option<DurableStreamHandle>,
+                        forwarded: Option<F>,
                         element_type: SchemaType,
                         registration: ProducerRegistrationRequest,
+                    }
+                    enum PublicationError {
+                        Forwarding(String),
+                        Preparation(SessionError),
+                        Store(StreamStoreError),
+                    }
+                    impl From<StreamStoreError> for PublicationError {
+                        fn from(error: StreamStoreError) -> Self {
+                            Self::Store(error)
+                        }
                     }
 
                     if let Err(error) = preflight_recursive_stream_value(&value).and_then(|_| {
@@ -3819,8 +3911,8 @@ impl StreamSession {
                                 schema_fingerprint_v1(&graph, nested_element.as_ref())
                                     .map_err(|error| error.to_string())?;
                             let forwarded = forwarded_durable_input_reference(stream)?;
-                            let (endpoint, forwarded_handle) = match forwarded {
-                                Some(forwarded) => (None, Some(forwarded.take(stream)?.handle)),
+                            let (endpoint, forwarded) = match forwarded {
+                                Some(forwarded) => (None, Some(forwarded.take(stream)?)),
                                 None => (
                                     Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
                                     None,
@@ -3830,7 +3922,7 @@ impl StreamSession {
                                 .map_err(|_| "durable nested handle index overflow".to_string())?;
                             nested_outputs.push(NestedOutput {
                                 endpoint,
-                                forwarded_handle,
+                                forwarded,
                                 element_type: nested_element.unwrap_or_else(SchemaType::u8),
                                 registration: ProducerRegistrationRequest {
                                     entity_parent_start_index: self.entity_parent_start_index,
@@ -3863,37 +3955,126 @@ impl StreamSession {
                             break;
                         }
                     };
-                    for output in &nested_outputs {
-                        if let Some(forwarded_handle) = &output.forwarded_handle {
-                            self.ensure_nested_mapping(None, forwarded_handle.clone(), role)
-                                .await?;
-                        }
-                    }
-                    let nested_sources = nested_outputs
-                        .iter()
-                        .map(|output| {
-                            output
-                                .forwarded_handle
-                                .clone()
-                                .map(NestedStreamWrite::Forward)
-                                .unwrap_or_else(|| {
-                                    NestedStreamWrite::Register(output.registration.clone())
-                                })
-                        })
-                        .collect();
                     let payload = StreamItemsPayload::Values(vec![value.encode_to_vec()]);
+                    let memory = DurableStreamStore::retained_payload_bytes(&payload)?;
+                    let session = self.clone();
+                    let stream_id = handle.stream_id;
+                    let parent_handle = handle.clone();
                     match self
                         .producer
-                        .write_items_with_nested_sources(
-                            None,
-                            handle.stream_id,
-                            event.offset,
-                            payload,
-                            nested_sources,
-                        )
+                        .run_admitted(None, memory, false, move |_, admission| async move {
+                            let _session_guard = session.session_lock.lock().await;
+                            let prepare_session = session.clone();
+                            let (nested_outputs, may_append) = admission
+                                .submit(move |owner, context| async move {
+                                    let may_append = owner
+                                        .input_high_water(stream_id)
+                                        .await?
+                                        .map_or(event.offset == 0, |water| {
+                                            !water.terminal
+                                                && water.highest_contiguous_sequence.checked_add(1)
+                                                    == Some(event.offset)
+                                        });
+                                    let mut prepared = Vec::with_capacity(nested_outputs.len());
+                                    for (handle_index, output) in nested_outputs.into_iter().enumerate() {
+                                        let forwarded = match output.forwarded {
+                                            Some(forwarded) => {
+                                                let parent = owner.local_binding(0, &parent_handle, role).await?;
+                                                let StreamRecordReference::Local(parent_stream) = parent.source else {
+                                                    unreachable!("producer item parent is owner-local")
+                                                };
+                                                Some(forwarded
+                                                    .prepare_mapping_owned(
+                                                        &context,
+                                                        &prepare_session,
+                                                        role,
+                                                        StreamReaderForwardPublication::ProducerItem {
+                                                            parent_stream,
+                                                            sequence: event.offset,
+                                                            handle_index: handle_index as u64,
+                                                        },
+                                                    )
+                                                    .await
+                                                    .map_err(PublicationError::Preparation)?)
+                                            }
+                                            None => None,
+                                        };
+                                        prepared.push(NestedOutput {
+                                            endpoint: output.endpoint,
+                                            forwarded,
+                                            element_type: output.element_type,
+                                            registration: output.registration,
+                                        });
+                                    }
+                                    Ok::<_, PublicationError>((prepared, may_append))
+                                })
+                                .await?;
+                            if may_append {
+                                for output in &nested_outputs {
+                                    if let Some(mapping) = &output.forwarded {
+                                        session
+                                            .activate_nested_mapping_under_lock(
+                                                &admission,
+                                                mapping.clone(),
+                                            )
+                                            .await
+                                            .map_err(|error| match error {
+                                                StreamStoreError::InvalidHandle => {
+                                                    PublicationError::Forwarding(error.to_string())
+                                                }
+                                                error => PublicationError::Store(error),
+                                            })?;
+                                    }
+                                }
+                            }
+                            let nested_sources = nested_outputs
+                                .iter()
+                                .map(|output| match &output.forwarded {
+                                    Some(mapping) => {
+                                        NestedStreamWrite::Forward(mapping.handle.clone())
+                                    }
+                                    None => {
+                                        NestedStreamWrite::Register(output.registration.clone())
+                                    }
+                                })
+                                .collect();
+                            let outcome = admission
+                                .submit(move |owner, context| async move {
+                                    owner
+                                        .write_items_with_nested_sources(
+                                            Some(&context),
+                                            stream_id,
+                                            event.offset,
+                                            payload,
+                                            nested_sources,
+                                        )
+                                        .await
+                                })
+                                .await;
+                            let outcome = match outcome {
+                                Ok(outcome) => Some(outcome),
+                                Err(
+                                    StreamStoreError::FencedByTerminal(_)
+                                    | StreamStoreError::SessionFinished(_),
+                                ) => None,
+                                Err(
+                                    StreamStoreError::TraversalDepthLimit
+                                    | StreamStoreError::ValueStreamLimit
+                                    | StreamStoreError::StreamLimit
+                                    | StreamStoreError::CounterOverflow,
+                                ) if may_append => None,
+                                Err(error @ StreamStoreError::ItemTooLarge) if may_append => {
+                                    return Err(PublicationError::Forwarding(error.to_string()));
+                                }
+                                Err(error) => return Err(PublicationError::Store(error)),
+                            };
+                            admission.wait_published().await?;
+                            Ok::<_, PublicationError>((outcome, nested_outputs))
+                        })
                         .await
                     {
-                        Ok(outcome) => {
+                        Ok((None, _)) => break,
+                        Ok((Some(outcome), nested_outputs)) => {
                             tracing::debug!(
                                 stream_id = %handle.stream_id,
                                 role = ?role,
@@ -3931,7 +4112,7 @@ impl StreamSession {
                                                         .into_iter()
                                                         .zip(nested_handles)
                                                     {
-                                                        if output.forwarded_handle.is_some() {
+                                                        if output.forwarded.is_some() {
                                                             continue;
                                                         }
                                                         let mut binding = session
@@ -3989,7 +4170,9 @@ impl StreamSession {
                             }
                             Ok(())
                         }
-                        Err(error) => Err(error.into()),
+                        Err(PublicationError::Store(error)) => return Err(error.into()),
+                        Err(PublicationError::Preparation(error)) => return Err(error),
+                        Err(PublicationError::Forwarding(error)) => Err(error.into()),
                     }
                 }
                 LiveStreamEventPayload::End => self
@@ -4036,14 +4219,13 @@ impl StreamSession {
                 },
             };
             if let Err(error) = result {
-                let _ = self
-                    .producer
+                self.producer
                     .end_open(
                         None,
                         handle.stream_id,
                         StreamEndResult::ErrorContext(error.to_string().into_bytes()),
                     )
-                    .await;
+                    .await?;
                 break;
             }
             if !is_item {
@@ -4100,7 +4282,7 @@ impl StreamSession {
                 let _session_guard = session.session_lock.lock().await;
                 session.validate_topology_complete().await?;
                 let session_for_write = session.clone();
-                admission
+                let outcome = admission
                     .submit(move |owner, context| async move {
                         owner
                             .finish_session(
@@ -4113,7 +4295,9 @@ impl StreamSession {
                             .await
                             .map_err(SessionError::from)
                     })
-                    .await
+                    .await;
+                admission.wait_published().await?;
+                outcome
             })
             .await;
         match outcome {
@@ -5239,6 +5423,172 @@ pub struct DurableInputEndpoint {
 /// Foreign source and attachment state for a forwarded durable input.
 pub struct ForwardedDurableInput {
     pub handle: DurableStreamHandle,
+    origin: StreamSession,
+    reader_id: LocalStreamReaderId,
+}
+
+impl ForwardedDurableInput {
+    /// Selects a stable owner-journal destination without activating its attachment.
+    async fn prepare_mapping_owned(
+        self,
+        context: &StreamWriteContext,
+        destination: &StreamSession,
+        role: SessionStreamRole,
+        publication: StreamReaderForwardPublication,
+    ) -> Result<StreamSessionMappingRecord, SessionError> {
+        destination.recover_session_mappings().await?;
+        let metadata = self.origin.current_control_metadata().await?;
+        let existing = metadata.reader_forward_intent(self.reader_id)?.cloned();
+        drop(metadata);
+        let transport_stream_id = if let Some((_, intent)) = existing {
+            match intent.destination {
+                StreamReaderForwardDestination::SessionBinding {
+                    session_key,
+                    binding,
+                    ..
+                } if session_key == destination.session_reference && binding.role == role => {
+                    binding.transport_stream_id
+                }
+                _ => {
+                    return Err(
+                        "durable reader already has a different forwarding destination".into(),
+                    );
+                }
+            }
+        } else {
+            destination
+                .mapping_for_reference(&StreamRecordReference::Foreign(self.handle.clone()), role)
+                .map(|mapping| Ok(mapping.transport_stream_id))
+                .unwrap_or_else(|| destination.allocate_transport_stream_id())?
+        };
+        let mapping = StreamSessionMappingRecord {
+            transport_stream_id,
+            handle: self.handle.clone(),
+            role,
+        };
+        let (_, intent) = self
+            .prepare_forward_owned(
+                context,
+                destination,
+                StreamReaderForwardDestination::SessionBinding {
+                    session_key: destination.session_reference.clone(),
+                    binding: StreamBindingRecord::foreign(&mapping),
+                    publication,
+                },
+            )
+            .await?;
+        let StreamReaderForwardDestination::SessionBinding { binding, .. } = intent.destination
+        else {
+            unreachable!("mapping preparation validates its destination kind")
+        };
+        destination
+            .producer
+            .materialize_binding(&binding)
+            .await
+            .map_err(SessionError::from)
+    }
+
+    /// Resolves historical destination identity without granting live attachment authority.
+    async fn prepare_forward_owned(
+        &self,
+        context: &StreamWriteContext,
+        destination_session: &StreamSession,
+        mut destination: StreamReaderForwardDestination,
+    ) -> Result<(OplogIndex, StreamReaderForwardIntentRecord), SessionError> {
+        if !Arc::ptr_eq(&self.origin.producer, &destination_session.producer) {
+            return Err("forwarded reader belongs to a different stream store".into());
+        }
+        context.assert_owner(&self.origin.producer);
+        let metadata = self.origin.current_control_metadata().await?;
+        let source = metadata.reader_binding(self.reader_id)?.clone();
+        let existing = metadata.reader_forward_intent(self.reader_id)?.cloned();
+        if metadata.consumer_record_count(self.reader_id) != 0 {
+            return Err("cannot forward a durable input stream after reading from it".into());
+        }
+        drop(metadata);
+        let current = self.origin.producer.materialize_binding(&source).await?;
+        if current.handle != self.handle {
+            return Err("forwarded handle does not match its original reader binding".into());
+        }
+        if let Some((_, intent)) = &existing {
+            // Local readers are requalified on fork/revert; their recorded destinations are not.
+            if matches!(source.source, StreamRecordReference::Local(_)) {
+                match (&mut destination, &intent.destination) {
+                    (
+                        StreamReaderForwardDestination::SessionBinding { binding, .. },
+                        StreamReaderForwardDestination::SessionBinding {
+                            binding: recorded, ..
+                        },
+                    ) => binding.source = recorded.source.clone(),
+                    (
+                        StreamReaderForwardDestination::InvocationInput { mapping, .. },
+                        StreamReaderForwardDestination::InvocationInput {
+                            mapping: recorded, ..
+                        },
+                    ) => mapping.handle = recorded.handle.clone(),
+                    _ => {}
+                }
+            }
+            if destination != intent.destination {
+                return Err("durable reader already has a different forwarding destination".into());
+            }
+        }
+        let binding = match &destination {
+            StreamReaderForwardDestination::SessionBinding { binding, .. } => binding.clone(),
+            StreamReaderForwardDestination::InvocationInput { mapping, .. } => {
+                StreamBindingRecord::foreign(mapping)
+            }
+        };
+        if destination_session
+            .binding(binding.transport_stream_id)
+            .is_some_and(|existing| existing != binding)
+        {
+            return Err("forwarding destination slot is already bound to another stream".into());
+        }
+        let destination_metadata = destination_session.current_control_metadata().await?;
+        for reserved in destination_metadata.incoming_reader_forwards().values() {
+            let same_binding = match (&reserved.destination, &destination) {
+                (
+                    StreamReaderForwardDestination::SessionBinding {
+                        session_key: reserved_session,
+                        binding: reserved_binding,
+                        ..
+                    },
+                    StreamReaderForwardDestination::SessionBinding {
+                        session_key,
+                        binding,
+                        ..
+                    },
+                ) => reserved_session == session_key && reserved_binding == binding,
+                _ => reserved.destination == destination,
+            };
+            if reserved.destination.transport_stream_id() == binding.transport_stream_id
+                && !same_binding
+            {
+                return Err("forwarding destination slot is reserved for another stream".into());
+            }
+        }
+        drop(destination_metadata);
+        if let Some(existing) = existing {
+            return Ok(existing);
+        }
+        let intent = StreamReaderForwardIntentRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: self.origin.session_reference.clone(),
+            reader_id: self.reader_id,
+            destination,
+        };
+        let indices = self
+            .origin
+            .producer
+            .append_session_records_owned(
+                context,
+                self.origin.entity_parent_start_index,
+                vec![StreamSessionRecord::ReaderForwardIntent(intent.clone())],
+            )
+            .await?;
+        Ok((indices[0], intent))
+    }
 }
 
 impl DurableInputEndpoint {
@@ -5253,6 +5603,8 @@ impl DurableInputEndpoint {
         self.forwarded_handle()?;
         Ok(ForwardedDurableInput {
             handle: self.handle,
+            origin: self.streams,
+            reader_id: self.reader_id,
         })
     }
 }
@@ -6421,8 +6773,14 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             && !producer.finished
         {
             let handle = producer.input.handle.clone();
+            let origin = producer.input.streams.clone();
+            let reader_id = producer.input.reader_id;
             me.as_mut().get_mut().finished = true;
-            Ok(Box::new(ForwardedDurableInput { handle }))
+            Ok(Box::new(ForwardedDurableInput {
+                handle,
+                origin,
+                reader_id,
+            }))
         } else {
             Err(me)
         }

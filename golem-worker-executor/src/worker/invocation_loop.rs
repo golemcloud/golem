@@ -2858,6 +2858,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 .await;
                             return CommandOutcome::BreakInnerLoop(RetryDecision::None);
                         }
+                        self.parent
+                            .durable_stream_producer
+                            .changed()
+                            .notify_waiters();
                         return failed_agent_invocation_outcome(
                             self.parent.agent_mode(),
                             RetryDecision::Immediate,
@@ -2879,11 +2883,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 if let Some(outcome) = self.retired_outcome() {
                     return outcome;
                 }
-                if self.uses_streams {
-                    let _ = self
+                if self.uses_streams
+                    && let Err(error) = self
                         .parent
                         .fail_durable_streaming_session(idempotency_key, kind.to_string())
-                        .await;
+                        .await
+                {
+                    if self.parent.retire_if_shard_lost(&error) {
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
                 }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), decision)
             }
@@ -2916,11 +2928,19 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 if let Some(outcome) = self.retired_outcome() {
                     return outcome;
                 }
-                if self.uses_streams {
-                    let _ = self
+                if self.uses_streams
+                    && let Err(error) = self
                         .parent
                         .fail_durable_streaming_session(idempotency_key, error.to_string())
-                        .await;
+                        .await
+                {
+                    if self.parent.retire_if_shard_lost(&error) {
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
+                    self.parent
+                        .durable_stream_producer
+                        .changed()
+                        .notify_waiters();
                 }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
@@ -2995,11 +3015,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return outcome;
         }
 
-        if self.uses_streams && decision == RetryDecision::None {
-            let _ = self
+        if self.uses_streams
+            && decision == RetryDecision::None
+            && let Err(error) = self
                 .parent
                 .fail_durable_streaming_session(idempotency_key, details)
-                .await;
+                .await
+        {
+            if self.parent.retire_if_shard_lost(&error) {
+                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+            }
+            self.parent
+                .durable_stream_producer
+                .changed()
+                .notify_waiters();
         }
 
         failed_agent_invocation_outcome(self.parent.agent_mode(), decision)

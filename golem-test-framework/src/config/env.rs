@@ -908,7 +908,7 @@ impl RedisControl for EnvBasedTestDependencies {
 #[allow(async_fn_in_trait)]
 #[test_r::hosted_rpc]
 pub trait WorkerExecutorClusterControl {
-    async fn kill_all(&self);
+    async fn kill_all_and_wait(&self, timeout_millis: u64) -> Result<(), String>;
     async fn restart_all(&self);
     async fn restart_all_with_env_vars(&self, vars: Vec<(String, String)>);
     async fn stop(&self, idx: u16);
@@ -940,8 +940,13 @@ impl EnvBasedTestDependencies {
 }
 
 impl WorkerExecutorClusterControl for EnvBasedTestDependencies {
-    async fn kill_all(&self) {
-        self.worker_executor_cluster.kill_all().await;
+    async fn kill_all_and_wait(&self, timeout_millis: u64) -> Result<(), String> {
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_millis);
+        self.worker_executor_cluster
+            .kill_all_and_wait(deadline)
+            .await
+            .map_err(|error| format!("{error:#}"))
     }
 
     async fn restart_all(&self) {

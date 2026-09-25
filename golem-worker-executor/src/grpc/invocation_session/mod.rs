@@ -1121,6 +1121,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         joined_origin_observer: accepted.joined_origin_observer,
                         tool_name: start.external_tool.as_ref().map(|tool| tool.tool_name.clone()),
                         command_path: start.external_tool.as_ref().map(|tool| tool.command_path.clone()).unwrap_or_default(),
+                        terminal_cursor_stream_ids: Vec::new(),
                     },
                 )),
             })
@@ -1819,15 +1820,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .terminal_output_cursor_stream_ids(&cursor_map)
                     .await
                     .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::invalid_request))?;
-                for stream_id in terminal_cursor_stream_ids {
-                    protocol_state
-                        .mark_terminal_resume_cursor(stream_id.0.as_u64_pair())
-                        .map_err(WorkerExecutorError::invalid_request)?;
-                }
-                Ok::<_, WorkerExecutorError>((acceptance, cursor_map))
+                let mut terminal_cursor_stream_ids = terminal_cursor_stream_ids.into_iter().collect::<Vec<_>>();
+                terminal_cursor_stream_ids.sort();
+                Ok::<_, WorkerExecutorError>((acceptance, cursor_map, terminal_cursor_stream_ids))
             }
             .await;
-        let (acceptance, cursor_map) = match result {
+        let (acceptance, cursor_map, terminal_cursor_stream_ids) = match result {
             Ok(result) => result,
             Err(error) => {
                 let rejection = InvocationResponse {
@@ -1942,6 +1940,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             PersistedInvocationTarget::ExternalTool { command_path, .. } => command_path.clone(),
                             PersistedInvocationTarget::AgentMethod { .. } => Vec::new(),
                         },
+                        terminal_cursor_stream_ids: terminal_cursor_stream_ids.into_iter().map(|id| id.0.into()).collect(),
                     },
                 )),
             })
