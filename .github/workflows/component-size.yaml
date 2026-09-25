@@ -1,0 +1,85 @@
+name: Component size (informational)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/component-size.yaml'
+      - 'test-components/size-analysis/**'
+      - 'test-components/agent-counters/**'
+      - 'sdks/rust/**'
+      - 'golem-rust-macro/**'
+      - 'golem-schema/**'
+      - 'cli/golem-cli/templates/rust/**'
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: wasm32-wasip2
+          install-cargo-binstall: 'true'
+          install-cargo-make: 'false'
+          cache-shared-key: component-size
+      - name: Install analysis tools
+        run: |
+          cargo binstall --no-confirm --locked wasm-tools@1.253.0 twiggy@0.8.0
+          curl -fLsS https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz -o /tmp/binaryen.tar.gz
+          tar xzf /tmp/binaryen.tar.gz -C /tmp
+          echo /tmp/binaryen-version_123/bin >> "$GITHUB_PATH"
+      - name: Test binary accounting and rebundling
+        run: python3 -m unittest discover -s test-components/size-analysis -v
+      - name: Build reflection retention fixtures
+        run: |
+          for package in retention-canonical-floor retention-empty retention-non-reflective retention-reflection; do
+            python3 test-components/size-analysis/analyze.py \
+              --manifest test-components/size-analysis/fixtures/Cargo.toml \
+              --package "$package" \
+              --out "tmp/$package"
+          done
+          wasm-tools component wit --json tmp/retention-canonical-floor/current/component.wasm \
+            > tmp/retention-canonical-floor/world.json
+          wasm-tools component wit --json tmp/retention-empty/current/component.wasm \
+            > tmp/retention-empty/world.json
+          python3 test-components/size-analysis/compare-export-contract.py \
+            tmp/retention-canonical-floor/world.json tmp/retention-empty/world.json
+      - name: Check reflection retention contracts
+        run: |
+          python3 test-components/size-analysis/retention.py \
+            --negative empty=tmp/retention-empty/current/component.wasm \
+            --negative tool=tmp/retention-non-reflective/current/component.wasm \
+            --positive reflection=tmp/retention-reflection/current/component.wasm \
+            --enforce-option-b \
+            --out tmp/reflection-retention.json
+      - name: Build and report independent release choices
+        run: |
+          python3 test-components/size-analysis/analyze.py \
+            --manifest test-components/agent-counters/Cargo.toml \
+            --matrix --optimize --out tmp/component-size
+      - name: Isolated allocator performance smoke check
+        run: |
+          node test-components/size-analysis/benchmark-core.mjs \
+            tmp/component-size/baseline-s/report/core-0/module.wasm \
+            tmp/component-size/strip/report/core-0/module.wasm \
+            tmp/component-size/cgu1/report/core-0/module.wasm \
+            tmp/component-size/z/report/core-0/module.wasm \
+            tmp/component-size/strip/optimized-report/core-0/module.wasm \
+            > tmp/component-size/allocator-performance.json
+      - name: Upload report, including partial results on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-size-${{ github.sha }}
+          path: |
+            tmp/component-size
+            tmp/retention-*
+            tmp/reflection-retention.json
+          retention-days: 14
+          if-no-files-found: warn

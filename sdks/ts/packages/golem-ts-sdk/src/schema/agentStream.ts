@@ -34,7 +34,7 @@ interface WireStreamState {
   endpoint?: GuestSchemaValueStream;
   iterator?: AsyncIterator<SchemaValueTree>;
   acquiring?: Promise<AsyncIterator<SchemaValueTree>>;
-  readonly itemCodec: SchemaCodec;
+  readonly readItem: (tree: SchemaValueTree) => unknown;
   busy: boolean;
 }
 
@@ -105,9 +105,7 @@ export class AgentStream<T> implements AsyncIterable<T>, AsyncIterator<T> {
         ? { done: true, value: undefined }
         : {
             done: false,
-            value: await withNativeStreamScope(
-              () => state.itemCodec.fromValue(schemaValueFromWit(item.value)) as T,
-            ),
+            value: await withNativeStreamScope(() => state.readItem(item.value) as T),
           };
     } catch (error) {
       if (state.kind === 'wire' && states.has(this)) {
@@ -193,6 +191,27 @@ export function agentStreamToHandle<T>(
   stream: AgentStream<T>,
   itemCodec: SchemaCodec,
 ): GuestSchemaValueStreamHandle {
+  return new GuestSchemaValueStreamHandle(
+    takeAgentStream(stream, (value) =>
+      withNativeStreamScope(() => itemCodec.toValue(value), schemaValueToWitAsync),
+    ),
+  );
+}
+
+/** @internal Reserve a concrete stream without committing ownership until its containing value is valid. */
+export function prepareAgentStream<T>(
+  stream: AgentStream<T>,
+  writeItem: (value: T) => Promise<SchemaValueTree>,
+) {
+  const state = streamState(stream);
+  const endpoint = takeAgentStream(stream, writeItem);
+  return { endpoint, rollback: () => states.set(stream, state as AgentStreamState<unknown>) };
+}
+
+function takeAgentStream<T>(
+  stream: AgentStream<T>,
+  writeItem: (value: T) => Promise<SchemaValueTree>,
+): GuestSchemaValueStream {
   const state = streamState(stream);
   if (state.busy) {
     throw new Error('cannot transfer an AgentStream while an operation is in progress');
@@ -201,22 +220,22 @@ export function agentStreamToHandle<T>(
 
   if (state.kind === 'wire') {
     if (state.endpoint !== undefined) {
-      return new GuestSchemaValueStreamHandle(state.endpoint);
+      return state.endpoint;
     }
     if (state.iterator !== undefined) {
-      return new GuestSchemaValueStreamHandle({
+      return {
         kind: 'native',
         value: iterableFromIterator(state.iterator),
-      });
+      };
     }
     throw new Error('AgentStream was already transferred');
   }
 
   const source = state.iterator === undefined ? state.source : iterableFromIterator(state.iterator);
-  return new GuestSchemaValueStreamHandle({
+  return {
     kind: 'native',
-    value: encodeItems(source, itemCodec),
-  });
+    value: encodeItems(source, writeItem),
+  };
 }
 
 /** @internal Lift a recursive schema-value-stream handle into an AgentStream. */
@@ -228,16 +247,41 @@ export function agentStreamFromHandle<T>(
   if (endpoint === undefined) {
     throw new Error('schema value stream was already transferred');
   }
+  return agentStreamFromWire(
+    endpoint,
+    (tree) => itemCodec.fromValue(schemaValueFromWit(tree)) as T,
+  );
+}
+
+/** @internal Lift an owned wire endpoint using a compiler-emitted item reader. */
+export function agentStreamFromWire<T>(
+  endpoint: GuestSchemaValueStream,
+  readItem: (tree: SchemaValueTree) => T,
+): AgentStream<T> {
+  const prepared = prepareAgentStreamLift(endpoint, readItem);
+  prepared.commit();
+  return prepared.stream;
+}
+
+/** @internal Defer endpoint adoption until the whole input structure has been checked. */
+export function prepareAgentStreamLift<T>(
+  endpoint: GuestSchemaValueStream,
+  readItem: (tree: SchemaValueTree) => T,
+) {
   const stream = createAgentStream<T>({
     kind: 'wire',
     endpoint,
-    itemCodec,
+    readItem,
     busy: false,
   });
-  ownStream(async () => {
-    if (states.has(stream)) await stream.return();
-  });
-  return stream;
+  return {
+    stream,
+    commit() {
+      ownStream(async () => {
+        if (states.has(stream)) await stream.return();
+      });
+    },
+  };
 }
 
 function createAgentStream<T>(state: AgentStreamState<T>): AgentStream<T> {
@@ -301,7 +345,7 @@ function iterableFromIterator<T>(iterator: AsyncIterator<T>): AsyncIterable<T> {
 
 function encodeItems<T>(
   source: AsyncIterable<T>,
-  itemCodec: SchemaCodec,
+  writeItem: (value: T) => Promise<SchemaValueTree>,
 ): AsyncIterable<SchemaValueTree> {
   let iterator: AsyncIterator<T> | undefined;
   let closed = false;
@@ -326,10 +370,7 @@ function encodeItems<T>(
           }
           return {
             done: false,
-            value: await withNativeStreamScope(
-              () => itemCodec.toValue(item.value),
-              schemaValueToWitAsync,
-            ),
+            value: await writeItem(item.value),
           };
         } catch (error) {
           try {

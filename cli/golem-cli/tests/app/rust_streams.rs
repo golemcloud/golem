@@ -48,11 +48,34 @@ async fn rust_generated_native_stream_bridge_e2e() {
     )
     .unwrap();
     fs::write_str(ctx.cwd_path_join("provider/src/counter_agent.rs"), indoc! {r#"
-        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema};
+        use golem_rust::{agent_definition, agent_implementation, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema};
         use golem_rust::agentic::{AgentStream, spawn_local};
         use golem_rust::schema::{SchemaValue, SchemaType, SchemaBuilder, TypeId, FromSchemaError};
+        use golem_rust::schema::wit::{wire, direct::{WireReader, WireWriter, WireError, WireSchemaBuilder}};
 
         pub struct FixedPair(Vec<u32>);
+        impl WireSchema for FixedPair {
+            fn append_schema(builder: &mut WireSchemaBuilder) -> i32 {
+                let element = u32::append_schema(builder);
+                builder.push(wire::SchemaTypeBody::FixedListType(wire::FixedListSpec { element, length: 2 }))
+            }
+        }
+        impl IntoWire for FixedPair {
+            fn write_wire(&self, writer: &mut WireWriter) -> Result<i32, WireError> {
+                if self.0.len() != 2 { return Err(WireError::Shape("fixed pair")); }
+                let elements = self.0.iter().map(|value| value.write_wire(writer)).collect::<Result<Vec<_>, _>>()?;
+                Ok(writer.push(wire::SchemaValueNode::FixedListValue(elements)))
+            }
+        }
+        impl FromWire for FixedPair {
+            fn read_wire(reader: &mut WireReader, index: i32) -> Result<Self, WireError> {
+                let wire::SchemaValueNode::FixedListValue(elements) = reader.take(index)? else {
+                    return Err(WireError::Shape("fixed pair"));
+                };
+                if elements.len() != 2 { return Err(WireError::Shape("fixed pair")); }
+                Ok(Self(elements.into_iter().map(|index| u32::read_wire(reader, index)).collect::<Result<Vec<_>, _>>()?))
+            }
+        }
         impl IntoSchema for FixedPair {
             fn type_id() -> TypeId { TypeId::new("FixedPair") }
             fn register_in(_: &mut SchemaBuilder) -> SchemaType {
@@ -70,7 +93,7 @@ async fn rust_generated_native_stream_bridge_e2e() {
                 }
             }
         }
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
         pub struct FallibleItem {
             pub first: AgentStream<u32>,
             pub tail: FixedPair,
@@ -224,7 +247,7 @@ async fn rust_generated_native_stream_bridge_e2e() {
                 spawn_local(async move { writer.write_one(vec![1, 2]).await.unwrap(); });
                 assert_eq!(provider.fixed_echo(input).await.unwrap().collect().await.unwrap(), vec![vec![1, 2]]);
 
-                // The generated item encoder acquires first before rejecting tail.
+                // Reject an invalid tail before preparing the nested stream endpoint.
                 let (mut nested_writer, nested) = new_u32_stream();
                 let (mut writer, output) = new_fallible_item_stream();
                 let error = writer.write_one(FallibleItem { first: nested, tail: vec![1] }).await.unwrap_err();

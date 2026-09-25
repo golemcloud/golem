@@ -150,6 +150,43 @@ jobs:
           artifact-name: unit-tests-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  check-builtin-tools:
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs: build-and-store
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-binstall: 'true'
+          install-protoc: 'true'
+      - uses: ./.github/actions/restore-binaries
+        with:
+          run-id: ${{ github.run_id }}
+          copy-to-target: 'true'
+      - name: Setup MoonBit
+        uses: hustcer/setup-moonbit@v1
+        with:
+          version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install wasm-tools
+        run: cargo binstall --force --locked wasm-tools@1.248.0
+      - name: Update MoonBit workspace dependencies
+        run: moon update
+        working-directory: sdks/moonbit
+      - name: Build built-in tools
+        run: cargo make --profile ci build-builtin-tools
+      - name: Validate committed built-in tool artifacts
+        run: |
+          wasm-tools validate --features all plugins/filesystem-tools-rust.wasm
+          wasm-tools validate --features all plugins/filesystem-tools-moonbit.wasm
+          git diff --exit-code -- plugins/filesystem-tools-rust plugins/filesystem-tools-rust.wasm plugins/filesystem-tools-moonbit plugins/filesystem-tools-moonbit.wasm
+
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
@@ -789,10 +826,10 @@ jobs:
         run: moon test cmd lib
         working-directory: sdks/moonbit/golem_sdk_tools
 
-  # The Rust SDK test suite is dominated by three integration test targets that each shell out to
-  # cargo (tool: one `cargo check` per test, tool_middleware_component: a full wasm component
-  # build, ui: trybuild). They run as separate matrix entries; the `check` entry runs lint and every
-  # other test target and fails if a test target is added without being assigned to an entry.
+  # The Rust SDK test suite is dominated by two integration test targets that each shell out to
+  # cargo (tool: one `cargo check` per test, ui: trybuild). They run as separate matrix entries;
+  # the `check` entry runs lint and every other test target, and fails if a test target is added
+  # without being assigned to an entry.
   build-golem-rust:
     name: build-golem-rust (${{ matrix.part.name }})
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -804,8 +841,6 @@ jobs:
             test-args: --lib --bins --test agent --test http_router --test tool_canonical --test schema_reexport --test reflection_recipe_compile
           - name: tool
             test-args: --test tool
-          - name: tool-middleware-component
-            test-args: --test tool_middleware_component
           - name: ui
             test-args: --test ui
     steps:
@@ -836,7 +871,6 @@ jobs:
           schema_reexport
           tool
           tool_canonical
-          tool_middleware_component
           ui'
           actual=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[].targets[] | select(.kind | index("test")) | .name' | sort)

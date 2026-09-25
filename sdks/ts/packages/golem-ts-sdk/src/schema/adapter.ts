@@ -22,7 +22,7 @@
 // structure) and must NOT statically `import` the schema library, so no schema
 // library is baked into the SDK / WASM — it lives only in the component bundle.
 
-import { SchemaCodec, freezeSchemaCodec, SchemaWalker } from './codec';
+import { SchemaCodec, freezeSchemaCodec, SchemaWalker, withDirectCodec } from './codec';
 import { isStandardSchema, type StandardSchemaV1 } from './standardSchema';
 import { isMarkerSchema, WIT_MARKER } from './markers';
 import { RecursionRegistry } from './recursion';
@@ -50,7 +50,9 @@ export function registeredVendors(): string[] {
  */
 export function compileSchema(schema: unknown): SchemaCodec {
   const codec = compileSchemaWith(schema, new RecursionRegistry());
-  return freezeSchemaCodec({ ...codec, toValue: isolateCapabilityRoot(codec.toValue) });
+  return freezeSchemaCodec(
+    withDirectCodec({ ...codec, toValue: isolateCapabilityRoot(codec.toValue) }),
+  );
 }
 
 /**

@@ -6,6 +6,7 @@ import ts from "typescript";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { componentPlugin } from "@golemcloud/golem-ts-sdk/component";
 
 // Rollup config for a TypeScript agent component.
 //
@@ -16,11 +17,9 @@ import process from "node:process";
 // and the type checker always agree on the same file set and resolution rules.
 //
 // The SDK derives agent metadata at runtime from the schemas, so the
-// virtual entry only imports the user's main module for its side-effecting
-// `defineAgent(...).implement(...)` registrations. The SDK package, its supported
-// subpaths, `golem:*`, and `wasm-rquickjs:*` host packages are externalized
-// (provided by the selected prebuilt wrapper); user code and the schema library
-// are bundled into main.js and injected into that wasm.
+// virtual entry runs the user's registrations and supplies capability-specific
+// SDK exports. The SDK is bundled so unreachable runtimes can be eliminated;
+// host packages remain external and are supplied by the single full-world wrapper.
 
 // Read tsconfig.json through the TypeScript compiler API — the same path
 // @rollup/plugin-typescript takes — so comments and `extends` are honored, and a
@@ -201,28 +200,13 @@ function componentRollupConfig() {
         ? parsedTsConfig.fileNames
         : ["./src/**/*.ts"];
 
-    const externalSdkModules = new Set([sdkPackage, `${sdkPackage}/middleware`]);
     const externalPackages = (id) =>
-        externalSdkModules.has(id) ||
+        id.startsWith("node:") ||
+        id.startsWith("wasi:") ||
         id.startsWith("golem:") ||
         id.startsWith("wasm-rquickjs:");
 
     const virtualAgentMainId = "virtual:agent-main";
-    const resolvedVirtualAgentMainId = "\0virtual:agent-main";
-    const virtualAgentMainPlugin = () => ({
-        name: "agent-main",
-        resolveId(id) {
-            if (id === virtualAgentMainId) {
-                return resolvedVirtualAgentMainId;
-            }
-        },
-        load(id) {
-            if (id === resolvedVirtualAgentMainId) {
-                // Async wrapper keeps rollup from reordering the side-effecting import.
-                return `export default (async () => { return await import("./src/main"); })();`;
-            }
-        },
-    });
 
     const plugins = [
         {
@@ -231,7 +215,7 @@ function componentRollupConfig() {
                 validateSdkImports(parsedTsConfig);
             },
         },
-        virtualAgentMainPlugin(),
+        componentPlugin(parsedTsConfig, path.join(componentDir, "src/main.ts")),
         nodeResolve({ extensions: [".mjs", ".js", ".node", ".ts"] }),
         commonjs(),
         json(),

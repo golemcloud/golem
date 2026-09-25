@@ -92,6 +92,35 @@ test "provider stdout writes, finishes, and drops exactly once" {
 }
 
 ///|
+test "provider stdout batches bytes in bounded 64 KiB writes" {
+  run_provider_async(() => {
+    for use_bytes in [false, true] {
+      let lengths : Array[Int] = []
+      let stdout = provider_stdout_from_callbacks(
+        bytes => {
+          lengths.push(bytes.length())
+          Ok(())
+        },
+        () => Ok(()),
+        _ => Ok(()),
+        () => (),
+      )
+      for size in [0, 1, 63, 64, 65, 4096, 65535, 65536, 65537] {
+        let data = Array::makei(size, i => (i % 251).to_byte())
+        if use_bytes {
+          assert_true(stdout.write_all_bytes(Bytes::from_array(data)))
+        } else {
+          assert_true(stdout.write_all(data))
+        }
+      }
+      assert_eq(lengths, [1, 63, 64, 65, 4096, 65535, 65536, 65536, 1])
+      stdout.finish()
+      stdout.drop()
+    }
+  })
+}
+
+///|
 #warnings("-unused_async")
 test "provider stdout skips empty writes before calling the host" {
   run_provider_async(async fn() {
@@ -429,7 +458,7 @@ test "invocation completion and drop wait for an outstanding writer operation" {
 ///|
 test "completion drains every chunk of an already started write all" {
   run_provider_async(() => {
-    let payload = Array::makei(193, i => (i % 251).to_byte())
+    let payload = Array::makei(131073, i => (i % 251).to_byte())
     let actual : Array[Byte] = []
     let (started, start) = @async-core.Future::new()
     let (release, unblock) = @async-core.Future::new()

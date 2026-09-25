@@ -84,6 +84,15 @@ try {
 
   const installed = join(temporaryDirectory, "node_modules", "@golemcloud", "effect-golem")
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"))
+  run(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      'import { componentConfiguration } from "@golemcloud/effect-golem/build"; if (typeof componentConfiguration !== "function") throw new Error("missing component builder")',
+    ],
+    { cwd: temporaryDirectory },
+  )
   if (
     manifest.dependencies["@golemcloud/http-contract"] ||
     manifest.dependencies["@golemcloud/golem-ts-sdk"]
@@ -103,7 +112,7 @@ try {
       "--ignore-scripts",
       "--no-save",
       `@types/node@${manifest.devDependencies["@types/node"]}`,
-      `typescript@${manifest.devDependencies.typescript}`,
+      `typescript@${manifest.dependencies.typescript}`,
     ],
     {
       cwd: temporaryDirectory,
@@ -217,9 +226,12 @@ subpath.define("PackageSubpathRouter", { mount: Http.mount("/package") }).regist
 assert.ok(root.golemAgent200Guest.discoverAgentTypes().some((agent) => agent.typeName === "PackageSubpathRouter"));
 assert.equal(subpath.define, HttpRouter.define);`,
     ],
-    { cwd: temporaryDirectory, encoding: "utf8" },
+    { cwd: temporaryDirectory, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
   )
-  if (runtime.status !== 0) throw new Error(`Public runtime import failed:\n${runtime.stderr}`)
+  if (runtime.status !== 0)
+    throw new Error(
+      `Public runtime import failed (status ${runtime.status}, signal ${runtime.signal}):\n${runtime.stderr}`,
+    )
 
   const ambientModules = Object.keys(manifest.typesVersions["*"])
   const ambientEntries = ambientModules.filter((name) => name.endsWith("guest"))

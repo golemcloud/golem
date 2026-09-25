@@ -1,4 +1,5 @@
 .metadata/
+.component-measurements/
 .agent-template-wit/
 agent-template/
 agent-tool-middleware-template/

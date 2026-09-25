@@ -21,7 +21,14 @@ import golem.host.js.JsComponentId
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.host.js.tool.{JsInvocationResult, JsTool, JsToolError}
 import golem.runtime.tool.ToolImplementationRuntime
-import golem.tool.{ByteStreamCloseCause, ByteStreamFailure, StreamWriteError, ToolRpcFailure}
+import golem.tool.{
+  ByteStreamCloseCause,
+  ByteStreamFailure,
+  StreamWriteError,
+  ToolRpcFailure,
+  WireCustomToolError,
+  WireToolRpcFailure
+}
 import golem.tool.wire.WitTool
 
 import scala.annotation.unused
@@ -262,6 +269,34 @@ private[golem] object ToolHostApi {
       }
     } else {
       ToolRpcFailure.ProtocolError(String.valueOf(thrown))
+    }
+  }
+
+  /**
+   * Decodes an RPC rejection without constructing recursive schema-model
+   * values.
+   */
+  def decodeWireRpcFailure(thrown: Any): WireToolRpcFailure = {
+    val rawTag = variantTag(thrown)
+    rawTag match {
+      case Some("protocol-error")        => WireToolRpcFailure.ProtocolError(String.valueOf(variantValue(thrown).orNull))
+      case Some("denied")                => WireToolRpcFailure.Denied(String.valueOf(variantValue(thrown).orNull))
+      case Some("not-found")             => WireToolRpcFailure.NotFound(String.valueOf(variantValue(thrown).orNull))
+      case Some("remote-internal-error") =>
+        WireToolRpcFailure.RemoteInternalError(String.valueOf(variantValue(thrown).orNull))
+      case Some("cancelled")          => WireToolRpcFailure.Cancelled
+      case Some("resource-exhausted") =>
+        WireToolRpcFailure.ResourceExhausted(String.valueOf(variantValue(thrown).orNull))
+      case Some("remote-tool-error") =>
+        try
+          ToolWireInterop.toolErrorFromJs(thrown.asInstanceOf[JsToolRpcErrorTool].value) match {
+            case golem.tool.wire.WitToolError.CustomError(error) =>
+              WireToolRpcFailure.RemoteToolError(WireCustomToolError(error.name, error.payload))
+            case other => WireToolRpcFailure.InvalidRemoteToolError(other.productPrefix)
+          }
+        catch { case error: Throwable => WireToolRpcFailure.InvalidRemoteToolError(String.valueOf(error.getMessage)) }
+      case Some(other) => WireToolRpcFailure.ProtocolError(s"unknown rpc error `$other`")
+      case None        => WireToolRpcFailure.ProtocolError("malformed rpc error")
     }
   }
 }

@@ -9,8 +9,9 @@ use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::{
-    ConfigSchema, FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaValue, agent_definition,
-    agent_implementation, decode_typed_schema_value_owned, read_only,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph,
+    SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
+    decode_typed_schema_value_owned, read_only,
 };
 use secret_policy_probe_tool_guest_client::SecretPolicyProbeClient;
 use std::io::{Read, Write};
@@ -25,7 +26,7 @@ pub extern "C" fn initialize_component_baseline_clock() {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamEvidence {
     pub output: Vec<u8>,
     pub chunks_read: u32,
@@ -34,14 +35,14 @@ pub struct StreamEvidence {
     pub completion: String,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamingBenchmarkResult {
     pub first_chunk_nanos: u64,
     pub total_nanos: u64,
     pub chunks_read: u32,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct ClockedStreamEvidence {
     pub before_tool_nanos: u64,
     pub after_tool_nanos: u64,
@@ -76,7 +77,36 @@ struct RawTypedOutputInput {
     tag: String,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(FromSchema)]
+struct RawReadFileResult {
+    content: String,
+    start_line: Option<u64>,
+    end_line: Option<u64>,
+    total_lines: u64,
+    truncated_before: bool,
+    truncated_after: bool,
+}
+
+#[derive(FromSchema)]
+enum RawWriteDisposition {
+    Created,
+    Replaced,
+}
+
+#[derive(FromSchema)]
+struct RawWriteFileResult {
+    disposition: RawWriteDisposition,
+    bytes_written: u64,
+}
+
+#[derive(FromSchema)]
+struct RawEditFileResult {
+    replacements: u64,
+    bytes_before: u64,
+    bytes_after: u64,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 struct TypedInputItem {
     ordinal: u32,
     caller_extra: u64,
@@ -94,7 +124,7 @@ pub struct ToolSecretCallerConfig {
     pub tool_secret: Secret<String>,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyObservation {
     pub label: String,
     pub config_resolved: bool,
@@ -102,7 +132,7 @@ pub struct SecretPolicyObservation {
     pub input_secret_revealed: bool,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyEvidence {
     pub middleware: Vec<SecretPolicyObservation>,
     pub leaf_revealed: bool,
@@ -158,13 +188,13 @@ struct RawDirectTypedInput {
     input: AgentStream<TypedInputEvidence>,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct TypedOutputEvidence {
     pub label: String,
     pub ordinal: u32,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct TypedInputEvidence {
     pub label: String,
     pub ordinal: u32,
@@ -208,6 +238,7 @@ pub trait ToolStreamingCaller {
     async fn dynamic_mcp_probe(&self, value: String) -> String;
     async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
+    async fn filesystem_tool_roundtrip(&self, implementation: String) -> Vec<String>;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
@@ -408,7 +439,48 @@ fn raw_typed_output_input(tag: String) -> golem_rust::schema::wit::wire::TypedSc
     golem_rust::encode_typed_schema_value(&value).expect("encode raw typed output wire input")
 }
 
-fn gated_typed_input<T: IntoSchema + FromSchema + 'static>(items: [T; 3]) -> AgentStream<T> {
+fn raw_filesystem_input(
+    fields: Vec<(&str, SchemaType, SchemaValue)>,
+) -> golem_rust::schema::wit::wire::TypedSchemaValue {
+    let value = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(
+            fields
+                .iter()
+                .map(|(name, body, _)| golem_rust::schema::NamedFieldType {
+                    name: (*name).to_string(),
+                    body: body.clone(),
+                    metadata: Default::default(),
+                })
+                .collect(),
+        )),
+        SchemaValue::Record {
+            fields: fields.into_iter().map(|(_, _, value)| value).collect(),
+        },
+    );
+    golem_rust::encode_typed_schema_value(&value).expect("encode filesystem tool wire input")
+}
+
+async fn invoke_filesystem_tool<T: FromSchema>(
+    name: String,
+    command: &str,
+    input: golem_rust::schema::wit::wire::TypedSchemaValue,
+) -> T {
+    let result = ToolRpc::create(&name)
+        .expect("tool RPC creation failed")
+        .invoke_and_await(vec![command.to_string()], input, None, None)
+        .await
+        .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error:?}"));
+    let value = decode_typed_schema_value_owned(
+        result
+            .result
+            .unwrap_or_else(|| panic!("filesystem tool '{name}' returned no result")),
+    )
+    .unwrap_or_else(|error| panic!("decode filesystem tool '{name}' result: {error}"));
+    T::from_value(value.value())
+        .unwrap_or_else(|error| panic!("convert filesystem tool '{name}' result: {error}"))
+}
+
+fn gated_typed_input<T: IntoWire + FromWire + 'static>(items: [T; 3]) -> AgentStream<T> {
     let (mut writer, input) = AgentStream::new();
     spawn_local(async move {
         let [first, second, third] = items;
@@ -1116,7 +1188,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn middleware_probe_modes(&self, value: String) -> Vec<String> {
-        let rpc = ToolRpc::new("middleware-probe");
+        let rpc = ToolRpc::create("middleware-probe").expect("tool RPC creation failed");
         let path = ["apply".to_string()];
         let synchronous = rpc
             .invoke_and_await(
@@ -1151,7 +1223,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn middleware_probe_once(&self, value: String) -> String {
-        let result = ToolRpc::new("middleware-probe")
+        let result = ToolRpc::create("middleware-probe")
+            .expect("tool RPC creation failed")
             .invoke_and_await(
                 vec!["apply".to_string()],
                 raw_middleware_probe_input(&value),
@@ -1164,7 +1237,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn dynamic_mcp_probe(&self, value: String) -> String {
-        let result = ToolRpc::new("middleware-probe")
+        let result = ToolRpc::create("middleware-probe")
+            .expect("tool RPC creation failed")
             .invoke_and_await(Vec::new(), raw_middleware_probe_input(&value), None, None)
             .await
             .expect("invoke dynamic MCP tool through universal middleware");
@@ -1173,7 +1247,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
 
     async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String> {
         let (stdout_target, stdout) = tool_host::create_stdout();
-        let rpc = ToolRpc::new("middleware-probe");
+        let rpc = ToolRpc::create("middleware-probe").expect("tool RPC creation failed");
         let result = rpc.invoke_and_await(
             Vec::new(),
             raw_middleware_probe_input(&value),
@@ -1189,7 +1263,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
 
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String {
         let (stdout_target, stdout) = tool_host::create_stdout();
-        let rpc = ToolRpc::new("middleware-probe");
+        let rpc = ToolRpc::create("middleware-probe").expect("tool RPC creation failed");
         let result = rpc.invoke_and_await(
             Vec::new(),
             raw_middleware_probe_input(&value),
@@ -1199,6 +1273,87 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let (result, stdout) = (result, read_all(stdout)).join().await;
         result.expect("invoke dynamic MCP middleware stdout probe");
         String::from_utf8(stdout).expect("MCP stdout is UTF-8")
+    }
+
+    async fn filesystem_tool_roundtrip(&self, implementation: String) -> Vec<String> {
+        let path = format!("workspace/guest-{implementation}/notes.txt");
+        let write: RawWriteFileResult = invoke_filesystem_tool(
+            format!("write-file-{implementation}"),
+            "write-file",
+            raw_filesystem_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String(path.clone()),
+                ),
+                (
+                    "content",
+                    SchemaType::string(),
+                    SchemaValue::String("one\r\ntwo\nthree".to_string()),
+                ),
+                (
+                    "create-parent-directories",
+                    SchemaType::bool(),
+                    SchemaValue::Bool(true),
+                ),
+            ]),
+        )
+        .await;
+        let read: RawReadFileResult = invoke_filesystem_tool(
+            format!("read-file-{implementation}"),
+            "read-file",
+            raw_filesystem_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String(path.clone()),
+                ),
+                (
+                    "range",
+                    SchemaType::list(SchemaType::u64()),
+                    SchemaValue::List {
+                        elements: vec![SchemaValue::U64(2)],
+                    },
+                ),
+            ]),
+        )
+        .await;
+        let edit: RawEditFileResult = invoke_filesystem_tool(
+            format!("edit-file-{implementation}"),
+            "edit-file",
+            raw_filesystem_input(vec![
+                ("path", SchemaType::string(), SchemaValue::String(path)),
+                (
+                    "old-text",
+                    SchemaType::string(),
+                    SchemaValue::String("two\n".to_string()),
+                ),
+                (
+                    "new-text",
+                    SchemaType::string(),
+                    SchemaValue::String("TWO\r\n".to_string()),
+                ),
+            ]),
+        )
+        .await;
+
+        vec![
+            match write.disposition {
+                RawWriteDisposition::Created => "created",
+                RawWriteDisposition::Replaced => "replaced",
+            }
+            .to_string(),
+            write.bytes_written.to_string(),
+            read.content,
+            read.start_line.unwrap_or_default().to_string(),
+            read.end_line.unwrap_or_default().to_string(),
+            read.total_lines.to_string(),
+            read.truncated_before.to_string(),
+            read.truncated_after.to_string(),
+            edit.replacements.to_string(),
+            edit.bytes_before.to_string(),
+            edit.bytes_after.to_string(),
+        ]
     }
 
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence> {
@@ -1230,7 +1385,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             return items;
         }
         let mut output = {
-            let result = ToolRpc::new("typed-output-stream")
+            let result = ToolRpc::create("typed-output-stream")
+                .expect("tool RPC creation failed")
                 .invoke_and_await(
                     vec!["produce".to_string()],
                     raw_typed_output_input(tag),
@@ -1311,7 +1467,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let input = golem_rust::encode_typed_schema_value_async(&input)
             .await
             .expect("encode raw typed input wire value");
-        let result = ToolRpc::new("typed-input-stream")
+        let result = ToolRpc::create("typed-input-stream")
+            .expect("tool RPC creation failed")
             .invoke_and_await(vec!["consume".to_string()], input, None, None)
             .await
             .expect("invoke typed input tool");

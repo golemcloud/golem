@@ -704,6 +704,7 @@ fn union_discriminator_overlap_prefix_suffix_is_reported() {
 }
 
 #[test]
+#[cfg(feature = "regex")]
 fn union_discriminator_validation_rejects_only_reject_classifications() {
     fn graph(left: DiscriminatorRule, right: DiscriminatorRule) -> SchemaGraph {
         SchemaGraph::anonymous(SchemaType::union(UnionSpec {
@@ -761,6 +762,7 @@ fn union_discriminator_validation_rejects_only_reject_classifications() {
 }
 
 #[test]
+#[cfg(feature = "regex")]
 fn invalid_regex_on_union_branch_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
         branches: vec![UnionBranch {
@@ -831,6 +833,7 @@ fn inverted_binary_byte_range_is_reported() {
 }
 
 #[test]
+#[cfg(feature = "regex")]
 fn invalid_text_regex_is_reported() {
     let graph = SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
         languages: None,

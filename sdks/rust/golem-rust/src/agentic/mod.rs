@@ -18,27 +18,34 @@ pub type InputStream = wit_bindgen::StreamReader<
 >;
 pub use agent::*;
 pub use agent_config::*;
-pub(crate) use agent_impl::Component;
+#[doc(hidden)]
+pub use agent_impl::install_agent_exports;
 pub use agent_initiator::*;
 pub use agent_registry::*;
 pub use agent_stream::*;
 pub use ambient_tool_rpc::*;
 pub use async_utils::*;
 pub use errors::*;
+#[doc(hidden)]
+pub use exports::Component;
 pub use extended_agent_type::*;
 pub use extended_tool_type::*;
+pub use golem_tool_metadata::{WireToolSchema, WireTypeRef};
 pub use http::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
 pub use schema::*;
 pub use tool_client::*;
 pub use tool_impl::OutputStream;
+#[doc(hidden)]
+pub use tool_impl::install_tool_exports;
 pub use tool_literal::*;
 pub use tool_refinement::*;
 pub use tool_reflection::*;
 pub use tool_registry::{
     ToolInvokeFuture, ToolInvokeFutureFor, ToolInvoker, get_all_tools, get_extended_tool_by_name,
-    get_tool_by_name, get_tool_invoker_by_name, register_tool, register_tool_invoker,
+    get_tool_by_name, get_tool_invoker_by_name, register_prepared_tool_invoker, register_tool,
+    register_tool_invoker, register_wire_tool_invoker,
 };
 pub use unstructured_binary::*;
 pub use unstructured_text::*;
@@ -61,6 +68,7 @@ mod agent_stream;
 pub mod ambient_tool_rpc;
 mod async_utils;
 mod errors;
+pub(crate) mod exports;
 mod extended_agent_type;
 mod extended_tool_type;
 mod http;

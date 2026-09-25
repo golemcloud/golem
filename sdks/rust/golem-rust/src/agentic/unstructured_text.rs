@@ -15,6 +15,7 @@
 use crate::SchemaValue;
 use crate::agentic::{Schema, StructuredSchema};
 use crate::schema::VariantValuePayload;
+use crate::schema::wit::{direct, wire};
 use std::fmt::Debug;
 
 /// Represents a text value that can either be inline or a URL reference.
@@ -161,5 +162,91 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
             text: payload.text,
             language_code,
         })
+    }
+}
+
+impl<T: AllowedLanguages> direct::WireSchema for UnstructuredText<T> {
+    fn append_schema(builder: &mut direct::WireSchemaBuilder) -> i32 {
+        let inline = builder.push(wire::SchemaTypeBody::TextType(wire::TextRestrictions {
+            languages: (!T::all().is_empty())
+                .then(|| T::all().iter().map(|s| (*s).to_string()).collect()),
+            min_length: None,
+            max_length: None,
+            regex: None,
+        }));
+        let url = builder.push(wire::SchemaTypeBody::UrlType(wire::UrlRestrictions {
+            allowed_schemes: None,
+            allowed_hosts: None,
+        }));
+        let mut metadata = direct::empty_metadata();
+        metadata.role = Some(wire::Role::UnstructuredText);
+        builder.push_with_metadata(
+            wire::SchemaTypeBody::VariantType(vec![
+                wire::VariantCaseType {
+                    name: "inline".to_string(),
+                    payload: Some(inline),
+                    metadata: direct::empty_metadata(),
+                },
+                wire::VariantCaseType {
+                    name: "url".to_string(),
+                    payload: Some(url),
+                    metadata: direct::empty_metadata(),
+                },
+            ]),
+            metadata,
+        )
+    }
+}
+
+impl<T: AllowedLanguages> direct::IntoWire for UnstructuredText<T> {
+    fn write_wire(&self, writer: &mut direct::WireWriter) -> Result<i32, direct::WireError> {
+        let (case, payload) = match self {
+            Self::Url(url) => (1, wire::SchemaValueNode::UrlValue(url.clone())),
+            Self::Text {
+                text,
+                language_code,
+            } => (
+                0,
+                wire::SchemaValueNode::TextValue(wire::TextValuePayload {
+                    text: text.clone(),
+                    language: language_code.as_ref().map(T::to_language_code),
+                }),
+            ),
+        };
+        let payload = writer.push(payload);
+        Ok(writer.push(wire::SchemaValueNode::VariantValue(
+            wire::VariantValuePayload {
+                case,
+                payload: Some(payload),
+            },
+        )))
+    }
+}
+
+impl<T: AllowedLanguages> direct::FromWire for UnstructuredText<T> {
+    fn read_wire(reader: &mut direct::WireReader, index: i32) -> Result<Self, direct::WireError> {
+        let wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
+            case,
+            payload: Some(payload),
+        }) = reader.take(index)?
+        else {
+            return Err(direct::WireError::Shape(
+                "unstructured text variant with payload",
+            ));
+        };
+        match (case, reader.take(payload)?) {
+            (0, wire::SchemaValueNode::TextValue(payload)) => Ok(Self::Text {
+                text: payload.text,
+                language_code: payload
+                    .language
+                    .map(|code| {
+                        T::from_language_code(&code)
+                            .ok_or(direct::WireError::Shape("allowed text language"))
+                    })
+                    .transpose()?,
+            }),
+            (1, wire::SchemaValueNode::UrlValue(url)) => Ok(Self::Url(url)),
+            _ => Err(direct::WireError::Shape("unstructured text payload")),
+        }
     }
 }

@@ -26,7 +26,7 @@ pub fn private() -> TokenStream {
     quote! { #schema_crate::schema::derive::__private }
 }
 
-fn schema_crate_path() -> TokenStream {
+pub(crate) fn schema_crate_path() -> TokenStream {
     crate_path("golem-schema")
         .or_else(|| crate_path("golem-rust"))
         .unwrap_or_else(|| crate_path("golem-common").unwrap_or_else(|| quote! { ::golem_common }))

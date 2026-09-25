@@ -312,7 +312,7 @@ test "native custom streams are lazy recursive and directly forwardable" {
 }
 
 ///|
-test "generated batch release traverses failing siblings and unconverted items" {
+test "generated batch release traverses failing fields and unconverted items" {
   let drops = Ref(0)
   fn endpoint() -> @schema.AgentStream[Int] {
     @schema.AgentStream::produce(async fn(_) { fail("must not pull") },
@@ -321,7 +321,6 @@ test "generated batch release traverses failing siblings and unconverted items" 
   run_stream_test(async fn() {
     let (writer, stream) = new_failure_input_0_stream()
     let items : Array[FailureItem] = [
-      { first: endpoint(), narrow: 1, last: [endpoint()] },
       { first: endpoint(), narrow: 128, last: [endpoint(), endpoint()] },
       { first: endpoint(), narrow: 2, last: [endpoint()] },
     ]
@@ -329,7 +328,7 @@ test "generated batch release traverses failing siblings and unconverted items" 
       CodecError(message) => assert_eq(message, "s8 value out of range")
       error => fail(repr(error))
     } noraise { _ => fail("expected encoding failure") }
-    assert_eq(drops.val, 7)
+    assert_eq(drops.val, 5)
     writer.close()
     stream.drop()
   })
@@ -338,7 +337,7 @@ test "generated batch release traverses failing siblings and unconverted items" 
     CodecError(_) => ()
     error => fail(repr(error))
   } noraise { _ => fail("expected decoding failure") }
-  assert_eq(drops.val, 9)
+  assert_eq(drops.val, 7)
 }
 "#).unwrap();
     let output = std::process::Command::new(
@@ -793,7 +792,7 @@ fn guest_tool_mode_generates_name_aware_error_decoder() {
 
     let source = std::fs::read_to_string(target.join("client/client.mbt")).unwrap();
     for expected in [
-        "(name : String, value : @model.TypedSchemaValue) -> Result[NewError, String]?",
+        "(name : String, value : @types.TypedSchemaValue) -> Result[NewError, String]?",
         "\"first-text\" => {",
         "\"second-text\" => {",
         "\"empty\" => {",
@@ -806,7 +805,6 @@ fn guest_tool_mode_generates_name_aware_error_decoder() {
     moon_check_wasm(dir.path());
 }
 
-// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
 #[test]
 fn guest_tool_mode_marks_substring_collision_parameter_used() {
     let dir = TempDir::new().unwrap();

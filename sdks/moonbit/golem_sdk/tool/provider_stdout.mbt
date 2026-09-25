@@ -97,6 +97,7 @@ fn provider_stdout_from_callbacks(
     },
     fn() { state.val.open && !state.val.dropped },
     None,
+    write_window_size=65536,
   )
   { state, output, }
 }
@@ -291,25 +292,24 @@ pub async fn invoke_with_stdout(
   }
   @async-core.protect_from_cancel(() => stdout.complete(reason)) catch {
     error =>
-      match (error, result) {
-        (@async-core.Cancelled::Cancelled, Ok(value)) => {
-          match @toolCore.decode_invocation_result(value) {
-            Ok(decoded) => @toolCore.drop_invocation_result(decoded)
-            Err(_) => ()
+      match result {
+        Ok(value) if error is @async-core.Cancelled::Cancelled => {
+          match value.result {
+            Some(payload) => @model.drop_wit_capabilities(payload.value)
+            None => ()
+          }
+          match value.stdout {
+            Some(stream) => stream.drop_sync()
+            None => ()
           }
           raise error
         }
-        (
-          @async-core.Cancelled::Cancelled,
-          Err(@types.ToolError::CustomError(payload)),
-        ) => {
-          match @toolCore.decode_typed_value(payload.payload, "tool error") {
-            Ok(decoded) => @model.drop_owned_capabilities(decoded.value)
-            Err(_) => ()
-          }
+        Err(@types.ToolError::CustomError(payload)) if error
+          is @async-core.Cancelled::Cancelled => {
+          @model.drop_wit_capabilities(payload.payload.value)
           raise error
         }
-        (@async-core.Cancelled::Cancelled, Err(_)) => raise error
+        Err(_) if error is @async-core.Cancelled::Cancelled => raise error
         _ => ()
       }
   }

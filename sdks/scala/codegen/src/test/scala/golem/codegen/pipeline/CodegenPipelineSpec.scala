@@ -58,64 +58,63 @@ class CodegenPipelineSpec extends munit.FunSuite {
   private def discover(sources: SourceDiscovery.SourceInput*): SourceDiscovery.Result =
     SourceDiscovery.discover(sources)
 
-  private val httpCorpus = {
-    val input = getClass.getResourceAsStream("/corpus.json")
-    require(input != null, "shared HTTP corpus is missing")
-    try ujson.read(input)("cases").arr.toList
-    finally input.close()
+  test("guest export roots follow implementations, including every mixed capability combination") {
+    val middleware = SourceDiscovery.SourceInput(
+      "Middleware.scala",
+      """package example
+        |import golem.runtime.annotations._
+        |@universalToolMiddleware(name = "pass-through")
+        |final class PassThrough extends golem.tool.UniversalToolMiddleware
+        |""".stripMargin
+    )
+    for {
+      agents      <- List(false, true)
+      tools       <- List(false, true)
+      middlewares <- List(false, true)
+    } {
+      val sources = List(
+        if (agents) Some(agentSource) else None,
+        if (tools) Some(toolSource) else None,
+        if (middlewares) Some(middleware) else None
+      ).flatten
+      val exports = CodegenPipeline
+        .run(discover(sources: _*), Some("example"), rpcEnabled = true)
+        .autoRegister
+        .get
+        .files
+        .find(_.relativePath.endsWith("RegisterAgents.scala"))
+        .get
+        .content
+      assertEquals(exports.contains("Guest.golemAgent200Guest"), agents)
+      assertEquals(exports.contains("Guest.SaveSnapshot.save()"), agents)
+      assertEquals(exports.contains("Guest.LoadSnapshot.load("), agents)
+      assertEquals(exports.contains("Guest.golemTool010Guest"), tools)
+      assertEquals(exports.contains("ToolMiddlewareGuest.golemTool010ToolMiddlewareGuest"), middlewares)
+      List("golemAgent200Guest", "golemTool010Guest", "golemTool010ToolMiddlewareGuest", "saveSnapshot", "loadSnapshot")
+        .foreach(name => assert(exports.contains(s"""@JSExportTopLevel("$name")"""), exports))
+    }
   }
 
-  httpCorpus
-    .filter(c =>
-      c("suite").str == "tooling" &&
-        Set("provisioning", "bridge-client").contains(c("input")("consumer").str)
+  test("client-only traits and middleware tool projections do not retain local guest implementations") {
+    val source = SourceDiscovery.SourceInput(
+      "Client.scala",
+      """package example
+        |import golem.runtime.annotations._
+        |@agentDefinition("remote")
+        |trait Remote { class Id(val id: String); def call(): String }
+        |@toolDefinition(name = "remote-tool")
+        |trait RemoteTool { def echo(value: String): String }
+        |@toolMiddleware(name = "transparent")
+        |final class Transparent extends RemoteToolMiddleware
+        |""".stripMargin
     )
-    .foreach { c =>
-      test(c("id").str) {
-        val input      = c("input")
-        val annotation =
-          if (input("kind").str == "http-router") "@httpRouter(\"Surface\", \"/\")"
-          else "@agentDefinition(mount = \"/\", exposeFiles = Array((\"/*\", \"/public/$1\")))"
-        val source = SourceDiscovery.SourceInput(
-          "Surface.scala",
-          s"""
-        package example
-        $annotation
-        trait Surface { class Id() }
-        @agentImplementation() final class SurfaceImpl() extends Surface
-      """
-        )
-        val generated = CodegenPipeline.run(discover(source), Some("example"), rpcEnabled = true)
-        val included  =
-          if (input("consumer").str == "provisioning") generated.autoRegister.exists(_.implCount == 1)
-          else generated.rpc.files.exists(_.content.contains("SurfaceClient"))
-        assertEquals(included, c("expect")("included").bool)
-      }
-    }
-
-  test("router registration is retained while only regular clients are generated") {
-    val router = SourceDiscovery.SourceInput(
-      "Website.scala",
-      """
-      package example
-      @httpRouter(typeName = "site", mount = "/")
-      trait Website { @httpHandler def serve(request: HttpRequest): Future[HttpResponse] }
-      @agentImplementation()
-      final class WebsiteImpl() extends Website {
-        def serve(request: HttpRequest): Future[HttpResponse] = ???
-      }
-    """
-    )
-    val discovered = discover(router, agentSource)
-    val site       = discovered.traits.find(_.name == "Website").get
-    assertEquals(site.kind, "http-router")
-    assertEquals(site.mode, Some("ephemeral"))
-    assertEquals(site.constructorParams, Nil)
-    val result = CodegenPipeline.run(discovered, Some("example"), rpcEnabled = true)
-    assertEquals(result.autoRegister.get.implCount, 2)
-    assert(result.autoRegister.get.files.exists(_.content.contains("WebsiteImpl")))
-    assertEquals(result.rpc.files.size, 1)
-    assert(result.rpc.files.head.content.contains("CounterAgentClient"))
+    val generated = CodegenPipeline.run(discover(source), Some("example"), rpcEnabled = true)
+    val exports   = generated.autoRegister.get.files.find(_.relativePath.endsWith("RegisterAgents.scala")).get.content
+    assert(!exports.contains("Guest.golemAgent200Guest"), exports)
+    assert(!exports.contains("Guest.golemTool010Guest"), exports)
+    assert(!exports.contains("Guest.SaveSnapshot"), exports)
+    assert(exports.contains("ToolMiddlewareGuest.golemTool010ToolMiddlewareGuest"), exports)
+    assert(generated.rpc.files.exists(_.relativePath.endsWith("RemoteToolClient.scala")))
   }
 
   test("pipeline with both auto-register and rpc enabled") {

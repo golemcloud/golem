@@ -16,7 +16,7 @@
 
 package golem.runtime.macros
 
-import golem.config.{AgentConfigDeclaration, ConfigSchema}
+import golem.config.{AgentConfigDeclaration, AgentConfigSource, ConfigSchema, Secret}
 import golem.runtime.annotations.{description, prompt, readOnly}
 import golem.runtime.{
   AgentMetadata,
@@ -30,7 +30,8 @@ import golem.runtime.{
   ParameterMetadata,
   ReadOnlyConfig,
   Snapshotting,
-  SnapshottingConfig
+  SnapshottingConfig,
+  WireAgentMetadata
 }
 import golem.schema.{IntoSchema, SchemaGraph}
 import golem.runtime.http.{
@@ -40,9 +41,12 @@ import golem.runtime.http.{
   DurableStreamSlotSource,
   HttpAgentValidation,
   HeaderVariable,
+  HttpExchangeCodec,
   HttpEndpointDetails,
   HttpMethod,
   HttpMountDetails,
+  HttpRequest,
+  HttpResponse,
   HttpRouteParser,
   HttpValidation,
   PathSegment,
@@ -72,7 +76,152 @@ object AgentDefinitionMacro {
     "\nHint: IntoSchema is derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
       "Use `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n"
-  inline def generate[T]: AgentMetadata = ${ impl[T] }
+  inline def generate[T]: AgentMetadata         = ${ impl[T] }
+  inline def generateWire[T]: WireAgentMetadata = ${ wireImpl[T] }
+
+  private def wireImpl[T: Type](using Quotes): Expr[WireAgentMetadata] = {
+    import quotes.reflect.*
+    val core      = new ToolMacroCore
+    val compiled  = new CompiledWireMetadata[core.type](core)
+    val traitType = TypeRepr.of[T]
+    val sym       = traitType.typeSymbol
+    if (!sym.flags.is(Flags.Trait)) report.errorAndAbort(s"@agent target must be a trait, found: ${sym.fullName}")
+    val router             = HttpDeclarationMacro.isRouter(sym)
+    val hasAgentDefinition =
+      sym.annotations.exists(_.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.agentDefinition")
+    if (router && hasAgentDefinition) report.errorAndAbort("Use either @httpRouter or @agentDefinition, not both")
+    if (!router && !hasAgentDefinition)
+      report.errorAndAbort(s"Missing @agentDefinition(...) on agent trait: ${sym.fullName}")
+    val name =
+      if (router) HttpDeclarationMacro.string(sym, "typeName", 0) else agentDefinitionTypeName(sym).getOrElse(sym.name)
+    val descriptionValue = annotationString(sym, TypeRepr.of[description]).orElse(docstringText(sym))
+    val mode             = if (router) Some("ephemeral") else agentDefinitionMode(sym).map(_.valueOrAbort)
+    val mount            = if (router) Some(HttpDeclarationMacro.routerMountValue(sym)) else extractHttpMount(sym, name)
+
+    def graph(tpe: TypeRepr): SchemaGraph = tpe.asType match {
+      case '[a] => compiled.graph(core.q.reflect.TypeRepr.of[a])
+    }
+    def params(method: Symbol): List[(String, TypeRepr)] = method.paramSymss.flatten.filter(_.isTerm).map { p =>
+      p.name -> p.tree.asInstanceOf[ValDef].tpt.tpe
+    }
+    def isPrincipal(tpe: TypeRepr): Boolean                    = tpe.dealias.typeSymbol.fullName == "golem.Principal"
+    def input(values: List[(String, TypeRepr)]): InputMetadata = InputMetadata(values.collect {
+      case (name, tpe) if !isPrincipal(tpe) => ParameterMetadata(name, FieldSource.UserSupplied, graph(tpe))
+    })
+    val (identity, constructorDescription) = if (router) {
+      if (sym.declarations.exists(c => c.isClassDef && (c.name == "Id" || HttpDeclarationMacro.has(c, "id"))))
+        report.errorAndAbort("router-constructor: HTTP routers cannot declare constructor parameters")
+      (Nil, descriptionValue.getOrElse(name))
+    } else {
+      val idClass = sym.declarations
+        .find(c => c.isClassDef && HttpDeclarationMacro.has(c, "id"))
+        .orElse(sym.declarations.find(c => c.isClassDef && c.name == "Id"))
+        .getOrElse(
+          report.errorAndAbort(
+            s"Agent trait ${sym.name} must define a `class Id(...)` to declare its constructor parameters."
+          )
+        )
+      (params(idClass.primaryConstructor), docstringText(idClass).getOrElse(descriptionValue.getOrElse(name)))
+    }
+    val constructor = ConstructorMetadata(
+      None,
+      constructorDescription,
+      None,
+      input(identity)
+    )
+    val methods = sym.methodMembers.collect {
+      case method if method.flags.is(Flags.Deferred) && method.isDefDef =>
+        val handler  = HttpDeclarationMacro.has(method, "httpHandler")
+        val provider = HttpDeclarationMacro.has(method, "openApiProvider")
+        if ((handler || provider) && !router) report.errorAndAbort("HTTP roles require @httpRouter")
+        if (router && (handler == provider))
+          report.errorAndAbort("router-method-role: each method must have exactly one HTTP role")
+        val arguments      = params(method)
+        val principalNames = arguments.collect { case (name, tpe) if isPrincipal(tpe) => name }.toSet
+        val headers        = extractHeaderVars(method)
+        if (router && (HttpDeclarationMacro.has(method, "endpoint") || headers.nonEmpty))
+          report.errorAndAbort("handler-endpoint-policy: router policy belongs to the mount")
+        if (provider && arguments.nonEmpty)
+          report.errorAndAbort("provider-schema: provider must be parameterless")
+        validateEndpoints(method, name, mount.isDefined, arguments.map(_._1).toSet, principalNames, headers)
+        val readonly = extractReadOnly(method, principalNames.nonEmpty)
+        if (mode.contains("ephemeral") && readonly.nonEmpty)
+          report.errorAndAbort(s"Agent '$name' is ephemeral but method '${method.name}' is marked with @readOnly.")
+        val out         = unwrapAsyncType(method.tree.asInstanceOf[DefDef].returnTpt.tpe)
+        val methodInput = if (handler) {
+          arguments.filterNot { case (_, tpe) => isPrincipal(tpe) } match {
+            case List(("request", request)) if request.dealias =:= TypeRepr.of[HttpRequest] =>
+              InputMetadata(
+                List(ParameterMetadata("request", FieldSource.UserSupplied, HttpExchangeCodec.requestGraph))
+              )
+            case _ => report.errorAndAbort("handler-schema")
+          }
+        } else input(arguments)
+        val methodOutput = if (handler) {
+          if (!(out.dealias =:= TypeRepr.of[HttpResponse])) report.errorAndAbort("handler-schema")
+          OutputMetadata.Single(HttpExchangeCodec.responseGraph)
+        } else if (out =:= TypeRepr.of[Unit]) OutputMetadata.Unit
+        else OutputMetadata.Single(graph(out))
+        MethodMetadata(
+          method.name,
+          annotationString(method, TypeRepr.of[description]).orElse(docstringText(method)),
+          annotationString(method, TypeRepr.of[prompt]),
+          None,
+          methodInput,
+          methodOutput,
+          if (handler) List(HttpEndpointDetails(HttpMethod.Any, Nil, Nil, Nil, None, None))
+          else extractEndpoints(method, headers),
+          readonly
+        )
+    }
+    def config(tpe: TypeRepr, path: List[String]): List[AgentConfigDeclaration] = tpe.dealias.asType match {
+      case '[Secret[a]] =>
+        val inner = graph(TypeRepr.of[a])
+        List(
+          AgentConfigDeclaration(
+            AgentConfigSource.Secret,
+            path,
+            inner.copy(root =
+              golem.schema.SchemaType(golem.schema.SchemaTypeBody.SecretType(golem.schema.SecretSpec(inner.root)))
+            )
+          )
+        )
+      case _ if tpe.typeSymbol.caseFields.nonEmpty && !(tpe <:< TypeRepr.of[Tuple]) =>
+        tpe.typeSymbol.caseFields.flatMap(f => config(tpe.memberType(f), path :+ f.name))
+      case _ => List(AgentConfigDeclaration(AgentConfigSource.Local, path, graph(tpe)))
+    }
+    val configTypes = traitType.baseClasses.filter(_.fullName == "golem.config.AgentConfig").flatMap { base =>
+      traitType.baseType(base).typeArgs
+    }
+    if (configTypes.size > 1) report.errorAndAbort("Agent trait may extend at most one AgentConfig[T]")
+    val snapshotting =
+      if (router) Snapshotting.Disabled
+      else
+        Snapshotting
+          .parse(extractAgentDefinitionStringArg(sym, "snapshotting", 7).getOrElse("disabled"))
+          .fold(error => report.errorAndAbort(error), value => value)
+    val metadata = AgentMetadata(
+      name,
+      if (router) AgentTypeKind.HttpRouter else AgentTypeKind.Regular,
+      descriptionValue,
+      mode,
+      methods,
+      constructor,
+      mount,
+      configTypes.flatMap(tpe => config(tpe, Nil)),
+      snapshotting
+    )
+    mount.foreach { m =>
+      HttpValidation
+        .validateMountVarsAreNotPrincipal(name, m, identity.collect { case (n, tpe) if isPrincipal(tpe) => n }.toSet)
+        .left
+        .foreach(error => report.errorAndAbort(error))
+    }
+    try HttpValidation.validateHttpMountFromMetadata(metadata)
+    catch { case error: IllegalArgumentException => report.errorAndAbort(error.getMessage) }
+    HttpAgentValidation.validate(metadata).left.foreach(error => report.errorAndAbort(error))
+    compiled.literal(WireAgentMetadata.fromModel(metadata))
+  }
 
   private def impl[T: Type](using Quotes): Expr[AgentMetadata] = {
     import quotes.reflect.*
@@ -112,7 +261,7 @@ object AgentDefinitionMacro {
 
     // --- HTTP mount extraction from @agentDefinition ---
     val httpMountExpr: Expr[Option[HttpMountDetails]] =
-      if (router) HttpDeclarationMacro.routerMount(typeSymbol) else extractHttpMount(typeSymbol, agentTypeName)
+      if (router) HttpDeclarationMacro.routerMount(typeSymbol) else literal(extractHttpMount(typeSymbol, agentTypeName))
     val hasMount =
       router || extractAgentDefinitionStringArg(typeSymbol, "mount", positionalIndex = 2).exists(_.nonEmpty)
     val isEphemeral = router || agentDefinitionModeString(typeSymbol).contains("ephemeral")
@@ -313,9 +462,9 @@ object AgentDefinitionMacro {
     val headerVars      = extractHeaderVars(method)
     val endpointDetails =
       if (HttpDeclarationMacro.has(method, "httpHandler"))
-        List('{ HttpEndpointDetails(HttpMethod.Any, Nil, Nil, Nil, None, None) })
+        List(HttpEndpointDetails(HttpMethod.Any, Nil, Nil, Nil, None, None))
       else extractEndpoints(method, headerVars)
-    val endpointListExpr = Expr.ofList(endpointDetails)
+    val endpointListExpr = literal(endpointDetails)
 
     // --- Compile-time validation ---
     val principalFullName   = "golem.Principal"
@@ -332,7 +481,7 @@ object AgentDefinitionMacro {
     validateEndpoints(method, agentName, hasMount, methodParamNames, principalParamNames, headerVars)
 
     // --- Read-only extraction ---
-    val readOnlyExpr = extractReadOnly(method, principalParamNames.nonEmpty)
+    val readOnlyExpr = literal(extractReadOnly(method, principalParamNames.nonEmpty))
 
     '{
       MethodMetadata(
@@ -352,13 +501,12 @@ object AgentDefinitionMacro {
 
   /**
    * Extract the optional `@readOnly(cache = ...)` annotation from a method and
-   * build an `Expr[Option[ReadOnlyConfig]]`. `usesPrincipal` is derived from
-   * whether the method has a Principal parameter (it is *not*
-   * user-configurable).
+   * build its metadata. `usesPrincipal` is derived from whether the method has
+   * a Principal parameter (it is *not* user-configurable).
    */
   private def extractReadOnly(using
     Quotes
-  )(method: quotes.reflect.Symbol, usesPrincipal: Boolean): Expr[Option[ReadOnlyConfig]] = {
+  )(method: quotes.reflect.Symbol, usesPrincipal: Boolean): Option[ReadOnlyConfig] = {
     import quotes.reflect.*
 
     val readOnlyAnnotations = method.annotations.collect {
@@ -367,7 +515,7 @@ object AgentDefinitionMacro {
         ap -> args
     }
 
-    if (readOnlyAnnotations.isEmpty) '{ None }
+    if (readOnlyAnnotations.isEmpty) None
     else {
       val (_, args) = readOnlyAnnotations.head
 
@@ -377,19 +525,13 @@ object AgentDefinitionMacro {
         case Literal(StringConstant(v))                    => v
       }.getOrElse("until-write")
 
-      val policyExpr: Expr[CachePolicy] = CachePolicy.parse(cacheStr) match {
+      val policy = CachePolicy.parse(cacheStr) match {
         case Left(err) =>
           report.errorAndAbort(s"@readOnly on method '${method.name}': $err")
-        case Right(CachePolicy.NoCache)    => '{ CachePolicy.NoCache }
-        case Right(CachePolicy.UntilWrite) => '{ CachePolicy.UntilWrite }
-        case Right(CachePolicy.Ttl(nanos)) =>
-          val n = Expr(nanos)
-          '{ CachePolicy.Ttl($n) }
+        case Right(value) => value
       }
 
-      val usesPrincipalExpr = Expr(usesPrincipal)
-
-      '{ Some(ReadOnlyConfig($policyExpr, $usesPrincipalExpr)) }
+      Some(ReadOnlyConfig(policy, usesPrincipal))
     }
   }
 
@@ -754,23 +896,19 @@ object AgentDefinitionMacro {
   }
 
   /**
-   * Build an Expr[Option[HttpMountDetails]] from the @agentDefinition
-   * annotation.
+   * Build the mount metadata from the @agentDefinition annotation.
    */
   private def extractHttpMount(using
     Quotes
-  )(symbol: quotes.reflect.Symbol, agentName: String): Expr[Option[HttpMountDetails]] = {
+  )(symbol: quotes.reflect.Symbol, agentName: String): Option[HttpMountDetails] = {
     import quotes.reflect.*
 
-    val filesystemExpr = HttpDeclarationMacro.mappings(symbol, "agentDefinition", "exposeFiles", 8)
-    val mountPath      = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
+    val filesystem = HttpDeclarationMacro.mappingValues(symbol, "agentDefinition", "exposeFiles", 8)
+    val mountPath  = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
     mountPath match {
-      case None =>
-        '{
-          require($filesystemExpr.isEmpty, "exposeFiles requires an HTTP mount")
-          None
-        }
-      case Some(mp) =>
+      case None if filesystem.nonEmpty => report.errorAndAbort("exposeFiles requires an HTTP mount")
+      case None                        => None
+      case Some(mp)                    =>
         val pathSegments = HttpRouteParser.parsePathOnly(mp, "mount") match {
           case Left(err)                                                    => report.errorAndAbort(s"Invalid mount path in @agentDefinition for '$agentName': $err")
           case Right(segments) if HttpDeclarationMacro.exposesFiles(symbol) =>
@@ -799,12 +937,6 @@ object AgentDefinitionMacro {
         val phantomAgent = extractAgentDefinitionBoolArg(symbol, "phantomAgent", positionalIndex = 5).getOrElse(false)
         val corsPatterns = extractAgentDefinitionCorsArg(symbol, positionalIndex = 4)
 
-        val pathExpr    = pathSegmentsExpr(pathSegments)
-        val webhookExpr = pathSegmentsExpr(webhookSuffix)
-        val authExpr    = Expr(authRequired)
-        val phantomExpr = Expr(phantomAgent)
-        val corsExpr    = Expr.ofList(corsPatterns.map(Expr(_)))
-
         val mount = HttpMountDetails(
           pathPrefix = pathSegments,
           authRequired = authRequired,
@@ -812,7 +944,7 @@ object AgentDefinitionMacro {
           corsAllowedPatterns = corsPatterns,
           webhookSuffix = webhookSuffix,
           staticBindings = Nil,
-          filesystemBindings = Nil,
+          filesystemBindings = filesystem,
           openapiProviderMethod = None
         )
         HttpValidation.validateNoCatchAllInMount(agentName, mount) match {
@@ -820,34 +952,13 @@ object AgentDefinitionMacro {
           case Right(()) => ()
         }
 
-        '{
-          Some(
-            HttpMountDetails(
-              pathPrefix = $pathExpr,
-              authRequired = $authExpr,
-              phantomAgent = $phantomExpr,
-              corsAllowedPatterns = $corsExpr,
-              webhookSuffix = $webhookExpr,
-              staticBindings = Nil,
-              filesystemBindings = $filesystemExpr,
-              openapiProviderMethod = None
-            )
-          )
-        }
+        Some(mount)
     }
   }
 
-  /**
-   * Convert a compile-time List[PathSegment] into an Expr[List[PathSegment]].
-   */
-  private def pathSegmentsExpr(using Quotes)(segments: List[PathSegment]): Expr[List[PathSegment]] = {
-    val exprs = segments.map {
-      case PathSegment.Literal(v)               => '{ PathSegment.Literal(${ Expr(v) }) }
-      case PathSegment.PathVariable(v)          => '{ PathSegment.PathVariable(${ Expr(v) }) }
-      case PathSegment.RemainingPathVariable(v) => '{ PathSegment.RemainingPathVariable(${ Expr(v) }) }
-      case PathSegment.SystemVariable(v)        => '{ PathSegment.SystemVariable(${ Expr(v) }) }
-    }
-    Expr.ofList(exprs)
+  private def literal[A: Type](value: A)(using Quotes): Expr[A] = {
+    val core = new ToolMacroCore
+    new CompiledWireMetadata[core.type](core).literal(value)
   }
 
   /** Extract @header annotations from method parameters. */
@@ -876,12 +987,11 @@ object AgentDefinitionMacro {
   }
 
   /**
-   * Extract @endpoint annotations from a method and build
-   * Expr[HttpEndpointDetails] for each.
+   * Extract @endpoint annotations from a method and build metadata for each.
    */
   private def extractEndpoints(using
     Quotes
-  )(method: quotes.reflect.Symbol, headerVars: List[HeaderVariable]): List[Expr[HttpEndpointDetails]] = {
+  )(method: quotes.reflect.Symbol, headerVars: List[HeaderVariable]): List[HttpEndpointDetails] = {
     import quotes.reflect.*
 
     def stringArg(args: List[Term], name: String, index: Int): Option[String] =
@@ -1012,10 +1122,6 @@ object AgentDefinitionMacro {
       report.errorAndAbort(s"duplicate @durableStreams for ${key.method} ${key.path} on method '${method.name}'")
     }
 
-    val headerVarsExpr = Expr.ofList(headerVars.map { hv =>
-      '{ HeaderVariable(${ Expr(hv.headerName) }, ${ Expr(hv.variableName) }) }
-    })
-
     method.annotations.collect {
       case Apply(Select(New(tpt), _), args)
           if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.endpoint" =>
@@ -1063,77 +1169,39 @@ object AgentDefinitionMacro {
           case Right(p)  => p
         }
 
-        val pathExpr  = pathSegmentsExpr(parsed.pathSegments)
-        val queryExpr = Expr.ofList(parsed.queryVars.map { qv =>
-          '{ QueryVariable(${ Expr(qv.queryParamName) }, ${ Expr(qv.variableName) }) }
-        })
-        val httpMethodExpr = httpMethod match {
-          case HttpMethod.Get       => '{ HttpMethod.Get }
-          case HttpMethod.Post      => '{ HttpMethod.Post }
-          case HttpMethod.Put       => '{ HttpMethod.Put }
-          case HttpMethod.Delete    => '{ HttpMethod.Delete }
-          case HttpMethod.Patch     => '{ HttpMethod.Patch }
-          case HttpMethod.Head      => '{ HttpMethod.Head }
-          case HttpMethod.Options   => '{ HttpMethod.Options }
-          case HttpMethod.Connect   => '{ HttpMethod.Connect }
-          case HttpMethod.Trace     => '{ HttpMethod.Trace }
-          case HttpMethod.Any       => '{ HttpMethod.Any }
-          case HttpMethod.Custom(m) => '{ HttpMethod.Custom(${ Expr(m) }) }
-        }
-        val authExpr = authOverride match {
-          case None    => '{ None: Option[Boolean] }
-          case Some(v) => '{ Some(${ Expr(v) }): Option[Boolean] }
-        }
-        val corsExpr = corsOverride match {
-          case None    => '{ None: Option[List[String]] }
-          case Some(v) => '{ Some(${ Expr.ofList(v.map(Expr(_))) }): Option[List[String]] }
-        }
-        val selected                                             = EndpointSelector(methodStr, pathStr)
-        val endpointSlots                                        = slots.filter(_.selector == selected)
-        val options                                              = routeOptions.find(_.selector == selected)
-        val durableExpr: Expr[Option[DurableStreamRouteOptions]] =
-          if (endpointSlots.isEmpty && options.isEmpty) '{ None }
-          else {
-            val slotExprs = endpointSlots.map { s =>
-              val sourceExpr: Expr[DurableStreamSlotSource] = if (s.source == "input") '{
-                DurableStreamSlotSource.Input(${ Expr(s.slot) })
-              }
-              else '{ DurableStreamSlotSource.Output(${ Expr(s.slot) }) }
-              '{ DurableStreamSlotOptions($sourceExpr, ${ Expr(s.name) }, ${ Expr(s.contentType) }) }
-            }
-            val writes                                                = options.flatMap(_.writes)
-            val streamDelete                                          = options.flatMap(_.streamDelete)
-            val invocationDelete                                      = options.flatMap(_.invocationDelete)
-            val loadExpr: Expr[Option[DurableStreamRouteLoadOptions]] = options match {
-              case Some(o) if o.readers.nonEmpty || o.appends.nonEmpty =>
-                '{ Some(DurableStreamRouteLoadOptions(${ Expr(o.readers) }, ${ Expr(o.appends) })) }
-              case None => '{ None }
-              case _    => '{ None }
-            }
-            '{
-              Some(
-                DurableStreamRouteOptions(
-                  ${ Expr.ofList(slotExprs) },
-                  ${ Expr(writes) },
-                  ${ Expr(streamDelete) },
-                  ${ Expr(invocationDelete) },
-                  $loadExpr
-                )
+        val selected       = EndpointSelector(methodStr, pathStr)
+        val endpointSlots  = slots.filter(_.selector == selected)
+        val options        = routeOptions.find(_.selector == selected)
+        val durableStreams =
+          if (endpointSlots.isEmpty && options.isEmpty) None
+          else
+            Some(
+              DurableStreamRouteOptions(
+                endpointSlots.map { slot =>
+                  val source =
+                    if (slot.source == "input") DurableStreamSlotSource.Input(slot.slot)
+                    else DurableStreamSlotSource.Output(slot.slot)
+                  DurableStreamSlotOptions(source, slot.name, slot.contentType)
+                },
+                options.flatMap(_.writes),
+                options.flatMap(_.streamDelete),
+                options.flatMap(_.invocationDelete),
+                options.collect {
+                  case option if option.readers.nonEmpty || option.appends.nonEmpty =>
+                    DurableStreamRouteLoadOptions(option.readers, option.appends)
+                }
               )
-            }
-          }
+            )
 
-        '{
-          HttpEndpointDetails(
-            httpMethod = $httpMethodExpr,
-            pathSuffix = $pathExpr,
-            headerVars = $headerVarsExpr,
-            queryVars = $queryExpr,
-            authOverride = $authExpr,
-            corsOverride = $corsExpr,
-            durableStreams = $durableExpr
-          )
-        }
+        HttpEndpointDetails(
+          httpMethod,
+          parsed.pathSegments,
+          headerVars,
+          parsed.queryVars,
+          authOverride,
+          corsOverride,
+          durableStreams
+        )
     }
   }
 

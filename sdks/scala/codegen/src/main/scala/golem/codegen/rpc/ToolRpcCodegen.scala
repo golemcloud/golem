@@ -177,7 +177,45 @@ object ToolRpcCodegen {
       else
         entries.mkString(s"_root_.scala.List(\n$indent  ", s",\n$indent  ", s"\n$indent)")
 
-    /** Renders one leaf command method. */
+    private def wireInput(tool: Tool, method: Method, kept: List[Param]): (String, String) = {
+      val values = kept.filterNot(isStreamParam)
+      val fields = values.map { p =>
+        val codec =
+          if (isCountFlag(p))
+            "_root_.golem.schema.wire.ConcreteCodec.uint.xmap[Int](_.value.toInt, v => _root_.golem.UInt(v.toLong))"
+          else s"_root_.golem.schema.wire.ConcreteCodec.derived[${p.typeExpr}]"
+        s"""("${canonicalValueName(
+            tool,
+            method,
+            p
+          )}", $codec.asInstanceOf[_root_.golem.schema.wire.ConcreteCodec[Any]])"""
+      }
+      val valueType =
+        if (values.isEmpty) "_root_.scala.Unit"
+        else if (values.size == 1) values.head.typeExpr
+        else values.map(_.typeExpr).mkString("(", ", ", ")")
+      val valueExpr =
+        if (values.isEmpty) "()"
+        else if (values.size == 1) values.head.ident
+        else values.map(_.ident).mkString("(", ", ", ")")
+      val from =
+        if (values.isEmpty) "_ => ()"
+        else if (values.size == 1) s"_.head.asInstanceOf[$valueType]"
+        else values.indices.map(i => s"v($i).asInstanceOf[${values(i).typeExpr}]").mkString("v => (", ", ", ")")
+      val to =
+        if (values.isEmpty) "_ => _root_.scala.Vector.empty"
+        else if (values.size == 1) "v => _root_.scala.Vector(v)"
+        else values.indices.map(i => s"v._${i + 1}").mkString("v => _root_.scala.Vector(", ", ", ")")
+      val codec =
+        s"_root_.golem.schema.wire.ConcreteCodec.record(_root_.scala.Vector(${fields.mkString(", ")})).xmap[$valueType]($from, $to)"
+      (codec, valueExpr)
+    }
+
+    /**
+     * Renders one leaf command method. `contextId` is empty for the root
+     * client, otherwise the wrapper path (used for cache val naming);
+     * `isWrapper` selects the dynamic (inherited-prefix) input path.
+     */
     private def leafMethod(
       tool: Tool,
       m: Method,
@@ -190,6 +228,9 @@ object ToolRpcCodegen {
       val stdin   = m.params.find(_.isStdin)
       val retType = leafReturnType(shape, shape.hasStdout)
 
+      val schemaPath      = m.localCommandPath
+      val commandPathExpr = ToolProjectionRendering.commandPath(None, schemaPath)
+
       val valueEntries = kept
         .filterNot(isStreamParam)
         .map(valueEntry(tool, m, _))
@@ -199,6 +240,31 @@ object ToolRpcCodegen {
       val paramDecls = kept.map(paramDecl).mkString(", ")
       val prefixExpr = if (isWrapper) "__inheritedPrefix" else "_root_.scala.Nil"
       val operation  = if (shape.hasStdout) "__start" else "__await"
+
+      if (!isWrapper) {
+        val (codec, value) = wireInput(tool, m, kept)
+        val errorDecoder   = shape.errType match {
+          case Some(err) =>
+            s"_root_.golem.runtime.macros.ToolErrorSchemaDerivation.wireDecoder[$err]"
+          case None => "_ => _root_.scala.Left(\"unexpected remote tool error\")"
+        }
+        val wireDecode = shape.okType match {
+          case Some(ok) =>
+            s"_root_.golem.tool.WireToolClientRuntime.decodeValue(__r, _root_.golem.schema.wire.ConcreteCodec.derived[$ok])"
+          case None => "_root_.golem.tool.WireToolClientRuntime.decodeUnit(__r)"
+        }
+        val call =
+          if (shape.hasStdout)
+            s"_root_.golem.tool.WireToolClientRuntime.start(__wireTransport, $commandPathExpr, __input, $stdinExpr, $errorDecoder)(__r => $wireDecode)"
+          else
+            s"_root_.golem.tool.WireToolClientRuntime.complete(_root_.golem.tool.WireToolClientRuntime.run(__wireTransport, $commandPathExpr, __input, $stdinExpr, $errorDecoder))(__r => $wireDecode)"
+        return s"""${indent}def ${m.name}(${kept.map(paramDecl).mkString(", ")}): $retType = {
+$indent  val __graph = _root_.golem.runtime.macros.WireToolMacro.inputGraph[${tool.fqn}](${ToolProjectionRendering
+            .stringList(schemaPath)})
+$indent  val __input = _root_.golem.tool.WireToolClientRuntime.input($codec, __graph, $value)
+$indent  $call
+$indent}"""
+      }
 
       s"""${indent}def ${m.name}($paramDecls): $retType = {
 $indent  val __params = _root_.golem.tool.ToolCallPreparation.encodeParams(${listExpr(valueEntries, s"$indent ")})
@@ -392,9 +458,17 @@ ${methods.mkString("\n\n")}
 
       sb.append(s"  private final class Root(lookupName: _root_.scala.Predef.String) extends $clientName {\n")
       sb.append(
-        "    private val __backend: _root_.golem.tool.AmbientToolCallBackend =\n" +
-          "      new _root_.golem.tool.AmbientToolCallBackend(_root_.golem.runtime.tool.client.ToolRpcClient.transport(lookupName))\n\n"
+        "    private lazy val __transport: _root_.golem.tool.ToolRpcTransport =\n" +
+          "      _root_.golem.runtime.tool.client.ToolRpcClient.transport(lookupName)\n" +
+          "    private val __wireTransport: _root_.golem.tool.WireToolRpcTransport =\n" +
+          "      _root_.golem.runtime.tool.client.ToolRpcClient.wireTransport(lookupName)\n\n"
       )
+      if (wrapperDefs.nonEmpty) {
+        sb.append(
+          "    private lazy val __backend: _root_.golem.tool.AmbientToolCallBackend =\n" +
+            "      new _root_.golem.tool.AmbientToolCallBackend(__transport)\n\n"
+        )
+      }
       sb.append(rootImpls.mkString("\n\n"))
       sb.append("\n  }\n")
 

@@ -17,7 +17,9 @@
 package golem.runtime.autowire
 
 import golem.config.{AgentConfigDeclaration, AgentConfigSource}
+import golem.host.SchemaWireInterop
 import golem.host.js._
+import golem.host.js.schema._
 import golem.runtime._
 import golem.runtime.http._
 
@@ -40,6 +42,61 @@ import scala.scalajs.js.JSConverters._
  * target the `golem.host.js` facades.
  */
 private[autowire] object AgentRequestBuilder {
+
+  def fromWire(metadata: WireAgentMetadata, mode: String): JsAgentType = {
+    def parameters(values: List[WireParameterMetadata]): JsInputSchema = JsInputSchema.parameters(values.map { p =>
+      JsNamedField(
+        p.name,
+        p.source match {
+          case FieldSource.UserSupplied          => JsFieldSource.userSupplied
+          case FieldSource.AutoInjectedPrincipal => JsFieldSource.autoInjectedPrincipal
+        },
+        p.schema,
+        SchemaWireInterop.metadataToJs(p.metadata)
+      )
+    }.toJSArray)
+    JsAgentType(
+      metadata.name,
+      metadata.kind match {
+        case AgentTypeKind.Regular    => "regular"
+        case AgentTypeKind.HttpRouter => "http-router"
+      },
+      metadata.description.getOrElse(metadata.name),
+      "scala",
+      SchemaWireInterop.graphToJs(metadata.schema),
+      JsAgentConstructor(
+        metadata.constructor.description,
+        parameters(metadata.constructor.parameters),
+        metadata.constructor.name.orUndefined,
+        metadata.constructor.promptHint.orUndefined
+      ),
+      metadata.methods.map { m =>
+        JsAgentMethod(
+          m.name,
+          m.description.getOrElse(m.name),
+          encodeHttpEndpoints(m.httpEndpoints),
+          parameters(m.parameters),
+          m.output.fold(JsOutputSchema.unit)(JsOutputSchema.single),
+          m.prompt.orUndefined,
+          m.readOnly.map(encodeReadOnly).orUndefined
+        )
+      }.toJSArray,
+      new js.Array[JsAgentDependency](),
+      mode,
+      encodeSnapshotting(metadata.snapshotting),
+      metadata.config.map { c =>
+        JsAgentConfigDeclaration(
+          c.source match {
+            case AgentConfigSource.Local  => "local"
+            case AgentConfigSource.Secret => "secret"
+          },
+          c.path.toJSArray,
+          c.schema
+        )
+      }.toJSArray,
+      metadata.httpMount.map(encodeHttpMount).orUndefined
+    )
+  }
 
   def fromMetadata(metadata: AgentMetadata, mode: String): AgentTypeEncoderV2.AgentRequest = {
     HttpAgentValidation.checked(metadata.copy(mode = Some(mode)))

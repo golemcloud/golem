@@ -4,8 +4,8 @@ use golem_rust::agentic::{
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, ToolError, decode_schema_value,
-    encode_schema_graph, tool_definition, tool_implementation,
+    FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, ToolError, WireSchema,
+    decode_schema_value, encode_schema_graph, tool_definition, tool_implementation,
 };
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
@@ -16,7 +16,7 @@ pub trait MiddlewareProbe {
     async fn apply(&self, value: String) -> String;
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyObservation {
     pub label: String,
     pub config_resolved: bool,
@@ -24,7 +24,7 @@ pub struct SecretPolicyObservation {
     pub input_secret_revealed: bool,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyEvidence {
     pub middleware: Vec<SecretPolicyObservation>,
     pub leaf_revealed: bool,
@@ -130,7 +130,7 @@ async fn announce_middleware_probe_effect(value: &str) {
     assert_eq!(response.get_status_code(), 204);
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct TypedOutputItem {
     pub ordinal: u32,
     pub label: String,
@@ -182,13 +182,13 @@ impl TypedOutputStream for TypedOutputStreamImpl {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct TypedInputItem {
     pub label: String,
     pub ordinal: u32,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct TypedInputEvidence {
     pub label: String,
     pub ordinal: u32,
@@ -228,7 +228,7 @@ impl TypedInputStream for TypedInputStreamImpl {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct StreamSummary {
     pub chunks_read: u32,
     pub bytes_read: u64,
@@ -488,7 +488,8 @@ fn launch_retained_crash_child() {
 }
 
 fn launch_atomic_idempotency_child() {
-    ToolRpc::new("streaming")
+    ToolRpc::create("streaming")
+        .expect("tool RPC creation failed")
         .invoke(
             &["run".to_string()],
             raw_run_input("atomic-idempotency-child"),

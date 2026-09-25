@@ -77,7 +77,7 @@ full = [
 
 [dependencies]
 golem-api-grpc = { workspace = true, optional = true }
-golem-schema = { workspace = true }
+golem-schema = { workspace = true, features = ["rich-validation"] }
 golem-schema-derive = { workspace = true }
 proptest = { workspace = true, optional = true }
 

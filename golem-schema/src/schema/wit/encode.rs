@@ -492,10 +492,8 @@ fn collect_streams<'a>(
                 collect_streams(value, streams);
             }
         }
-        SchemaValue::Option { inner } => {
-            if let Some(value) = inner {
-                collect_streams(value, streams);
-            }
+        SchemaValue::Option { inner: Some(value) } => {
+            collect_streams(value, streams);
         }
         SchemaValue::Result(payload) => {
             let value = match payload {

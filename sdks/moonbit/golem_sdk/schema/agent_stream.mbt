@@ -8,7 +8,7 @@
 #warnings("-unused_type_variable")
 pub(all) struct AgentStream[T] {
   priv handle : @model.GuestSchemaValueStreamHandle
-  priv decode : (@model.SchemaValue) -> T raise FromSchemaError
+  priv decode : (@types.SchemaValueTree) -> T raise AgentStreamReadError
 }
 
 ///|
@@ -16,7 +16,8 @@ pub(all) struct AgentStream[T] {
 #warnings("-unused_type_variable")
 pub struct AgentStreamWriter[T] {
   priv sink : @async-core.Sink[@types.SchemaValueTree]
-  priv encode : (T) -> @model.SchemaValue raise
+  priv encode : async (T) -> @types.SchemaValueTree
+  priv cleanup_encoded : (@types.SchemaValueTree) -> Unit
   priv release : (T) -> Unit
 }
 
@@ -41,6 +42,8 @@ pub suberror AgentStreamReadError {
   WireDecode(@model.SchemaModelError)
   /// A valid schema value could not be decoded as the declared item type.
   ItemDecode(FromSchemaError)
+  /// Direct wire decoding rejected the declared item shape or ownership.
+  DirectDecode(WireError)
 } derive(Debug, Eq)
 
 ///|
@@ -48,19 +51,62 @@ fn[T] AgentStream::from_reader(
   reader : @async-core.Stream[@types.SchemaValueTree],
   decode : (@model.SchemaValue) -> T raise FromSchemaError,
 ) -> AgentStream[T] {
-  { handle: @model.GuestSchemaValueStreamHandle::from_native(reader), decode, }
+  {
+    handle: @model.GuestSchemaValueStreamHandle::from_native(reader),
+    decode: tree => decode_model_stream_item(tree, decode),
+  }
+}
+
+///|
+fn[T] decode_model_stream_item(
+  tree : @types.SchemaValueTree,
+  decode : (@model.SchemaValue) -> T raise FromSchemaError,
+) -> T raise AgentStreamReadError {
+  let value = @model_host.schema_value_from_wit(tree) catch {
+    error => raise AgentStreamReadError::WireDecode(error)
+  }
+  errdefer value.release_resources(@model_host.resource_drops())
+  decode(value) catch {
+    error => raise AgentStreamReadError::ItemDecode(error)
+  }
+}
+
+///|
+fn[T : FromWire] decode_wire_stream_item(
+  tree : @types.SchemaValueTree,
+) -> T raise AgentStreamReadError {
+  from_wire(tree) catch {
+    error => raise AgentStreamReadError::DirectDecode(error)
+  }
+}
+
+///|
+fn drop_wire_stream_item(tree : @types.SchemaValueTree) -> Unit {
+  WireReader::new(tree).abort()
 }
 
 ///|
 /// Creates an explicit writer and readable stream endpoint. The writer owns
 /// every value passed to it, including values rejected after the reader drops.
-pub fn[T : IntoSchema + FromSchema] AgentStream::new() -> (
+pub fn[T : IntoWire + FromWire] AgentStream::new() -> (
   AgentStreamWriter[T],
   AgentStream[T],
 ) {
-  AgentStream::new_with_codec(value => to_value_as(value), from_value_as, value => {
-    to_value_as(value).release_resources(@model_host.resource_drops())
-  })
+  let (reader, sink) = @async-core.Stream::new_with_cleanup(
+    drop_wire_stream_item,
+  )
+  (
+    {
+      sink,
+      encode: into_wire_async,
+      cleanup_encoded: drop_wire_stream_item,
+      release: release_wire,
+    },
+    {
+      handle: @model.GuestSchemaValueStreamHandle::from_native(reader),
+      decode: decode_wire_stream_item,
+    },
+  )
 }
 
 ///|
@@ -76,7 +122,19 @@ pub fn[T] AgentStream::new_with_codec(
   let (reader, sink) = @async-core.Stream::new_with_cleanup(
     @model.drop_wit_capabilities,
   )
-  ({ sink, encode, release, }, AgentStream::from_reader(reader, decode))
+  (
+    {
+      sink,
+      encode: async fn(value) {
+        let model = encode(value)
+        errdefer model.release_resources(@model_host.resource_drops())
+        @model.schema_value_to_wit_async(model)
+      },
+      cleanup_encoded: @model.drop_wit_capabilities,
+      release,
+    },
+    AgentStream::from_reader(reader, decode),
+  )
 }
 
 ///|
@@ -85,17 +143,28 @@ pub fn[T] AgentStream::new_with_codec(
 /// terminal behavior and are not converted to clean EOF. When the producer
 /// captures explicitly owned capabilities, `on_unstarted_drop` must release
 /// them if the readable endpoint is dropped before the producer first runs.
-pub fn[T : IntoSchema + FromSchema] AgentStream::produce(
+pub fn[T : IntoWire + FromWire] AgentStream::produce(
   producer : async (AgentStreamWriter[T]) -> Unit,
   on_unstarted_drop? : () -> Unit,
 ) -> AgentStream[T] {
-  AgentStream::produce_with_codec(
-    producer,
-    value => to_value_as(value),
-    from_value_as,
-    value => to_value_as(value).release_resources(@model_host.resource_drops()),
+  let reader = @async-core.Stream::produce(
+    async fn(sink) {
+      let writer : AgentStreamWriter[T] = {
+        sink,
+        encode: into_wire_async,
+        cleanup_encoded: drop_wire_stream_item,
+        release: release_wire,
+      }
+      producer(writer)
+      writer.close()
+    },
+    cleanup=drop_wire_stream_item,
     on_unstarted_drop?,
   )
+  {
+    handle: @model.GuestSchemaValueStreamHandle::from_native(reader),
+    decode: decode_wire_stream_item,
+  }
 }
 
 ///|
@@ -110,7 +179,16 @@ pub fn[T] AgentStream::produce_with_codec(
 ) -> AgentStream[T] {
   let reader = @async-core.Stream::produce(
     async fn(sink) {
-      let writer : AgentStreamWriter[T] = { sink, encode, release, }
+      let writer : AgentStreamWriter[T] = {
+        sink,
+        encode: async fn(value) {
+          let model = encode(value)
+          errdefer model.release_resources(@model_host.resource_drops())
+          @model.schema_value_to_wit_async(model)
+        },
+        cleanup_encoded: @model.drop_wit_capabilities,
+        release,
+      }
       producer(writer)
       writer.close()
     },
@@ -123,30 +201,23 @@ pub fn[T] AgentStream::produce_with_codec(
 ///|
 async fn[T] encode_stream_items(
   items : Array[T],
-  encode : (T) -> @model.SchemaValue raise,
+  encode : async (T) -> @types.SchemaValueTree,
+  cleanup_encoded : (@types.SchemaValueTree) -> Unit,
   release : (T) -> Unit,
 ) -> Array[@types.SchemaValueTree] {
-  let drops = @model_host.resource_drops()
-  let values : Array[@model.SchemaValue] = []
   let encoded : Array[@types.SchemaValueTree] = []
   let mut converted = 0
   errdefer {
     for value in encoded {
-      @model.drop_wit_capabilities(value)
-    }
-    for value in values {
-      value.release_resources(drops)
+      cleanup_encoded(value)
     }
     for i in converted..<items.length() {
       release(items[i])
     }
   }
   for item in items {
-    values.push(encode(item))
+    encoded.push(encode(item))
     converted += 1
-  }
-  for value in values {
-    encoded.push(@model.schema_value_to_wit_async(value))
   }
   encoded
 }
@@ -169,7 +240,12 @@ pub async fn[T] AgentStreamWriter::write_all(
   self : AgentStreamWriter[T],
   values : Array[T],
 ) -> AgentStreamWriteOutcome {
-  let encoded = encode_stream_items(values, self.encode, self.release)
+  let encoded = encode_stream_items(
+    values,
+    self.encode,
+    self.cleanup_encoded,
+    self.release,
+  )
   if self.sink.write_all(encoded[:]) {
     Accepted
   } else {
@@ -189,9 +265,7 @@ pub async fn[T] AgentStreamWriter::close(self : AgentStreamWriter[T]) -> Unit {
 /// stream has no effect. A producer observes the drop cooperatively when a
 /// subsequent write returns `PeerDropped`.
 pub fn[T] AgentStream::drop(self : AgentStream[T]) -> Unit {
-  @model.SchemaValue::Stream(self.handle).release_resources(
-    @model_host.resource_drops(),
-  )
+  release_wire(self.handle)
 }
 
 ///|
@@ -219,18 +293,7 @@ pub async fn[T] AgentStream::read(self : AgentStream[T]) -> T? {
         return None
       }
       Some(values) if values.length() == 0 => continue
-      Some(values) => {
-        let drops = @model_host.resource_drops()
-        let value = @model_host.schema_value_from_wit(values[0]) catch {
-          e => raise AgentStreamReadError::WireDecode(e)
-        }
-        errdefer value.release_resources(drops)
-        return Some(
-          (self.decode)(value) catch {
-            e => raise AgentStreamReadError::ItemDecode(e)
-          },
-        )
-      }
+      Some(values) => return Some((self.decode)(values[0]))
     }
   }
 }
@@ -271,7 +334,8 @@ pub fn[T] AgentStream::from_value_with_codec(
   decode : (@model.SchemaValue) -> T raise FromSchemaError,
 ) -> AgentStream[T] raise FromSchemaError {
   match value {
-    @model.SchemaValue::Stream(handle) => { handle, decode, }
+    @model.SchemaValue::Stream(handle) =>
+      { handle, decode: tree => decode_model_stream_item(tree, decode), }
     other =>
       raise FromSchemaError::shape_mismatch(
         "stream",
@@ -279,4 +343,32 @@ pub fn[T] AgentStream::from_value_with_codec(
         "AgentStream",
       )
   }
+}
+
+///|
+pub impl[T] IntoWire for AgentStream[T] with fn append_wire(self, encoder) {
+  IntoWire::append_wire(self.handle, encoder)
+}
+
+///|
+pub impl[T] IntoWire for AgentStream[T] with fn release_wire(self, releaser) {
+  IntoWire::release_wire(self.handle, releaser)
+}
+
+///|
+pub impl[T : FromWire] FromWire for AgentStream[T] with fn read_wire(
+  reader,
+  index,
+) {
+  {
+    handle: FromWire::read_wire(reader, index),
+    decode: decode_wire_stream_item,
+  }
+}
+
+///|
+pub impl[T : WireSchema] WireSchema for AgentStream[T] with fn append_wire_type(
+  encoder,
+) {
+  encoder.push(@types.StreamType(Some(T::append_wire_type(encoder))))
 }

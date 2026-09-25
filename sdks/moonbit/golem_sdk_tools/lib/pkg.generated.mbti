@@ -8,10 +8,6 @@ import {
 }
 
 // Values
-pub fn compile_http_file_mapping(String, String) -> HttpFileMapping raise AgentParseError
-
-pub fn compile_http_file_mappings(Array[(String, String)]) -> Array[HttpFileMapping] raise AgentParseError
-
 pub fn component_target_dir(String, String) -> String
 
 pub fn config_has_overridable_fields(ConfigTypeInfo, Map[String, ConfigTypeInfo]) -> Bool
@@ -34,11 +30,15 @@ pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_client_code(Array[AgentInfo], value_types? : Array[ValueTypeInfo], config_types? : Array[ConfigTypeInfo], agent_package? : String) -> @list.List[@syntax.Impl] raise AgentParseError
 
+pub fn generate_component_reexports(Array[FnSignature], Bool, Bool, Bool) -> @list.List[@syntax.Impl]
+
 pub fn generate_config_field_impls(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_config_override_types(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_config_override_walkers(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
+
+pub fn generate_export_hooks(Bool, Bool, Bool) -> (@list.List[@syntax.Impl], Array[(String, String)])
 
 pub fn generate_multimodal_impls(Array[MultimodalEnumInfo], type_id_prefix? : String) -> @list.List[@syntax.Impl]
 

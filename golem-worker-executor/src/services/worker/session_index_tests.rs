@@ -1529,7 +1529,7 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
         .lookup_durable_stream_control_metadata(
             &owner,
             AgentMode::Durable,
-            test_fingerprint(),
+            source.callee_fingerprint,
             &source,
         )
         .await
@@ -1564,7 +1564,7 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
         .lookup_durable_stream_control_metadata(
             &owner,
             AgentMode::Durable,
-            test_fingerprint(),
+            destination.callee_fingerprint,
             &destination,
         )
         .await

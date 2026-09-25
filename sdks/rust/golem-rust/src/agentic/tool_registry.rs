@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::InputStream;
-use crate::agentic::extended_tool_type::ExtendedToolType;
+use crate::agentic::extended_tool_type::{ExtendedToolType, PreparedToolDescriptor};
 use crate::golem_agentic::exports::golem::tool::guest::{
     InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
@@ -44,7 +44,7 @@ pub struct State {
 }
 #[derive(Default)]
 pub struct Tools {
-    pub tools: BTreeMap<String, ExtendedToolType>,
+    pub tools: BTreeMap<String, Box<dyn Fn() -> Tool>>,
     pub invokers: BTreeMap<String, ToolInvoker>,
 }
 static mut STATE: Option<State> = None;
@@ -60,16 +60,32 @@ pub fn get_state() -> &'static State {
 }
 
 pub fn register_tool(tool: ExtendedToolType) {
-    register_tool_inner(tool, None)
+    register_tool_inner(tool.prepare().expect("tool descriptor build failed"), None)
 }
 
 pub fn register_tool_invoker(tool: ExtendedToolType, invoker: ToolInvoker) {
+    register_prepared_tool_invoker(
+        tool.prepare().expect("tool descriptor build failed"),
+        invoker,
+    )
+}
+
+#[doc(hidden)]
+pub fn register_prepared_tool_invoker(tool: PreparedToolDescriptor, invoker: ToolInvoker) {
     register_tool_inner(tool, Some(invoker))
 }
 
-fn register_tool_inner(tool: ExtendedToolType, invoker: Option<ToolInvoker>) {
-    tool.try_to_tool().expect("tool descriptor build failed");
-    let name = tool.tool_name().to_string();
+fn register_tool_inner(tool: PreparedToolDescriptor, invoker: Option<ToolInvoker>) {
+    let name = tool.extended().tool_name().to_string();
+    register_factory(name, Box::new(move || tool.wire()), invoker);
+}
+
+#[doc(hidden)]
+pub fn register_wire_tool_invoker(name: &str, descriptor: fn() -> Tool, invoker: ToolInvoker) {
+    register_factory(name.to_string(), Box::new(descriptor), Some(invoker));
+}
+
+fn register_factory(name: String, descriptor: Box<dyn Fn() -> Tool>, invoker: Option<ToolInvoker>) {
     let state = get_state();
     let mut tools = state.tools.borrow_mut();
     if tools.tools.contains_key(&name) {
@@ -78,7 +94,7 @@ fn register_tool_inner(tool: ExtendedToolType, invoker: Option<ToolInvoker>) {
     if let Some(invoker) = invoker {
         tools.invokers.insert(name.clone(), invoker);
     }
-    tools.tools.insert(name, tool);
+    tools.tools.insert(name, descriptor);
 }
 
 pub fn get_all_tools() -> Vec<Tool> {
@@ -87,14 +103,23 @@ pub fn get_all_tools() -> Vec<Tool> {
         .borrow()
         .tools
         .values()
-        .map(|t| t.to_tool())
+        .map(|tool| tool())
         .collect()
 }
 pub fn get_tool_by_name(name: &str) -> Option<Tool> {
-    get_extended_tool_by_name(name).map(|t| t.to_tool())
+    get_state()
+        .tools
+        .borrow()
+        .tools
+        .get(name)
+        .map(|tool| tool())
 }
 pub fn get_extended_tool_by_name(name: &str) -> Option<ExtendedToolType> {
-    get_state().tools.borrow().tools.get(name).cloned()
+    get_tool_by_name(name).map(|tool| {
+        crate::schema::tool::wit::decode_tool(tool)
+            .expect("registered descriptor must be valid")
+            .into()
+    })
 }
 
 pub fn get_tool_invoker_by_name(name: &str) -> Option<ToolInvoker> {

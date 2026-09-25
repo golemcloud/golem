@@ -20,6 +20,7 @@ const bundleFiles = [
 ]
 
 const inputRoots = [
+  "build",
   "src",
   "wit",
   "golem-types",

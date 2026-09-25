@@ -26,42 +26,276 @@ pub use golem_schema::schema::tool::{
     BoolFlagShape, DuplicateKeyPolicy, ErrorKind, FlagShape, Quantifier, Repetition,
 };
 
+pub trait ToolSchemaRepr: Clone + std::fmt::Debug {
+    type Value: Clone + std::fmt::Debug;
+
+    fn list(&self) -> Self;
+    fn map_value(&self) -> Option<Self>;
+    fn shape_matches(&self, other: &Self) -> bool;
+    fn is_sound(&self) -> bool;
+    fn value_is_literal(
+        &self,
+        literal: &ToolLiteral,
+        whole_or_one_peel: bool,
+    ) -> Result<Self::Value, ToolBuildError>;
+}
+
+impl ToolSchemaRepr for SchemaGraph {
+    type Value = SchemaValue;
+
+    fn list(&self) -> Self {
+        list_wrapper_graph(self)
+    }
+
+    fn map_value(&self) -> Option<Self> {
+        resolves_to_map(self).then(|| map_value_graph(self))
+    }
+
+    fn shape_matches(&self, other: &Self) -> bool {
+        schema_shapes_match(self, other)
+    }
+
+    fn is_sound(&self) -> bool {
+        comparand_graph_is_sound(self)
+    }
+
+    fn value_is_literal(
+        &self,
+        literal: &ToolLiteral,
+        whole_or_one_peel: bool,
+    ) -> Result<Self::Value, ToolBuildError> {
+        let value = value_is_literal_to_schema_value(self, literal)?;
+        let comparand = ValueIsComparand {
+            graph: self.clone(),
+            mode: if whole_or_one_peel {
+                ValueIsMode::WholeOrOnePeel
+            } else {
+                ValueIsMode::Exact
+            },
+        };
+        if value_is_compatible(&comparand, &value) {
+            Ok(value)
+        } else {
+            Err(ToolBuildError::ValueIsTypeMismatch(String::new()))
+        }
+    }
+}
+
 fn schema_graph_root(graph: &SchemaGraph) -> SchemaType {
     graph.root.clone()
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedToolType {
+pub struct ExtendedToolType<S: ToolSchemaRepr = SchemaGraph> {
     pub version: String,
-    pub commands: Vec<ExtendedCommandNode>,
+    pub commands: Vec<ExtendedCommandNode<S>>,
+}
+
+/// Immutable, validated metadata. Native conversion is performed once when
+/// preparing the descriptor. Wire values are encoded from the cached native
+/// form because the WIT model is not cloneable.
+///
+/// ```compile_fail
+/// use golem_tool_metadata::PreparedToolDescriptor;
+/// fn mutate(prepared: PreparedToolDescriptor) {
+///     prepared.clone().native().version.clear();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use golem_tool_metadata::PreparedToolDescriptor;
+/// fn mutate(prepared: PreparedToolDescriptor) {
+///     prepared.extended().commands.clear();
+/// }
+/// ```
+#[derive(Clone, Debug)]
+pub struct PreparedToolDescriptor {
+    extended: ExtendedToolType,
+    native: native::Tool,
+}
+
+impl PreparedToolDescriptor {
+    pub fn extended(&self) -> &ExtendedToolType {
+        &self.extended
+    }
+
+    pub fn native(&self) -> &native::Tool {
+        &self.native
+    }
+
+    #[cfg(feature = "guest")]
+    pub fn wire(&self) -> golem_schema::schema::tool::wit::wire::Tool {
+        golem_schema::schema::tool::wit::encode_tool(&self.native)
+            .expect("prepared tool metadata must remain encodable")
+    }
+
+    fn build(extended: ExtendedToolType) -> Result<Self, ToolBuildError> {
+        let native = extended.build_native_tool()?;
+        #[cfg(feature = "guest")]
+        golem_schema::schema::tool::wit::encode_tool(&native)
+            .map_err(|error| ToolBuildError::EncodeError(error.to_string()))?;
+        Ok(Self { extended, native })
+    }
+}
+
+/// Schema validation selected by generated descriptor code. The fields are
+/// private so callers cannot substitute a validator that accepts invalid data.
+#[derive(Clone, Copy)]
+pub struct ToolSchemaChecks(ToolGraphCheck);
+
+type ToolGraphCheck = fn(&SchemaGraph, &str) -> Result<(), ToolBuildError>;
+
+impl ToolSchemaChecks {
+    pub fn dynamic() -> Self {
+        Self(check_graph_closed)
+    }
+
+    pub fn scalar() -> Self {
+        Self(check_scalar_graph)
+    }
+}
+
+/// Autoref dispatch lets generated code select using the resolved Rust type,
+/// including aliases, without confusing a user type named `String` with std's.
+#[doc(hidden)]
+pub struct ToolSchemaProbe<T>(pub std::marker::PhantomData<T>);
+
+#[doc(hidden)]
+pub trait SelectToolSchemaChecks {
+    fn tool_schema_checks(self) -> Option<ToolSchemaChecks>;
+    fn tool_value_schema(
+        self,
+        fallback: impl FnOnce() -> Result<SchemaGraph, ToolBuildError>,
+    ) -> Result<SchemaGraph, ToolBuildError>;
+}
+
+impl<T> SelectToolSchemaChecks for &&ToolSchemaProbe<T> {
+    fn tool_schema_checks(self) -> Option<ToolSchemaChecks> {
+        Some(ToolSchemaChecks::dynamic())
+    }
+
+    fn tool_value_schema(
+        self,
+        fallback: impl FnOnce() -> Result<SchemaGraph, ToolBuildError>,
+    ) -> Result<SchemaGraph, ToolBuildError> {
+        fallback()
+    }
+}
+
+macro_rules! scalar_schema_checks {
+    ($($ty:ty => $constructor:ident),* $(,)?) => {$(
+        impl SelectToolSchemaChecks for &ToolSchemaProbe<$ty> {
+            fn tool_schema_checks(self) -> Option<ToolSchemaChecks> { None }
+
+            #[inline]
+            fn tool_value_schema(
+                self,
+                _fallback: impl FnOnce() -> Result<SchemaGraph, ToolBuildError>,
+            ) -> Result<SchemaGraph, ToolBuildError> {
+                Ok(SchemaGraph::anonymous(SchemaType::$constructor()))
+            }
+        }
+    )*};
+}
+
+scalar_schema_checks!(
+    bool => bool, u8 => u8, u16 => u16, u32 => u32, u64 => u64,
+    i8 => s8, i16 => s16, i32 => s32, i64 => s64,
+    f32 => f32, f64 => f64, char => char, String => string,
+);
+
+fn check_scalar_graph(graph: &SchemaGraph, position: &str) -> Result<(), ToolBuildError> {
+    let scalar = matches!(
+        graph.root,
+        SchemaType::Bool { .. }
+            | SchemaType::String { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::U8 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::U16 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::U32 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::U64 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::S8 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::S16 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::S32 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::S64 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::F32 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::F64 {
+                restrictions: None,
+                ..
+            }
+    );
+    if scalar && graph.defs.is_empty() {
+        Ok(())
+    } else {
+        Err(ToolBuildError::IllFormedSchema {
+            position: position.to_string(),
+            detail: "expected an unrefined scalar schema".to_string(),
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedCommandNode {
+pub struct ExtendedCommandNode<S: ToolSchemaRepr = SchemaGraph> {
     pub name: String,
     pub aliases: Vec<String>,
     pub doc: Doc,
-    pub globals: ExtendedGlobals,
+    pub globals: ExtendedGlobals<S>,
     pub subcommands: Vec<i32>,
-    pub body: Option<ExtendedCommandBody>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ExtendedGlobals {
-    pub options: Vec<ExtendedOptionSpec>,
-    pub flags: Vec<FlagSpec>,
+    pub body: Option<ExtendedCommandBody<S>>,
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedCommandBody {
-    pub positionals: ExtendedPositionals,
-    pub options: Vec<ExtendedOptionSpec>,
+pub struct ExtendedGlobals<S: ToolSchemaRepr = SchemaGraph> {
+    pub options: Vec<ExtendedOptionSpec<S>>,
     pub flags: Vec<FlagSpec>,
-    pub constraints: Vec<ExtendedConstraint>,
+}
+
+impl<S: ToolSchemaRepr> Default for ExtendedGlobals<S> {
+    fn default() -> Self {
+        Self {
+            options: Vec::new(),
+            flags: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExtendedCommandBody<S: ToolSchemaRepr = SchemaGraph> {
+    pub positionals: ExtendedPositionals<S>,
+    pub options: Vec<ExtendedOptionSpec<S>>,
+    pub flags: Vec<FlagSpec>,
+    pub constraints: Vec<ExtendedConstraint<S>>,
     pub stdin: Option<StreamSpec>,
     pub stdout: Option<StreamSpec>,
-    pub result: Option<ExtendedResultSpec>,
-    pub errors: Vec<ExtendedErrorCase>,
+    pub result: Option<ExtendedResultSpec<S>>,
+    pub errors: Vec<ExtendedErrorCase<S>>,
     pub annotations: Option<CommandAnnotations>,
     /// The body's positional-eligible parameters, in declaration order, used to
     /// finalize the tail positional after inherited-global de-projection (see
@@ -71,7 +305,7 @@ pub struct ExtendedCommandBody {
     /// facts needed to finalize it; an explicit tail additionally carries its full
     /// authored spec so promotion is lossless. Empty for hand-built bodies and
     /// ignored by canonical conversion.
-    pub positional_plan: Vec<PositionalCandidate>,
+    pub positional_plan: Vec<PositionalCandidate<S>>,
 }
 
 /// One positional-eligible parameter of a command body, recorded by the macro in
@@ -79,7 +313,7 @@ pub struct ExtendedCommandBody {
 /// inherited-global de-projection. See [`ExtendedCommandBody::positional_plan`]
 /// and [`reinfer_body_tail`].
 #[derive(Clone, Debug)]
-pub enum PositionalCandidate {
+pub enum PositionalCandidate<S: ToolSchemaRepr = SchemaGraph> {
     /// A parameter that can never be the tail (a fixed scalar positional, or an
     /// explicit `#[arg(... = "positional")]`). It is recorded only so the
     /// declaration order of surviving candidates is known.
@@ -117,7 +351,7 @@ pub enum PositionalCandidate {
         /// (which has no `separator`/`verbatim`/`accepts_stdio`/occurrence-bound
         /// fields). `None` for inferred candidates, which keep the
         /// reconstruct-from-spec path. Boxed to keep this variant compact.
-        authored_tail_surrogate: Option<Box<ExtendedTailPositional>>,
+        authored_tail_surrogate: Option<Box<ExtendedTailPositional<S>>>,
         /// Long names of the body options declared after this `Vec<T>`, in
         /// declaration order. When this candidate is demoted from the tail to a
         /// repeatable-list option, it is inserted before the first of these that
@@ -127,7 +361,7 @@ pub enum PositionalCandidate {
     },
 }
 
-impl PositionalCandidate {
+impl<S: ToolSchemaRepr> PositionalCandidate<S> {
     fn name(&self) -> &str {
         match self {
             PositionalCandidate::Plain { name }
@@ -136,29 +370,38 @@ impl PositionalCandidate {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct ExtendedPositionals {
-    pub fixed: Vec<ExtendedPositional>,
-    pub tail: Option<ExtendedTailPositional>,
+#[derive(Clone, Debug)]
+pub struct ExtendedPositionals<S: ToolSchemaRepr = SchemaGraph> {
+    pub fixed: Vec<ExtendedPositional<S>>,
+    pub tail: Option<ExtendedTailPositional<S>>,
+}
+
+impl<S: ToolSchemaRepr> Default for ExtendedPositionals<S> {
+    fn default() -> Self {
+        Self {
+            fixed: Vec::new(),
+            tail: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedPositional {
+pub struct ExtendedPositional<S: ToolSchemaRepr = SchemaGraph> {
     pub name: String,
     pub doc: Doc,
     pub value_name: Option<String>,
-    pub type_: SchemaGraph,
-    pub default: Option<SchemaValue>,
+    pub type_: S,
+    pub default: Option<S::Value>,
     pub required: bool,
     pub accepts_stdio: bool,
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedTailPositional {
+pub struct ExtendedTailPositional<S: ToolSchemaRepr = SchemaGraph> {
     pub name: String,
     pub doc: Doc,
     pub value_name: Option<String>,
-    pub item_type: SchemaGraph,
+    pub item_type: S,
     pub min: u32,
     pub max: Option<u32>,
     pub separator: Option<String>,
@@ -167,36 +410,36 @@ pub struct ExtendedTailPositional {
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedOptionSpec {
+pub struct ExtendedOptionSpec<S: ToolSchemaRepr = SchemaGraph> {
     pub long: String,
     pub short: Option<char>,
     pub aliases: Vec<String>,
     pub doc: Doc,
     pub value_name: Option<String>,
-    pub shape: ExtendedOptionShape,
-    pub default: Option<SchemaValue>,
+    pub shape: ExtendedOptionShape<S>,
+    pub default: Option<S::Value>,
     pub required: bool,
     pub env_var: Option<String>,
 }
 
 #[derive(Clone, Debug)]
-pub enum ExtendedOptionShape {
-    Scalar(SchemaGraph),
-    OptionalScalar(SchemaGraph),
-    RepeatableList(ExtendedRepeatableListShape),
-    RepeatableMap(ExtendedRepeatableMapShape),
+pub enum ExtendedOptionShape<S: ToolSchemaRepr = SchemaGraph> {
+    Scalar(S),
+    OptionalScalar(S),
+    RepeatableList(ExtendedRepeatableListShape<S>),
+    RepeatableMap(ExtendedRepeatableMapShape<S>),
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedRepeatableListShape {
+pub struct ExtendedRepeatableListShape<S: ToolSchemaRepr = SchemaGraph> {
     pub repetition: wire::Repetition,
-    pub item_type: SchemaGraph,
+    pub item_type: S,
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedRepeatableMapShape {
+pub struct ExtendedRepeatableMapShape<S: ToolSchemaRepr = SchemaGraph> {
     pub repetition: wire::Repetition,
-    pub map_type: SchemaGraph,
+    pub map_type: S,
     pub duplicate_key_policy: wire::DuplicateKeyPolicy,
 }
 
@@ -208,20 +451,20 @@ pub type Doc = wire::Doc;
 pub type Example = wire::Example;
 
 #[derive(Clone, Debug)]
-pub struct ExtendedResultSpec {
-    pub type_: SchemaGraph,
+pub struct ExtendedResultSpec<S: ToolSchemaRepr = SchemaGraph> {
+    pub type_: S,
     pub doc: Doc,
     pub formatters: Vec<ToolFormatter>,
     pub default_formatter: String,
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedErrorCase {
+pub struct ExtendedErrorCase<S: ToolSchemaRepr = SchemaGraph> {
     pub name: String,
     pub doc: Doc,
     pub kind: wire::ErrorKind,
     pub exit_code: u8,
-    pub payload: Option<SchemaGraph>,
+    pub payload: Option<S>,
 }
 
 /// Implemented by `#[derive(ToolError)]` enums. A tool method returning
@@ -245,15 +488,15 @@ pub trait ToolErrorSchema {
 }
 
 #[derive(Clone, Debug)]
-pub enum ExtendedRef {
+pub enum ExtendedRef<S: ToolSchemaRepr = SchemaGraph> {
     Present(String),
-    ValueIs(ExtendedValueIsRef),
+    ValueIs(ExtendedValueIsRef<S>),
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedValueIsRef {
+pub struct ExtendedValueIsRef<S: ToolSchemaRepr = SchemaGraph> {
     pub name: String,
-    pub value: ExtendedValueIsLiteral,
+    pub value: ExtendedValueIsLiteral<S>,
 }
 
 /// The literal a `value-is` constraint compares against.
@@ -272,37 +515,37 @@ pub struct ExtendedValueIsRef {
 /// composition (the standalone subtree-child case) is reported as an unresolved
 /// constraint reference by validation rather than silently accepted.
 #[derive(Clone, Debug)]
-pub enum ExtendedValueIsLiteral {
-    Resolved(SchemaValue),
+pub enum ExtendedValueIsLiteral<S: ToolSchemaRepr = SchemaGraph> {
+    Resolved(S::Value),
     Deferred(ToolLiteral),
 }
 
 #[derive(Clone, Debug)]
-pub enum ExtendedConstraint {
-    RequiresAll(Vec<ExtendedRef>),
-    AllOrNone(Vec<ExtendedRef>),
-    RequiresAny(Vec<ExtendedRef>),
-    MutexGroups(Vec<ExtendedRefGroup>),
-    Implies(ExtendedImpliesC),
-    Forbids(ExtendedForbidsC),
+pub enum ExtendedConstraint<S: ToolSchemaRepr = SchemaGraph> {
+    RequiresAll(Vec<ExtendedRef<S>>),
+    AllOrNone(Vec<ExtendedRef<S>>),
+    RequiresAny(Vec<ExtendedRef<S>>),
+    MutexGroups(Vec<ExtendedRefGroup<S>>),
+    Implies(ExtendedImpliesC<S>),
+    Forbids(ExtendedForbidsC<S>),
 }
 
 #[derive(Clone, Debug)]
-pub struct ExtendedRefGroup {
-    pub refs: Vec<ExtendedRef>,
+pub struct ExtendedRefGroup<S: ToolSchemaRepr = SchemaGraph> {
+    pub refs: Vec<ExtendedRef<S>>,
 }
 #[derive(Clone, Debug)]
-pub struct ExtendedImpliesC {
+pub struct ExtendedImpliesC<S: ToolSchemaRepr = SchemaGraph> {
     pub lhs_quant: wire::Quantifier,
-    pub lhs: Vec<ExtendedRef>,
+    pub lhs: Vec<ExtendedRef<S>>,
     pub rhs_quant: wire::Quantifier,
-    pub rhs: Vec<ExtendedRef>,
+    pub rhs: Vec<ExtendedRef<S>>,
 }
 #[derive(Clone, Debug)]
-pub struct ExtendedForbidsC {
+pub struct ExtendedForbidsC<S: ToolSchemaRepr = SchemaGraph> {
     pub lhs_quant: wire::Quantifier,
-    pub lhs: Vec<ExtendedRef>,
-    pub rhs: Vec<ExtendedRef>,
+    pub lhs: Vec<ExtendedRef<S>>,
+    pub rhs: Vec<ExtendedRef<S>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -501,8 +744,8 @@ pub fn native_tool_value_schema<T: golem_schema::schema::IntoSchema>(
 
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum EffectiveCommandField {
-    Option(ExtendedOptionSpec),
+pub enum EffectiveCommandField<S: ToolSchemaRepr = SchemaGraph> {
+    Option(ExtendedOptionSpec<S>),
     Flag(FlagSpec),
 }
 
@@ -908,6 +1151,24 @@ impl ExtendedToolType {
         self.commands.first().map(|c| c.name.as_str()).unwrap_or("")
     }
 
+    /// Prepare an already normalized, genuinely dynamic descriptor with all
+    /// schema and literal checks enabled.
+    pub fn prepare(self) -> Result<PreparedToolDescriptor, ToolBuildError> {
+        validate_tool(&self)?;
+        PreparedToolDescriptor::build(self)
+    }
+
+    /// Prepare a generated descriptor with no defaults or `value-is` literals.
+    /// Unexpected literals are rejected, not ignored. Schema checks remain
+    /// enabled and are selected using macro facts and resolved Rust types.
+    pub fn prepare_without_literals(
+        self,
+        schemas: ToolSchemaChecks,
+    ) -> Result<PreparedToolDescriptor, ToolBuildError> {
+        validate_tool_with::<false>(&self, schemas.0)?;
+        PreparedToolDescriptor::build(self)
+    }
+
     #[cfg(feature = "guest")]
     pub fn to_tool(&self) -> golem_schema::schema::tool::wit::wire::Tool {
         self.try_to_tool().expect("failed to build tool metadata")
@@ -925,6 +1186,10 @@ impl ExtendedToolType {
     /// Builds the SDK-owned recursive metadata model used by middleware APIs.
     pub fn try_to_native_tool(&self) -> Result<native::Tool, ToolBuildError> {
         validate_tool(self)?;
+        self.build_native_tool()
+    }
+
+    fn build_native_tool(&self) -> Result<native::Tool, ToolBuildError> {
         let schema = merge_agent_graphs(collect_schema_graphs(self))
             .map_err(|error| ToolBuildError::EncodeError(error.to_string()))?;
         let commands = self
@@ -1501,10 +1766,10 @@ fn collect_option(s: &ExtendedOptionShape, v: &mut Vec<SchemaGraph>) {
 /// `default`): a `repeatable-list` collects into `list<item>`, a
 /// `repeatable-map` into its map node; scalar/optional-scalar use the value
 /// type directly. Definition graphs are preserved so refs still resolve.
-pub fn option_collected_graph(s: &ExtendedOptionShape) -> SchemaGraph {
+pub fn option_collected_graph<S: ToolSchemaRepr>(s: &ExtendedOptionShape<S>) -> S {
     match s {
         ExtendedOptionShape::Scalar(g) | ExtendedOptionShape::OptionalScalar(g) => g.clone(),
-        ExtendedOptionShape::RepeatableList(r) => list_wrapper_graph(&r.item_type),
+        ExtendedOptionShape::RepeatableList(r) => r.item_type.list(),
         ExtendedOptionShape::RepeatableMap(r) => r.map_type.clone(),
     }
 }
@@ -1607,8 +1872,8 @@ enum ValueIsMode {
 /// [`ValueIsMode`] controlling whether the one-level element/value relaxation
 /// applies.
 #[derive(Clone, Debug)]
-struct ValueIsComparand {
-    graph: SchemaGraph,
+struct ValueIsComparand<S: ToolSchemaRepr = SchemaGraph> {
+    graph: S,
     mode: ValueIsMode,
 }
 
@@ -1622,8 +1887,8 @@ struct ValueIsComparand {
 /// is a flag (no value type), against which a `value-is` is a genuine mismatch.
 #[derive(Clone, Debug)]
 #[allow(clippy::large_enum_variant)]
-enum ValueComparand {
-    Type(ValueIsComparand),
+enum ValueComparand<S: ToolSchemaRepr = SchemaGraph> {
+    Type(ValueIsComparand<S>),
     BlockedByTypeError,
 }
 
@@ -1637,7 +1902,9 @@ enum ValueComparand {
 /// [`ValueComparand::BlockedByTypeError`] (the malformed type is reported by
 /// [`validate_tool`]). Definition graphs are preserved so any `Ref` still
 /// resolves.
-fn option_value_is_comparand(shape: &ExtendedOptionShape) -> ValueComparand {
+fn option_value_is_comparand<S: ToolSchemaRepr>(
+    shape: &ExtendedOptionShape<S>,
+) -> ValueComparand<S> {
     match shape {
         ExtendedOptionShape::Scalar(g) | ExtendedOptionShape::OptionalScalar(g) => {
             ValueComparand::Type(ValueIsComparand {
@@ -1649,9 +1916,9 @@ fn option_value_is_comparand(shape: &ExtendedOptionShape) -> ValueComparand {
             graph: r.item_type.clone(),
             mode: ValueIsMode::Exact,
         }),
-        ExtendedOptionShape::RepeatableMap(r) if resolves_to_map(&r.map_type) => {
+        ExtendedOptionShape::RepeatableMap(r) if r.map_type.map_value().is_some() => {
             ValueComparand::Type(ValueIsComparand {
-                graph: map_value_graph(&r.map_type),
+                graph: r.map_type.map_value().unwrap(),
                 mode: ValueIsMode::Exact,
             })
         }
@@ -1849,8 +2116,15 @@ fn insert_unique_short(set: &mut BTreeSet<char>, short: char) -> Result<(), Tool
 /// Runs the structural command-tree check first so the subsequent recursive
 /// traversal can index the tree without bounds/cycle hazards.
 pub fn validate_tool(tool: &ExtendedToolType) -> Result<(), ToolBuildError> {
+    validate_tool_with::<true>(tool, check_graph_closed)
+}
+
+fn validate_tool_with<const VALUES: bool>(
+    tool: &ExtendedToolType,
+    graph_check: ToolGraphCheck,
+) -> Result<(), ToolBuildError> {
     check_command_tree_structure(tool)?;
-    visit_command(tool, 0, &[])
+    visit_command::<VALUES>(tool, 0, &[], graph_check)
 }
 
 /// Structural integrity of the command tree: non-empty, every subcommand index
@@ -1905,29 +2179,30 @@ fn dfs_command_tree(
 /// `ancestor_globals` are the globals of strict ancestors (root excluded only
 /// at the root call); the current node's own globals are appended to form the
 /// in-scope set for its body and children.
-fn visit_command(
+fn visit_command<const VALUES: bool>(
     tool: &ExtendedToolType,
     index: usize,
     ancestor_globals: &[&ExtendedGlobals],
+    graph_check: ToolGraphCheck,
 ) -> Result<(), ToolBuildError> {
     let node = &tool.commands[index];
     check_identifier("command name", &node.name)?;
     for alias in &node.aliases {
         check_identifier("command alias", alias)?;
     }
-    check_globals_decls(&node.globals)?;
+    check_globals_decls::<VALUES>(&node.globals, graph_check)?;
     check_global_scope_uniqueness(ancestor_globals, &node.globals)?;
 
     let mut in_scope: Vec<&ExtendedGlobals> = ancestor_globals.to_vec();
     in_scope.push(&node.globals);
 
     if let Some(body) = &node.body {
-        check_body(body, &in_scope)?;
+        check_body::<VALUES>(body, &in_scope, graph_check)?;
     }
     check_subcommand_uniqueness(tool, node)?;
 
     for sub in &node.subcommands {
-        visit_command(tool, *sub as usize, &in_scope)?;
+        visit_command::<VALUES>(tool, *sub as usize, &in_scope, graph_check)?;
     }
     Ok(())
 }
@@ -1935,9 +2210,12 @@ fn visit_command(
 /// Identifier, repeatable-map, default, and variant-in-input checks for the
 /// declarations within one command's `globals` (uniqueness is handled by
 /// [`check_global_scope_uniqueness`]).
-fn check_globals_decls(globals: &ExtendedGlobals) -> Result<(), ToolBuildError> {
+fn check_globals_decls<const VALUES: bool>(
+    globals: &ExtendedGlobals,
+    graph_check: ToolGraphCheck,
+) -> Result<(), ToolBuildError> {
     for opt in &globals.options {
-        check_option_decl(opt)?;
+        check_option_decl::<VALUES>(opt, graph_check)?;
     }
     for flag in &globals.flags {
         check_flag_identifiers(flag)?;
@@ -1945,12 +2223,15 @@ fn check_globals_decls(globals: &ExtendedGlobals) -> Result<(), ToolBuildError> 
     Ok(())
 }
 
-fn check_option_decl(opt: &ExtendedOptionSpec) -> Result<(), ToolBuildError> {
+fn check_option_decl<const VALUES: bool>(
+    opt: &ExtendedOptionSpec,
+    graph_check: ToolGraphCheck,
+) -> Result<(), ToolBuildError> {
     check_identifier("option long name", &opt.long)?;
     for alias in &opt.aliases {
         check_identifier("option alias", alias)?;
     }
-    check_graph_closed(
+    graph_check(
         option_authored_graph(&opt.shape),
         &format!("option --{}", opt.long),
     )?;
@@ -1960,6 +2241,11 @@ fn check_option_decl(opt: &ExtendedOptionSpec) -> Result<(), ToolBuildError> {
         return Err(ToolBuildError::RepeatableMapTypeNotMap(opt.long.clone()));
     }
     if let Some(default) = &opt.default {
+        if !VALUES {
+            return Err(ToolBuildError::DefaultTypeMismatch(
+                "literal-free descriptor contains a default".to_string(),
+            ));
+        }
         validate_default(default, &option_collected_graph(&opt.shape))?;
     }
     let input = option_input_graph(&opt.shape);
@@ -2032,15 +2318,23 @@ fn seed_global_tokens(
 
 /// Per-name `value-is` comparand for constraint resolution (only value-typed
 /// names; a name in `names` but absent from `typed` is a flag).
-#[derive(Default)]
-struct NameScope {
+struct NameScope<S: ToolSchemaRepr = SchemaGraph> {
     names: BTreeSet<String>,
-    typed: BTreeMap<String, ValueComparand>,
+    typed: BTreeMap<String, ValueComparand<S>>,
+}
+
+impl<S: ToolSchemaRepr> Default for NameScope<S> {
+    fn default() -> Self {
+        Self {
+            names: BTreeSet::new(),
+            typed: BTreeMap::new(),
+        }
+    }
 }
 
 /// Registers a flag's referenceable names. A flag carries no value type, so it
 /// is never added to [`NameScope::typed`]; a `value-is` against it is rejected.
-fn register_flag_scope(scope: &mut NameScope, flag: &FlagSpec) {
+fn register_flag_scope<S: ToolSchemaRepr>(scope: &mut NameScope<S>, flag: &FlagSpec) {
     scope.names.insert(flag.long.clone());
     scope.names.extend(flag.aliases.iter().cloned());
 }
@@ -2048,7 +2342,10 @@ fn register_flag_scope(scope: &mut NameScope, flag: &FlagSpec) {
 /// Registers a fixed positional's name and its whole-or-one-peel comparand (a
 /// fixed positional is a non-collecting value surface: its declared type is the
 /// comparand).
-fn register_fixed_positional_scope(scope: &mut NameScope, positional: &ExtendedPositional) {
+fn register_fixed_positional_scope<S: ToolSchemaRepr>(
+    scope: &mut NameScope<S>,
+    positional: &ExtendedPositional<S>,
+) {
     scope.names.insert(positional.name.clone());
     scope.typed.insert(
         positional.name.clone(),
@@ -2062,7 +2359,10 @@ fn register_fixed_positional_scope(scope: &mut NameScope, positional: &ExtendedP
 /// Registers a tail positional's name and its per-occurrence comparand. A tail
 /// collects occurrences into a `list<item>`, so a `value-is` literal matches one
 /// item exactly (the tail's `item_type`), never the whole collected list.
-fn register_tail_scope(scope: &mut NameScope, tail: &ExtendedTailPositional) {
+fn register_tail_scope<S: ToolSchemaRepr>(
+    scope: &mut NameScope<S>,
+    tail: &ExtendedTailPositional<S>,
+) {
     scope.names.insert(tail.name.clone());
     scope.typed.insert(
         tail.name.clone(),
@@ -2073,9 +2373,10 @@ fn register_tail_scope(scope: &mut NameScope, tail: &ExtendedTailPositional) {
     );
 }
 
-fn check_body(
+fn check_body<const VALUES: bool>(
     body: &ExtendedCommandBody,
     in_scope: &[&ExtendedGlobals],
+    graph_check: ToolGraphCheck,
 ) -> Result<(), ToolBuildError> {
     // In-scope global tokens (for uniqueness) and resolution scope (for refs).
     let mut names: BTreeSet<String> = BTreeSet::new();
@@ -2092,7 +2393,7 @@ fn check_body(
     }
 
     for opt in &body.options {
-        check_option_decl(opt)?;
+        check_option_decl::<VALUES>(opt, graph_check)?;
         insert_unique(&mut names, &opt.long)?;
         for alias in &opt.aliases {
             insert_unique(&mut names, alias)?;
@@ -2124,13 +2425,18 @@ fn check_body(
     let mut saw_optional_positional = false;
     for positional in &body.positionals.fixed {
         check_identifier("positional name", &positional.name)?;
-        check_graph_closed(
+        graph_check(
             &positional.type_,
             &format!("positional {}", positional.name),
         )?;
         insert_unique(&mut names, &positional.name)?;
         register_fixed_positional_scope(&mut scope, positional);
         if let Some(default) = &positional.default {
+            if !VALUES {
+                return Err(ToolBuildError::DefaultTypeMismatch(
+                    "literal-free descriptor contains a default".to_string(),
+                ));
+            }
             validate_default(default, &positional.type_)?;
         }
         if graph_reaches_variant(&positional.type_) {
@@ -2151,7 +2457,7 @@ fn check_body(
 
     if let Some(tail) = &body.positionals.tail {
         check_identifier("positional name", &tail.name)?;
-        check_graph_closed(&tail.item_type, &format!("tail {}", tail.name))?;
+        graph_check(&tail.item_type, &format!("tail {}", tail.name))?;
         insert_unique(&mut names, &tail.name)?;
         register_tail_scope(&mut scope, tail);
         if graph_reaches_variant(&tail.item_type) {
@@ -2172,11 +2478,11 @@ fn check_body(
     }
 
     for constraint in &body.constraints {
-        check_constraint(constraint, &scope)?;
+        check_constraint::<VALUES>(constraint, &scope)?;
     }
 
     if let Some(result) = &body.result {
-        check_graph_closed(&result.type_, "result")?;
+        graph_check(&result.type_, "result")?;
         for formatter in &result.formatters {
             check_identifier("formatter name", &formatter.name)?;
         }
@@ -2194,14 +2500,14 @@ fn check_body(
     for error_case in &body.errors {
         check_identifier("error-case name", &error_case.name)?;
         if let Some(payload) = &error_case.payload {
-            check_graph_closed(payload, &format!("error {}", error_case.name))?;
+            graph_check(payload, &format!("error {}", error_case.name))?;
         }
     }
 
     Ok(())
 }
 
-fn register_option_scope(scope: &mut NameScope, opt: &ExtendedOptionSpec) {
+fn register_option_scope<S: ToolSchemaRepr>(scope: &mut NameScope<S>, opt: &ExtendedOptionSpec<S>) {
     scope.names.insert(opt.long.clone());
     scope.names.extend(opt.aliases.iter().cloned());
     let comparand = option_value_is_comparand(&opt.shape);
@@ -2226,29 +2532,35 @@ fn check_subcommand_uniqueness(
     Ok(())
 }
 
-fn check_constraint(c: &ExtendedConstraint, scope: &NameScope) -> Result<(), ToolBuildError> {
+fn check_constraint<const VALUES: bool>(
+    c: &ExtendedConstraint,
+    scope: &NameScope,
+) -> Result<(), ToolBuildError> {
     match c {
         ExtendedConstraint::RequiresAll(v)
         | ExtendedConstraint::AllOrNone(v)
-        | ExtendedConstraint::RequiresAny(v) => check_refs(v, scope),
+        | ExtendedConstraint::RequiresAny(v) => check_refs::<VALUES>(v, scope),
         ExtendedConstraint::MutexGroups(groups) => {
             for g in groups {
-                check_refs(&g.refs, scope)?;
+                check_refs::<VALUES>(&g.refs, scope)?;
             }
             Ok(())
         }
         ExtendedConstraint::Implies(i) => {
-            check_refs(&i.lhs, scope)?;
-            check_refs(&i.rhs, scope)
+            check_refs::<VALUES>(&i.lhs, scope)?;
+            check_refs::<VALUES>(&i.rhs, scope)
         }
         ExtendedConstraint::Forbids(f) => {
-            check_refs(&f.lhs, scope)?;
-            check_refs(&f.rhs, scope)
+            check_refs::<VALUES>(&f.lhs, scope)?;
+            check_refs::<VALUES>(&f.rhs, scope)
         }
     }
 }
 
-fn check_refs(refs: &[ExtendedRef], scope: &NameScope) -> Result<(), ToolBuildError> {
+fn check_refs<const VALUES: bool>(
+    refs: &[ExtendedRef],
+    scope: &NameScope,
+) -> Result<(), ToolBuildError> {
     for r in refs {
         match r {
             ExtendedRef::Present(name) => {
@@ -2257,6 +2569,9 @@ fn check_refs(refs: &[ExtendedRef], scope: &NameScope) -> Result<(), ToolBuildEr
                 }
             }
             ExtendedRef::ValueIs(v) => {
+                if !VALUES {
+                    return Err(ToolBuildError::UnresolvedValueIsLiteral(v.name.clone()));
+                }
                 if !scope.names.contains(&v.name) {
                     return Err(ToolBuildError::UnresolvedConstraintRef(v.name.clone()));
                 }
@@ -2520,12 +2835,22 @@ fn render_flag_help(f: &FlagSpec, global: bool) -> String {
     )
 }
 
-#[derive(Default)]
-pub struct ToolBuildCtx {
+pub struct ToolBuildCtx<S: ToolSchemaRepr = SchemaGraph> {
     stack: Vec<String>,
     command_path: Vec<String>,
-    inherited_globals: Vec<EffectiveCommandField>,
+    inherited_globals: Vec<EffectiveCommandField<S>>,
     graft_roots: Vec<PendingGraftRoot>,
+}
+
+impl<S: ToolSchemaRepr> Default for ToolBuildCtx<S> {
+    fn default() -> Self {
+        Self {
+            stack: Vec::new(),
+            command_path: Vec::new(),
+            inherited_globals: Vec::new(),
+            graft_roots: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2534,7 +2859,7 @@ struct PendingGraftRoot {
     override_name: Option<String>,
 }
 
-impl ToolBuildCtx {
+impl<S: ToolSchemaRepr> ToolBuildCtx<S> {
     pub fn new() -> Self {
         Self::default()
     }
@@ -2581,12 +2906,12 @@ impl ToolBuildCtx {
         self.pop_descriptor();
         result
     }
-    pub fn inherited_globals(&self) -> &[EffectiveCommandField] {
+    pub fn inherited_globals(&self) -> &[EffectiveCommandField<S>] {
         &self.inherited_globals
     }
     pub fn with_inherited_globals<T>(
         &mut self,
-        globals: Vec<EffectiveCommandField>,
+        globals: Vec<EffectiveCommandField<S>>,
         f: impl FnOnce(&mut Self) -> Result<T, ToolBuildError>,
     ) -> Result<T, ToolBuildError> {
         let old_len = self.inherited_globals.len();
@@ -2611,7 +2936,7 @@ impl ToolBuildCtx {
     }
     pub fn apply_pending_graft_root(
         &self,
-        root: &mut ExtendedCommandNode,
+        root: &mut ExtendedCommandNode<S>,
     ) -> Result<(), ToolBuildError> {
         let Some(pending) = self.graft_roots.last() else {
             return Ok(());
@@ -2646,18 +2971,18 @@ pub trait ToolDefinitionDescriptor {
     fn metadata(ctx: &mut ToolBuildCtx) -> Result<ExtendedToolType, ToolBuildError>;
 }
 
-pub fn reconcile_subtree_parent_globals(
-    mut parent_globals: ExtendedGlobals,
-    strict_ancestor_globals: &[EffectiveCommandField],
+pub fn reconcile_subtree_parent_globals<S: ToolSchemaRepr>(
+    mut parent_globals: ExtendedGlobals<S>,
+    strict_ancestor_globals: &[EffectiveCommandField<S>],
     command_name: &str,
-) -> Result<ExtendedGlobals, ToolBuildError> {
+) -> Result<ExtendedGlobals<S>, ToolBuildError> {
     reconcile_globals(&mut parent_globals, strict_ancestor_globals, command_name)?;
     Ok(parent_globals)
 }
 
-pub fn reconcile_command_inherited_globals(
-    node: &mut ExtendedCommandNode,
-    strict_ancestor_globals: &[EffectiveCommandField],
+pub fn reconcile_command_inherited_globals<S: ToolSchemaRepr>(
+    node: &mut ExtendedCommandNode<S>,
+    strict_ancestor_globals: &[EffectiveCommandField<S>],
     command_name: &str,
 ) -> Result<(), ToolBuildError> {
     reconcile_globals(&mut node.globals, strict_ancestor_globals, command_name)?;
@@ -2691,16 +3016,16 @@ pub fn reconcile_command_inherited_globals(
 ///
 /// Command indices are returned unchanged (graft-local); the final offset into
 /// the parent's command tree is applied by [`append_grafted_subtree`].
-pub fn graft_subtree(
-    child: ExtendedToolType,
+pub fn graft_subtree<S: ToolSchemaRepr>(
+    child: ExtendedToolType<S>,
     expected_name: &str,
-    parent_globals: ExtendedGlobals,
-    strict_ancestor_globals: &[EffectiveCommandField],
+    parent_globals: ExtendedGlobals<S>,
+    strict_ancestor_globals: &[EffectiveCommandField<S>],
     override_name: Option<String>,
     override_doc: Option<Doc>,
     override_aliases: Option<Vec<String>>,
     override_annotations: Option<CommandAnnotations>,
-) -> Result<Vec<ExtendedCommandNode>, ToolBuildError> {
+) -> Result<Vec<ExtendedCommandNode<S>>, ToolBuildError> {
     let mut nodes = child.commands;
     let root = nodes.first_mut().ok_or(ToolBuildError::EmptyCommandTree)?;
     if override_annotations.is_some() {
@@ -2801,7 +3126,9 @@ pub fn graft_subtree(
 ///
 /// The traversal guards against malformed (cyclic / out-of-bounds) trees so it
 /// is safe to run before [`validate_tool`] proves the tree well-formed.
-pub fn normalize_inherited_globals(tool: &mut ExtendedToolType) -> Result<(), ToolBuildError> {
+pub fn normalize_inherited_globals<S: ToolSchemaRepr>(
+    tool: &mut ExtendedToolType<S>,
+) -> Result<(), ToolBuildError> {
     if tool.commands.is_empty() {
         return Ok(());
     }
@@ -2809,10 +3136,10 @@ pub fn normalize_inherited_globals(tool: &mut ExtendedToolType) -> Result<(), To
     normalize_command(tool, 0, &[], &mut visited)
 }
 
-fn normalize_command(
-    tool: &mut ExtendedToolType,
+fn normalize_command<S: ToolSchemaRepr>(
+    tool: &mut ExtendedToolType<S>,
     index: usize,
-    ancestor_globals: &[EffectiveCommandField],
+    ancestor_globals: &[EffectiveCommandField<S>],
     visited: &mut [bool],
 ) -> Result<(), ToolBuildError> {
     if index >= tool.commands.len() || visited[index] {
@@ -2878,11 +3205,11 @@ fn normalize_command(
 /// and the positional/tail/flag handling) so deferred-literal resolution and
 /// validation agree on which names are value-carrying and on each name's
 /// comparand graph.
-fn value_is_scope(
-    ancestors: &[EffectiveCommandField],
-    node_globals: &ExtendedGlobals,
-    body: &ExtendedCommandBody,
-) -> NameScope {
+fn value_is_scope<S: ToolSchemaRepr>(
+    ancestors: &[EffectiveCommandField<S>],
+    node_globals: &ExtendedGlobals<S>,
+    body: &ExtendedCommandBody<S>,
+) -> NameScope<S> {
     let mut scope = NameScope::default();
     for field in ancestors {
         match field {
@@ -2927,9 +3254,9 @@ fn value_is_scope(
 /// [`ToolBuildError::ValueIsTypeMismatch`]. A name not in scope is left deferred
 /// — it is reported as an unresolved constraint reference by [`check_refs`] (the
 /// standalone subtree-child case where the ancestor global is not present).
-fn resolve_deferred_value_is(
-    body: &mut ExtendedCommandBody,
-    scope: &NameScope,
+fn resolve_deferred_value_is<S: ToolSchemaRepr>(
+    body: &mut ExtendedCommandBody<S>,
+    scope: &NameScope<S>,
 ) -> Result<(), ToolBuildError> {
     for constraint in &mut body.constraints {
         for_each_ref_mut(constraint, &mut |r| {
@@ -2946,12 +3273,11 @@ fn resolve_deferred_value_is(
                     // ref) leave the literal deferred so `validate_tool` reports
                     // the real schema error instead of a cascading value-is
                     // mismatch against a graph that cannot be resolved.
-                    if comparand_graph_is_sound(&comparand.graph) {
-                        let value = value_is_literal_to_schema_value(&comparand.graph, lit)
+                    if comparand.graph.is_sound() {
+                        let value = comparand
+                            .graph
+                            .value_is_literal(lit, comparand.mode == ValueIsMode::WholeOrOnePeel)
                             .map_err(|_| ToolBuildError::ValueIsTypeMismatch(v.name.clone()))?;
-                        if !value_is_compatible(comparand, &value) {
-                            return Err(ToolBuildError::ValueIsTypeMismatch(v.name.clone()));
-                        }
                         v.value = ExtendedValueIsLiteral::Resolved(value);
                     }
                 }
@@ -2976,9 +3302,9 @@ fn resolve_deferred_value_is(
 
 /// Applies `f` to every [`ExtendedRef`] referenced by a constraint, regardless of
 /// its variant, short-circuiting on the first error.
-fn for_each_ref_mut(
-    constraint: &mut ExtendedConstraint,
-    f: &mut impl FnMut(&mut ExtendedRef) -> Result<(), ToolBuildError>,
+fn for_each_ref_mut<S: ToolSchemaRepr>(
+    constraint: &mut ExtendedConstraint<S>,
+    f: &mut impl FnMut(&mut ExtendedRef<S>) -> Result<(), ToolBuildError>,
 ) -> Result<(), ToolBuildError> {
     match constraint {
         ExtendedConstraint::RequiresAll(v)
@@ -3015,9 +3341,9 @@ fn for_each_ref_mut(
     Ok(())
 }
 
-fn reconcile_globals(
-    globals: &mut ExtendedGlobals,
-    ancestors: &[EffectiveCommandField],
+fn reconcile_globals<S: ToolSchemaRepr>(
+    globals: &mut ExtendedGlobals<S>,
+    ancestors: &[EffectiveCommandField<S>],
     command: &str,
 ) -> Result<(), ToolBuildError> {
     if ancestors.is_empty() {
@@ -3043,9 +3369,9 @@ fn reconcile_globals(
     Ok(())
 }
 
-fn reconcile_body(
-    body: &mut ExtendedCommandBody,
-    ancestors: &[EffectiveCommandField],
+fn reconcile_body<S: ToolSchemaRepr>(
+    body: &mut ExtendedCommandBody<S>,
+    ancestors: &[EffectiveCommandField<S>],
     command: &str,
 ) -> Result<(), ToolBuildError> {
     if ancestors.is_empty() {
@@ -3084,7 +3410,7 @@ fn reconcile_body(
     body.positionals.fixed = kept_fixed;
 
     if let Some(tail) = body.positionals.tail.take() {
-        let shape = FieldShape::Value(list_wrapper_graph(&tail.item_type));
+        let shape = FieldShape::Value(tail.item_type.list());
         if !reconcile_local(std::slice::from_ref(&tail.name), &shape, ancestors, command)? {
             body.positionals.tail = Some(tail);
         }
@@ -3120,7 +3446,9 @@ fn reconcile_body(
 ///
 /// It is a no-op for hand-built bodies (empty plan) and whenever the natural tail
 /// is already the last surviving positional.
-fn reinfer_body_tail(body: &mut ExtendedCommandBody) -> Result<(), ToolBuildError> {
+fn reinfer_body_tail<S: ToolSchemaRepr>(
+    body: &mut ExtendedCommandBody<S>,
+) -> Result<(), ToolBuildError> {
     if body.positional_plan.is_empty() {
         return Ok(());
     }
@@ -3186,8 +3514,8 @@ fn reinfer_body_tail(body: &mut ExtendedCommandBody) -> Result<(), ToolBuildErro
 /// bounds (`min`/`max`) or tail-only attributes a repeatable-list option cannot
 /// represent. (An explicit tail before a survivor is rejected earlier, in
 /// [`reinfer_body_tail`].)
-fn demote_tail_to_option(
-    body: &mut ExtendedCommandBody,
+fn demote_tail_to_option<S: ToolSchemaRepr>(
+    body: &mut ExtendedCommandBody<S>,
     tail_idx: usize,
 ) -> Result<(), ToolBuildError> {
     let PositionalCandidate::VecCandidate {
@@ -3282,8 +3610,8 @@ fn demote_tail_to_option(
 /// slot or never projected to an option; rejects an inferred candidate carrying
 /// option-only attributes (or an `Option<Vec<T>>`, or authored `min`/`max`) that
 /// a tail cannot represent.
-fn promote_option_to_tail(
-    body: &mut ExtendedCommandBody,
+fn promote_option_to_tail<S: ToolSchemaRepr>(
+    body: &mut ExtendedCommandBody<S>,
     last_idx: usize,
 ) -> Result<(), ToolBuildError> {
     let PositionalCandidate::VecCandidate {
@@ -3376,8 +3704,8 @@ fn promote_option_to_tail(
 /// tail slot: it must carry no option-only surface a tail positional cannot
 /// express (`short`/`aliases`/`default`/`required`/`env`), and must be a
 /// `RepeatableList` with `Repeated` (non-delimited) repetition.
-fn verify_promotable_surrogate(
-    option: &ExtendedOptionSpec,
+fn verify_promotable_surrogate<S: ToolSchemaRepr>(
+    option: &ExtendedOptionSpec<S>,
     name: &str,
 ) -> Result<(), ToolBuildError> {
     if option.short.is_some()
@@ -3417,7 +3745,7 @@ fn verify_promotable_surrogate(
 /// Whether the body still carries a positional-eligible parameter with the given
 /// surface name (as a fixed positional, the tail, or a repeatable-list option),
 /// i.e. it survived de-projection.
-fn body_contains_positional(body: &ExtendedCommandBody, name: &str) -> bool {
+fn body_contains_positional<S: ToolSchemaRepr>(body: &ExtendedCommandBody<S>, name: &str) -> bool {
     body.positionals.fixed.iter().any(|p| p.name == name)
         || body
             .positionals
@@ -3433,10 +3761,10 @@ fn body_contains_positional(body: &ExtendedCommandBody, name: &str) -> bool {
 /// inherited global shares a surface name (keep the local), and
 /// [`ToolBuildError::InheritedGlobalConflict`] when a surface name matches but
 /// the input shapes are incompatible.
-fn reconcile_local(
+fn reconcile_local<S: ToolSchemaRepr>(
     local_names: &[String],
-    local_shape: &FieldShape,
-    ancestors: &[EffectiveCommandField],
+    local_shape: &FieldShape<S>,
+    ancestors: &[EffectiveCommandField<S>],
     command: &str,
 ) -> Result<bool, ToolBuildError> {
     // A local may share a surface name with more than one inherited global (its
@@ -3482,7 +3810,7 @@ fn reconcile_local(
 
 /// The primary (long) surface name of an inherited effective global, used to
 /// name the colliding global in [`ToolBuildError::InheritedGlobalConflict`].
-fn effective_field_primary_name(g: &EffectiveCommandField) -> String {
+fn effective_field_primary_name<S: ToolSchemaRepr>(g: &EffectiveCommandField<S>) -> String {
     match g {
         EffectiveCommandField::Option(o) => o.long.clone(),
         EffectiveCommandField::Flag(f) => f.long.clone(),
@@ -3497,36 +3825,36 @@ fn effective_field_primary_name(g: &EffectiveCommandField) -> String {
 /// option, repeatable list/map option, fixed positional, tail positional) is
 /// compared by its canonical input value graph.
 #[allow(clippy::large_enum_variant)]
-enum FieldShape {
+enum FieldShape<S: ToolSchemaRepr = SchemaGraph> {
     BoolFlag,
     CountFlag,
-    Value(SchemaGraph),
+    Value(S),
 }
 
-fn flag_field_shape(f: &FlagSpec) -> FieldShape {
+fn flag_field_shape<S: ToolSchemaRepr>(f: &FlagSpec) -> FieldShape<S> {
     match f.shape {
         wire::FlagShape::BoolFlag(_) => FieldShape::BoolFlag,
         wire::FlagShape::CountFlag(_) => FieldShape::CountFlag,
     }
 }
 
-fn effective_field_shape(g: &EffectiveCommandField) -> FieldShape {
+fn effective_field_shape<S: ToolSchemaRepr>(g: &EffectiveCommandField<S>) -> FieldShape<S> {
     match g {
         EffectiveCommandField::Option(o) => FieldShape::Value(option_collected_graph(&o.shape)),
         EffectiveCommandField::Flag(f) => flag_field_shape(f),
     }
 }
 
-fn field_shapes_compatible(a: &FieldShape, b: &FieldShape) -> bool {
+fn field_shapes_compatible<S: ToolSchemaRepr>(a: &FieldShape<S>, b: &FieldShape<S>) -> bool {
     match (a, b) {
         (FieldShape::BoolFlag, FieldShape::BoolFlag) => true,
         (FieldShape::CountFlag, FieldShape::CountFlag) => true,
-        (FieldShape::Value(ga), FieldShape::Value(gb)) => schema_shapes_match(ga, gb),
+        (FieldShape::Value(ga), FieldShape::Value(gb)) => ga.shape_matches(gb),
         _ => false,
     }
 }
 
-fn option_surface_names(o: &ExtendedOptionSpec) -> Vec<String> {
+fn option_surface_names<S: ToolSchemaRepr>(o: &ExtendedOptionSpec<S>) -> Vec<String> {
     let mut names = Vec::with_capacity(1 + o.aliases.len());
     names.push(o.long.clone());
     names.extend(o.aliases.iter().cloned());
@@ -3540,7 +3868,7 @@ fn flag_surface_names(f: &FlagSpec) -> Vec<String> {
     names
 }
 
-fn effective_field_surface_names(g: &EffectiveCommandField) -> Vec<String> {
+fn effective_field_surface_names<S: ToolSchemaRepr>(g: &EffectiveCommandField<S>) -> Vec<String> {
     match g {
         EffectiveCommandField::Option(o) => option_surface_names(o),
         EffectiveCommandField::Flag(f) => flag_surface_names(f),
@@ -3813,9 +4141,9 @@ fn schema_opt_box_match(
 /// placeholder) to `parent`, offsetting every internal subcommand index, and
 /// return the parent index of the placeholder. The caller links this index as a
 /// subcommand of the hosting command.
-pub fn append_grafted_subtree(
-    parent: &mut Vec<ExtendedCommandNode>,
-    mut graft: Vec<ExtendedCommandNode>,
+pub fn append_grafted_subtree<S: ToolSchemaRepr>(
+    parent: &mut Vec<ExtendedCommandNode<S>>,
+    mut graft: Vec<ExtendedCommandNode<S>>,
 ) -> i32 {
     let offset = parent.len() as i32;
     for node in &mut graft {
@@ -3849,6 +4177,132 @@ mod tests {
     }
     fn u32_graph() -> SchemaGraph {
         SchemaGraph::anonymous(SchemaType::u32())
+    }
+
+    #[test]
+    fn preparation_checks_once_and_caches_conversion() {
+        thread_local! {
+            static CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        }
+        fn counted(graph: &SchemaGraph, position: &str) -> Result<(), ToolBuildError> {
+            CHECKS.with(|count| count.set(count.get() + 1));
+            check_graph_closed(graph, position)
+        }
+        let tool = sample_tool();
+        let reference = tool.try_to_native_tool().unwrap();
+        let prepared = tool
+            .prepare_without_literals(ToolSchemaChecks(counted))
+            .unwrap();
+        assert_eq!(CHECKS.with(|count| count.get()), 4);
+        assert_eq!(prepared.native(), &reference);
+        assert!(std::ptr::eq(prepared.native(), prepared.native()));
+        let clone = prepared.clone();
+        assert_eq!(clone.native(), prepared.native());
+        #[cfg(feature = "guest")]
+        {
+            assert_eq!(
+                format!("{:?}", clone.wire()),
+                format!("{:?}", prepared.extended().try_to_tool().unwrap())
+            );
+        }
+        assert_eq!(CHECKS.with(|count| count.get()), 4);
+    }
+
+    #[test]
+    fn scalar_preparation_checks_structure_and_rejects_unexpected_literals() {
+        let mut tool = sample_tool();
+        tool.commands[1].body.as_mut().unwrap().options.clear();
+        let reference = tool.try_to_native_tool().unwrap();
+        assert_eq!(
+            tool.clone()
+                .prepare_without_literals(ToolSchemaChecks::scalar())
+                .unwrap()
+                .native(),
+            &reference
+        );
+
+        let mut duplicate = tool.clone();
+        duplicate.commands[1].body.as_mut().unwrap().flags[0].long = "input".into();
+        assert_eq!(
+            duplicate
+                .clone()
+                .prepare_without_literals(ToolSchemaChecks::scalar())
+                .unwrap_err()
+                .to_string(),
+            duplicate.prepare().unwrap_err().to_string(),
+        );
+
+        let mut default = tool.clone();
+        default.commands[1].body.as_mut().unwrap().positionals.fixed[0].default =
+            Some(SchemaValue::String("valid".into()));
+        assert!(default.clone().prepare().is_ok());
+        assert!(matches!(
+            default.prepare_without_literals(ToolSchemaChecks::scalar()),
+            Err(ToolBuildError::DefaultTypeMismatch(_))
+        ));
+
+        tool.commands[1]
+            .body
+            .as_mut()
+            .unwrap()
+            .constraints
+            .push(ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
+                ExtendedValueIsRef {
+                    name: "input".into(),
+                    value: ExtendedValueIsLiteral::Resolved(SchemaValue::String("valid".into())),
+                },
+            )]));
+        assert!(tool.clone().prepare().is_ok());
+        assert!(matches!(
+            tool.prepare_without_literals(ToolSchemaChecks::scalar()),
+            Err(ToolBuildError::UnresolvedValueIsLiteral(_))
+        ));
+    }
+
+    #[test]
+    fn schema_check_selection_uses_resolved_type_and_keeps_dynamic_checks() {
+        type Alias = String;
+        struct Custom;
+        assert!(
+            (&ToolSchemaProbe::<Alias>(std::marker::PhantomData))
+                .tool_schema_checks()
+                .is_none()
+        );
+        let dynamic = (&ToolSchemaProbe::<Custom>(std::marker::PhantomData))
+            .tool_schema_checks()
+            .unwrap();
+        let invalid = SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+            regex: Some("[".into()),
+            ..Default::default()
+        }));
+        assert_eq!(
+            (dynamic.0)(&invalid, "test").unwrap_err().to_string(),
+            check_graph_closed(&invalid, "test")
+                .unwrap_err()
+                .to_string()
+        );
+        assert!((ToolSchemaChecks::scalar().0)(&invalid, "test").is_err());
+    }
+
+    #[test]
+    fn scalar_schema_constructors_match_reference_without_calling_fallback() {
+        macro_rules! check {
+            ($($ty:ty),*) => {$(
+                let graph = (&ToolSchemaProbe::<$ty>(std::marker::PhantomData))
+                    .tool_value_schema(|| panic!("scalar construction must be static"))
+                    .unwrap();
+                assert_eq!(graph, native_tool_value_schema::<$ty>("test").unwrap());
+                check_scalar_graph(&graph, "test").unwrap();
+            )*};
+        }
+        check!(
+            bool, u8, u16, u32, u64, i8, i16, i32, i64, f32, f64, char, String
+        );
+        struct Custom;
+        let graph = (&ToolSchemaProbe::<Custom>(std::marker::PhantomData))
+            .tool_value_schema(|| Ok(str_graph()))
+            .unwrap();
+        assert_eq!(graph, str_graph());
     }
 
     fn sample_tool() -> ExtendedToolType {
@@ -4795,7 +5249,7 @@ mod tests {
 
     #[test]
     fn cycle_detection_and_refinements_work() {
-        let mut ctx = ToolBuildCtx::new();
+        let mut ctx: ToolBuildCtx = ToolBuildCtx::new();
         ctx.push_descriptor("a").unwrap();
         assert!(matches!(
             ctx.push_descriptor("a"),

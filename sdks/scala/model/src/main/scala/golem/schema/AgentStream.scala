@@ -6,6 +6,8 @@
  */
 package golem.schema
 
+import golem.schema.wire.*
+
 import scala.concurrent.{ExecutionContext, Future, Promise}
 import scala.collection.mutable
 import scala.util.{DynamicVariable, Failure, Success, Try}
@@ -173,6 +175,11 @@ final class AgentStream[+A] private[golem] (
 
   private[golem] def moveToSchemaValueStream(
     encode: A => SchemaValue
+  )(implicit ec: ExecutionContext): GuestSchemaValueStreamHandle =
+    moveToWireStream(value => SchemaWire.schemaValueToWit(encode(value)))
+
+  private[golem] def moveToWireStream(
+    encode: A => WitSchemaValueTree
   )(implicit ec: ExecutionContext): GuestSchemaValueStreamHandle = {
     ensureTransferable()
     val handle = directTransfer match {
@@ -196,7 +203,7 @@ final class AgentStream[+A] private[golem] (
           },
           ownershipEntry = ownershipEntry
         )
-        GuestSchemaValueStreamHandle.native(stream)
+        GuestSchemaValueStreamHandle.nativeWire(stream)
     }
     val endpoint = handle.withHandle(identity).getOrElse {
       throw new IllegalStateException("schema value stream was already transferred")
@@ -319,64 +326,82 @@ object AgentStream {
 
   implicit def fromSchema[A](implicit element: FromSchema[A]): FromSchema[AgentStream[A]] =
     new FromSchema[AgentStream[A]] {
-      private implicit val executionContext: ExecutionContext = ExecutionContext.parasitic
-
-      private def decode(
-        pull: () => Future[Option[SchemaValue]],
-        finalize: () => Future[Unit],
-        directTransfer: Option[() => GuestSchemaValueStreamHandle],
-        ownership: Option[AgentStreamOwnership.Entry]
-      ): AgentStream[A] = {
-        val decoded = new AgentStream(
-          () =>
-            pull().flatMap {
-              case None        => Future.successful(None)
-              case Some(value) =>
-                val result = Try {
-                  AgentStreamOwnership.capture(ownership.flatMap(_.activeOwner)) {
-                    element.fromValue(value).fold(throw _, identity)
-                  }
-                }
-                result match {
-                  case Success(item) =>
-                    ownership.foreach(_.handoffDecodedItem())
-                    Future.successful(Some(item))
-                  case Failure(error) =>
-                    AgentStreamOwnership
-                      .cleanup(
-                        ownership.map(_.closeTransferredOwnership()).getOrElse(Future.successful(()))
-                      )
-                      .flatMap(_ => Future.failed(error))
-                }
-            },
-          finalize,
-          directTransfer,
-          ownership
-        )
-        ownership.foreach(_.replace(decoded))
-        AgentStreamOwnership.own(decoded)
-      }
-
       override def fromValue(value: SchemaValue): Either[FromSchemaError, AgentStream[A]] = value match {
         case SchemaValue.StreamValue(handle) =>
-          handle.take() match {
-            case Some(native: GuestSchemaValueStream.Native) =>
-              Right(decode(() => native.value.pull(), () => native.value.close(), None, native.ownership))
-            case Some(wrapped: GuestSchemaValueStream.Wrapped) =>
-              lazy val stream = wrapped.unwrap()
-              Right(
-                decode(
-                  () => stream.flatMap(_.pull()),
-                  () => stream.flatMap(_.close()),
-                  Some(() => GuestSchemaValueStreamHandle.endpoint(wrapped)),
-                  wrapped.ownership
-                )
-              )
-            case None => Left(FromSchemaError("schema value stream was already transferred"))
-          }
+          decodeHandle(handle, value => element.fromValue(SchemaWire.schemaValueFromWit(value)).fold(throw _, identity))
         case other => Left(FromSchemaError(s"Expected stream value, got $other"))
       }
     }
+
+  def concreteCodec[A](element: ConcreteCodec[A]): ConcreteCodec[AgentStream[A]] = new ConcreteCodec[AgentStream[A]] {
+    def describe(out: WireTypes): Int                      = out.add(WitSchemaTypeBody.StreamType(Some(element.describe(out))))
+    def write(value: AgentStream[A], out: WireValues): Int = {
+      val handle = value.moveToWireStream(element.encodeValue)(using ExecutionContext.parasitic)
+      out.add(WitSchemaValueNode.StreamValue(handle))
+    }
+    def read(in: WireValuesReader, index: Int): AgentStream[A] = in.at(index) {
+      case WitSchemaValueNode.StreamValue(handle) => decodeHandle(handle, element.decode).fold(throw _, identity)
+    }
+  }
+
+  private def decodeHandle[A](
+    handle: GuestSchemaValueStreamHandle,
+    decodeValue: WitSchemaValueTree => A
+  ): Either[FromSchemaError, AgentStream[A]] = {
+    implicit val executionContext: ExecutionContext = ExecutionContext.parasitic
+
+    def decode(
+      pull: () => Future[Option[WitSchemaValueTree]],
+      finalize: () => Future[Unit],
+      directTransfer: Option[() => GuestSchemaValueStreamHandle],
+      ownership: Option[AgentStreamOwnership.Entry]
+    ): AgentStream[A] = {
+      val decoded = new AgentStream(
+        () =>
+          pull().flatMap {
+            case None        => Future.successful(None)
+            case Some(value) =>
+              val result = Try {
+                AgentStreamOwnership.capture(ownership.flatMap(_.activeOwner)) {
+                  decodeValue(value)
+                }
+              }
+              result match {
+                case Success(item) =>
+                  ownership.foreach(_.handoffDecodedItem())
+                  Future.successful(Some(item))
+                case Failure(error) =>
+                  AgentStreamOwnership
+                    .cleanup(
+                      ownership.map(_.closeTransferredOwnership()).getOrElse(Future.successful(()))
+                    )
+                    .flatMap(_ => Future.failed(error))
+              }
+          },
+        finalize,
+        directTransfer,
+        ownership
+      )
+      ownership.foreach(_.replace(decoded))
+      AgentStreamOwnership.own(decoded)
+    }
+
+    handle.take() match {
+      case Some(native: GuestSchemaValueStream.Native[?]) =>
+        Right(decode(() => native.pull(), () => native.value.close(), None, native.ownership))
+      case Some(wrapped: GuestSchemaValueStream.Wrapped) =>
+        lazy val stream = wrapped.unwrap()
+        Right(
+          decode(
+            () => stream.flatMap(_.pull()),
+            () => stream.flatMap(_.close()),
+            Some(() => GuestSchemaValueStreamHandle.endpoint(wrapped)),
+            wrapped.ownership
+          )
+        )
+      case None => Left(FromSchemaError("schema value stream was already transferred"))
+    }
+  }
 }
 
 private[golem] sealed trait GuestSchemaValueStream extends AgentStreamOwnership.Owned {
@@ -421,7 +446,7 @@ private[golem] sealed trait GuestSchemaValueStream extends AgentStreamOwnership.
   private[golem] final def isTransferCommitted: Boolean = committed
 }
 private[golem] object GuestSchemaValueStream {
-  final case class Wrapped(raw: Any, unwrapValue: () => Future[AgentStream[SchemaValue]])
+  final case class Wrapped(raw: Any, unwrapValue: () => Future[AgentStream[WitSchemaValueTree]])
       extends GuestSchemaValueStream {
     private lazy val stream =
       try unwrapValue()
@@ -438,13 +463,18 @@ private[golem] object GuestSchemaValueStream {
         )(using ExecutionContext.parasitic)
     )
 
-    def unwrap(): Future[AgentStream[SchemaValue]] = stream
+    def unwrap(): Future[AgentStream[WitSchemaValueTree]] = stream
 
     override def ownershipKey: Any       = raw
     override def dispose(): Future[Unit] = disposal
   }
-  final case class Native(value: AgentStream[SchemaValue]) extends GuestSchemaValueStream {
+  final case class Native[A](value: AgentStream[A], encode: A => WitSchemaValueTree) extends GuestSchemaValueStream {
     value.ownership.foreach(attachOwnership)
+
+    def pull(): Future[Option[WitSchemaValueTree]] =
+      value
+        .pull()
+        .map(item => AgentStreamOwnership.capture(activeOwnership)(item.map(encode)))(using ExecutionContext.parasitic)
 
     private lazy val disposal = disposeOwned(
       value
@@ -474,7 +504,7 @@ final class GuestSchemaValueStreamHandle private (private var cell: Option[Guest
 object GuestSchemaValueStreamHandle {
   private[golem] def wrapped(
     raw: Any,
-    unwrap: () => Future[AgentStream[SchemaValue]]
+    unwrap: () => Future[AgentStream[WitSchemaValueTree]]
   ): GuestSchemaValueStreamHandle = endpoint(GuestSchemaValueStream.Wrapped(raw, unwrap))
 
   private[golem] def endpoint(value: GuestSchemaValueStream): GuestSchemaValueStreamHandle = {
@@ -484,7 +514,10 @@ object GuestSchemaValueStreamHandle {
   }
 
   private[golem] def native(stream: AgentStream[SchemaValue]): GuestSchemaValueStreamHandle =
-    endpoint(GuestSchemaValueStream.Native(stream))
+    endpoint(GuestSchemaValueStream.Native(stream, SchemaWire.schemaValueToWit))
+
+  private[golem] def nativeWire(stream: AgentStream[WitSchemaValueTree]): GuestSchemaValueStreamHandle =
+    endpoint(GuestSchemaValueStream.Native(stream, identity))
 }
 
 /**

@@ -110,8 +110,8 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("""val toolName: _root_.scala.Predef.String = "grep""""))
     assert(content.contains("def apply(): GrepClient = apply(toolName)"))
     assert(content.contains("def apply(lookupName: _root_.scala.Predef.String): GrepClient = new Root(lookupName)"))
-    assert(content.contains("ToolRpcClient.transport(lookupName)"))
-    assert(content.contains("new _root_.golem.tool.AmbientToolCallBackend"))
+    assert(content.contains("ToolRpcClient.wireTransport(lookupName)"))
+    assert(!content.contains("new _root_.golem.tool.AmbientToolCallBackend"))
   }
 
   test("drops Principal and stdout parameters and keeps stdin; stdout returns a started invocation") {
@@ -127,17 +127,22 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
       )
     )
     assert(content.contains("_root_.scala.Some(stdin)"))
-    assert(content.contains("GrepCallProjection.__start_grep"))
+    assert(content.contains("WireToolClientRuntime.start"))
+    assert(content.contains("WireToolClientRuntime.decodeValue"))
   }
 
   test("the implicit-body root command invokes with an empty command path") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
-    assert(content.contains("GrepCallProjection.__start_grep(__backend, _root_.scala.Nil"))
+    // `grep` is the tool's root command: no path element is appended
+    assert(
+      content.contains("WireToolClientRuntime.start(__wireTransport, _root_.scala.Nil, __input")
+    )
   }
 
   test("unwraps Future results and decodes typed errors through the derived error schema") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
-    assert(content.contains("GrepCallProjection.__await_replace"))
+    assert(content.contains("ToolErrorSchemaDerivation.wireDecoder[GrepError]"))
+    assert(!content.contains("ConcreteCodec.derived[GrepError]"))
     // subcommands inherit the root global `caseSensitive`
     assert(
       content.contains(
@@ -155,12 +160,12 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
           "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[_root_.scala.Nothing], String]]"
       )
     )
-    assert(content.contains("GrepCallProjection.__await_version"))
+    assert(content.contains("WireToolClientRuntime.run"))
   }
 
-  test("count-flag parameters encode through countFlagValue") {
+  test("count-flag parameters use a concrete field codec") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
-    assert(content.contains("""("times", _root_.golem.tool.ToolClientRuntime.countFlagValue(times))"""))
+    assert(content.contains("ConcreteCodec.uint.xmap[Int]"))
   }
 
   test("subcommands inherit root globals and use canonical field names") {
@@ -176,10 +181,15 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     )
     assert(
       content.contains(
-        """("git-dir", _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[Option[String]]].toValue(gitDir))"""
+        """("git-dir", _root_.golem.schema.wire.ConcreteCodec.derived[Option[String]]"""
       )
     )
-    assert(content.contains("GitCallProjection.__await_status"))
+    assert(
+      content.contains(
+        """WireToolClientRuntime.run(__wireTransport, _root_.scala.List("status"), __input"""
+      )
+    )
+    assert(content.contains("WireToolMacro.inputGraph[example.Git](_root_.scala.List(\"status\"))"))
   }
 
   test("subtree methods return wrapper clients carrying the inherited canonical prefix") {
@@ -439,6 +449,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
 
     val content = generate("Grep2.scala" -> source).files.head.content
     assert(content.contains("""val toolName: _root_.scala.Predef.String = "super-grep""""))
-    assert(content.contains("Grep2CallProjection.__await_superGrep(__backend, _root_.scala.Nil"))
+    // the overridden root command is the implicit body: empty command path
+    assert(content.contains("WireToolClientRuntime.run(__wireTransport, _root_.scala.Nil, __input"))
   }
 }

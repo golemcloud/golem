@@ -222,10 +222,10 @@ count : Int,
             raise @async-core.EndpointBusy::Read
       }
       // `Stream.read` promises at most `count`; bound one canonical allocation.
-      let read_count = if count < 64 {
+      let read_count = if count < 65536 {
             count
       } else {
-            64
+            65536
       }
       let ptr = wasmWasiHttpTypes030StaticRequestNewStream0Malloc(read_count)
       let mut owns_buffer = false
@@ -382,10 +382,10 @@ fn wasmWasiHttpTypes030StaticRequestNewStream0StreamCommit(handle : Int) -> Unit
                   if writer_closed.val || data.length() == 0 {
                         return 0
                   }
-                  let data_len = if data.length() < 64 {
+                  let data_len = if data.length() < 65536 {
                         data.length()
                   } else {
-                        64
+                        65536
                   }
                   let ptr = wasmWasiHttpTypes030StaticRequestNewStream0Malloc(data_len)
                   for i in 0..<data_len {
@@ -441,6 +441,7 @@ fn wasmWasiHttpTypes030StaticRequestNewStream0StreamCommit(handle : Int) -> Unit
             () => close_writer_serialized(),
             () => !writer_closed.val,
             Some(cleanup_value),
+            write_window_size=65536,
             )
             let relay_source = producer is None
             let run_producer = async fn() -> Unit {
@@ -451,7 +452,7 @@ fn wasmWasiHttpTypes030StaticRequestNewStream0StreamCommit(handle : Int) -> Unit
                         }
                         None =>
                         for ;; {
-                              match stream.read(64) {
+                              match stream.read(65536) {
                                     Some(data) =>
                                     if !sink.write_all(data[:]) {
                                           stream.reject(cleanup_value)
@@ -4663,10 +4664,10 @@ count : Int,
             raise @async-core.EndpointBusy::Read
       }
       // `Stream.read` promises at most `count`; bound one canonical allocation.
-      let read_count = if count < 64 {
+      let read_count = if count < 65536 {
             count
       } else {
-            64
+            65536
       }
       let ptr = wasmWasiHttpTypes030StaticRequestConsumeBodyStream1Malloc(read_count)
       let mut owns_buffer = false
@@ -5728,10 +5729,10 @@ count : Int,
             raise @async-core.EndpointBusy::Read
       }
       // `Stream.read` promises at most `count`; bound one canonical allocation.
-      let read_count = if count < 64 {
+      let read_count = if count < 65536 {
             count
       } else {
-            64
+            65536
       }
       let ptr = wasmWasiHttpTypes030StaticResponseNewStream0Malloc(read_count)
       let mut owns_buffer = false
@@ -5888,10 +5889,10 @@ fn wasmWasiHttpTypes030StaticResponseNewStream0StreamCommit(handle : Int) -> Uni
                   if writer_closed.val || data.length() == 0 {
                         return 0
                   }
-                  let data_len = if data.length() < 64 {
+                  let data_len = if data.length() < 65536 {
                         data.length()
                   } else {
-                        64
+                        65536
                   }
                   let ptr = wasmWasiHttpTypes030StaticResponseNewStream0Malloc(data_len)
                   for i in 0..<data_len {
@@ -5947,6 +5948,7 @@ fn wasmWasiHttpTypes030StaticResponseNewStream0StreamCommit(handle : Int) -> Uni
             () => close_writer_serialized(),
             () => !writer_closed.val,
             Some(cleanup_value),
+            write_window_size=65536,
             )
             let relay_source = producer is None
             let run_producer = async fn() -> Unit {
@@ -5957,7 +5959,7 @@ fn wasmWasiHttpTypes030StaticResponseNewStream0StreamCommit(handle : Int) -> Uni
                         }
                         None =>
                         for ;; {
-                              match stream.read(64) {
+                              match stream.read(65536) {
                                     Some(data) =>
                                     if !sink.write_all(data[:]) {
                                           stream.reject(cleanup_value)
@@ -10148,10 +10150,10 @@ count : Int,
             raise @async-core.EndpointBusy::Read
       }
       // `Stream.read` promises at most `count`; bound one canonical allocation.
-      let read_count = if count < 64 {
+      let read_count = if count < 65536 {
             count
       } else {
-            64
+            65536
       }
       let ptr = wasmWasiHttpTypes030StaticResponseConsumeBodyStream1Malloc(read_count)
       let mut owns_buffer = false

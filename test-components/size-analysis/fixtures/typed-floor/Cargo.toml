@@ -1,0 +1,13 @@
+[package]
+name = "retention-typed-floor"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+tool-only = []
+
+[dependencies]
+wit-bindgen.workspace = true

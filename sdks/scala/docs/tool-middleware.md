@@ -159,6 +159,6 @@ advance the pinned middleware chain; ambient tool calls do not bypass runtime pe
 The artifact is embedded byte-for-byte in both sbt and Mill plugins. `golemPrepare` refreshes the
 `.generated/agent_guest.wasm` file by content hash.
 
-## Generated client relationship
+## Future client design
 
-The generated `<Tool>Client` and `<Tool>Underlying` remain separate nominal APIs for ambient calls and invocation-scoped middleware calls. Code generation backs both with the same internal command paths, canonical input assembly, declared-error codecs, and result codecs, so the two call surfaces encode and decode a tool definition consistently without exposing the transport abstraction to application code.
+[GOL-484](https://linear.app/golem-cloud/issue/GOL-484/redesign-scala-typed-tool-clients-around-injectable-transports-and) tracks a possible redesign of typed Scala tool clients around injectable transports and failure algebras. That could simplify how ordinary and underlying projections share implementation, but it is not required to author or run middleware with the API described here.

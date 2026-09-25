@@ -60,7 +60,12 @@ cargo make wit
 
 ## Agent Template WASM
 
-The agent template embeds the existing `packages/golem-ts-sdk/dist/index.mjs`. Rebuild the SDK bundle and then the template when `wasm-rquickjs-cli`, WIT dependencies, wrapper/toolchain inputs, or any source/dependency in the Rollup graph rooted at `packages/golem-ts-sdk/src/index.ts` changes.
+The agent template embeds `packages/golem-ts-sdk/dist/wrapper.mjs`, which forwards the single
+full world's exports to the injected application. The component Rollup plugin bundles the SDK's
+preserved `dist/runtime/` modules into each application with capability-specific static exports.
+Rebuild the SDK after source or component-plugin changes and rebuild affected applications.
+Also rebuild the template when `wasm-rquickjs-cli`, WIT dependencies, wrapper/toolchain inputs,
+or `src/wrapper.ts` changes.
 
 The Preview 3 wrapper still requires the `wasm32-wasip2` Rust target because Rust does not yet
 provide a dedicated `wasm32-wasip3` target:
@@ -76,7 +81,10 @@ npx pnpm --filter @golemcloud/golem-ts-sdk run build
 npx pnpm run build-agent-template
 ```
 
-The first command refreshes `dist/index.mjs`; the second embeds it in `agent_guest.wasm`. Running either command alone can leave runtime artifacts stale. Type-only, test-only, documentation, bridge, or REPL changes that cannot affect the bundle or WIT do not require a template rebuild.
+The first command refreshes `dist/index.mjs`, `dist/runtime/`, `dist/component.mjs`, and
+`dist/wrapper.mjs`; the second embeds the wrapper in `agent_guest.wasm`. Rebuild affected
+applications after either changes. Type-only, test-only, documentation, bridge, or REPL changes
+that cannot affect the wrapper or WIT do not require a template rebuild.
 
 **Testing local wasm-rquickjs changes:** If modifying wasm-rquickjs locally (in a separate
 checkout), install it from the local path:

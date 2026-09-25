@@ -14,8 +14,8 @@
 
 const CRLF = '\r\n';
 
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
+const textEncoder = /* @__PURE__ */ new TextEncoder();
+const textDecoder = /* @__PURE__ */ new TextDecoder();
 
 export interface MultipartPart {
   name: string;

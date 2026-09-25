@@ -2,13 +2,18 @@
 package "golemcloud/golem_sdk/schema"
 
 import {
+  "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/schema_model",
   "moonbitlang/core/debug",
 }
 
 // Values
+pub fn[T : WireSchema] append_wire_type_with(WireTypeEncoder, TypeTag[T]) -> Int
+
 pub fn check_case_index(UInt, UInt, String) -> Unit raise FromSchemaError
+
+pub fn empty_wire_metadata() -> @types.MetadataEnvelope
 
 pub fn expect_enum(@schema_model.SchemaValue, String) -> UInt raise FromSchemaError
 
@@ -22,11 +27,25 @@ pub fn expect_variant_payload(@schema_model.SchemaValue?, String) -> @schema_mod
 
 pub fn[T : FromSchema] from_value_as(@schema_model.SchemaValue) -> T raise FromSchemaError
 
+pub fn[T : FromWire] from_wire(@types.SchemaValueTree) -> T raise WireError
+
 pub fn[T : IntoSchema] into_schema_graph(TypeTag[T]) -> @schema_model.SchemaGraph raise
+
+pub fn[T : IntoWire] into_wire(T) -> @types.SchemaValueTree raise WireError
+
+pub async fn[T : IntoWire] into_wire_async(T) -> @types.SchemaValueTree
+
+pub fn into_wire_record(Array[&IntoWire]) -> @types.SchemaValueTree raise WireError
+
+pub async fn into_wire_record_async(Array[&IntoWire]) -> @types.SchemaValueTree
 
 pub fn record_field(Array[@schema_model.SchemaValue], Int, String) -> @schema_model.SchemaValue raise FromSchemaError
 
 pub fn[T : IntoSchema] register_in_with(@schema_model.SchemaBuilder, TypeTag[T]) -> @schema_model.SchemaType
+
+pub fn[T : IntoWire] release_wire(T) -> Unit
+
+pub fn release_wire_fields(Array[&IntoWire]) -> Unit
 
 pub fn[T : IntoSchema] schema_graph_of_tag(TypeTag[T]) -> @schema_model.SchemaGraph raise
 
@@ -42,12 +61,25 @@ pub fn[U : QuantityUnit] unit_allowed(TypeTag[U], String) -> Bool
 
 pub fn value_kind(@schema_model.SchemaValue) -> String
 
+pub fn wire_no_payload(Int?) -> Unit raise WireError
+
+pub fn wire_node(WireReader, Int) -> @types.SchemaValueNode raise WireError
+
+pub fn wire_payload(Int?) -> Int raise WireError
+
+pub fn wire_record(WireReader, Int, Int, String) -> Array[Int] raise WireError
+
+pub fn[T : WireSchema] wire_schema(TypeTag[T]) -> @types.SchemaGraph
+
+pub fn wire_variant(WireReader, Int, Int, String) -> @types.VariantValuePayload raise WireError
+
 // Errors
 pub suberror AgentStreamReadError {
   Ownership(String)
   Transport(String)
   WireDecode(@schema_model.SchemaModelError)
   ItemDecode(FromSchemaError)
+  DirectDecode(WireError)
 } derive(Eq, @debug.Debug)
 
 pub suberror FromSchemaError {
@@ -60,20 +92,27 @@ pub fn FromSchemaError::custom(String) -> Self
 pub fn FromSchemaError::out_of_range(UInt, UInt, String) -> Self
 pub fn FromSchemaError::shape_mismatch(String, String, String) -> Self
 
+pub(all) suberror WireError {
+  Invalid(String)
+} derive(Eq, @debug.Debug)
+
 // Types and methods
 pub(all) struct AgentStream[T] {
   // private fields
 }
 pub fn[T] AgentStream::drop(Self[T]) -> Unit
 pub fn[T] AgentStream::from_value_with_codec(@schema_model.SchemaValue, (@schema_model.SchemaValue) -> T raise FromSchemaError) -> Self[T] raise FromSchemaError
-pub fn[T : IntoSchema + FromSchema] AgentStream::new() -> (AgentStreamWriter[T], Self[T])
+pub fn[T : IntoWire + FromWire] AgentStream::new() -> (AgentStreamWriter[T], Self[T])
 pub fn[T] AgentStream::new_with_codec((T) -> @schema_model.SchemaValue raise, (@schema_model.SchemaValue) -> T raise FromSchemaError, (T) -> Unit) -> (AgentStreamWriter[T], Self[T])
-pub fn[T : IntoSchema + FromSchema] AgentStream::produce(async (AgentStreamWriter[T]) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
+pub fn[T : IntoWire + FromWire] AgentStream::produce(async (AgentStreamWriter[T]) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
 pub fn[T] AgentStream::produce_with_codec(async (AgentStreamWriter[T]) -> Unit, (T) -> @schema_model.SchemaValue raise, (@schema_model.SchemaValue) -> T raise FromSchemaError, (T) -> Unit, on_unstarted_drop? : () -> Unit) -> Self[T]
 pub async fn[T] AgentStream::read(Self[T]) -> T?
 pub fn[T] AgentStream::to_schema_value(Self[T]) -> @schema_model.SchemaValue
 pub impl[T : FromSchema] FromSchema for AgentStream[T]
+pub impl[T : FromWire] FromWire for AgentStream[T]
 pub impl[T : IntoSchema] IntoSchema for AgentStream[T]
+pub impl[T] IntoWire for AgentStream[T]
+pub impl[T : WireSchema] WireSchema for AgentStream[T]
 
 pub(all) enum AgentStreamWriteOutcome {
   Accepted
@@ -92,14 +131,20 @@ pub(all) struct Duration {
 } derive(Eq, @debug.Debug)
 pub fn Duration::new(Int64) -> Self
 pub impl FromSchema for Duration
+pub impl FromWire for Duration
 pub impl IntoSchema for Duration
+pub impl IntoWire for Duration
+pub impl WireSchema for Duration
 
 pub(all) struct Path {
   value : String
 } derive(Eq, @debug.Debug)
 pub fn Path::new(String) -> Self
 pub impl FromSchema for Path
+pub impl FromWire for Path
 pub impl IntoSchema for Path
+pub impl IntoWire for Path
+pub impl WireSchema for Path
 
 pub struct Quantity[U] {
   mantissa : Int64
@@ -109,7 +154,10 @@ pub struct Quantity[U] {
 pub fn[U : QuantityUnit] Quantity::new(Int64, Int, String) -> Self[U] raise FromSchemaError
 pub fn[U] Quantity::value(Self[U]) -> @types.QuantityValue
 pub impl[U : QuantityUnit] FromSchema for Quantity[U]
+pub impl[U : QuantityUnit] FromWire for Quantity[U]
 pub impl[U : QuantityUnit] IntoSchema for Quantity[U]
+pub impl[U] IntoWire for Quantity[U]
+pub impl[U : QuantityUnit] WireSchema for Quantity[U]
 
 pub(all) struct TypeTag[T] {
 }
@@ -119,7 +167,44 @@ pub(all) struct Url {
 } derive(Eq, @debug.Debug)
 pub fn Url::new(String) -> Self
 pub impl FromSchema for Url
+pub impl FromWire for Url
 pub impl IntoSchema for Url
+pub impl IntoWire for Url
+pub impl WireSchema for Url
+
+pub(all) struct WireEncoder {
+  nodes : Array[@types.SchemaValueNode]
+  // private fields
+}
+pub fn WireEncoder::new() -> Self
+pub fn WireEncoder::push(Self, @types.SchemaValueNode) -> Int
+
+pub struct WireReader {
+  tree : @types.SchemaValueTree
+  visited : Array[Bool]
+  resources : Array[@types.SchemaValueNode]
+  rollback : Array[() -> Unit]
+  drop_resource : (@types.SchemaValueNode) -> Unit
+  mut settled : Bool
+}
+pub fn WireReader::abort(Self) -> Unit
+pub fn WireReader::finish(Self) -> Unit raise WireError
+pub fn WireReader::new(@types.SchemaValueTree, drop_resource? : (@types.SchemaValueNode) -> Unit) -> Self
+
+pub struct WireReleaser {
+  resources : Array[@types.SchemaValueNode]
+  native_streams : Array[@async-core.Stream[@types.SchemaValueTree]]
+}
+
+pub(all) struct WireTypeEncoder {
+  nodes : Array[@types.SchemaTypeNode]
+  defs : Array[@types.SchemaTypeDef]
+  ids : Map[String, Int]
+  active : Map[String, Unit]
+}
+pub fn WireTypeEncoder::named(Self, String, () -> Int) -> Int
+pub fn WireTypeEncoder::new() -> Self
+pub fn WireTypeEncoder::push(Self, @types.SchemaTypeBody) -> Int
 
 // Type aliases
 
@@ -153,6 +238,39 @@ pub impl[T0 : FromSchema, T1 : FromSchema, T2 : FromSchema, T3 : FromSchema, T4 
 pub impl[T0 : FromSchema, T1 : FromSchema, T2 : FromSchema, T3 : FromSchema, T4 : FromSchema, T5 : FromSchema, T6 : FromSchema] FromSchema for (T0, T1, T2, T3, T4, T5, T6)
 pub impl[T0 : FromSchema, T1 : FromSchema, T2 : FromSchema, T3 : FromSchema, T4 : FromSchema, T5 : FromSchema, T6 : FromSchema, T7 : FromSchema] FromSchema for (T0, T1, T2, T3, T4, T5, T6, T7)
 
+pub(open) trait FromWire {
+  fn read_wire(WireReader, Int) -> Self raise WireError
+  fn read_result_payload(WireReader, Int?) -> Self raise WireError = _
+}
+pub impl FromWire for Unit
+pub impl FromWire for Bool
+pub impl FromWire for Byte
+pub impl FromWire for Char
+pub impl FromWire for Int
+pub impl FromWire for Int64
+pub impl FromWire for UInt
+pub impl FromWire for UInt64
+pub impl FromWire for Float
+pub impl FromWire for Double
+pub impl FromWire for String
+pub impl[T : FromWire] FromWire for T?
+pub impl[T : FromWire, E : FromWire] FromWire for Result[T, E]
+pub impl FromWire for Bytes
+pub impl FromWire for @types.Datetime
+pub impl FromWire for @schema_model.GuestPermissionCardHandle
+pub impl FromWire for @schema_model.GuestQuotaTokenHandle
+pub impl FromWire for @schema_model.GuestSchemaValueStreamHandle
+pub impl FromWire for @schema_model.GuestSecretHandle
+pub impl[T : FromWire] FromWire for Array[T]
+pub impl[K : FromWire + Hash + Eq, V : FromWire] FromWire for Map[K, V]
+pub impl[A : FromWire, B : FromWire] FromWire for (A, B)
+pub impl[A : FromWire, B : FromWire, C : FromWire] FromWire for (A, B, C)
+pub impl[A : FromWire, B : FromWire, C : FromWire, D : FromWire] FromWire for (A, B, C, D)
+pub impl[A : FromWire, B : FromWire, C : FromWire, D : FromWire, E : FromWire] FromWire for (A, B, C, D, E)
+pub impl[A : FromWire, B : FromWire, C : FromWire, D : FromWire, E : FromWire, F : FromWire] FromWire for (A, B, C, D, E, F)
+pub impl[A : FromWire, B : FromWire, C : FromWire, D : FromWire, E : FromWire, F : FromWire, G : FromWire] FromWire for (A, B, C, D, E, F, G)
+pub impl[A : FromWire, B : FromWire, C : FromWire, D : FromWire, E : FromWire, F : FromWire, G : FromWire, H : FromWire] FromWire for (A, B, C, D, E, F, G, H)
+
 pub(open) trait IntoSchema {
   fn type_id() -> String
   fn register_in(@schema_model.SchemaBuilder) -> @schema_model.SchemaType
@@ -184,8 +302,71 @@ pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema, T4 
 pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema, T4 : IntoSchema, T5 : IntoSchema, T6 : IntoSchema] IntoSchema for (T0, T1, T2, T3, T4, T5, T6)
 pub impl[T0 : IntoSchema, T1 : IntoSchema, T2 : IntoSchema, T3 : IntoSchema, T4 : IntoSchema, T5 : IntoSchema, T6 : IntoSchema, T7 : IntoSchema] IntoSchema for (T0, T1, T2, T3, T4, T5, T6, T7)
 
+pub(open) trait IntoWire {
+  fn append_wire(Self, WireEncoder) -> Int raise WireError
+  fn append_result_payload(Self, WireEncoder) -> Int? raise WireError = _
+  fn release_wire(Self, WireReleaser) -> Unit = _
+}
+pub impl IntoWire for Unit
+pub impl IntoWire for Bool
+pub impl IntoWire for Byte
+pub impl IntoWire for Char
+pub impl IntoWire for Int
+pub impl IntoWire for Int64
+pub impl IntoWire for UInt
+pub impl IntoWire for UInt64
+pub impl IntoWire for Float
+pub impl IntoWire for Double
+pub impl IntoWire for String
+pub impl[T : IntoWire] IntoWire for T?
+pub impl[T : IntoWire, E : IntoWire] IntoWire for Result[T, E]
+pub impl IntoWire for Bytes
+pub impl IntoWire for @types.Datetime
+pub impl IntoWire for @schema_model.GuestPermissionCardHandle
+pub impl IntoWire for @schema_model.GuestQuotaTokenHandle
+pub impl IntoWire for @schema_model.GuestSchemaValueStreamHandle
+pub impl IntoWire for @schema_model.GuestSecretHandle
+pub impl[T : IntoWire] IntoWire for Array[T]
+pub impl[K : IntoWire, V : IntoWire] IntoWire for Map[K, V]
+pub impl[A : IntoWire, B : IntoWire] IntoWire for (A, B)
+pub impl[A : IntoWire, B : IntoWire, C : IntoWire] IntoWire for (A, B, C)
+pub impl[A : IntoWire, B : IntoWire, C : IntoWire, D : IntoWire] IntoWire for (A, B, C, D)
+pub impl[A : IntoWire, B : IntoWire, C : IntoWire, D : IntoWire, E : IntoWire] IntoWire for (A, B, C, D, E)
+pub impl[A : IntoWire, B : IntoWire, C : IntoWire, D : IntoWire, E : IntoWire, F : IntoWire] IntoWire for (A, B, C, D, E, F)
+pub impl[A : IntoWire, B : IntoWire, C : IntoWire, D : IntoWire, E : IntoWire, F : IntoWire, G : IntoWire] IntoWire for (A, B, C, D, E, F, G)
+pub impl[A : IntoWire, B : IntoWire, C : IntoWire, D : IntoWire, E : IntoWire, F : IntoWire, G : IntoWire, H : IntoWire] IntoWire for (A, B, C, D, E, F, G, H)
+
 pub(open) trait QuantityUnit {
   fn type_id() -> String
   fn base_unit() -> String
   fn allowed_suffixes() -> Array[String]
 }
+
+pub(open) trait WireSchema {
+  fn append_wire_type(WireTypeEncoder) -> Int
+  fn append_result_type(WireTypeEncoder) -> Int? = _
+}
+pub impl WireSchema for Unit
+pub impl WireSchema for Bool
+pub impl WireSchema for Byte
+pub impl WireSchema for Char
+pub impl WireSchema for Int
+pub impl WireSchema for Int64
+pub impl WireSchema for UInt
+pub impl WireSchema for UInt64
+pub impl WireSchema for Float
+pub impl WireSchema for Double
+pub impl WireSchema for String
+pub impl[T : WireSchema] WireSchema for T?
+pub impl[T : WireSchema, E : WireSchema] WireSchema for Result[T, E]
+pub impl WireSchema for Bytes
+pub impl WireSchema for @types.Datetime
+pub impl[T : WireSchema] WireSchema for Array[T]
+pub impl[K : WireSchema, V : WireSchema] WireSchema for Map[K, V]
+pub impl[A : WireSchema, B : WireSchema] WireSchema for (A, B)
+pub impl[A : WireSchema, B : WireSchema, C : WireSchema] WireSchema for (A, B, C)
+pub impl[A : WireSchema, B : WireSchema, C : WireSchema, D : WireSchema] WireSchema for (A, B, C, D)
+pub impl[A : WireSchema, B : WireSchema, C : WireSchema, D : WireSchema, E : WireSchema] WireSchema for (A, B, C, D, E)
+pub impl[A : WireSchema, B : WireSchema, C : WireSchema, D : WireSchema, E : WireSchema, F : WireSchema] WireSchema for (A, B, C, D, E, F)
+pub impl[A : WireSchema, B : WireSchema, C : WireSchema, D : WireSchema, E : WireSchema, F : WireSchema, G : WireSchema] WireSchema for (A, B, C, D, E, F, G)
+pub impl[A : WireSchema, B : WireSchema, C : WireSchema, D : WireSchema, E : WireSchema, F : WireSchema, G : WireSchema, H : WireSchema] WireSchema for (A, B, C, D, E, F, G, H)

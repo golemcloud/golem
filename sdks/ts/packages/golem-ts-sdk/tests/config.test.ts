@@ -159,8 +159,9 @@ describe('agent config (single-record + s.secret marker)', () => {
   });
 
   it('Secret.toJSON throws so secrets never leak through serialization', () => {
-    const [secretDecl] = compileConfig({ apiKey: s.secret(z.string()) });
-    const handle = new Secret(secretDecl);
+    const handle = new Secret(() => {
+      throw new Error('serialization must not read the secret');
+    });
     expect(() => JSON.stringify(handle)).toThrow(/not serializable/);
     expect(() => handle.toJSON()).toThrow(/not serializable/);
   });

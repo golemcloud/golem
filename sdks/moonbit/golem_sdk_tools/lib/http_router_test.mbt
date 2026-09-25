@@ -384,7 +384,7 @@ test "shared tooling corpus keeps router provisioning and excludes clients" {
       let output = @formatter.impls_to_string(
         @lib.generate_agent_registration(agents),
       )
-      assert_true(output.contains("input: []"))
+      assert_true(output.contains("input_schema: @common.InputSchema::Parameters([])"))
       if consumer == "config-secrets-dependencies" {
         assert_true(output.contains("@config.load_config"))
       }

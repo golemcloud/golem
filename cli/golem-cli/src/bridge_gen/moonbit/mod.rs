@@ -663,7 +663,13 @@ impl MoonBitBridgeGenerator {
             if !is_named_composite(resolved) {
                 continue;
             }
-            self.write_encode_fn(writer, &name.name, resolved)?;
+            self.write_encode_fn(writer, &name.name, resolved, true, false)?;
+            if self.mode == MoonBitBridgeMode::GuestWasmRpc {
+                writer.blank();
+                self.write_encode_fn(writer, &name.name, resolved, false, true)?;
+                writer.blank();
+                self.write_encode_fn(writer, &name.name, resolved, false, false)?;
+            }
             writer.blank();
             self.write_decode_fn(writer, &name.name, resolved)?;
             writer.blank();
@@ -852,9 +858,16 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         writer: &mut MoonBitWriter,
         name: &str,
         resolved: &SchemaType,
+        cleanup: bool,
+        preflight: bool,
     ) -> anyhow::Result<()> {
         if self.mode == MoonBitBridgeMode::GuestWasmRpc {
-            writer.line("#warnings(\"-unused_error_type-unused_errdefer\")");
+            let warnings = if cleanup {
+                "-unused_error_type-unused_errdefer"
+            } else {
+                "-unused_error_type-unused_errdefer-unused_value"
+            };
+            writer.line(format!("#warnings(\"{warnings}\")"));
         }
         let context = if self.mode == MoonBitBridgeMode::ExternalRest
             && contains_stream_in_graph(self.type_naming.graph(), resolved)
@@ -868,11 +881,20 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         } else {
             " raise"
         };
+        let function = if cleanup {
+            format!("encode_{name}")
+        } else if preflight {
+            format!("stream_preflight_{name}")
+        } else {
+            format!("stream_encode_{name}")
+        };
+        let visibility = if cleanup { "pub " } else { "" };
         writer.line(format!(
-            "pub fn encode_{name}({context}value : {name}) -> @runtime.SchemaValue{raise_clause} {{"
+            "{visibility}fn {function}({context}value : {name}) -> @runtime.SchemaValue{raise_clause} {{"
         ));
         writer.indent();
-        if self.mode == MoonBitBridgeMode::GuestWasmRpc
+        if cleanup
+            && self.mode == MoonBitBridgeMode::GuestWasmRpc
             && contains_stream_in_graph(&self.agent_type.schema, resolved)
         {
             writer.line(format!("errdefer release_{name}(value)"));
@@ -885,10 +907,12 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 } else {
                     let mut elems = Vec::new();
                     for (idx, field) in fields.iter().enumerate() {
-                        let enc = self.encode_expr(
+                        let enc = self.encode_expr_mode(
                             &format!("value.{}", field_names[idx]),
                             &field.body,
                             0,
+                            cleanup,
+                            preflight,
                         )?;
                         writer.line(format!("let f{idx} = {enc}"));
                         elems.push(format!("f{idx}"));
@@ -904,7 +928,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     let case_name = &case_names[idx];
                     match &case.payload {
                         Some(payload) => {
-                            let enc = self.encode_expr("inner", payload, 0)?;
+                            let enc =
+                                self.encode_expr_mode("inner", payload, 0, cleanup, preflight)?;
                             writer.line(format!("{name}::{case_name}(inner) => {{"));
                             writer.indent();
                             writer.line(format!("let vp = {enc}"));
@@ -949,7 +974,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 for (idx, branch) in spec.branches.iter().enumerate() {
                     let branch_name = &branch_names[idx];
                     let tag = moonbit_string_literal(branch.tag.as_str());
-                    let enc = self.encode_expr("inner", &branch.body, 0)?;
+                    let enc =
+                        self.encode_expr_mode("inner", &branch.body, 0, cleanup, preflight)?;
                     writer.line(format!("{name}::{branch_name}(inner) => {{"));
                     writer.indent();
                     writer.line(format!("let ub = {enc}"));
@@ -2488,11 +2514,22 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
     // --- Codec dispatchers --------------------------------------------------
 
     fn encode_expr(&self, val: &str, typ: &SchemaType, depth: usize) -> anyhow::Result<String> {
+        self.encode_expr_mode(val, typ, depth, true, false)
+    }
+
+    fn encode_expr_mode(
+        &self,
+        val: &str,
+        typ: &SchemaType,
+        depth: usize,
+        cleanup: bool,
+        preflight: bool,
+    ) -> anyhow::Result<String> {
         if self.mode == MoonBitBridgeMode::GuestWasmRpc
             && (unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some()
                 || unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some())
         {
-            return self.encode_structural(val, typ, depth);
+            return self.encode_structural(val, typ, depth, cleanup, preflight);
         }
         if let Some(name) = self.type_naming.type_name_for_type(typ)
             && is_named_composite(self.resolve_ref(typ))
@@ -2504,9 +2541,16 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             } else {
                 ""
             };
-            return Ok(format!("encode_{}({context}{val})", name.name));
+            let function = if cleanup {
+                format!("encode_{}", name.name)
+            } else if preflight {
+                format!("stream_preflight_{}", name.name)
+            } else {
+                format!("stream_encode_{}", name.name)
+            };
+            return Ok(format!("{function}({context}{val})"));
         }
-        self.encode_structural(val, typ, depth)
+        self.encode_structural(val, typ, depth, cleanup, preflight)
     }
 
     fn decode_expr(&self, val: &str, typ: &SchemaType, depth: usize) -> anyhow::Result<String> {
@@ -2529,6 +2573,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         val: &str,
         typ: &SchemaType,
         depth: usize,
+        cleanup: bool,
+        preflight: bool,
     ) -> anyhow::Result<String> {
         if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
             if self.mode == MoonBitBridgeMode::GuestWasmRpc {
@@ -2551,6 +2597,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         }
 
         let resolved = self.resolve_ref(typ);
+        if preflight
+            && self.mode == MoonBitBridgeMode::GuestWasmRpc
+            && matches!(
+                resolved,
+                SchemaType::Stream { .. }
+                    | SchemaType::Secret { .. }
+                    | SchemaType::QuotaToken { .. }
+                    | SchemaType::PermissionCard { .. }
+            )
+        {
+            return Ok("@runtime.SchemaValue::String(\"\")".to_string());
+        }
         let e = format!("e{depth}");
         let next = depth + 1;
         let rendered = match resolved {
@@ -2589,17 +2647,17 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
             },
             SchemaType::String { .. } => format!("@runtime.StringValue({val})"),
             SchemaType::Option { inner, .. } => {
-                let inner_enc = self.encode_expr(&e, inner, next)?;
+                let inner_enc = self.encode_expr_mode(&e, inner, next, cleanup, preflight)?;
                 format!("@runtime.OptionValue({val}.map(({e}) => {inner_enc}))")
             }
             SchemaType::List { element, .. } => {
-                let inner_enc = self.encode_expr(&e, element, next)?;
+                let inner_enc = self.encode_expr_mode(&e, element, next, cleanup, preflight)?;
                 format!("@runtime.ListValue({val}.map(({e}) => {inner_enc}))")
             }
             SchemaType::FixedList {
                 element, length, ..
             } => {
-                let inner_enc = self.encode_expr(&e, element, next)?;
+                let inner_enc = self.encode_expr_mode(&e, element, next, cleanup, preflight)?;
                 match self.mode {
                     MoonBitBridgeMode::ExternalRest => {
                         format!("@runtime.FixedListValue({val}.map(({e}) => {inner_enc}))")
@@ -2613,20 +2671,22 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 let entries = format!("entries{depth}");
                 let k = format!("k{depth}");
                 let v = format!("v{depth}");
-                let key_enc = self.encode_expr(&k, key, next)?;
-                let val_enc = self.encode_expr(&v, value, next)?;
+                let key_enc = self.encode_expr_mode(&k, key, next, cleanup, preflight)?;
+                let val_enc = self.encode_expr_mode(&v, value, next, cleanup, preflight)?;
                 format!(
                     "{{\n  let {entries} : Array[@runtime.SchemaMapEntry] = []\n  {val}.each(({k}, {v}) => {entries}.push(@runtime.SchemaMapEntry::{{ key: {key_enc}, value: {val_enc} }}))\n  @runtime.MapValue({entries})\n}}"
                 )
             }
-            SchemaType::Tuple { elements, .. } => self.encode_tuple(val, elements, depth)?,
+            SchemaType::Tuple { elements, .. } => {
+                self.encode_tuple(val, elements, depth, cleanup, preflight)?
+            }
             SchemaType::Result { spec, .. } => {
                 let r = format!("r{depth}");
                 let l = format!("l{depth}");
                 let p = format!("p{depth}");
                 let ok_arm = match spec.ok.as_deref() {
                     Some(ok_type) => {
-                        let enc = self.encode_expr(&r, ok_type, next)?;
+                        let enc = self.encode_expr_mode(&r, ok_type, next, cleanup, preflight)?;
                         match self.mode {
                             MoonBitBridgeMode::ExternalRest => format!(
                                 "Ok({r}) => {{ let {p} = {enc}; @runtime.ResultValue(@runtime.ResultOk(Some({p}))) }}"
@@ -2647,7 +2707,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 };
                 let err_arm = match spec.err.as_deref() {
                     Some(err_type) => {
-                        let enc = self.encode_expr(&l, err_type, next)?;
+                        let enc = self.encode_expr_mode(&l, err_type, next, cleanup, preflight)?;
                         match self.mode {
                             MoonBitBridgeMode::ExternalRest => format!(
                                 "Err({l}) => {{ let {p} = {enc}; @runtime.ResultValue(@runtime.ResultErr(Some({p}))) }}"
@@ -2687,7 +2747,7 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                 let inner = inner
                     .as_deref()
                     .context("MoonBit external streams require an element schema")?;
-                let encoded = self.encode_expr(&e, inner, next)?;
+                let encoded = self.encode_expr_mode(&e, inner, next, cleanup, preflight)?;
                 let wire_kind = match self.resolve_ref(inner) {
                     SchemaType::U8 { .. } => "u8",
                     SchemaType::Binary { .. } => "binary",
@@ -2928,13 +2988,15 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         val: &str,
         elements: &[SchemaType],
         depth: usize,
+        cleanup: bool,
+        preflight: bool,
     ) -> anyhow::Result<String> {
         if elements.is_empty() {
             return Ok("@runtime.TupleValue([])".to_string());
         }
         let next = depth + 1;
         if elements.len() == 1 {
-            let enc = self.encode_expr(val, &elements[0], next)?;
+            let enc = self.encode_expr_mode(val, &elements[0], next, cleanup, preflight)?;
             return Ok(format!(
                 "{{\n  let te{depth}_0 = {enc}\n  @runtime.TupleValue([te{depth}_0])\n}}"
             ));
@@ -2943,7 +3005,8 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         let mut lines = vec![format!("  let {t} = {val}")];
         let mut names = Vec::new();
         for (idx, element) in elements.iter().enumerate() {
-            let enc = self.encode_expr(&format!("{t}.{idx}"), element, next)?;
+            let enc =
+                self.encode_expr_mode(&format!("{t}.{idx}"), element, next, cleanup, preflight)?;
             lines.push(format!("  let te{depth}_{idx} = {enc}"));
             names.push(format!("te{depth}_{idx}"));
         }

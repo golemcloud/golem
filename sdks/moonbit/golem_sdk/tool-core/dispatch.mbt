@@ -516,6 +516,27 @@ pub fn invocation_result_empty() -> @toolCommon.InvocationResult {
 }
 
 ///|
+/// Encodes generated concrete results and error payloads without a model value.
+pub async fn[T : @schema.WireSchema + @schema.IntoWire] encode_wire_result(
+  value : T,
+) -> @types.TypedSchemaValue {
+  errdefer @schema.release_wire(value)
+  let graph = @schema.wire_schema((@schema.type_tag() : @schema.TypeTag[T]))
+  let value = @schema.into_wire_async(value) catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    error => raise @types.ToolError::InvalidResult(repr(error))
+  }
+  { graph, value, }
+}
+
+///|
+pub async fn[T : @schema.WireSchema + @schema.IntoWire] invocation_result_wire(
+  value : T,
+) -> @toolCommon.InvocationResult {
+  { result: Some(encode_wire_result(value)), stdout: None, }
+}
+
+///|
 pub async fn[T : @schema.IntoSchema] invocation_result_value(
   value : T,
 ) -> @toolCommon.InvocationResult {

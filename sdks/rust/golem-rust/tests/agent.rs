@@ -30,7 +30,8 @@ mod tests {
     };
     use golem_rust::schema::VariantValuePayload;
     use golem_rust::{
-        AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, IntoSchema, MultimodalSchema,
+        AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, FromWire, IntoSchema,
+        IntoWire, MultimodalSchema, WireSchema,
     };
     use golem_rust::{ScheduledTime, SchemaType, SchemaValue, http_router};
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent};
@@ -47,7 +48,216 @@ mod tests {
         T::from_schema_value(value, T::get_type()).unwrap()
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    fn wire_input(fields: Vec<SchemaValue>) -> golem_rust::schema::wit::wire::SchemaValueTree {
+        golem_rust::encode_schema_value(&SchemaValue::Record { fields }).unwrap()
+    }
+
+    #[derive(FromWire, IntoWire, WireSchema)]
+    #[schema(transparent)]
+    struct WireOnlyValue(u32);
+
+    impl IntoSchema for WireOnlyValue {
+        fn type_id() -> golem_rust::schema::TypeId {
+            <u32 as IntoSchema>::type_id()
+        }
+
+        fn register_in(_: &mut golem_rust::schema::SchemaBuilder) -> SchemaType {
+            panic!("generated descriptors must not build the schema model")
+        }
+
+        fn to_value(&self) -> SchemaValue {
+            panic!("generated invocation must not encode through the model")
+        }
+    }
+
+    impl FromSchema for WireOnlyValue {
+        fn from_value(_: &SchemaValue) -> Result<Self, golem_rust::schema::FromSchemaError> {
+            panic!("generated invocation must not decode through the model")
+        }
+    }
+
+    type CallerPrincipal = Principal;
+
+    #[agent_definition]
+    trait DirectDispatch {
+        fn new(seed: WireOnlyValue, caller: CallerPrincipal) -> Self;
+        fn run(
+            &mut self,
+            caller: CallerPrincipal,
+            first: WireOnlyValue,
+            second: Vec<Option<Result<u32, String>>>,
+        ) -> WireOnlyValue;
+    }
+
+    struct DirectDispatchImpl {
+        calls: usize,
+    }
+
+    #[agent_implementation]
+    impl DirectDispatch for DirectDispatchImpl {
+        fn new(seed: WireOnlyValue, caller: CallerPrincipal) -> Self {
+            assert!(matches!(caller, Principal::Anonymous));
+            Self {
+                calls: seed.0 as usize,
+            }
+        }
+
+        fn run(
+            &mut self,
+            caller: CallerPrincipal,
+            first: WireOnlyValue,
+            second: Vec<Option<Result<u32, String>>>,
+        ) -> WireOnlyValue {
+            assert!(matches!(caller, Principal::Anonymous));
+            self.calls += 1;
+            WireOnlyValue(
+                first.0
+                    + second
+                        .into_iter()
+                        .flatten()
+                        .map(|value| value.unwrap_or_else(|s| s.len() as u32))
+                        .sum::<u32>(),
+            )
+        }
+    }
+
+    #[test]
+    fn generated_agent_descriptor_uses_wire_schema_and_preserves_principal_alias() {
+        use golem_rust::golem_agentic::golem::agent::common::{FieldSource, InputSchema};
+        use golem_rust::schema::wit::wire::SchemaTypeBody;
+        let descriptor = golem_rust::agentic::get_agent_type_by_name(&AgentTypeName(
+            "DirectDispatch".to_string(),
+        ))
+        .unwrap();
+        let InputSchema::Parameters(fields) = &descriptor.constructor.input_schema;
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["seed", "caller"]
+        );
+        assert!(matches!(
+            descriptor.schema.type_nodes[fields[0].schema as usize].body,
+            SchemaTypeBody::U32Type(None)
+        ));
+        assert!(matches!(fields[1].source, FieldSource::AutoInjected(_)));
+        let reflected = golem_rust::agentic::get_enriched_agent_type_by_name(&AgentTypeName(
+            "DirectDispatch".to_string(),
+        ))
+        .unwrap();
+        assert!(
+            reflected
+                .principal_params_in_constructor()
+                .contains("caller")
+        );
+    }
+
+    #[test]
+    async fn generated_agent_dispatch_uses_direct_codecs_and_rejects_invalid_structure_before_calling()
+     {
+        use golem_rust::schema::wit::{direct, wire};
+        #[derive(IntoWire)]
+        struct Arguments {
+            first: u32,
+            second: Vec<Option<Result<u32, String>>>,
+        }
+        let input = || {
+            direct::encode(&Arguments {
+                first: 7,
+                second: vec![Some(Err("fail".into())), None, Some(Ok(23))],
+            })
+            .unwrap()
+        };
+        let mut agent = DirectDispatchImpl::new(WireOnlyValue(0), Principal::Anonymous);
+        let output = agent
+            .invoke("run".to_string(), input(), Principal::Anonymous)
+            .await
+            .unwrap();
+        assert_eq!(direct::decode::<u32>(output.value.unwrap()).unwrap(), 34);
+        for mode in 0..4 {
+            let mut bad = input();
+            let wire::SchemaValueNode::RecordValue(fields) =
+                &mut bad.value_nodes[bad.root as usize]
+            else {
+                panic!("record input")
+            };
+            match mode {
+                0 => {
+                    fields.pop();
+                }
+                1 => {
+                    fields.push(fields[0]);
+                }
+                2 => {
+                    fields[1] = fields[0];
+                }
+                _ => {
+                    fields[0] = -1;
+                }
+            }
+            assert!(
+                agent
+                    .invoke("run".to_string(), bad, Principal::Anonymous)
+                    .await
+                    .is_err()
+            );
+        }
+        assert_eq!(agent.calls, 1);
+    }
+
+    #[test]
+    async fn generated_agent_constructor_uses_direct_codecs_and_checks_record_structure() {
+        use golem_rust::agentic::with_agent_initiator;
+        use golem_rust::schema::wit::{direct, wire};
+        #[derive(IntoWire)]
+        struct Arguments {
+            seed: u32,
+        }
+        DirectDispatchImpl::__register_agent_type();
+        let name = AgentTypeName("DirectDispatch".into());
+        let input = || direct::encode(&Arguments { seed: 19 }).unwrap();
+        assert!(
+            with_agent_initiator(
+                |initiator| async move { initiator.initiate(input(), Principal::Anonymous).await },
+                &name
+            )
+            .await
+            .is_ok()
+        );
+        for mode in 0..4 {
+            let mut bad = input();
+            let wire::SchemaValueNode::RecordValue(fields) =
+                &mut bad.value_nodes[bad.root as usize]
+            else {
+                panic!("record input")
+            };
+            match mode {
+                0 => {
+                    fields.clear();
+                }
+                1 => {
+                    fields.push(fields[0]);
+                }
+                2 => {
+                    fields[0] = -1;
+                }
+                _ => {
+                    bad.value_nodes[bad.root as usize] = wire::SchemaValueNode::BoolValue(false);
+                }
+            }
+            assert!(
+                with_agent_initiator(
+                    |initiator| async move { initiator.initiate(bad, Principal::Anonymous).await },
+                    &name
+                )
+                .await
+                .is_err()
+            );
+        }
+    }
+
+    #[derive(Clone, Debug, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     struct Config {
         model: String,
     }
@@ -242,6 +452,91 @@ mod tests {
         PlainText,
         #[mime_type("image/png")]
         PngImage,
+    }
+
+    #[test]
+    fn direct_unstructured_codecs_preserve_roles_restrictions_and_values() {
+        use golem_rust::schema::wit::{decode_graph, direct};
+
+        fn check<
+            T: Schema + Clone + golem_rust::FromWire + golem_rust::IntoWire + golem_rust::WireSchema,
+        >(
+            value: T,
+        ) {
+            let expected_schema = T::get_type().get_schema_graph().unwrap();
+            assert_eq!(
+                decode_graph(&direct::schema::<T>()).unwrap(),
+                expected_schema
+            );
+            let expected = value.clone().to_schema_value().unwrap();
+            let decoded = direct::decode::<T>(direct::encode(&value).unwrap()).unwrap();
+            assert_eq!(decoded.to_schema_value().unwrap(), expected);
+        }
+
+        check(UnstructuredText::from_inline("Grüße", MyLang::German));
+        check(UnstructuredText::from_inline_any("unrestricted"));
+        check(UnstructuredText::<MyLang>::Url(
+            "https://example.com/text".to_string(),
+        ));
+        check(UnstructuredBinary::from_inline(
+            vec![0, 255, 19],
+            MyMimeType::PngImage,
+        ));
+        check(UnstructuredBinary::<MyMimeType>::from_url(
+            "https://example.com/image",
+        ));
+        check(UnstructuredBinary::from_inline(
+            vec![3, 7],
+            "application/test".to_string(),
+        ));
+    }
+
+    #[test]
+    fn direct_unstructured_codecs_reject_wrong_payloads_and_restrictions() {
+        use golem_rust::schema::wit::{direct, wire};
+
+        let text =
+            UnstructuredText::from_inline("bonjour", golem_rust::agentic::AnyLanguage::new("fr"));
+        assert!(
+            direct::decode::<UnstructuredText<MyLang>>(direct::encode(&text).unwrap()).is_err()
+        );
+        let binary = UnstructuredBinary::from_inline(vec![5], "application/json".to_string());
+        assert!(
+            direct::decode::<UnstructuredBinary<MyMimeType>>(direct::encode(&binary).unwrap())
+                .is_err()
+        );
+
+        for case in [0, 2] {
+            let tree = || wire::SchemaValueTree {
+                value_nodes: vec![
+                    wire::SchemaValueNode::UrlValue("https://example.com".to_string()),
+                    wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
+                        case,
+                        payload: Some(0),
+                    }),
+                ],
+                root: 1,
+            };
+            assert!(direct::decode::<UnstructuredText<MyLang>>(tree()).is_err());
+            assert!(direct::decode::<UnstructuredBinary<MyMimeType>>(tree()).is_err());
+        }
+        let without_mime = wire::SchemaValueTree {
+            value_nodes: vec![
+                wire::SchemaValueNode::BinaryValue(wire::BinaryValuePayload {
+                    bytes: vec![41],
+                    mime_type: None,
+                }),
+                wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
+                    case: 0,
+                    payload: Some(0),
+                }),
+            ],
+            root: 1,
+        };
+        assert!(
+            matches!(direct::decode::<UnstructuredBinary<MyMimeType>>(without_mime).unwrap(),
+            UnstructuredBinary::Inline { data, mime_type: MyMimeType::PlainText } if data == [41])
+        );
     }
 
     #[agent_implementation]
@@ -515,13 +810,15 @@ mod tests {
 
         fn rpc_call_schedule(&self, string: String) {
             let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
-            let _ = client.schedule_echo(
-                string,
-                ScheduledTime {
-                    seconds: 1,
-                    nanoseconds: 1,
-                },
-            );
+            client
+                .schedule_echo(
+                    string,
+                    ScheduledTime {
+                        seconds: 1,
+                        nanoseconds: 1,
+                    },
+                )
+                .expect("schedule accepts a stream-free input");
         }
     }
 
@@ -580,13 +877,13 @@ mod tests {
         }
     }
 
-    #[derive(IntoSchema, FromSchema, MultimodalSchema)]
+    #[derive(IntoSchema, FromSchema, MultimodalSchema, FromWire, IntoWire, WireSchema)]
     enum TextOrImage {
         Text(String),
         Image(Vec<u8>),
     }
 
-    #[derive(IntoSchema, FromSchema, Clone)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema, Clone)]
     struct UserId {
         id: String,
     }
@@ -670,9 +967,7 @@ mod tests {
         let output = agent
             .invoke(
                 "echo_multimodal_advanced".to_string(),
-                SchemaValue::Record {
-                    fields: vec![input],
-                },
+                wire_input(vec![input]),
                 Principal::Anonymous,
             )
             .await
@@ -680,7 +975,8 @@ mod tests {
             .value
             .unwrap();
 
-        let SchemaValue::List { elements } = output else {
+        let SchemaValue::List { elements } = golem_rust::schema::wit::decode_value(output).unwrap()
+        else {
             panic!("expected multimodal output schema list")
         };
         assert!(matches!(
@@ -709,12 +1005,10 @@ mod tests {
         let result = agent
             .invoke(
                 "echo".to_string(),
-                SchemaValue::Record {
-                    fields: vec![
-                        SchemaValue::String("hello".to_string()),
-                        SchemaValue::String("extra".to_string()),
-                    ],
-                },
+                wire_input(vec![
+                    SchemaValue::String("hello".to_string()),
+                    SchemaValue::String("extra".to_string()),
+                ]),
                 Principal::Anonymous,
             )
             .await;
@@ -780,35 +1074,44 @@ mod tests {
     async fn agent_stream_dispatch_rejects_missing_streams() {
         StreamingAgentImpl::__register_agent_type();
         let mut agent = StreamingAgentImpl::new();
-        let scalar = SchemaValue::Record {
-            fields: vec![SchemaValue::String("p".to_string())],
-        };
+        let scalar = wire_input(vec![SchemaValue::String("p".to_string())]);
         assert!(
             agent
-                .invoke("combine".to_string(), scalar.clone(), Principal::Anonymous)
+                .invoke("combine".to_string(), scalar, Principal::Anonymous)
                 .await
                 .is_err()
         );
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn assert_forwarded_stream_identity(agent: &mut impl BaseAgent) {
+        use golem_rust::schema::wit::wire::{SchemaValueNode, SchemaValueStream, SchemaValueTree};
+        let input = SchemaValueTree {
+            value_nodes: vec![
+                SchemaValueNode::RecordValue(vec![1]),
+                SchemaValueNode::StreamValue(unsafe { SchemaValueStream::from_handle(59) }),
+            ],
+            root: 0,
+        };
+        let output = agent
+            .invoke("forward".to_string(), input, Principal::Anonymous)
+            .await
+            .unwrap()
+            .value
+            .unwrap();
+        assert_eq!(output.value_nodes.len(), 1);
+        match output.value_nodes.into_iter().next().unwrap() {
+            SchemaValueNode::StreamValue(stream) => assert_eq!(stream.take_handle(), 59),
+            _ => panic!("expected forwarded stream"),
+        }
+    }
+
     #[test]
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn agent_stream_dispatch_preserves_forwarded_stream_identity() {
         StreamingAgentImpl::__register_agent_type();
         let mut agent = StreamingAgentImpl::new();
-        let (_writer, stream) = AgentStream::<String>::new();
-        let input_stream = stream.to_value();
-        let invocation = agent
-            .invoke(
-                "forward".to_string(),
-                SchemaValue::Record {
-                    fields: vec![input_stream.clone()],
-                },
-                Principal::Anonymous,
-            )
-            .await
-            .unwrap();
-        assert_eq!(invocation.value, Some(input_stream));
+        assert_forwarded_stream_identity(&mut agent).await;
     }
 
     type AliasedAgentStream<T> = AgentStream<T>;
@@ -833,24 +1136,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn agent_stream_alias_dispatches_through_recursive_value_tree() {
         AliasedStreamingAgentImpl::__register_agent_type();
         let mut agent = AliasedStreamingAgentImpl::new();
-        let (_writer, stream) = AgentStream::<String>::new();
-        let input_stream = stream.to_value();
-        let invocation = agent
-            .invoke(
-                "forward".to_string(),
-                SchemaValue::Record {
-                    fields: vec![input_stream.clone()],
-                },
-                Principal::Anonymous,
-            )
-            .await
-            .expect("a Rust type alias must not change AgentStream ABI dispatch");
-
-        assert_eq!(invocation.value, Some(input_stream));
+        assert_forwarded_stream_identity(&mut agent).await;
     }
 
     #[agent_definition]
@@ -880,17 +1170,15 @@ mod tests {
         let invocation = agent
             .invoke(
                 "echo".to_string(),
-                SchemaValue::Record {
-                    fields: vec![SchemaValue::String("payload".to_string())],
-                },
+                wire_input(vec![SchemaValue::String("payload".to_string())]),
                 Principal::Anonymous,
             )
             .await
             .expect("a scalar parameter name must not affect native stream validation");
 
         assert_eq!(
-            invocation.value,
-            Some(SchemaValue::String("payload".to_string()))
+            golem_rust::schema::wit::direct::decode::<String>(invocation.value.unwrap()).unwrap(),
+            "payload"
         );
     }
 
@@ -1669,9 +1957,7 @@ mod tests {
             |initiator| async move {
                 initiator
                     .initiate(
-                        SchemaValue::Record {
-                            fields: vec![SchemaValue::String("created".to_string())],
-                        },
+                        wire_input(vec![SchemaValue::String("created".to_string())]),
                         Principal::Anonymous,
                     )
                     .await
@@ -1687,9 +1973,7 @@ mod tests {
         let context = SnapshotRestoreContext {
             principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
-            parameters: SchemaValue::Record {
-                fields: vec![SchemaValue::String("created".to_string())],
-            },
+            parameters: wire_input(vec![SchemaValue::String("created".to_string())]),
             phantom_id: None,
         };
         let restored = with_agent_initiator(
@@ -1755,16 +2039,15 @@ mod tests {
         CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
         CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.store(0, Ordering::SeqCst);
         let agent_type = AgentTypeName("CustomSnapshotAgent".to_string());
-        let context = SnapshotRestoreContext {
+        let context = || SnapshotRestoreContext {
             principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
-            parameters: SchemaValue::Record {
-                fields: vec![SchemaValue::String("original".to_string())],
-            },
+            parameters: wire_input(vec![SchemaValue::String("original".to_string())]),
             phantom_id: None,
         };
 
-        let failed_context = context.clone();
+        let failed_context = context();
+        let context = context();
         let failed = with_agent_initiator(
             |initiator| async move { initiator.restore(vec![0xff], failed_context).await },
             &agent_type,

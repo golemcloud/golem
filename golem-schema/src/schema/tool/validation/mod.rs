@@ -64,20 +64,18 @@ use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 use crate::schema::validation::value::{ValueError, validate_value};
 use crate::schema::validation::well_formedness::{SchemaError, validate_graph, validate_root_type};
-use regex::Regex;
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
-use std::sync::LazyLock;
-
-/// The identifier grammar shared by every identifier-like string in the tool
-/// model: lowercase kebab-case, starting with a letter.
-static IDENTIFIER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$").expect("invalid tool identifier regex")
-});
 
 /// Returns `true` if `s` is a valid tool identifier (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`).
 pub fn is_valid_identifier(s: &str) -> bool {
-    IDENTIFIER_REGEX.is_match(s)
+    s.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+        && s.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
 }
 
 /// A single producer-side construction-invariant violation.

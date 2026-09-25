@@ -151,10 +151,11 @@ object RpcCodegen {
     // typeName
     sb.append(s"""  val typeName: _root_.scala.Predef.String = "$typeName"\n\n""")
 
-    // agentType
-    sb.append(s"  lazy val agentType: _root_.golem.runtime.AgentType[$simpleName, Id] =\n")
-    sb.append(s"    _root_.golem.runtime.rpc.AgentClient.agentType[$simpleName]\n")
-    sb.append(s"      .asInstanceOf[_root_.golem.runtime.AgentType[$simpleName, Id]]\n\n")
+    // Structurally generated client codecs and descriptor. The reflective
+    // AgentType API remains available explicitly through AgentClient.
+    sb.append(s"  private lazy val agentType: _root_.golem.runtime.WireAgentClientType[$simpleName, Id] =\n")
+    sb.append(s"    _root_.golem.runtime.macros.AgentClientMacro.wireType[$simpleName]\n")
+    sb.append(s"      .asInstanceOf[_root_.golem.runtime.WireAgentClientType[$simpleName, Id]]\n\n")
 
     // Generate XRemote trait, per-method classes, and mode-aware constructors
     if (remoteMethods.nonEmpty) {
@@ -189,7 +190,7 @@ object RpcCodegen {
 
     // Private bindRemote
     sb.append(s"  private def bindRemote(\n")
-    sb.append(s"    resolved: _root_.golem.runtime.rpc.AgentClientRuntime.ResolvedAgent[$simpleName]\n")
+    sb.append(s"    resolved: _root_.golem.runtime.rpc.AgentClientRuntime.WireResolvedAgent[$simpleName]\n")
     sb.append(s"  ): $remoteName =\n")
     sb.append(s"    new $remoteName {\n")
     remoteMethods.foreach { method =>
@@ -222,10 +223,10 @@ object RpcCodegen {
     val outputType = resultType
 
     sb.append(s"  final class $className private[$simpleName" + "Client] (\n")
-    sb.append(s"    resolved: _root_.golem.runtime.rpc.AgentClientRuntime.ResolvedAgent[$simpleName]\n")
+    sb.append(s"    resolved: _root_.golem.runtime.rpc.AgentClientRuntime.WireResolvedAgent[$simpleName]\n")
     val methodNameLit = "\"" + method.name + "\""
     sb.append(
-      s"  ) extends _root_.golem.runtime.rpc.AbstractRemoteMethod[$simpleName, $packedInputType, $outputType](resolved, $methodNameLit) {\n"
+      s"  ) extends _root_.golem.runtime.rpc.AbstractWireRemoteMethod[$simpleName, $packedInputType, $outputType](resolved, $methodNameLit) {\n"
     )
 
     val packExpr = rParams match {
@@ -309,20 +310,11 @@ object RpcCodegen {
     val paramDecls = ctorParams.map(p => s"${p.name}: ${p.typeExpr}").mkString(", ")
     val packExpr   = constructorPackExpr(ctorParams)
 
-    def resolveCall(phantom: Option[String], config: Option[String]): String =
-      (phantom, config) match {
-        case (None, None) =>
-          s"_root_.golem.runtime.rpc.AgentClientRuntime.resolve[$simpleName, Id](agentType, $packExpr)"
-        case (Some(ph), None) =>
-          s"_root_.golem.runtime.rpc.AgentClientRuntime.resolveWithPhantom[$simpleName, Id](\n" +
-            s"      agentType, $packExpr, phantom = _root_.scala.Some($ph)\n    )"
-        case (None, Some(cfg)) =>
-          s"_root_.golem.runtime.rpc.AgentClientRuntime.resolveWithConfig[$simpleName, Id](\n" +
-            s"      agentType, $packExpr, $cfg\n    )"
-        case (Some(ph), Some(cfg)) =>
-          s"_root_.golem.runtime.rpc.AgentClientRuntime.resolveWithPhantomAndConfig[$simpleName, Id](\n" +
-            s"      agentType, $packExpr, phantom = _root_.scala.Some($ph), $cfg\n    )"
-      }
+    def resolveCall(phantom: Option[String], config: Option[String]): String = {
+      val ph  = phantom.fold("_root_.scala.None")(p => s"_root_.scala.Some($p)")
+      val cfg = config.getOrElse("_root_.scala.Nil")
+      s"_root_.golem.runtime.rpc.AgentClientRuntime.resolveWire[$simpleName, Id](agentType, $packExpr, $ph, $cfg)"
+    }
 
     def emitConstructor(
       name: String,
@@ -368,14 +360,7 @@ object RpcCodegen {
       val allExtra      = Seq(extraParamsAfter, configParams).filter(_.nonEmpty).mkString(", ")
       val allParams     = Seq(extraParamsBefore, paramDecls, allExtra).filter(_.nonEmpty).mkString(", ")
       val overridesExpr = configOverrideListExpr
-      val resolveExpr   = (phantom) match {
-        case None =>
-          s"_root_.golem.runtime.rpc.AgentClientRuntime.resolveWithConfig[$simpleName, Id](\n" +
-            s"      agentType, $packExpr, $overridesExpr\n    )"
-        case Some(ph) =>
-          s"_root_.golem.runtime.rpc.AgentClientRuntime.resolveWithPhantomAndConfig[$simpleName, Id](\n" +
-            s"      agentType, $packExpr, phantom = _root_.scala.Some($ph), $overridesExpr\n    )"
-      }
+      val resolveExpr   = resolveCall(phantom, Some(overridesExpr))
       sb.append(s"  def $name($allParams): $remoteName =\n")
       sb.append(s"    $resolveExpr match {\n")
       sb.append(s"      case _root_.scala.Right(resolved) => bindRemote(resolved)\n")

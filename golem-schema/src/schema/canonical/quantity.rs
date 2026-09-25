@@ -38,17 +38,10 @@
 
 use crate::schema::canonical::error::ParseError;
 use crate::schema::schema_type::QuantityValue;
-use regex::Regex;
 use serde_json::{Map, Value};
-use std::sync::OnceLock;
 
 const MAX_ABS_SCALE_TEXT: i32 = 18;
 const MAX_NEGATIVE_SCALE_BODY_LEN: usize = 40;
-
-fn unit_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9%°µμ_/\-^]+$").expect("quantity unit regex compiles"))
-}
 
 pub fn to_text(payload: &QuantityValue) -> Result<String, ParseError> {
     if payload.mantissa == i64::MIN {
@@ -220,9 +213,7 @@ fn split_decimal_and_unit(s: &str) -> Result<(&str, &str), ParseError> {
     let decimal = &s[..i];
     let mut unit_start = i;
     // Allow a single ASCII space between the decimal and the unit on input;
-    // reject two or more. A leading space without a following unit also
-    // reaches the unit regex which rejects empty input via the
-    // non-emptiness check below.
+    // reject two or more. An empty unit is allowed.
     if unit_start < bytes.len() && bytes[unit_start] == b' ' {
         unit_start += 1;
         if unit_start < bytes.len() && bytes[unit_start] == b' ' {
@@ -238,7 +229,10 @@ fn validate_unit(unit: &str) -> Result<(), ParseError> {
     if unit.is_empty() {
         return Ok(());
     }
-    if !unit_regex().is_match(unit) {
+    if !unit
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "%°µμ_/-^".contains(c))
+    {
         return Err(ParseError::BadFormat(format!(
             "invalid characters in unit: {unit:?}"
         )));

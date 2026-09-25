@@ -168,7 +168,8 @@ pub fn universal_tool_middleware(attr: TokenStream, item: TokenStream) -> TokenS
 #[cfg(not(test))]
 #[proc_macro_derive(ToolError, attributes(tool_error, example))]
 pub fn derive_tool_error(input: TokenStream) -> TokenStream {
-    tool::derive_tool_error_impl(input, &get_tool_schema_crate_ident())
+    let guest = crate_name("golem-rust").is_ok() || crate_name("golem-native-tool").is_err();
+    tool::derive_tool_error_impl(input, &get_tool_schema_crate_ident(), guest)
 }
 
 fn get_tool_schema_crate_ident() -> syn::Ident {

@@ -18,14 +18,7 @@ import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
-import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
-import {
-  schemaValueFromWit,
-  t,
-  typedSchemaValueFromWit,
-  typedSchemaValueToWit,
-  v,
-} from './internal/schema-model';
+import type { ExtendedCommandBody } from './internal/tool';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -130,7 +123,7 @@ export {
   toolDefinition,
   universalToolMiddleware,
 } from './tool';
-export { toolClientDefinition, ToolCallError } from './toolClient';
+export { client, toolClientDefinition, ToolCallError } from './toolClient';
 export type { ToolClientDefinition } from './toolClient';
 export type {
   CamelCase,
@@ -291,9 +284,7 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = await (initiator.initiateFromWit
-    ? initiator.initiateFromWit(input, principal)
-    : initiator.initiate(schemaValueFromWit(input), principal));
+  const initiateResult = await initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
     initializedAgent = { agent: initiateResult.val, principal };
@@ -358,14 +349,12 @@ async function invokeTool(
   try {
     const resolved = ToolRegistry.resolveInvocation(toolName, commandPath);
 
-    let decodedInput;
+    let prepared;
     try {
-      decodedInput = typedSchemaValueFromWit(input);
+      prepared = resolved.prepareWire(input);
     } catch (error) {
       throw invalidToolInput(`malformed invocation input: ${errorMessage(error)}`);
     }
-
-    const prepared = resolved.prepare(decodedInput);
     const body = resolved.command.body;
     if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
 
@@ -863,7 +852,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Agent is already initialized in this container`;
   }
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
+  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsedWire();
   const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
   if (registrationError) {
     // The snapshot WIT interface returns `result<_, string>`, not AgentError.

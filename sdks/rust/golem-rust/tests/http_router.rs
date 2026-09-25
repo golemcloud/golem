@@ -187,35 +187,54 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn ordinary_dispatch_forwards_body_without_polling() {
-        let input = request();
-        let body = input.body.to_value();
+        let mut input = request();
+        input.body = AgentStream::from_schema_stream(
+            SchemaValueStream::from_wrapped(unsafe {
+                golem_rust::schema::wit::wire::SchemaValueStream::from_handle(59)
+            }),
+            |value| Vec::<u8>::from_value(&value).map_err(|e| e.to_string()),
+        );
         let mut echo = <Echo as HttpRouter>::new(Config::new());
         let output = echo
             .invoke(
                 "handle".into(),
-                SchemaValue::Record {
+                golem_rust::encode_schema_value_async(&SchemaValue::Record {
                     fields: vec![input.to_value()],
-                },
+                })
+                .await
+                .unwrap(),
                 Principal::Anonymous,
             )
             .await
             .unwrap();
-        let output = HttpResponse::from_value(&output.value.unwrap()).unwrap();
+        let output = HttpResponse::from_value(
+            &golem_rust::decode_schema_value(output.value.unwrap()).unwrap(),
+        )
+        .unwrap();
         assert_eq!(output.status, 201);
-        assert_eq!(output.body.to_value(), body);
+        assert_eq!(
+            output
+                .body
+                .into_schema_stream()
+                .take_wrapped()
+                .unwrap()
+                .take_handle(),
+            59
+        );
         assert_eq!(output.headers[0].value, [0x80, 0xff]);
         let mut provider = <Provider as HttpRouter>::new(Config::new());
         let document = provider
             .invoke(
                 "openapi".into(),
-                SchemaValue::Record { fields: vec![] },
+                golem_rust::encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap(),
                 Principal::Anonymous,
             )
             .await
             .unwrap();
         assert!(
-            String::from_value(&document.value.unwrap())
+            String::from_value(&golem_rust::decode_schema_value(document.value.unwrap()).unwrap(),)
                 .unwrap()
                 .contains("3.1.0")
         );
@@ -223,7 +242,8 @@ mod tests {
             provider
                 .invoke(
                     "handle".into(),
-                    SchemaValue::Record { fields: vec![] },
+                    golem_rust::encode_schema_value(&SchemaValue::Record { fields: vec![] })
+                        .unwrap(),
                     Principal::Anonymous
                 )
                 .await

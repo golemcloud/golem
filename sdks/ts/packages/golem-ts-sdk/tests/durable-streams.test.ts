@@ -24,7 +24,7 @@ import { Secret } from '../src/secret';
 import { SECRET_INTERNAL } from '../src/internal/schema-model/secretInternal';
 import { secretHandleToSchemaValue } from '../src/bridge/schema';
 import { schemaValueToWit } from '../src/internal/schema-model';
-import { compileConfig } from '../src/config';
+import { buildConfigAccessor, compileConfigTree } from '../src/config';
 import { s } from '../src/schema/markers';
 import { agentStreamToHandle, agentStreamFromHandle } from '../src/schema/agentStream';
 import { compileSchema } from '../src/schema/adapter';
@@ -40,14 +40,14 @@ const writerHandles: (DurableStreamWriter & { [Symbol.dispose]: ReturnType<typeo
 const url = 'https://streams.example/events';
 const encoder = new TextEncoder();
 const rawSecret = () => ({ [Symbol.dispose]: vi.fn() }) as unknown as SecretHandle;
-const [authDeclaration] = compileConfig({ auth: s.secret(z.string()) });
+const authConfig = compileConfigTree({ auth: s.secret(z.string()) });
 const auth = (...handles: SecretHandle[]) => {
   for (const handle of handles) {
     vi.mocked(getConfigValue).mockReturnValueOnce(
       schemaValueToWit(secretHandleToSchemaValue(handle)),
     );
   }
-  return new Secret<string>(authDeclaration);
+  return buildConfigAccessor(authConfig).auth as Secret<string>;
 };
 const batch = (
   payload: string | number[],

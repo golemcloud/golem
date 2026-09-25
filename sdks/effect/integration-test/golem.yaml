@@ -167,6 +167,9 @@ components:
 
 tools:
   effect-streaming: {}
+  middleware:
+    effect-combined-prefix:
+      component: effect-golem:tool-caller
 
 # Per-agent default config values for the local source. The secret
 # `connectionAddress` field is provisioned via `secretDefaults` below

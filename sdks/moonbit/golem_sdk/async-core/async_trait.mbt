@@ -5,6 +5,7 @@ pub struct Sink[X] {
   priv is_open : () -> Bool
   priv has_cleanup : () -> Bool
   priv cleanup : ((X) -> Unit)?
+  priv write_window_size : Int
 }
 
 ///|
@@ -21,8 +22,10 @@ pub fn[X] Sink::from_callbacks(
   close : async () -> Unit,
   is_open : () -> Bool,
   cleanup : ((X) -> Unit)?,
+  write_window_size? : Int = sink_write_window_size,
 ) -> Sink[X] {
-  { write, close, is_open, has_cleanup: () => cleanup is Some(_), cleanup }
+  guard! write_window_size > 0
+  { write, close, is_open, has_cleanup: () => cleanup is Some(_), cleanup, write_window_size }
 }
 
 ///|
@@ -34,10 +37,10 @@ pub async fn[X] Sink::write(self : Sink[X], data : ArrayView[X]) -> Int {
   if data.length() == 0 {
     return 0
   }
-  let length = if data.length() < sink_write_window_size {
+  let length = if data.length() < self.write_window_size {
     data.length()
   } else {
-    sink_write_window_size
+    self.write_window_size
   }
   // The callback may suspend, so it must not retain the caller's borrowed view.
   let buffer = FixedArray::makei(length, i => data[i])
@@ -60,10 +63,10 @@ pub async fn Sink::write_bytes(self : Sink[Byte], data : BytesView) -> Int {
   if data.length() == 0 {
     return 0
   }
-  let length = if data.length() < sink_write_window_size {
+  let length = if data.length() < self.write_window_size {
     data.length()
   } else {
-    sink_write_window_size
+    self.write_window_size
   }
   let buffer = FixedArray::makei(length, i => data[i])
   let written = (self.write)(buffer[:])
@@ -734,6 +737,7 @@ fn[X] stream_pipe_sink(pipe : Ref[StreamPipe[X]]) -> Sink[X] {
     close: () => stream_pipe_close_writer(pipe),
     is_open: () => !pipe.val.writer_closed && !pipe.val.reader_dropped,
     has_cleanup: () => pipe.val.cleanup is Some(_),
+    write_window_size: sink_write_window_size,
     cleanup: Some(fn(value) {
       match pipe.val.cleanup {
         Some(cleanup) => cleanup(value)

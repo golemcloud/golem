@@ -220,7 +220,7 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      content.contains("AbstractRemoteMethod[MyAgent, String, String]"),
+      content.contains("AbstractWireRemoteMethod[MyAgent, String, String]"),
       s"missing correct method type in:\n$content"
     )
     assert(
@@ -277,7 +277,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     val content = result.files.head.content
     assert(content.contains("def apply(data: String)"), s"missing filtered apply in:\n$content")
     assert(!content.contains("caller: Principal"), s"principal param should be filtered out:\n$content")
-    assert(content.contains("AbstractRemoteMethod[MyAgent, String, String]"), s"wrong method type in:\n$content")
+    assert(content.contains("AbstractWireRemoteMethod[MyAgent, String, String]"), s"wrong method type in:\n$content")
   }
 
   test("all-principal method generates no-arg apply") {
@@ -335,8 +335,8 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(
-      content.contains("extends _root_.golem.runtime.rpc.AbstractRemoteMethod["),
-      s"missing AbstractRemoteMethod extends in:\n$content"
+      content.contains("extends _root_.golem.runtime.rpc.AbstractWireRemoteMethod["),
+      s"missing AbstractWireRemoteMethod extends in:\n$content"
     )
     assert(content.contains("awaitWith("), s"missing awaitWith delegation in:\n$content")
     assert(content.contains("triggerWith("), s"missing triggerWith delegation in:\n$content")
@@ -718,15 +718,10 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(content.contains("AgentClientRuntime.resolve["), s"get should use resolve:\n$content")
+    assertEquals(content.split("AgentClientRuntime.resolveWire", -1).length - 1, 4)
     assert(
-      content.contains("AgentClientRuntime.resolveWithConfig["),
-      s"getWithConfig should use resolveWithConfig:\n$content"
-    )
-    assert(content.contains("resolveWithPhantom["), s"getPhantom should use resolveWithPhantom:\n$content")
-    assert(
-      content.contains("resolveWithPhantomAndConfig["),
-      s"getPhantomWithConfig should use resolveWithPhantomAndConfig:\n$content"
+      !content.contains("AgentClientRuntime.resolve["),
+      s"generated clients must avoid reflective resolve:\n$content"
     )
   }
 
@@ -749,18 +744,10 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(content.contains("AgentClientRuntime.resolve["), s"newPhantom should use resolve:\n$content")
+    assertEquals(content.split("AgentClientRuntime.resolveWire", -1).length - 1, 4)
     assert(
-      content.contains("AgentClientRuntime.resolveWithConfig["),
-      s"newPhantomWithConfig should use resolveWithConfig:\n$content"
-    )
-    assert(
-      content.contains("resolveWithPhantom["),
-      s"ephemeral known phantom should use resolveWithPhantom:\n$content"
-    )
-    assert(
-      content.contains("resolveWithPhantomAndConfig["),
-      s"ephemeral known phantom with config should use resolveWithPhantomAndConfig:\n$content"
+      !content.contains("AgentClientRuntime.resolve["),
+      s"generated clients must avoid reflective resolve:\n$content"
     )
   }
 

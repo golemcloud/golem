@@ -14,6 +14,7 @@
 
 import type { TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import {
+  directTypedSchemaValueToWit,
   relinquishSchemaValueCapabilities,
   sourceValueIsCanonical,
   type SchemaCodec,
@@ -43,6 +44,13 @@ export function encodeToolValue(
   value: unknown,
   position: string,
 ): TypedSchemaValue {
+  if (codec.direct) {
+    try {
+      return directTypedSchemaValueToWit(codec, value);
+    } catch (error) {
+      throw invalidToolResult(`${position}: ${errorMessage(error)}`);
+    }
+  }
   let encoded: SchemaValue | undefined;
   try {
     encoded = withCapabilityAdoptionTransaction(() => codec.toValue(value));

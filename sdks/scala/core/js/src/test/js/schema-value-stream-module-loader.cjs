@@ -104,12 +104,9 @@ Module._load = function (request) {
   }
   if (request === "golem:tool/host@0.1.0") {
     return {
-      getAllTools: missingHostImport("getAllTools"),
-      getTool: missingHostImport("getTool"),
       createStdin: missingHostImport("createStdin"),
       createStdout: missingHostImport("createStdout"),
-      ToolRpc: { create: missingHostImport("createToolRpc") },
-      FutureInvokeResult: {},
+      ToolRpc: missingHostImport("ToolRpc"),
     };
   }
   if (request === "golem:agent/durable-streams@2.0.0") {

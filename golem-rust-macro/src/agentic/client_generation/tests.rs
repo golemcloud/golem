@@ -43,6 +43,10 @@ fn durable_agents_generate_getters() {
 
     assert!(rendered.contains("pub fn get ("));
     assert!(rendered.contains("get_with_config"));
+    assert!(!rendered.contains("get_agent_type"));
+    assert!(!rendered.contains("component_id"));
+    assert!(rendered.contains("WasmRpc :: create"));
+    assert!(!rendered.contains("WasmRpc :: new"));
 }
 
 #[test]
@@ -65,6 +69,32 @@ fn ephemeral_agents_generate_known_and_fresh_phantom_getters() {
 }
 
 #[test]
+fn caller_defined_clients_do_not_load_reflection_metadata() {
+    let item_trait = parse_quote! {
+        trait ExampleAgent {
+            fn new(name: String) -> Self;
+            fn ping(&self);
+        }
+    };
+    let rendered = super::get_remote_client_for_type(
+        &item_trait,
+        "remote:example/agent",
+        &[quote! { name: String }],
+        &[format_ident!("name")],
+        &[],
+        &[],
+        &[],
+        true,
+        true,
+    )
+    .to_string();
+
+    assert!(!rendered.contains("get_agent_type"));
+    assert!(!rendered.contains("component_id"));
+    assert!(rendered.contains("WasmRpc :: create"));
+}
+
+#[test]
 fn awaited_streaming_methods_use_async_value_encoding_only() {
     let item_trait = parse_quote! {
         trait StreamingAgent {
@@ -79,7 +109,12 @@ fn awaited_streaming_methods_use_async_value_encoding_only() {
     for durable in [true, false] {
         let rendered = get_remote_client(&item_trait, &[], &[], &[], &[], &[], durable).to_string();
 
-        assert_eq!(rendered.matches("encode_schema_value_async").count(), 1);
+        assert_eq!(rendered.matches("prepare_parameter").count(), 1);
+        assert!(!rendered.contains("encode_schema_value"));
+        assert!(!rendered.contains("from_schema_value"));
+        assert!(!rendered.contains("get_schema_graph"));
+        assert!(!rendered.contains("Schema > :: contains_stream"));
+        assert!(rendered.contains("parameter_contains_stream"));
         assert_eq!(
             rendered
                 .matches(
@@ -499,5 +534,5 @@ fn client_does_not_store_affine_constructor_tree() {
     assert!(rendered.contains("make_agent_id"));
     assert!(rendered.contains("agent_id"));
     // Quota tokens are rejected in constructor parameters before any encode.
-    assert!(rendered.contains("__reject_quota_tokens_in_agent_constructor"));
+    assert!(rendered.contains("reject_quota_tokens"));
 }

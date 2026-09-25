@@ -23,6 +23,9 @@
 mod decode;
 mod encode;
 
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub mod direct;
+
 #[cfg(any(
     all(feature = "guest", not(feature = "host")),
     all(feature = "host", not(feature = "guest"))

@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "golem_filesystem_tools_rust"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "symbols"
+
+[dependencies]
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }

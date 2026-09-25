@@ -614,6 +614,16 @@ until the final parity matrix passes.
 
 ## Build and verify in the monorepo
 
+The base WASM retains the single full `agent-guest` world and a shared Effect runtime.
+The CLI's Rollup configuration uses `@golemcloud/effect-golem/build` to discover retained
+capability modules without executing user code, then generates a static entrypoint. Agent,
+tool, and middleware hooks import their implementations only when needed; absent capabilities
+have explicit empty discovery and error bodies. No roles or world selection are required.
+The component bundle includes only reachable SDK code and adapters, rather than importing
+the full SDK from the base WASM. `capabilities.json` beside the bundle records the selection.
+Selection is conservative: a retained definition can keep its capability even when its
+registration is conditional or never executed.
+
 Prerequisites are Node/npm, Rust with `wasm32-wasip2`, `wasm-rquickjs`, WASI SDK, and Golem's normal
 build prerequisites. From `sdks/effect`:
 
@@ -650,7 +660,7 @@ npm run check:dts       # fail if generated declarations drift
 npm run check:artifacts # fail if bundles/templates/WASM drift
 ```
 
-For a focused real-runtime check, build all three templates first, then run the relevant harness
+For a focused real-runtime check, build the default template first, then run the relevant harness
 case under `integration-test`. Unit tests use injectable host-service layers under `src/host`; they
 do not replace a real WASM integration check.
 
@@ -690,7 +700,8 @@ To prepare the consumer without the Golem CLI, bundle only its entrypoint and in
 (cd components/agents && \
   GOLEM_APP_ROOT="$PWD/../.." GOLEM_TEMP="$PWD/../../golem-temp" \
   GOLEM_COMPONENT_NAME=effect-golem-durable-streams \
-  npx --no rollup -- -c ../../rollup.config.component.mjs --input ./src/durable-streams-agent.ts)
+  GOLEM_COMPONENT_ENTRY=./src/durable-streams-agent.ts \
+  npx --no rollup -- -c ../../rollup.config.component.mjs)
 mkdir -p golem-temp/agents
 wasm-rquickjs inject-js --input ../wasm/agent_guest.wasm \
   --js golem-temp/ts-dist/effect-golem-durable-streams/main.js \

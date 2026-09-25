@@ -24,6 +24,8 @@ golem-rust = { path = "../../../..", default-features = false, features = [
     "macro",
     "nonempty_collections",
     "num_bigint",
+    "regex",
+    "rich-validation",
     "rust_decimal",
     "serde_json_types",
     "url",

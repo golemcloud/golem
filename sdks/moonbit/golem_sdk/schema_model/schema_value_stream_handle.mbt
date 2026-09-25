@@ -35,7 +35,7 @@ pub fn GuestSchemaValueStreamHandle::is_present(
 }
 
 ///|
-fn GuestSchemaValueStreamHandle::same_endpoint(
+pub fn GuestSchemaValueStreamHandle::same_endpoint(
   self : GuestSchemaValueStreamHandle,
   other : GuestSchemaValueStreamHandle,
 ) -> Bool {
@@ -56,7 +56,7 @@ fn GuestSchemaValueStreamHandle::take(
 }
 
 ///|
-fn GuestSchemaValueStreamHandle::release(
+pub fn GuestSchemaValueStreamHandle::release(
   self : GuestSchemaValueStreamHandle,
   drop_wrapped : (@types.SchemaValueStream) -> Unit,
   drop_native : (@async-core.Stream[@types.SchemaValueTree]) -> Unit,
@@ -69,7 +69,7 @@ fn GuestSchemaValueStreamHandle::release(
 }
 
 ///|
-async fn GuestSchemaValueStreamHandle::prepare_outgoing(
+pub async fn GuestSchemaValueStreamHandle::prepare_outgoing(
   self : GuestSchemaValueStreamHandle,
 ) -> Unit {
   match self.take() {
@@ -85,6 +85,29 @@ async fn GuestSchemaValueStreamHandle::prepare_outgoing(
       }
       self.cell = Some(Wrapped(wrapped))
     }
+  }
+}
+
+///|
+pub fn GuestSchemaValueStreamHandle::wrapped(
+  self : GuestSchemaValueStreamHandle,
+) -> @types.SchemaValueStream? {
+  match self.cell {
+    Some(Wrapped(raw)) => Some(raw)
+    _ => None
+  }
+}
+
+///|
+pub fn GuestSchemaValueStreamHandle::take_wrapped(
+  self : GuestSchemaValueStreamHandle,
+) -> @types.SchemaValueStream? {
+  match self.cell {
+    Some(Wrapped(raw)) => {
+      self.cell = None
+      Some(raw)
+    }
+    _ => None
   }
 }
 

@@ -43,7 +43,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
             root_tool_name: ::std::string::String,
             command_path: ::std::vec::Vec<::std::string::String>,
             schema_path: ::std::vec::Vec<::std::string::String>,
-            inherited_prefix: ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
+            inherited_prefix: ::std::vec::Vec<golem_rust::agentic::DirectInputValue>,
         }
 
         impl #client_ident {
@@ -71,7 +71,7 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
                 root_tool_name: ::std::string::String,
                 command_path: ::std::vec::Vec<::std::string::String>,
                 schema_path: ::std::vec::Vec<::std::string::String>,
-                inherited_prefix: ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
+                inherited_prefix: ::std::vec::Vec<golem_rust::agentic::DirectInputValue>,
             ) -> Self {
                 Self {
                     rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&root_tool_name),
@@ -93,44 +93,53 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
     }
 }
 
-/// The generated expression building the invocation's input record. The fast
-/// path (no inherited prefix, root schema path) resolves the command's
-/// canonical input model once per method through a `OnceLock`; the general
-/// path recomputes it per call from the descriptor plus the inherited prefix.
-/// Record assembly itself is shared runtime code in `golem_rust::agentic`.
-fn input_build_expr(descriptor_fn_ident: &Ident, param_values: TokenStream) -> TokenStream {
+/// Encodes the compiled canonical field order from concrete captured values.
+fn input_build_expr(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    tool_name: &str,
+    param_values: TokenStream,
+) -> TokenStream {
+    let mut ordered = Vec::new();
+    if let Some(root) = ir
+        .commands
+        .iter()
+        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
+    {
+        let mut globals = root
+            .params
+            .iter()
+            .filter(|param| is_global_param(root, param))
+            .collect::<Vec<_>>();
+        globals.sort_by_key(|param| is_flag_param(root, param));
+        ordered.extend(
+            globals
+                .into_iter()
+                .map(|param| to_kebab_case(&param.ident.to_string())),
+        );
+    }
+    let mut fields = Vec::new();
+    for param in &cmd.params {
+        if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
+            continue;
+        }
+        let order = match crate::tool::descriptor::client_surface_order(ir, cmd, param) {
+            Ok(order) => order,
+            Err(error) => return error.to_compile_error(),
+        };
+        fields.push((order, canonical_value_name(ir, cmd, param, tool_name)));
+    }
+    fields.sort_by_key(|(order, _)| *order);
+    for (_, name) in fields {
+        if !ordered.contains(&name) {
+            ordered.push(name);
+        }
+    }
     quote! {
-        if __can_use_static_input_model {
-            static __GOLEM_TOOL_INPUT_MODEL: ::std::sync::OnceLock<
-                ::std::result::Result<golem_rust::agentic::CanonicalInputModel, ::std::string::String>
-            > =
-                ::std::sync::OnceLock::new();
-            let __model = __GOLEM_TOOL_INPUT_MODEL.get_or_init(|| {
-                let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
-                    .expect("tool descriptor build failed");
-                let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
-                    format!("invalid generated tool command path `{}`", __schema_path.join(" "))
-                })?;
-                __tool.canonical_input_model(__command_index)
-                    .map_err(|__err| __err.to_string())
-            }).as_ref().map_err(|__err| {
-                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err.clone()))
-            })?;
-            golem_rust::agentic::build_canonical_input(__model, #param_values)
-                .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err)))?
-        } else {
-            let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
-                .expect("tool descriptor build failed");
-            let __command_index = __tool.command_index_by_path(&__schema_path).ok_or_else(|| {
-                golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(
-                    format!("invalid generated tool command path `{}`", __schema_path.join(" "))
-                ))
-            })?;
-            golem_rust::agentic::build_canonical_input_with_prefix(
-                __tool.canonical_input_fields(__command_index),
-                &self.inherited_prefix,
-                #param_values,
-            )
+        {
+            let mut __values = self.inherited_prefix.clone();
+            __values.extend(#param_values);
+            golem_rust::agentic::encode_direct_tool_input(&__values, &[#(#ordered),*]).await
                 .map_err(|__err| golem_rust::agentic::ToolError::Rpc(golem_rust::agentic::RpcError::Protocol(__err)))?
         }
     }
@@ -151,7 +160,6 @@ fn synthesize_leaf_method(
     omitted_names: &[String],
 ) -> TokenStream {
     let method_ident = &cmd.method_ident;
-    let descriptor_fn_ident = crate::tool::descriptor::descriptor_fn_ident(&ir.trait_ident);
     let command_name = command_name(cmd, tool_name);
     let command_path_part = if command_name == tool_name {
         quote! {}
@@ -174,7 +182,7 @@ fn synthesize_leaf_method(
     let result_ty = client_result_type(&cmd.output, has_stdout);
     let decode_result = decode_client_result(&cmd.output);
     let invoke = invoke_call(&cmd.output, stdin_expr.clone());
-    let input_expr = input_build_expr(&descriptor_fn_ident, quote! { __golem_param_values });
+    let input_expr = input_build_expr(ir, cmd, tool_name, quote! { __golem_param_values });
 
     if has_stdout {
         let started_ty = started_result_type(&cmd.output);
@@ -183,7 +191,6 @@ fn synthesize_leaf_method(
             pub async fn #method_ident(&self, #(#input_args),*) -> #started_ty {
                 #(#value_inserts)*
 
-                let __can_use_static_input_model = self.inherited_prefix.is_empty() && self.schema_path.is_empty();
                 let mut __command_path = self.command_path.clone();
                 let mut __schema_path = self.schema_path.clone();
                 #command_path_part
@@ -197,7 +204,6 @@ fn synthesize_leaf_method(
         pub async fn #method_ident(&self, #(#input_args),*) -> #result_ty {
             #(#value_inserts)*
 
-            let __can_use_static_input_model = self.inherited_prefix.is_empty() && self.schema_path.is_empty();
             let mut __command_path = self.command_path.clone();
             let mut __schema_path = self.schema_path.clone();
             #command_path_part
@@ -262,7 +268,6 @@ fn synthesize_leaf_method_dynamic(
     param_values: TokenStream,
 ) -> TokenStream {
     let method_ident = &cmd.method_ident;
-    let descriptor_fn_ident = crate::tool::descriptor::descriptor_fn_ident(&ir.trait_ident);
     let command_name = command_name(cmd, tool_name);
     let command_path_part = if command_name == tool_name {
         quote! {}
@@ -287,18 +292,16 @@ fn synthesize_leaf_method_dynamic(
     let result_ty = client_result_type(&cmd.output, has_stdout);
     let decode_result = decode_client_result(&cmd.output);
     let invoke = invoke_call(&cmd.output, stdin_expr.clone());
-    let input_expr = input_build_expr(&descriptor_fn_ident, param_values.clone());
+    let input_expr = input_build_expr(ir, cmd, tool_name, param_values.clone());
 
     if has_stdout {
         let result_ty = started_result_type(&cmd.output);
         let start = start_call(&cmd.output, stdin_expr);
         return quote! {
             pub async fn #method_ident(&self #input_args) -> #result_ty {
-                let mut #param_values: ::std::vec::Vec<(&'static str, golem_rust::SchemaValue)> =
-                    ::std::vec::Vec::new();
-                #value_inserts
+                let mut #param_values: ::std::vec::Vec<golem_rust::agentic::DirectInputValue> =
+                    ::std::vec![#value_inserts];
 
-                let __can_use_static_input_model = self.inherited_prefix.is_empty() && self.schema_path.is_empty();
                 let mut __command_path = self.command_path.clone();
                 let mut __schema_path = self.schema_path.clone();
                 #command_path_part
@@ -310,11 +313,9 @@ fn synthesize_leaf_method_dynamic(
 
     quote! {
         pub async fn #method_ident(&self #input_args) -> #result_ty {
-            let mut #param_values: ::std::vec::Vec<(&'static str, golem_rust::SchemaValue)> =
-                ::std::vec::Vec::new();
-            #value_inserts
+            let mut #param_values: ::std::vec::Vec<golem_rust::agentic::DirectInputValue> =
+                ::std::vec![#value_inserts];
 
-            let __can_use_static_input_model = self.inherited_prefix.is_empty() && self.schema_path.is_empty();
             let mut __command_path = self.command_path.clone();
             let mut __schema_path = self.schema_path.clone();
             #command_path_part
@@ -386,7 +387,7 @@ fn synthesize_subtree_wrapper(ir: &ToolDefinitionIr, cmd: &CommandIr) -> Option<
             root_tool_name: ::std::string::String,
             command_path: ::std::vec::Vec<::std::string::String>,
             schema_path: ::std::vec::Vec<::std::string::String>,
-            inherited_prefix: ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
+            inherited_prefix: ::std::vec::Vec<golem_rust::agentic::DirectInputValue>,
             _omitted: ::std::marker::PhantomData<fn() -> __GOLEM_OMITTED>,
         }
 
@@ -635,27 +636,25 @@ fn subtree_client_macro_keep_param(
         quote! {}
     } else if is_subtree_command {
         let name = canonical_value_name(ir, cmd, param, tool_name);
-        let from_root = !cmd.params.iter().any(|own| own.ident == param.ident);
-        let schema = captured_schema_expr(ir, cmd, tool_name, &name, from_root);
         let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
         let aliases = aliases.iter();
         let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
+        let option_carrier = direct_input_needs_option_carrier(ir, cmd, param, tool_name);
         quote! {
-            $inherited_prefix.push(golem_rust::agentic::CanonicalInputValue {
-                name: #name.to_string(),
-                aliases: ::std::vec![#(#aliases.to_string()),*],
-                short: #short,
-                schema: #schema,
-                value: <#ty as golem_rust::agentic::Schema>::to_schema_value(#ident)
-                    .expect("failed to encode tool parameter"),
-            });
+            $inherited_prefix.push(golem_rust::agentic::DirectInputValue::new(
+                #name, ::std::vec![#(#aliases.to_string()),*], #short, #ident
+            ).with_option_carrier(#option_carrier));
         }
     } else {
         let name = canonical_value_name(ir, cmd, param, tool_name);
+        let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
+        let aliases = aliases.iter();
+        let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
+        let option_carrier = direct_input_needs_option_carrier(ir, cmd, param, tool_name);
         quote! {
-            let __golem_value = <_ as golem_rust::agentic::Schema>::to_schema_value(#ident)
-                .expect("failed to encode tool parameter");
-            $param_values.push((#name, __golem_value));
+            golem_rust::agentic::DirectInputValue::new(
+                #name, ::std::vec![#(#aliases.to_string()),*], #short, #ident
+            ).with_option_carrier(#option_carrier),
         }
     };
 
@@ -678,34 +677,6 @@ fn subtree_client_macro_keep_param(
             #macro_ident!(@#next_state $client_ident, $omitted_tag, $omitted_ty, $param_values, [$($all)*], [$($args)* #arg], [$($values)* #value] ; $($all)*);
         }
     }
-}
-
-fn captured_schema_expr(
-    ir: &ToolDefinitionIr,
-    cmd: &CommandIr,
-    tool_name: &str,
-    name: &str,
-    from_root: bool,
-) -> TokenStream {
-    let descriptor_fn_ident = crate::tool::descriptor::descriptor_fn_ident(&ir.trait_ident);
-    let source_command = command_name(cmd, tool_name);
-    let source_path = if from_root || source_command == tool_name {
-        quote! { ::std::vec::Vec::<::std::string::String>::new() }
-    } else {
-        quote! { ::std::vec![#source_command.to_string()] }
-    };
-    quote! {{
-        let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
-            .expect("tool descriptor build failed");
-        let __source_path = #source_path;
-        let __source_index = __tool.node_index_by_path(&__source_path)
-            .expect("captured tool command must exist in its descriptor");
-        __tool.canonical_input_fields(__source_index)
-            .into_iter()
-            .find(|field| field.name == #name)
-            .expect("captured tool field must exist in its descriptor")
-            .schema
-    }}
 }
 
 fn subtree_client_macro_omit_param(
@@ -777,18 +748,20 @@ fn value_inserts(
             }
             let ident = &param.ident;
             let name = canonical_value_name(ir, cmd, param, tool_name);
+            let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
+            let aliases = aliases.iter();
+            let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
+            let option_carrier = direct_input_needs_option_carrier(ir, cmd, param, tool_name);
             Some(quote! {
-                let __golem_value = <_ as golem_rust::agentic::Schema>::to_schema_value(#ident)
-                    .expect("failed to encode tool parameter");
-                __golem_param_values.push((#name, __golem_value));
+                golem_rust::agentic::DirectInputValue::new(
+                    #name, ::std::vec![#(#aliases.to_string()),*], #short, #ident
+                ).with_option_carrier(#option_carrier)
             })
         });
     let inserts: Vec<_> = inserts.collect();
-    let capacity = inserts.len();
     vec![quote! {
-            let mut __golem_param_values: ::std::vec::Vec<(&'static str, golem_rust::SchemaValue)> =
-                ::std::vec::Vec::with_capacity(#capacity);
-            #(#inserts)*
+            let mut __golem_param_values: ::std::vec::Vec<golem_rust::agentic::DirectInputValue> =
+                ::std::vec![#(#inserts),*];
     }]
 }
 
@@ -986,7 +959,7 @@ fn prefix_value_builders(
     inherited
         .into_iter()
         .chain(current)
-        .filter_map(|(param, from_root)| {
+        .filter_map(|(param, _from_root)| {
             if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
                 return None;
             }
@@ -997,21 +970,15 @@ fn prefix_value_builders(
                 return None;
             }
             let ident = &param.ident;
-            let ty = &param.ty;
             let name = canonical_value_name(ir, cmd, param, tool_name);
-            let schema = captured_schema_expr(ir, cmd, tool_name, &name, from_root);
             let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
             let aliases = aliases.iter();
             let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
+            let option_carrier = direct_input_needs_option_carrier(ir, cmd, param, tool_name);
             Some(quote! {
-                __inherited_prefix.push(golem_rust::agentic::CanonicalInputValue {
-                    name: #name.to_string(),
-                    aliases: ::std::vec![#(#aliases.to_string()),*],
-                    short: #short,
-                    schema: #schema,
-                    value: <#ty as golem_rust::agentic::Schema>::to_schema_value(#ident)
-                        .expect("failed to encode tool parameter"),
-                });
+                __inherited_prefix.push(golem_rust::agentic::DirectInputValue::new(
+                    #name, ::std::vec![#(#aliases.to_string()),*], #short, #ident
+                ).with_option_carrier(#option_carrier));
             })
         })
         .collect()
@@ -1081,6 +1048,45 @@ pub(crate) fn canonical_value_name(
         }
     }
     own_name
+}
+
+fn canonical_param_source<'a>(
+    ir: &'a ToolDefinitionIr,
+    cmd: &'a CommandIr,
+    param: &'a ParamIr,
+    tool_name: &str,
+) -> (&'a CommandIr, &'a ParamIr) {
+    let own_name = to_kebab_case(&param.ident.to_string());
+    if let Some(root) = ir
+        .commands
+        .iter()
+        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
+    {
+        for root_param in &root.params {
+            if is_global_param(root, root_param)
+                && param_surfaces_intersect(
+                    &to_kebab_case(&root_param.ident.to_string()),
+                    &param_aliases(root, root_param),
+                    &own_name,
+                    &param_aliases(cmd, param),
+                )
+            {
+                return (root, root_param);
+            }
+        }
+    }
+    (cmd, param)
+}
+
+fn direct_input_needs_option_carrier(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &ParamIr,
+    tool_name: &str,
+) -> bool {
+    let (source_cmd, source_param) = canonical_param_source(ir, cmd, param, tool_name);
+    crate::tool::descriptor::canonical_field_has_option_carrier(ir, source_cmd, source_param)
+        .unwrap_or(false)
 }
 
 fn canonical_param_aliases(
@@ -1236,33 +1242,35 @@ fn start_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
     let (ok, err) = split_result(output);
     let decode = match ok {
         Some(ok) => {
-            quote! { |__result| golem_rust::agentic::decode_result_value::<#ok, _>(__result) }
+            quote! { |__result| golem_rust::agentic::decode_direct_result_value::<#ok, _>(__result) }
         }
-        None => quote! { |__result| golem_rust::agentic::decode_result_empty(__result) },
+        None => quote! { |__result| golem_rust::agentic::decode_direct_result_empty(__result) },
     };
     match err {
         Some(err) => quote! {
             {
-                fn __golem_assert_tool_error_decodable<E: golem_rust::agentic::Schema>() {}
+                fn __golem_assert_tool_error_decodable<E: golem_rust::agentic::DirectToolError>() {}
                 __golem_assert_tool_error_decodable::<#err>();
-                golem_rust::agentic::start_tool_invocation(
+                golem_rust::agentic::start_tool_invocation_direct_input(
                     &self.rpc,
                     &__command_path,
-                    &__input,
+                    __input,
                     #stdin_expr,
                     #decode,
-                    golem_rust::agentic::decode_declared_tool_error::<#err>,
+                    <#err as golem_rust::agentic::DirectToolError>::recognizes_error_name,
+                    <#err as golem_rust::agentic::DirectToolError>::from_direct_error_reader,
                 )
             }
         },
         None => quote! {
-            golem_rust::agentic::start_tool_invocation(
+            golem_rust::agentic::start_tool_invocation_direct_input(
                 &self.rpc,
                 &__command_path,
-                &__input,
+                __input,
                 #stdin_expr,
                 #decode,
-                |_, _| ::std::result::Result::Ok(::std::option::Option::None),
+                |_| false,
+                |_, _, _| ::std::result::Result::Ok(::std::option::Option::None),
             )
         },
     }
@@ -1273,23 +1281,22 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
     match err {
         Some(err) => quote! {
             {
-                fn __golem_assert_tool_error_decodable<E: golem_rust::agentic::Schema>() {}
+                fn __golem_assert_tool_error_decodable<E: golem_rust::agentic::DirectToolError>() {}
                 __golem_assert_tool_error_decodable::<#err>();
-                golem_rust::agentic::invoke_and_await(
+                golem_rust::agentic::invoke_and_await_direct::<#err, _>(
                     &self.rpc,
                     &__command_path,
-                    &__input,
+                    __input,
                     (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
                     ::std::option::Option::None,
-                    golem_rust::agentic::decode_declared_tool_error::<#err>,
                 ).await
             }
         },
         None => quote! {
-            golem_rust::agentic::invoke_and_await_infallible(
+            golem_rust::agentic::invoke_and_await_direct_infallible(
                 &self.rpc,
                 &__command_path,
-                &__input,
+                __input,
                 (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
                 ::std::option::Option::None,
             ).await
@@ -1303,10 +1310,10 @@ fn decode_client_result(output: &ReturnType) -> TokenStream {
     let (ok, _) = split_result(output);
     match ok {
         Some(ok) => quote! {
-            golem_rust::agentic::decode_result_value::<#ok, _>(__result)
+            golem_rust::agentic::decode_direct_result_value::<#ok, _>(__result)
         },
         None => quote! {
-            golem_rust::agentic::decode_result_empty(__result)
+            golem_rust::agentic::decode_direct_result_empty(__result)
         },
     }
 }

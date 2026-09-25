@@ -22,20 +22,14 @@ pub fn param_type_to_type_string(pt : ParamType) -> String {
 }
 
 // ============================================================
-// Agent registration + dispatch emission (new schema model)
-//
-// Generates `golem_agents.mbt` for the recursive schema model
-// (`golem:core/types@2.0.0`): the `init` block builds an
-// `@agents.AgentTypeDef` per agent (per-parameter `@schema.into_schema_graph`
-// roots), registers it, and the generated `@agents.RawAgent` dispatch decodes
-// the `@types.SchemaValueTree` input record and encodes the output via the SDK
-// runtime helpers in `agents/dispatch.mbt`. Built as a MoonBit-source string and
-// parsed back via `parse_generated_impls` (see `value_types_emit.mbt`).
+// Agent registration and dispatch use the flat WIT schema and value carriers.
+// Each agent appends type nodes to one shared pool, avoiding recursive models
+// and graph merging. Source is parsed back through `parse_generated_impls`.
 // ============================================================
 
 ///|
 /// Lowercases the first character of a name so it can be used as a MoonBit value
-/// identifier (the local `AgentTypeDef` binding in the generated `init` block).
+/// identifier in the generated `init` block.
 fn lower_first(s : String) -> String {
   let chars = s.to_array()
   if chars.length() == 0 {
@@ -104,15 +98,13 @@ fn read_only_str(info : MethodInfo) -> String {
 }
 
 ///|
-/// Renders the `source` of a single input parameter. A `Principal` parameter is
-/// auto-injected by the platform; every other parameter carries its own schema
-/// graph (built from `T`'s `@schema.into_schema_graph`).
+/// Renders the source and wire type index of a single input parameter.
 fn input_param_source_str(pt : ParamType) -> String {
   if is_principal_type(pt) {
-    "@agents.InputParamSource::AutoInjected(@common.AutoInjectedKind::PRINCIPAL)"
+    "@common.FieldSource::AutoInjected(@common.AutoInjectedKind::PRINCIPAL), schema: schema_encoder.push(@types.RecordType([]))"
   } else {
     let ts = param_type_to_type_string(pt)
-    "@agents.InputParamSource::UserSupplied(@schema.into_schema_graph((@schema.TypeTag::{  } : @schema.TypeTag[\{ts}])))"
+    "@common.FieldSource::UserSupplied, schema: @schema.append_wire_type_with(schema_encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ts}]))"
   }
 }
 
@@ -128,20 +120,20 @@ fn emit_input_params(
     let (name, pt) = p
     if !is_config_type(pt) {
       buf.write_string(
-        "\{indent}{ name: \"\{escape_string_lit(name)}\", source: \{input_param_source_str(pt)} },\n",
+        "\{indent}{ name: \"\{escape_string_lit(name)}\", source: \{input_param_source_str(pt)}, metadata: @schema.empty_wire_metadata() },\n",
       )
     }
   }
 }
 
 ///|
-/// Renders a method/constructor `output` schema (`None` for a unit return).
+/// Renders a method output's index in the shared wire type pool.
 fn output_schema_str(return_type : ParamType?) -> String {
   match return_type {
-    None => "None"
+    None => "@common.OutputSchema::Unit"
     Some(pt) => {
       let ts = param_type_to_type_string(pt)
-      "Some(@schema.into_schema_graph((@schema.TypeTag::{  } : @schema.TypeTag[\{ts}])))"
+      "@common.OutputSchema::Single(@schema.append_wire_type_with(schema_encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ts}])))"
     }
   }
 }
@@ -153,18 +145,22 @@ fn config_entries_str(agent : AgentInfo) -> String {
   match agent.config_type {
     None => "[]"
     Some(ct) =>
-      "@config.collect_entries_of((@schema.TypeTag::{  } : @schema.TypeTag[\{ct}]), [])"
+      "@config.append_wire_entries_with(schema_encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ct}]), [])"
   }
 }
 
 ///|
-/// Emits the `AgentTypeDef` literal bound to `var_name`.
+/// Emits the wire `AgentType` literal bound to `var_name`.
 fn emit_agent_type_def(
   buf : StringBuilder,
   agent : AgentInfo,
   var_name : String,
 ) -> Unit {
-  buf.write_string("    let \{var_name} : @agents.AgentTypeDef = {\n")
+  buf.write_string("    let schema_encoder = @schema.WireTypeEncoder::new()\n")
+  buf.write_string(
+    "    let schema_root = schema_encoder.push(@types.RecordType([]))\n",
+  )
+  buf.write_string("    let \{var_name} : @common.AgentType = {\n")
   buf.write_string("      type_name: \"\{escape_string_lit(agent.name)}\",\n")
   let kind = if agent.is_http_router() { "HTTP_ROUTER" } else { "REGULAR" }
   buf.write_string("      kind: @common.AgentTypeKind::\{kind},\n")
@@ -180,9 +176,9 @@ fn emit_agent_type_def(
   buf.write_string(
     "        prompt_hint: \{opt_string_lit(agent.constructor_prompt_hint)},\n",
   )
-  buf.write_string("        input: [\n")
+  buf.write_string("        input_schema: @common.InputSchema::Parameters([\n")
   emit_input_params(buf, agent.constructor_params, "          ")
-  buf.write_string("        ],\n")
+  buf.write_string("        ]),\n")
   buf.write_string("      },\n")
   buf.write_string("      methods: [\n")
   for m in agent.methods {
@@ -197,10 +193,14 @@ fn emit_agent_type_def(
     buf.write_string(
       "          prompt_hint: \{opt_string_lit(m.prompt_hint)},\n",
     )
-    buf.write_string("          input: [\n")
+    buf.write_string(
+      "          input_schema: @common.InputSchema::Parameters([\n",
+    )
     emit_input_params(buf, m.params, "            ")
-    buf.write_string("          ],\n")
-    buf.write_string("          output: \{output_schema_str(m.return_type)},\n")
+    buf.write_string("          ]),\n")
+    buf.write_string(
+      "          output_schema: \{output_schema_str(m.return_type)},\n",
+    )
     buf.write_string("          read_only: \{read_only_str(m)},\n")
     buf.write_string("        },\n")
   }
@@ -212,6 +212,9 @@ fn emit_agent_type_def(
     "      snapshotting: \{snapshotting_str(agent.snapshotting)},\n",
   )
   buf.write_string("      config: \{config_entries_str(agent)},\n")
+  buf.write_string(
+    "      schema: { type_nodes: schema_encoder.nodes, defs: schema_encoder.defs, root: schema_root },\n",
+  )
   buf.write_string("    }\n")
 }
 
@@ -244,19 +247,13 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
   buf.write_string("      construct: async fn(input, principal) {\n")
   buf.write_string("        let _ = principal\n")
   buf.write_string("        try {\n")
-  if arity > 0 {
+  buf.write_string(
+    "          let params = @agents.decode_wire_input(input, \{arity}, \"\{ctx}\")\n          defer params.abort()\n",
+  )
+  for j, p in user_params {
+    let (name, pt) = p
     buf.write_string(
-      "          let params = @agents.decode_invocation_input(input, \{arity}, \"\{ctx}\")\n",
-    )
-    for j, p in user_params {
-      let (name, pt) = p
-      buf.write_string(
-        "          let \{name} : \{param_type_to_type_string(pt)} = @agents.decode_param(params, \{j}, \"\{ctx}\")\n",
-      )
-    }
-  } else {
-    buf.write_string(
-      "          let _ = @agents.decode_invocation_input(input, 0, \"\{ctx}\")\n",
+      "          let \{name} : \{param_type_to_type_string(pt)} = @agents.decode_wire_param(params, \{j}, \"\{ctx}\")\n",
     )
   }
   match find_config_param(agent.constructor_params) {
@@ -269,6 +266,7 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
   let args = agent.constructor_params
     .map(fn(p) { if is_principal_type(p.1) { "principal" } else { p.0 } })
     .join(", ")
+  buf.write_string("          params.finish()\n")
   buf.write_string("          let agent = \{agent.name}::new(\{args})\n")
   let use_auto_json = agent.has_json_derives &&
     !agent.has_snapshottable &&
@@ -335,36 +333,27 @@ fn emit_load_snapshot(buf : StringBuilder, agent : AgentInfo) -> Unit {
 }
 
 ///|
-/// Emits a single agent's `let <var> : AgentTypeDef = {...}` +
-/// `@agents.register_agent({...})` block inside the `init` try.
+/// Emits a single agent's wire descriptor and
+/// `@agents.register_agent({...})` block.
 fn emit_register(buf : StringBuilder, agent : AgentInfo) -> Unit {
   let var_name = lower_first(agent.name) + "_type_def"
   emit_agent_type_def(buf, agent, var_name)
   buf.write_string("    @agents.register_agent({\n")
   buf.write_string("      name: \"\{escape_string_lit(agent.name)}\",\n")
-  buf.write_string("      agent_type: \{var_name}.to_agent_type(),\n")
+  buf.write_string("      agent_type: \{var_name},\n")
   emit_construct(buf, agent)
   emit_load_snapshot(buf, agent)
   buf.write_string("    })\n")
 }
 
 ///|
-/// Emits the `init` block that registers every agent. The whole body is wrapped
-/// in a `try/catch` because `to_agent_type()` (and `collect_entries_of`) raise.
+/// Emits the `init` block that registers every agent.
 fn emit_init(buf : StringBuilder, agents : Array[AgentInfo]) -> Unit {
   buf.write_string("///|\n")
   buf.write_string("fn init {\n")
-  buf.write_string("  try {\n")
   for a in agents {
     emit_register(buf, a)
   }
-  buf.write_string("  } catch {\n")
-  // Use string concatenation, not `\{e}` interpolation: the formatter (0.1.5)
-  // drops interpolation segments when round-tripping generated source.
-  buf.write_string(
-    "    e =>\n      @agents.panic_with_message(\"init\", \"Failed to register agents: \" + e.to_string())\n",
-  )
-  buf.write_string("  }\n")
   buf.write_string("}\n\n")
 }
 
@@ -379,21 +368,16 @@ fn emit_method_arm(
   let arity = user_params.length()
   let ctx = escape_string_lit("\{agent.name}.\{m.name}")
   buf.write_string("      \"\{escape_string_lit(m.name)}\" => {\n")
-  if arity > 0 {
+  buf.write_string(
+    "        let params = @agents.decode_wire_input(input, \{arity}, \"\{ctx}\")\n        defer params.abort()\n",
+  )
+  for j, p in user_params {
+    let (name, pt) = p
     buf.write_string(
-      "        let params = @agents.decode_invocation_input(input, \{arity}, \"\{ctx}\")\n",
-    )
-    for j, p in user_params {
-      let (name, pt) = p
-      buf.write_string(
-        "        let \{name} : \{param_type_to_type_string(pt)} = @agents.decode_param(params, \{j}, \"\{ctx}\")\n",
-      )
-    }
-  } else {
-    buf.write_string(
-      "        let _ = @agents.decode_invocation_input(input, 0, \"\{ctx}\")\n",
+      "        let \{name} : \{param_type_to_type_string(pt)} = @agents.decode_wire_param(params, \{j}, \"\{ctx}\")\n",
     )
   }
+  buf.write_string("        params.finish()\n")
   let args = m.params
     .map(fn(p) { if is_principal_type(p.1) { "principal" } else { p.0 } })
     .join(", ")
@@ -404,7 +388,7 @@ fn emit_method_arm(
     }
     Some(_) => {
       buf.write_string("        let result = self.\{m.name}(\{args})\n")
-      buf.write_string("        Ok(Some(@agents.encode_output(result)))\n")
+      buf.write_string("        Ok(Some(@agents.encode_wire_output(result)))\n")
     }
   }
   buf.write_string("      }\n")

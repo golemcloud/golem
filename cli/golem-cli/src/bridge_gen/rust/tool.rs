@@ -161,6 +161,25 @@ impl RustToolBridgeGenerator {
 
             #schema_graphs
 
+            trait __WireParameter {
+                fn preflight(&self, resources: &mut golem_rust::schema::wit::direct::WirePreflight) -> Result<(), String>;
+                fn prepare(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + '_>>;
+                fn encode(&self, writer: &mut golem_rust::schema::wit::direct::WireWriter) -> Result<i32, String>;
+            }
+
+            struct __Parameter<T> {
+                value: T,
+                preflight: fn(&T, &mut golem_rust::schema::wit::direct::WirePreflight) -> Result<(), String>,
+                prepare: for<'a> fn(&'a T) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + 'a>>,
+                encode: fn(&T, &mut golem_rust::schema::wit::direct::WireWriter) -> Result<i32, String>,
+            }
+
+            impl<T> __WireParameter for __Parameter<T> {
+                fn preflight(&self, resources: &mut golem_rust::schema::wit::direct::WirePreflight) -> Result<(), String> { (self.preflight)(&self.value, resources) }
+                fn prepare(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + '_>> { (self.prepare)(&self.value) }
+                fn encode(&self, writer: &mut golem_rust::schema::wit::direct::WireWriter) -> Result<i32, String> { (self.encode)(&self.value, writer) }
+            }
+
             #(#client_items)*
 
             #(#error_items)*
@@ -211,7 +230,7 @@ impl RustToolBridgeGenerator {
                 #(#doc)*
                 pub struct #struct_ident {
                     rpc: golem_rust::golem_agentic::golem::tool::host::ToolRpc,
-                    inherited: Vec<crate::__golem_bridge_runtime::schema::SchemaValue>,
+                    inherited: Vec<std::rc::Rc<dyn __WireParameter>>,
                 }
 
                 impl #struct_ident {
@@ -267,6 +286,30 @@ impl RustToolBridgeGenerator {
         Ok(methods)
     }
 
+    fn capture_parameter(
+        &mut self,
+        parameter: &Ident,
+        field: &CanonicalInputField,
+    ) -> anyhow::Result<TokenStream> {
+        let preflight = self
+            .inner
+            .guest_wire_visit(quote! { value }, &field.type_, false, None)?;
+        let prepare = self
+            .inner
+            .guest_wire_visit(quote! { value }, &field.type_, true, None)?;
+        let encode = self
+            .inner
+            .guest_wire_encode_expr(quote! { value }, &field.type_, false, 0)?;
+        Ok(quote! {
+            std::rc::Rc::new(__Parameter {
+                value: #parameter,
+                preflight: |value, __resources| { #preflight Ok(()) },
+                prepare: |value| Box::pin(async move { #prepare Ok(()) }),
+                encode: |value, __writer| { #encode },
+            })
+        })
+    }
+
     fn accessor_method(
         &mut self,
         child_index: usize,
@@ -293,12 +336,10 @@ impl RustToolBridgeGenerator {
             let param_name = naming.fresh(self.inner.to_rust_ident(&field.name));
             let param_ident = ident(&param_name);
             let param_type = self.inner.type_reference(&field.type_, false)?;
-            let encode =
-                self.inner
-                    .emit_encode_expr(quote! { #param_ident }, &field.type_, false, 0)?;
+            let capture = self.capture_parameter(&param_ident, &field)?;
             param_defs.push(quote! { #param_ident: #param_type });
             encodes.push(quote! {
-                inherited.push((#encode).expect("failed to encode tool parameter"));
+                inherited.push(#capture);
             });
         }
         let tool_name = &self.tool_name;
@@ -342,15 +383,10 @@ impl RustToolBridgeGenerator {
             let param_name = naming.fresh(self.inner.to_rust_ident(&field.name));
             let param_ident = ident(&param_name);
             let typ = self.inner.type_reference(&field.type_, false)?;
-            let encode =
-                self.inner
-                    .emit_encode_expr(quote! { #param_ident }, &field.type_, false, 0)?;
-            let name = &field.name;
+            let capture = self.capture_parameter(&param_ident, field)?;
             param_defs.push(quote! { #param_ident: #typ });
             field_encodes.push(quote! {
-                __fields.push((|| -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> {
-                    #encode
-                })().map_err(|e| golem_rust::agentic::tool_protocol_error(format!("failed to encode tool parameter `{}`: {e}", #name)))?);
+                __parameters.push(#capture);
             });
         }
         let stdin_expr = match &body.stdin {
@@ -400,13 +436,16 @@ impl RustToolBridgeGenerator {
         Ok(quote! {
             #(#doc)*
             pub #asyncness fn #method_ident(&self, #(#param_defs),*) -> #return_type {
-                let __schema: golem_rust::SchemaGraph = #schema;
-                let mut __fields: Vec<crate::__golem_bridge_runtime::schema::SchemaValue> = self.inherited.clone();
+                let mut __parameters = self.inherited.clone();
                 #(#field_encodes)*
-                let __input = golem_rust::TypedSchemaValue::new(
-                    __schema,
-                    crate::__golem_bridge_runtime::schema::SchemaValue::Record { fields: __fields },
-                );
+                let mut __resources = golem_rust::schema::wit::direct::WirePreflight::asynchronous();
+                for parameter in &__parameters { parameter.preflight(&mut __resources).map_err(golem_rust::agentic::tool_protocol_error)?; }
+                for parameter in &__parameters { parameter.prepare().await.map_err(golem_rust::agentic::tool_protocol_error)?; }
+                let mut __writer = golem_rust::schema::wit::direct::WireWriter::default();
+                let mut __fields = Vec::with_capacity(__parameters.len());
+                for parameter in &__parameters { __fields.push(parameter.encode(&mut __writer).map_err(golem_rust::agentic::tool_protocol_error)?); }
+                let __root = __writer.push(__wire::SchemaValueNode::RecordValue(__fields));
+                let __input = __wire::TypedSchemaValue { graph: #schema, value: __writer.finish(__root) };
                 #completion
             }
         })
@@ -420,34 +459,15 @@ impl RustToolBridgeGenerator {
         path_tokens: &[TokenStream],
     ) -> anyhow::Result<TokenStream> {
         let decode_result = self.started_result_decode(body)?;
-        let decode_error = if body.errors.is_empty() {
-            quote! {
-                |_, _| Ok(None)
-            }
-        } else {
-            let error_ident = ident(
-                self.error_names
-                    .get(&command_index)
-                    .context("missing error enum")?,
-            );
-            let decode_arms = self.error_decode_arms(&error_ident, body)?;
-            quote! {
-                |__name: String, __value: golem_rust::TypedSchemaValue| -> Result<Option<#error_ident>, String> {
-                    let (_, __value) = __value.into_parts();
-                    match __name.as_str() {
-                        #(#decode_arms)*
-                        _ => Ok(None),
-                    }
-                }
-            }
-        };
+        let (recognizes, decode_error) = self.error_decoder(command_index, body)?;
         Ok(quote! {
-            golem_rust::agentic::start_tool_invocation(
+            golem_rust::agentic::start_tool_invocation_direct_input(
                 &self.rpc,
                 &[#(#path_tokens),*],
-                &__input,
+                __input,
                 #stdin_expr,
                 #decode_result,
+                #recognizes,
                 #decode_error,
             )
         })
@@ -460,40 +480,43 @@ impl RustToolBridgeGenerator {
         stdin_expr: &TokenStream,
         path_tokens: &[TokenStream],
     ) -> anyhow::Result<TokenStream> {
+        let (recognizes, decode_error) = self.error_decoder(command_index, body)?;
+        Ok(quote! {
+            golem_rust::agentic::invoke_and_await_direct_with_error_decoder(
+                &self.rpc,
+                &[#(#path_tokens),*],
+                __input,
+                (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
+                None,
+                #recognizes,
+                #decode_error,
+            ).await
+        })
+    }
+
+    fn error_decoder(
+        &mut self,
+        command_index: usize,
+        body: &CommandBody,
+    ) -> anyhow::Result<(TokenStream, TokenStream)> {
         if body.errors.is_empty() {
-            Ok(quote! {
-                golem_rust::agentic::invoke_and_await_infallible(
-                    &self.rpc,
-                    &[#(#path_tokens),*],
-                    &__input,
-                    (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
-                    None,
-                ).await
-            })
-        } else {
-            let error_ident = ident(
-                self.error_names
-                    .get(&command_index)
-                    .context("missing error enum")?,
-            );
-            let decode_arms = self.error_decode_arms(&error_ident, body)?;
-            Ok(quote! {
-                golem_rust::agentic::invoke_and_await(
-                    &self.rpc,
-                    &[#(#path_tokens),*],
-                    &__input,
-                    (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
-                    None,
-                    |__name: String, __value: golem_rust::TypedSchemaValue| -> Result<Option<#error_ident>, String> {
-                        let (_, __value) = __value.into_parts();
-                        match __name.as_str() {
-                            #(#decode_arms)*
-                            _ => Ok(None),
-                        }
-                    },
-                ).await
-            })
+            return Ok((quote! { |_| false }, quote! { |_, _, _| Ok(None) }));
         }
+        let error_ident = ident(
+            self.error_names
+                .get(&command_index)
+                .context("missing error enum")?,
+        );
+        let names = body.errors.iter().map(|case| &case.name);
+        let arms = self.error_decode_arms(&error_ident, body)?;
+        Ok((
+            quote! { |name| matches!(name, #(#names)|*) },
+            quote! {
+                |__name: &str, __reader: &mut golem_rust::schema::wit::direct::WireReader, __value: i32| -> Result<Option<#error_ident>, String> {
+                    match __name { #(#arms)* _ => Ok(None) }
+                }
+            },
+        ))
     }
 
     fn error_decode_arms(
@@ -505,15 +528,15 @@ impl RustToolBridgeGenerator {
         for (case, variant) in body.errors.iter().zip(error_variant_idents(body)) {
             let name = &case.name;
             if let Some(payload) = &case.payload {
-                let dec = self
-                    .inner
-                    .emit_decode_expr(quote! { __value }, payload, false, 0)?;
+                let dec =
+                    self.inner
+                        .guest_wire_decode_expr(quote! { __value }, payload, false, 0)?;
                 arms.push(quote! {
                     #name => (#dec).map(|__payload| Some(#error_ident::#variant(__payload))),
                 });
             } else {
                 arms.push(quote! {
-                    #name => <() as golem_rust::FromSchema>::from_value(&__value)
+                    #name => <() as golem_rust::FromWire>::read_wire(__reader, __value)
                         .map(|()| Some(#error_ident::#variant))
                         .map_err(|__error| __error.to_string()),
                 });
@@ -523,39 +546,32 @@ impl RustToolBridgeGenerator {
     }
 
     fn started_result_decode(&mut self, body: &CommandBody) -> anyhow::Result<TokenStream> {
-        match &body.result {
-            Some(result) => {
-                let dec =
-                    self.inner
-                        .emit_decode_expr(quote! { __value }, &result.type_, false, 0)?;
-                Ok(quote! {
-                    |__result| {
-                        let __value = golem_rust::agentic::expect_value(__result.result)?;
-                        let (_, __value) = __value.into_parts();
-                        (#dec).map_err(golem_rust::agentic::tool_protocol_error)
-                    }
-                })
-            }
-            None => Ok(quote! {
-                |__result| golem_rust::agentic::expect_no_value(__result.result)
-            }),
-        }
+        let decode = self.result_decode(body)?;
+        Ok(quote! { |__result| { #decode } })
     }
 
     fn result_decode(&mut self, body: &CommandBody) -> anyhow::Result<TokenStream> {
         match &body.result {
             Some(result) => {
-                let dec =
-                    self.inner
-                        .emit_decode_expr(quote! { __value }, &result.type_, false, 0)?;
+                let dec = self.inner.guest_wire_decode_expr(
+                    quote! { __value },
+                    &result.type_,
+                    false,
+                    0,
+                )?;
                 Ok(quote! {
-                    let __value = golem_rust::agentic::expect_value(__result.result)?;
-                    let (_, __value) = __value.into_parts();
-                    (#dec).map_err(golem_rust::agentic::tool_protocol_error)
+                    let __value = __result.root.ok_or_else(|| golem_rust::agentic::tool_protocol_error("tool result did not contain a value"))?;
+                    let mut __reader = __result.snapshot.reader();
+                    let __decoded = (|| -> Result<_, String> {
+                        let __reader = &mut __reader;
+                        #dec
+                    })().map_err(golem_rust::agentic::tool_protocol_error)?;
+                    __reader.finish().map_err(|e| golem_rust::agentic::tool_protocol_error(e.to_string()))?;
+                    Ok(__decoded)
                 })
             }
             None => Ok(quote! {
-                golem_rust::agentic::expect_no_value(__result.result)
+                golem_rust::agentic::decode_direct_result_empty(__result)
             }),
         }
     }

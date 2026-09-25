@@ -33,6 +33,8 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
     let mut serialize_match_arms = Vec::new();
     let mut get_name_match_arms = Vec::new();
     let mut from_schema_value_match_arms = Vec::new();
+    let mut wire_cases = Vec::new();
+    let mut stream_types = Vec::new();
 
     for variant in data_enum.variants.iter() {
         let variant_ident = &variant.ident;
@@ -42,6 +44,15 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
         match &variant.fields {
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let field_type = &fields.unnamed[0].ty;
+                stream_types.push(field_type);
+
+                wire_cases.push(quote! {
+                    golem_rust::schema::wit::wire::VariantCaseType {
+                        name: #variant_name.to_string(),
+                        payload: Some(<#field_type as golem_rust::WireSchema>::append_schema(builder)),
+                        metadata: golem_rust::schema::wit::direct::empty_metadata(),
+                    }
+                });
 
                 get_type_pairs.push(quote! {
                     (#variant_name.to_string(),  <#field_type as golem_rust::agentic::Schema>::get_type().get_schema_graph().expect("multimodal types cannot be nested"))
@@ -79,6 +90,21 @@ pub fn derive_multimodal(input: TokenStream) -> TokenStream {
     }
 
     let expanded = quote! {
+        impl golem_rust::agentic::MultimodalWire for #enum_name {
+            fn contains_stream(seen: &mut ::std::collections::HashSet<&'static str>) -> bool {
+                if !seen.insert(::core::any::type_name::<Self>()) {
+                    return false;
+                }
+                false #(|| <#stream_types as golem_rust::WireSchema>::contains_stream(seen))*
+            }
+
+            fn append_modality_cases(
+                builder: &mut golem_rust::schema::wit::direct::WireSchemaBuilder,
+            ) -> Vec<golem_rust::schema::wit::wire::VariantCaseType> {
+                vec![#(#wire_cases),*]
+            }
+        }
+
         impl golem_rust::agentic::MultimodalSchema for #enum_name {
             fn get_multimodal_schema() -> Vec<(String, golem_rust::schema::SchemaGraph)> {
                 vec![

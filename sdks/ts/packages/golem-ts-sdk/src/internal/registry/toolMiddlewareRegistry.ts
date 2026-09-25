@@ -148,7 +148,7 @@ class ToolMiddlewareRegistryImpl {
   }
 }
 
-export const ToolMiddlewareRegistry = new ToolMiddlewareRegistryImpl();
+export const ToolMiddlewareRegistry = /* @__PURE__ */ new ToolMiddlewareRegistryImpl();
 
 function encodeMiddleware(source: ToolMiddlewareSource): ToolMiddleware {
   return {

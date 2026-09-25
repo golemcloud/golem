@@ -73,6 +73,7 @@ fn exhaustive_rust_literal_compiles_executes_and_round_trips_through_wit() {
     let workspace = workspace_root().unwrap();
     let graph = exhaustive_schema_graph();
     let literal = rust_emitter::emit_schema_graph_literal(&graph);
+    let expected = format!("{graph:?}");
     let (node_count, root, defs) = canonical_carrier_shape();
     let def_assertions = defs.iter().map(|(id, body)| {
         format!("assert!(wire.defs.iter().any(|def| def.id == {id:?} && def.body == {body}));")
@@ -90,7 +91,7 @@ fn exhaustive_rust_literal_compiles_executes_and_round_trips_through_wit() {
     std::fs::write(
         dir.path().join("src/main.rs"),
         format!(
-            "fn main() {{\n  let graph: golem_rust::SchemaGraph = {literal};\n  let wire = golem_rust::encode_schema_graph(&graph).unwrap();\n  assert_eq!(wire.type_nodes.len(), {node_count});\n  assert_eq!(wire.root, {root});\n  assert_eq!(wire.defs.len(), {});\n  {}\n  assert_eq!(golem_rust::decode_schema_graph(&wire).unwrap(), graph);\n}}\n",
+            "fn main() {{\n  let wire: golem_rust::schema::wit::wire::SchemaGraph = {literal};\n  assert_eq!(wire.type_nodes.len(), {node_count});\n  assert_eq!(wire.root, {root});\n  assert_eq!(wire.defs.len(), {});\n  {}\n  assert_eq!(format!(\"{{:?}}\", golem_rust::decode_schema_graph(&wire).unwrap()), {expected:?});\n}}\n",
             defs.len(),
             def_assertions.collect::<Vec<_>>().join("\n  ")
         ),

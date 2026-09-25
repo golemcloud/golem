@@ -44,7 +44,16 @@ mod gated_host_bindings {
 use gated_host_bindings::golem::agent::host as agent_host;
 use gated_host_bindings::golem::api::host as host_api;
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct ResolveComponentResult {
     pub component_found: bool,
     pub worker_found: bool,
@@ -1080,12 +1089,14 @@ impl GolemHostApi for GolemHostApiImpl {
         checkpoint: Option<String>,
     ) -> (Result<(), String>, Result<Vec<u8>, String>) {
         let (stdout_target, mut stdout) = tool_host::create_stdout();
-        let result = tool_host::ToolRpc::new(&tool_name).async_invoke_and_await(
-            &[],
-            encode_tool_input(String::new()).expect("encode empty tool input"),
-            None,
-            Some(stdout_target),
-        );
+        let result = tool_host::ToolRpc::create(&tool_name)
+            .expect("tool RPC creation failed")
+            .async_invoke_and_await(
+                &[],
+                encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
+                Some(stdout_target),
+            );
         if let Some(checkpoint) = checkpoint {
             let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
                 .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
@@ -1120,12 +1131,14 @@ impl GolemHostApi for GolemHostApiImpl {
         tool_name: String,
     ) -> (Result<(), String>, Result<Vec<u8>, String>) {
         let (stdout_target, mut stdout) = tool_host::create_stdout();
-        let result = tool_host::ToolRpc::new(&tool_name).async_invoke_and_await(
-            &[],
-            encode_tool_input(String::new()).expect("encode empty tool input"),
-            None,
-            Some(stdout_target),
-        );
+        let result = tool_host::ToolRpc::create(&tool_name)
+            .expect("tool RPC creation failed")
+            .async_invoke_and_await(
+                &[],
+                encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
+                Some(stdout_target),
+            );
         let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
             .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
         raw_http::request_async(
@@ -1150,7 +1163,8 @@ impl GolemHostApi for GolemHostApiImpl {
         let (result, stdout) = (result.get(), read).join().await;
         // Make the observed stream terminal part of a subsequent durable claim.
         // Returning it alone does not validate what reconstruction recomputes.
-        let _ = tool_host::ToolRpc::new(&tool_name)
+        let _ = tool_host::ToolRpc::create(&tool_name)
+            .expect("tool RPC creation failed")
             .invoke_and_await(
                 vec![format!("observed-{stdout:?}")],
                 encode_tool_input(String::new()).expect("encode empty tool input"),

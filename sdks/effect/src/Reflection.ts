@@ -21,6 +21,8 @@ import { field, t, type SchemaGraph, type SchemaType } from "./internal/schema-m
 import { schemaGraphFromWit, schemaGraphToWit } from "./internal/schema-model/wit.js"
 import { freezeSchemaGraph, SchemaRef, SchemaRenderError, type JsonValue } from "./SchemaRef.js"
 
+export { AgentIdentityError } from "./internal/agentIdentityError.js"
+
 /** A reflected method and its concrete input/output schema roots. @since 1.6.0 @category models */
 export interface AgentMethod {
   readonly name: string
@@ -55,15 +57,11 @@ export class UnknownMethodError {
   ) {}
 }
 
-export { AgentIdentityError } from "./AgentIdentity.js"
-
-/** Agent-type discovery failed at the host boundary. @since 1.6.0 @category errors */
 export class ReflectionHostError {
   readonly _tag = "ReflectionHostError"
   constructor(readonly cause: unknown) {}
 }
 
-/** A discovered registration contains a malformed schema graph. @since 1.6.0 @category errors */
 export class ReflectionSchemaError {
   readonly _tag = "ReflectionSchemaError"
   constructor(readonly cause: unknown) {}

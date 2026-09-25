@@ -1,10 +1,19 @@
 # Built-in tools
 
 Built-in tools are tool components shipped as bytes in the registry-service binary and provisioned
-at registry startup. There are currently no production descriptors or user-facing built-in tools;
-`BUILTIN_TOOLS` in `golem-registry-service/src/services/builtin_tool_provisioner.rs` is empty. The
-`test-components/tool-streaming` application is the representative component used to verify the
-build path until a production source is added.
+at registry startup. `BUILTIN_TOOLS` in
+`golem-registry-service/src/services/builtin_tool_provisioner.rs` is the production inventory.
+
+The filesystem tools currently have equivalent Rust and MoonBit candidate implementations for
+comparison:
+
+- `plugins/filesystem-tools-rust/` → `plugins/filesystem-tools-rust.wasm`
+- `plugins/filesystem-tools-moonbit/` → `plugins/filesystem-tools-moonbit.wasm`
+
+The candidates are temporarily registered as `read-file-rust` / `read-file-moonbit` (and likewise
+for write and edit), allowing both to be provisioned in the same built-in environment. Once an
+implementation is selected, its three tools will take the final unsuffixed names and the other
+candidate will be removed.
 
 ## Adding a component-implemented built-in tool
 
@@ -14,9 +23,9 @@ build path until a production source is added.
    depends on a filesystem path.
 3. Set `component_name`, `tool_name`, and `release_version` to the artifact's exported metadata.
    Provisioning validates these values before writing anything.
-4. Run `cargo make build-builtin-tools`, validate the resulting WASM, and run the registry
-   provisioning tests. The task currently builds `test-components/tool-streaming`; switch it to
-   descriptor-listed production source directories when the first production descriptor is added.
+4. Add the component to `build-builtin-tools` in the root `Makefile.toml` and run
+   `cargo make build-builtin-tools`. Validate the resulting WASM and run the registry provisioning
+   tests.
 5. Commit the source, manifest, descriptor, and rebuilt WASM together.
 
 Provisioning is idempotent for identical bytes and an identical exact version. A published system

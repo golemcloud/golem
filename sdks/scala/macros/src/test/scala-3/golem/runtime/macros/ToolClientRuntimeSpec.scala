@@ -91,6 +91,30 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("ToolClientRuntimeSpec")(
+      test("wire custom errors decode the named case payload, not an enum carrier") {
+        import golem.schema.wire.*
+        val decode  = ToolErrorSchemaDerivation.wireDecoder[GitError]
+        val payload = WitTypedSchemaValue(
+          WitSchemaGraph(Vector.empty, Vector.empty, 99),
+          WitSchemaValueTree(Vector(WitSchemaValueNode.StringValue("selected-case")), 0)
+        )
+        assertTrue(
+          decode(WireCustomToolError("bad", payload)) == Right(GitError.Bad("selected-case")),
+          decode(WireCustomToolError("unknown", payload)).isLeft,
+          decode(
+            WireCustomToolError(
+              "bad",
+              payload.copy(value = WitSchemaValueTree(Vector(WitSchemaValueNode.S32Value(19)), 0))
+            )
+          ).isLeft
+        )
+      },
+      test("compiled input graph matches canonical inherited field order") {
+        import golem.schema.wire.*
+        val graph = WireToolMacro.inputGraph[Git](List("status"))
+        val model = gitDescriptor.flatMap(_.canonicalInputRecordSchema(1)).toOption.get
+        assertTrue(graph == SchemaWire.schemaGraphToWit(model))
+      },
       test("root subcommand call assembles the canonical input from the static model") {
         val transport = new RecordingTransport(ok("clean"))
         // Values deliberately listed in non-canonical order to exercise the
