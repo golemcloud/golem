@@ -3512,7 +3512,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await?
         };
 
-        if claimed_scope.is_none() {
+        let Some((scope_start_index, scope_handle)) = claimed_scope else {
             let (tx_id, tx) = handler.create_new().await?;
             // A transaction is a durable scope: append the scope `Start` and the
             // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
@@ -3548,189 +3548,183 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .push_durable_scope(begin_index, DurableScopeKind::Transaction, None);
             self.state.current_retry_point = begin_index;
 
-            Ok((begin_index, tx))
-        } else {
-            // The transaction scope `Start` is preserved across restarts, so its index is the
-            // stable original begin index that keys every transaction marker. Its `End` is folded
-            // into the resolver: `claim_scope_start` consumes the `Start`, validates the exact
-            // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
-            // interleaved oplog fails here instead of silently driving the recovery logic with the
-            // wrong scope), and registers an awaiter the transaction terminal awaits instead of
-            // reading the scope `End` positionally. The handle is stored only when the transaction
-            // continues replaying (not when recovery restarts it live).
-            let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let (scope_start_index, scope_handle) = claimed_scope
-                .expect("a transaction that did not continue live claimed its scope Start");
-            let (begin_index, begin_entry) =
-                crate::get_oplog_entry!(self, OplogEntry::BeginRemoteTransaction)?;
-            // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
-            // transaction (`original_begin_index: None`) or, after a restart, points back at this
-            // scope `Start`.
-            if let OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(idx),
-                ..
-            } = &begin_entry
-                && *idx != scope_start_index
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
+            return Ok((begin_index, tx));
+        };
+
+        // The transaction scope `Start` is preserved across restarts, so its index is the
+        // stable original begin index that keys every transaction marker. Its `End` is folded
+        // into the resolver: `claim_scope_start` consumes the `Start`, validates the exact
+        // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
+        // interleaved oplog fails here instead of silently driving the recovery logic with the
+        // wrong scope), and registers an awaiter the transaction terminal awaits instead of
+        // reading the scope `End` positionally. The handle is stored only when the transaction
+        // continues replaying (not when recovery restarts it live).
+        let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
+        let (begin_index, begin_entry) =
+            crate::get_oplog_entry!(self, OplogEntry::BeginRemoteTransaction)?;
+        // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
+        // transaction (`original_begin_index: None`) or, after a restart, points back at this
+        // scope `Start`.
+        if let OplogEntry::BeginRemoteTransaction {
+            original_begin_index: Some(idx),
+            ..
+        } = &begin_entry
+            && *idx != scope_start_index
+        {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
                     format!(
                         "BeginRemoteTransaction {{ original_begin_index: None | Some({scope_start_index}) }}"
                     ),
                     format!("BeginRemoteTransaction {{ original_begin_index: Some({idx}) }}"),
                 )
                 .into());
-            }
-            let original_begin_index = scope_start_index;
+        }
+        let original_begin_index = scope_start_index;
 
-            let assume_idempotence = self.state.assume_idempotence;
+        let assume_idempotence = self.state.assume_idempotence;
 
-            let pre_entry = self
-                .state
-                .replay_state
-                .lookup_oplog_entry_with_condition_and_state(
-                    original_begin_index,
-                    OplogEntry::is_pre_remote_transaction_s,
-                    OplogEntry::no_concurrent_side_effect,
-                    ScopeScanState::new(original_begin_index),
-                    OplogEntry::track_scope_membership,
-                )
-                .await;
-
-            let tx_id = try_match!(
-                begin_entry,
-                OplogEntry::BeginRemoteTransaction { transaction_id, .. }
+        let pre_entry = self
+            .state
+            .replay_state
+            .lookup_oplog_entry_with_condition_and_state(
+                original_begin_index,
+                OplogEntry::is_pre_remote_transaction_s,
+                OplogEntry::no_concurrent_side_effect,
+                ScopeScanState::new(original_begin_index),
+                OplogEntry::track_scope_membership,
             )
-            .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
+            .await;
 
-            let (tx_id, tx) = handler.create_replay(&tx_id).await?;
+        let tx_id = try_match!(
+            begin_entry,
+            OplogEntry::BeginRemoteTransaction { transaction_id, .. }
+        )
+        .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
 
-            let mut should_restart = false;
+        let (tx_id, tx) = handler.create_replay(&tx_id).await?;
 
-            match pre_entry {
-                OplogEntryLookupResult::Found {
-                    entry: pre_entry, ..
-                } => {
-                    let end_entry = self
-                        .state
-                        .replay_state
-                        .lookup_oplog_entry_with_condition_and_state(
-                            original_begin_index,
-                            OplogEntry::is_end_remote_transaction_s,
-                            OplogEntry::no_concurrent_side_effect,
-                            ScopeScanState::new(original_begin_index),
-                            OplogEntry::track_scope_membership,
-                        )
-                        .await;
+        let mut should_restart = false;
 
-                    match end_entry {
-                        OplogEntryLookupResult::Found { .. } => {}
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: false,
-                        } => {
-                            if pre_entry.is_pre_commit_remote_transaction(original_begin_index) {
-                                // if we can not confirm the transaction was committed, we need to restart
-                                should_restart = !handler.is_committed(&tx_id).await?;
-                            } else if pre_entry
-                                .is_pre_rollback_remote_transaction(original_begin_index)
-                            {
-                                // if we can not confirm the transaction was rolled back, we need to restart
-                                should_restart = !handler.is_rolled_back(&tx_id).await?;
-                            }
+        match pre_entry {
+            OplogEntryLookupResult::Found {
+                entry: pre_entry, ..
+            } => {
+                let end_entry = self
+                    .state
+                    .replay_state
+                    .lookup_oplog_entry_with_condition_and_state(
+                        original_begin_index,
+                        OplogEntry::is_end_remote_transaction_s,
+                        OplogEntry::no_concurrent_side_effect,
+                        ScopeScanState::new(original_begin_index),
+                        OplogEntry::track_scope_membership,
+                    )
+                    .await;
+
+                match end_entry {
+                    OplogEntryLookupResult::Found { .. } => {}
+                    OplogEntryLookupResult::NotFound {
+                        violates_for_all: false,
+                    } => {
+                        if pre_entry.is_pre_commit_remote_transaction(original_begin_index) {
+                            // if we can not confirm the transaction was committed, we need to restart
+                            should_restart = !handler.is_committed(&tx_id).await?;
+                        } else if pre_entry.is_pre_rollback_remote_transaction(original_begin_index)
+                        {
+                            // if we can not confirm the transaction was rolled back, we need to restart
+                            should_restart = !handler.is_rolled_back(&tx_id).await?;
                         }
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: true,
-                        } => {
-                            // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await?;
-                            return Err(WorkerExecutorError::runtime(
+                    }
+                    OplogEntryLookupResult::NotFound {
+                        violates_for_all: true,
+                    } => {
+                        // Must switch to live mode before failing to be able to commit an Error entry
+                        self.switch_to_live().await?;
+                        return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
-                        }
                     }
                 }
-                OplogEntryLookupResult::NotFound {
-                    violates_for_all: false,
-                } => {
-                    should_restart = true;
-                }
-                OplogEntryLookupResult::NotFound {
-                    violates_for_all: true,
-                } => {
-                    // Must switch to live mode before failing to be able to commit an Error entry
-                    self.switch_to_live().await?;
-                    return Err(WorkerExecutorError::runtime(
+            }
+            OplogEntryLookupResult::NotFound {
+                violates_for_all: false,
+            } => {
+                should_restart = true;
+            }
+            OplogEntryLookupResult::NotFound {
+                violates_for_all: true,
+            } => {
+                // Must switch to live mode before failing to be able to commit an Error entry
+                self.switch_to_live().await?;
+                return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
+            }
+        };
+
+        let (result, tx) = if should_restart {
+            let pending = match self.begin_switch_to_live().await? {
+                BeginReplayToLive::ReplayResumed => {
+                    return Err(WorkerExecutorError::runtime(
+                        "replay target grew while a remote transaction was settling",
+                    )
+                    .into());
                 }
+                BeginReplayToLive::Pending(pending) => pending,
             };
 
-            let (result, tx) = if should_restart {
-                let pending = match self.begin_switch_to_live().await? {
-                    BeginReplayToLive::ReplayResumed => {
-                        return Err(WorkerExecutorError::runtime(
-                            "replay target grew while a remote transaction was settling",
-                        )
-                        .into());
-                    }
-                    BeginReplayToLive::Pending(pending) => pending,
-                };
-
-                if !assume_idempotence {
-                    self.finish_switch_to_live(pending).await?.require_live()?;
-                    Err(WorkerExecutorError::runtime(
-                        "Non-idempotent remote write operation was not completed, cannot retry",
-                    ))
-                } else {
-                    // But this is not enough, because if the retried batched write operation succeeds,
-                    // and later we replay it, we need to skip the first attempt and only replay the second.
-                    // Se we add a Jump entry to the oplog that registers a deleted region.
-                    let deleted_region = OplogRegion {
-                        // Delete the previous `BeginRemoteTransaction` entry (and everything after),
-                        // because we'll get a new tx id. The transaction scope `Start` lives at
-                        // `scope_start_index < begin_index`, so it is preserved.
-                        start: begin_index,
-                        end: pending.replay_target().next(), // skipping the Jump entry too
-                    };
-                    commit_replay_jumps(
-                        &self.public_state.worker(),
-                        &self.state.replay_state,
-                        self.entity_parent_start_index(),
-                        vec![deleted_region],
-                    )
-                    .await?;
-
-                    self.finish_switch_to_live(pending).await?.require_live()?;
-
-                    let (tx_id, tx) = handler.create_new().await?;
-                    let _ = self
-                        .public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
-                            tx_id,
-                            Some(original_begin_index),
-                        ))
-                        .await;
-
-                    // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
-                    // be appended live by the transaction terminal, so do not store the (now
-                    // incomplete) replay handle.
-                    Ok((original_begin_index, tx))
-                }
+            if !assume_idempotence {
+                self.finish_switch_to_live(pending).await?.require_live()?;
+                Err(WorkerExecutorError::runtime(
+                    "Non-idempotent remote write operation was not completed, cannot retry",
+                ))
             } else {
-                scope_replay_handle = Some(scope_handle);
+                // But this is not enough, because if the retried batched write operation succeeds,
+                // and later we replay it, we need to skip the first attempt and only replay the second.
+                // Se we add a Jump entry to the oplog that registers a deleted region.
+                let deleted_region = OplogRegion {
+                    // Delete the previous `BeginRemoteTransaction` entry (and everything after),
+                    // because we'll get a new tx id. The transaction scope `Start` lives at
+                    // `scope_start_index < begin_index`, so it is preserved.
+                    start: begin_index,
+                    end: pending.replay_target().next(), // skipping the Jump entry too
+                };
+                commit_replay_jumps(
+                    &self.public_state.worker(),
+                    &self.state.replay_state,
+                    self.entity_parent_start_index(),
+                    vec![deleted_region],
+                )
+                .await?;
+
+                self.finish_switch_to_live(pending).await?.require_live()?;
+
+                let (tx_id, tx) = handler.create_new().await?;
+                let _ = self
+                    .public_state
+                    .worker()
+                    .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
+                        tx_id,
+                        Some(original_begin_index),
+                    ))
+                    .await;
+
+                // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
+                // be appended live by the transaction terminal, so do not store the (now
+                // incomplete) replay handle.
                 Ok((original_begin_index, tx))
-            }?;
+            }
+        } else {
+            scope_replay_handle = Some(scope_handle);
+            Ok((original_begin_index, tx))
+        }?;
 
-            // The (possibly re-begun) transaction scope is open until commit/rollback.
-            self.state.push_durable_scope(
-                result,
-                DurableScopeKind::Transaction,
-                scope_replay_handle,
-            );
-            self.state.current_retry_point = original_begin_index;
+        // The (possibly re-begun) transaction scope is open until commit/rollback.
+        self.state
+            .push_durable_scope(result, DurableScopeKind::Transaction, scope_replay_handle);
+        self.state.current_retry_point = original_begin_index;
 
-            Ok((result, tx))
-        }
+        Ok((result, tx))
     }
 
     pub async fn pre_commit_transaction_function(
