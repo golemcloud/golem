@@ -31,6 +31,7 @@ import golem.schema.{
   SchemaValue
 }
 import golem.schema.SchemaValue.*
+import golem.schema.wire.{WitSchemaValueNode, WitSchemaValueTree}
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
@@ -61,15 +62,23 @@ object MethodBinding {
     new MethodBinding[Instance] {
       def name: String             = method.name
       def metadata: MethodMetadata = descriptor.reflectedMethod(descriptor.methods.find(_.name == name).get)
+      private val rawHttp          = metadata.httpEndpoints match {
+        case List(endpoint) => endpoint.httpMethod == HttpMethod.Any && endpoint.pathSuffix.isEmpty
+        case _              => false
+      }
       def invoke(
         instance: Instance,
         input: JsSchemaValueTree,
         principal: Principal
       ): js.Promise[Option[JsSchemaValueTree]] =
         FutureInterop.toPromise(SchemaPayload.withWireInput(input) { value =>
+          val head = rawHttp && isHeadWireInput(value)
           method.invoke(instance, value, principal).flatMap {
             case None        => Future.successful(None)
-            case Some(value) => SchemaWireInterop.ownedValueTreeToJsAsync(value).map(Some(_))
+            case Some(value) =>
+              suppressWireBody(value, head)
+                .flatMap(SchemaWireInterop.ownedValueTreeToJsAsync)
+                .map(Some(_))
           }
         })
     }
@@ -139,4 +148,35 @@ object MethodBinding {
       endpoint.dispose().map(_ => replacement)
     case _ => Future.successful(value)
   }
+
+  private def isHeadWireInput(value: WitSchemaValueTree): Boolean =
+    value.valueNodes.lift(value.root) match {
+      case Some(WitSchemaValueNode.RecordValue(Vector(request))) =>
+        value.valueNodes.lift(request) match {
+          case Some(WitSchemaValueNode.RecordValue(fields)) =>
+            fields.headOption.flatMap(value.valueNodes.lift).contains(WitSchemaValueNode.StringValue("HEAD"))
+          case _ => false
+        }
+      case _ => false
+    }
+
+  private def suppressWireBody(value: WitSchemaValueTree, head: Boolean): Future[WitSchemaValueTree] =
+    value.valueNodes.lift(value.root) match {
+      case Some(WitSchemaValueNode.RecordValue(Vector(status, _, body))) =>
+        (value.valueNodes.lift(status), value.valueNodes.lift(body)) match {
+          case (
+                Some(WitSchemaValueNode.U16Value(code)),
+                Some(WitSchemaValueNode.StreamValue(handle))
+              ) if head || code == 204 || code == 205 || code == 304 =>
+            val endpoint = handle.take().getOrElse(throw new IllegalStateException("HTTP body was already transferred"))
+            endpoint.dispose().map { _ =>
+              val empty = GuestSchemaValueStreamHandle.nativeWire(
+                AgentStream.fromPull[WitSchemaValueTree](() => Future.successful(None))
+              )
+              value.copy(valueNodes = value.valueNodes.updated(body, WitSchemaValueNode.StreamValue(empty)))
+            }
+          case _ => Future.successful(value)
+        }
+      case _ => Future.successful(value)
+    }
 }

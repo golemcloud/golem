@@ -18,6 +18,7 @@ const expected = {
   'exported-agent': { agents: true, tools: false, middleware: false },
   'agent-tool': { agents: true, tools: true, middleware: false },
   'agent-reflection': { agents: true, tools: false, middleware: false },
+  'durable-json': { agents: true, tools: false, middleware: false },
   'middleware-only': { agents: false, tools: false, middleware: true },
   mixed: { agents: true, tools: true, middleware: true },
 };
@@ -100,6 +101,14 @@ function instantiate(code, overrides = {}) {
 }
 
 describe('static component exports', () => {
+  it('retains the schema adapter used by runtime Durable Stream codecs', async () => {
+    const output = await build('durable-json');
+    const retained = Object.entries(output.modules)
+      .filter(([, info]) => info.renderedLength > 0)
+      .map(([id]) => id);
+    expect(retained.some((id) => id.includes('/schema/zod.'))).toBe(true);
+  }, 30000);
+
   it('executes compiler-emitted ordinary tool clients without retaining model validation', async () => {
     const output = await build('compiled-tool-client');
     const retained = Object.entries(output.modules)
@@ -543,7 +552,7 @@ describe('static component exports', () => {
           for (const module of modules) expect(retained).not.toContain(module);
       }
       if (!capabilities.tools) expect(output.unminified).not.toContain('class ToolRegistryImpl');
-      if (!capabilities.middleware && name !== 'agent-reflection') {
+      if (!capabilities.middleware && !['agent-reflection', 'durable-json'].includes(name)) {
         for (const module of [
           'schema-model/model.mjs',
           'schema-model/wit.mjs',

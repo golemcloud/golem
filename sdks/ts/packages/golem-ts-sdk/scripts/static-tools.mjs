@@ -97,6 +97,8 @@ export function staticTools(config, runtime) {
             'parts',
             'dynamicClient',
             'create',
+            'createDurableJsonWriter',
+            'readDurableJsonStream',
           ].includes(symbol?.name) &&
           symbol.declarations?.some((d) => d.getSourceFile().fileName.endsWith('/dist/index.d.mts'))
         )
