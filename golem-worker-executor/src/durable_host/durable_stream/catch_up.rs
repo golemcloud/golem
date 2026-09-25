@@ -371,7 +371,7 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         &self,
         attachment: &StreamAttachmentKey,
         handle: &DurableStreamHandle,
-        now_millis: u64,
+        _now_millis: u64,
         after: Option<StreamOffset>,
         through: Option<StreamOffset>,
     ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
@@ -400,15 +400,11 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         if indexed_attachment.key != *attachment {
             return Err(StreamStoreError::AttachmentConflict);
         }
-        match indexed_attachment.state {
-            IndexedStreamAttachmentState::Active {
-                lease_expires_at_millis,
-                ..
-            } if now_millis < lease_expires_at_millis => {}
-            IndexedStreamAttachmentState::Active { .. } => {
-                return Err(StreamStoreError::LeaseExpired);
-            }
-            _ => return Err(StreamStoreError::InvalidAttachmentState),
+        if !matches!(
+            indexed_attachment.state,
+            IndexedStreamAttachmentState::Active { .. }
+        ) {
+            return Err(StreamStoreError::InvalidAttachmentState);
         }
         drop(index);
         self.read_segment(handle, after, through).await
@@ -450,7 +446,7 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         {
             event?;
         }
-        // The attachment may have been renewed, finalized, or replaced while the long poll was
+        // The attachment may have been finalized or replaced while the long poll was
         // asleep. Re-read it authoritatively and drain the full available segment rather than
         // returning only the bus event that happened to wake this waiter.
         let now_millis = now_millis.saturating_add(started.elapsed().as_millis() as u64);
