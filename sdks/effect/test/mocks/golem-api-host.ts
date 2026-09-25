@@ -60,9 +60,7 @@ export type PersistenceLevel =
   | { tag: "persist-nothing" }
   | { tag: "persist-remote-side-effects" }
   | { tag: "smart" }
-export type UpdateMode =
-  | "automatic"
-  | "snapshot-based"
+export type UpdateMode = "automatic" | "snapshot-based"
 export type RevertAgentTarget =
   | { tag: "revert-to-oplog-index"; val: OplogIndex }
   | { tag: "revert-last-invocations"; val: bigint }
