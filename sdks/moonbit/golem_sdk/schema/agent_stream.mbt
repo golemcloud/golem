@@ -17,6 +17,7 @@ pub(all) struct AgentStream[T] {
 pub struct AgentStreamWriter[T] {
   priv sink : @async-core.Sink[@types.SchemaValueTree]
   priv encode : async (T) -> @types.SchemaValueTree
+  priv cleanup_encoded : (@types.SchemaValueTree) -> Unit
   priv release : (T) -> Unit
 }
 
@@ -95,7 +96,12 @@ pub fn[T : IntoWire + FromWire] AgentStream::new() -> (
     drop_wire_stream_item,
   )
   (
-    { sink, encode: into_wire_async, release: release_wire, },
+    {
+      sink,
+      encode: into_wire_async,
+      cleanup_encoded: drop_wire_stream_item,
+      release: release_wire,
+    },
     {
       handle: @model.GuestSchemaValueStreamHandle::from_native(reader),
       decode: decode_wire_stream_item,
@@ -124,6 +130,7 @@ pub fn[T] AgentStream::new_with_codec(
         errdefer model.release_resources(@model_host.resource_drops())
         @model.schema_value_to_wit_async(model)
       },
+      cleanup_encoded: @model.drop_wit_capabilities,
       release,
     },
     AgentStream::from_reader(reader, decode),
@@ -145,6 +152,7 @@ pub fn[T : IntoWire + FromWire] AgentStream::produce(
       let writer : AgentStreamWriter[T] = {
         sink,
         encode: into_wire_async,
+        cleanup_encoded: drop_wire_stream_item,
         release: release_wire,
       }
       producer(writer)
@@ -178,6 +186,7 @@ pub fn[T] AgentStream::produce_with_codec(
           errdefer model.release_resources(@model_host.resource_drops())
           @model.schema_value_to_wit_async(model)
         },
+        cleanup_encoded: @model.drop_wit_capabilities,
         release,
       }
       producer(writer)
@@ -193,13 +202,14 @@ pub fn[T] AgentStream::produce_with_codec(
 async fn[T] encode_stream_items(
   items : Array[T],
   encode : async (T) -> @types.SchemaValueTree,
+  cleanup_encoded : (@types.SchemaValueTree) -> Unit,
   release : (T) -> Unit,
 ) -> Array[@types.SchemaValueTree] {
   let encoded : Array[@types.SchemaValueTree] = []
   let mut converted = 0
   errdefer {
     for value in encoded {
-      drop_wire_stream_item(value)
+      cleanup_encoded(value)
     }
     for i in converted..<items.length() {
       release(items[i])
@@ -230,7 +240,12 @@ pub async fn[T] AgentStreamWriter::write_all(
   self : AgentStreamWriter[T],
   values : Array[T],
 ) -> AgentStreamWriteOutcome {
-  let encoded = encode_stream_items(values, self.encode, self.release)
+  let encoded = encode_stream_items(
+    values,
+    self.encode,
+    self.cleanup_encoded,
+    self.release,
+  )
   if self.sink.write_all(encoded[:]) {
     Accepted
   } else {

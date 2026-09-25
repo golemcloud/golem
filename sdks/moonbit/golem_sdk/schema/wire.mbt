@@ -417,6 +417,20 @@ pub impl FromWire for Int with fn read_wire(tree, index) {
 }
 
 ///|
+pub impl IntoWire for UInt16 with fn append_wire(self, encoder) {
+  encoder.push(@types.SchemaValueNode::U16Value(self.to_uint()))
+}
+
+///|
+pub impl FromWire for UInt16 with fn read_wire(tree, index) {
+  match wire_node(tree, index) {
+    @types.SchemaValueNode::U16Value(value) if value <= 65535U =>
+      value.to_uint16()
+    _ => raise WireError::Invalid("expected u16 value")
+  }
+}
+
+///|
 pub impl IntoWire for UInt with fn append_wire(self, encoder) {
   encoder.push(@types.SchemaValueNode::U32Value(self))
 }

@@ -248,7 +248,8 @@ export function staticTools(config, runtime) {
           ? evaluate(node.expression, locals)
           : receiver[node.expression.name.text];
       if (typeof fn !== 'function') fail(node, 'Static metadata call target is not a constructor');
-      return fn.apply(
+      return Reflect.apply(
+        fn,
         receiver,
         node.arguments.map((arg) => evaluate(arg, locals)),
       );

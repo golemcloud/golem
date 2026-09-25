@@ -488,7 +488,8 @@ fn launch_retained_crash_child() {
 }
 
 fn launch_atomic_idempotency_child() {
-    ToolRpc::new("streaming")
+    ToolRpc::create("streaming")
+        .expect("tool RPC creation failed")
         .invoke(
             &["run".to_string()],
             raw_run_input("atomic-idempotency-child"),

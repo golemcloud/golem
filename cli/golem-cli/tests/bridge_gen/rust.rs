@@ -775,8 +775,9 @@ fn guest_runtime_prelude_compiles_with_generated_golem_rust_dependency_flags() {
         "the relocated prelude test no longer exercises unrestricted binary values"
     );
     assert!(
-        lib_rs.contains("::__golem_bridge_runtime::agentic::UnstructuredText as crate")
-            && lib_rs.contains("::to_schema_value(input)"),
+        lib_rs.contains("::__golem_bridge_runtime::agentic::UnstructuredText as")
+            && lib_rs.contains("golem_rust::schema::wit::direct::IntoWire")
+            && lib_rs.contains("::write_wire(__source, __writer)"),
         "the relocated prelude test no longer exercises unrestricted text encoding:\n{lib_rs}"
     );
 

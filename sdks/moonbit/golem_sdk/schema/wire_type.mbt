@@ -166,6 +166,11 @@ pub impl WireSchema for Int with fn append_wire_type(encoder) {
 }
 
 ///|
+pub impl WireSchema for UInt16 with fn append_wire_type(encoder) {
+  encoder.push(@types.SchemaTypeBody::U16Type(None))
+}
+
+///|
 pub impl WireSchema for UInt with fn append_wire_type(encoder) {
   encoder.push(@types.SchemaTypeBody::U32Type(None))
 }

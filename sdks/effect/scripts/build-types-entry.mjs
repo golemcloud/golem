@@ -129,6 +129,10 @@ facades.push(
   ["Ignite/IgniteClient", "@golemcloud/effect-golem/ignite2"],
 )
 for (const [modulePath, owner, namespace] of facades) {
+  // WitCodec is the implementation used by the package itself. Replacing it
+  // with a facade would make the package import that facade through its own
+  // public entrypoint and create a circular, uninitialized module.
+  if (modulePath === "WitCodec") continue
   const source = program.getSourceFile(resolve(root, "src", `${modulePath}.ts`))
   const exports = checker
     .getExportsOfModule(checker.getSymbolAtLocation(source))

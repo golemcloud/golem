@@ -83,12 +83,16 @@ object AgentDefinitionMacro {
     val traitType = TypeRepr.of[T]
     val sym       = traitType.typeSymbol
     if (!sym.flags.is(Flags.Trait)) report.errorAndAbort(s"@agent target must be a trait, found: ${sym.fullName}")
-    if (!sym.annotations.exists(_.tpe.typeSymbol.fullName == "golem.runtime.annotations.agentDefinition"))
+    val router = HttpDeclarationMacro.isRouter(sym)
+    val hasAgentDefinition =
+      sym.annotations.exists(_.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.agentDefinition")
+    if (router && hasAgentDefinition) report.errorAndAbort("Use either @httpRouter or @agentDefinition, not both")
+    if (!router && !hasAgentDefinition)
       report.errorAndAbort(s"Missing @agentDefinition(...) on agent trait: ${sym.fullName}")
-    val name             = agentDefinitionTypeName(sym).getOrElse(sym.name)
+    val name             = if (router) HttpDeclarationMacro.string(sym, "typeName", 0) else agentDefinitionTypeName(sym).getOrElse(sym.name)
     val descriptionValue = annotationString(sym, TypeRepr.of[description]).orElse(docstringText(sym))
-    val mode             = agentDefinitionMode(sym).map(_.valueOrAbort)
-    val mount            = extractHttpMount(sym, name)
+    val mode             = if (router) Some("ephemeral") else agentDefinitionMode(sym).map(_.valueOrAbort)
+    val mount            = if (router) Some(HttpDeclarationMacro.routerMountValue(sym)) else extractHttpMount(sym, name)
 
     def graph(tpe: TypeRepr): SchemaGraph = tpe.asType match {
       case '[a] => compiled.graph(core.q.reflect.TypeRepr.of[a])
@@ -100,26 +104,41 @@ object AgentDefinitionMacro {
     def input(values: List[(String, TypeRepr)]): InputMetadata = InputMetadata(values.collect {
       case (name, tpe) if !isPrincipal(tpe) => ParameterMetadata(name, FieldSource.UserSupplied, graph(tpe))
     })
-    val idClass = sym.declarations
-      .find(c => c.isClassDef && c.annotations.exists(_.tpe.typeSymbol.fullName == "golem.runtime.annotations.id"))
-      .orElse(sym.declarations.find(c => c.isClassDef && c.name == "Id"))
-      .getOrElse(
-        report.errorAndAbort(
-          s"Agent trait ${sym.name} must define a `class Id(...)` to declare its constructor parameters."
+    val (identity, constructorDescription) = if (router) {
+      if (sym.declarations.exists(c => c.isClassDef && (c.name == "Id" || HttpDeclarationMacro.has(c, "id"))))
+        report.errorAndAbort("router-constructor: HTTP routers cannot declare constructor parameters")
+      (Nil, descriptionValue.getOrElse(name))
+    } else {
+      val idClass = sym.declarations
+        .find(c => c.isClassDef && HttpDeclarationMacro.has(c, "id"))
+        .orElse(sym.declarations.find(c => c.isClassDef && c.name == "Id"))
+        .getOrElse(
+          report.errorAndAbort(
+            s"Agent trait ${sym.name} must define a `class Id(...)` to declare its constructor parameters."
+          )
         )
-      )
-    val identity    = params(idClass.primaryConstructor)
+      (params(idClass.primaryConstructor), docstringText(idClass).getOrElse(descriptionValue.getOrElse(name)))
+    }
     val constructor = ConstructorMetadata(
       None,
-      docstringText(idClass).getOrElse(descriptionValue.getOrElse(name)),
+      constructorDescription,
       None,
       input(identity)
     )
     val methods = sym.methodMembers.collect {
       case method if method.flags.is(Flags.Deferred) && method.isDefDef =>
+        val handler  = HttpDeclarationMacro.has(method, "httpHandler")
+        val provider = HttpDeclarationMacro.has(method, "openApiProvider")
+        if ((handler || provider) && !router) report.errorAndAbort("HTTP roles require @httpRouter")
+        if (router && (handler == provider))
+          report.errorAndAbort("router-method-role: each method must have exactly one HTTP role")
         val arguments      = params(method)
         val principalNames = arguments.collect { case (name, tpe) if isPrincipal(tpe) => name }.toSet
         val headers        = extractHeaderVars(method)
+        if (router && (HttpDeclarationMacro.has(method, "endpoint") || headers.nonEmpty))
+          report.errorAndAbort("handler-endpoint-policy: router policy belongs to the mount")
+        if (provider && arguments.nonEmpty)
+          report.errorAndAbort("provider-schema: provider must be parameterless")
         validateEndpoints(method, name, mount.isDefined, arguments.map(_._1).toSet, principalNames, headers)
         val readonly = extractReadOnly(method, principalNames.nonEmpty)
         if (mode.contains("ephemeral") && readonly.nonEmpty)
@@ -132,7 +151,7 @@ object AgentDefinitionMacro {
           None,
           input(arguments),
           if (out =:= TypeRepr.of[Unit]) OutputMetadata.Unit else OutputMetadata.Single(graph(out)),
-          extractEndpoints(method, headers),
+          if (handler) List(HttpEndpointDetails(HttpMethod.Any, Nil, Nil, Nil, None, None)) else extractEndpoints(method, headers),
           readonly
         )
     }
@@ -156,12 +175,12 @@ object AgentDefinitionMacro {
       traitType.baseType(base).typeArgs
     }
     if (configTypes.size > 1) report.errorAndAbort("Agent trait may extend at most one AgentConfig[T]")
-    val snapshotting = Snapshotting
+    val snapshotting = if (router) Snapshotting.Disabled else Snapshotting
       .parse(extractAgentDefinitionStringArg(sym, "snapshotting", 7).getOrElse("disabled"))
       .fold(error => report.errorAndAbort(error), value => value)
     val metadata = AgentMetadata(
       name,
-      AgentTypeKind.Regular,
+      if (router) AgentTypeKind.HttpRouter else AgentTypeKind.Regular,
       descriptionValue,
       mode,
       methods,
@@ -178,6 +197,7 @@ object AgentDefinitionMacro {
     }
     try HttpValidation.validateHttpMountFromMetadata(metadata)
     catch { case error: IllegalArgumentException => report.errorAndAbort(error.getMessage) }
+    HttpAgentValidation.validate(metadata).left.foreach(error => report.errorAndAbort(error))
     compiled.literal(WireAgentMetadata.fromModel(metadata))
   }
 

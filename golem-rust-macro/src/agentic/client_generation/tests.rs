@@ -45,6 +45,8 @@ fn durable_agents_generate_getters() {
     assert!(rendered.contains("get_with_config"));
     assert!(!rendered.contains("get_agent_type"));
     assert!(!rendered.contains("component_id"));
+    assert!(rendered.contains("WasmRpc :: create"));
+    assert!(!rendered.contains("WasmRpc :: new"));
 }
 
 #[test]
@@ -64,6 +66,32 @@ fn ephemeral_agents_generate_known_and_fresh_phantom_getters() {
     assert!(!rendered.contains("_with_metadata"));
     assert!(!rendered.contains("fn phantom_id ("));
     assert!(!rendered.contains("fn get_agent_id ("));
+}
+
+#[test]
+fn caller_defined_clients_do_not_load_reflection_metadata() {
+    let item_trait = parse_quote! {
+        trait ExampleAgent {
+            fn new(name: String) -> Self;
+            fn ping(&self);
+        }
+    };
+    let rendered = super::get_remote_client_for_type(
+        &item_trait,
+        "remote:example/agent",
+        &[quote! { name: String }],
+        &[format_ident!("name")],
+        &[],
+        &[],
+        &[],
+        true,
+        true,
+    )
+    .to_string();
+
+    assert!(!rendered.contains("get_agent_type"));
+    assert!(!rendered.contains("component_id"));
+    assert!(rendered.contains("WasmRpc :: create"));
 }
 
 #[test]
