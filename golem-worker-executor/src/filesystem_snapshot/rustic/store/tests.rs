@@ -23,8 +23,8 @@ use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
 use super::{
-    RusticSnapshotStore, StorePolicy, leaves_marked_packs, scope_snapshots, store_backup_options,
-    store_restore_options, whole_millis_from,
+    PublishGate, RusticSnapshotStore, StorePolicy, leaves_marked_packs, scope_snapshots,
+    store_backup_options, store_restore_options, whole_millis_from,
 };
 use crate::filesystem_snapshot::contract_tests::fixture::{
     Listed, Scratch, Spec, fixture, listing, write_tree,
@@ -1227,6 +1227,51 @@ async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_end
 
     assert!(matches!(&saved, Ok(Ok(Ok(_)))), "{saved:?}");
     assert_eq!((held, waited, stopped), (true, true, true));
+}
+
+#[test]
+async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {
+    // The gate holds the save after its blocking work, so the tracker is empty and `shut_down`
+    // returns before the publish starts.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let gate = Arc::new(PublishGate::default());
+    let store = Arc::new(RusticSnapshotStore {
+        publish_gate: Some(gate.clone()),
+        ..RusticSnapshotStore::with_policy(
+            storage.clone(),
+            key(),
+            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+        )
+    });
+    let scope = new_scope();
+    let tree = one_file_tree("late");
+    let saving = tokio::spawn({
+        let store = store.clone();
+        let scope = scope.clone();
+        let path = tree.path().to_path_buf();
+        async move { store.save(&scope, &name("p-late"), &path, None).await }
+    });
+    let reached = tokio::time::timeout(LIMIT, gate.reached.notified())
+        .await
+        .is_ok();
+
+    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
+    gate.open.notify_one();
+    let saved = tokio::time::timeout(LIMIT, saving).await;
+
+    assert!(
+        matches!(&saved, Ok(Ok(Err(error))) if is_storage(error, false)),
+        "{saved:?}"
+    );
+    assert_eq!(
+        (
+            reached,
+            stopped,
+            blobs(&*storage, &scope.0, "snapshots/").await,
+            store.work_in_flight(),
+        ),
+        (true, true, Vec::<String>::new(), 0)
+    );
 }
 
 #[test]

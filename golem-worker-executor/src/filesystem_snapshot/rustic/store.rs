@@ -154,10 +154,31 @@ pub(crate) struct RusticSnapshotStore {
     policy: StorePolicy,
     /// The parent of the token of each operation.
     root: CancellationToken,
-    /// Counts the blocking tasks, the backends and the deletes of dropped publishes.
+    /// Counts the blocking tasks, the backends, the publishes and the deletes of dropped publishes.
     tracker: TaskTracker,
     /// Runs saves and prunes at a low priority.
     low_priority: LowPriority,
+    /// Holds a save after its blocking work and before its publish, when a test sets it.
+    #[cfg(test)]
+    pub(super) publish_gate: Option<Arc<PublishGate>>,
+}
+
+/// A gate that holds a save after its blocking work and before its publish.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(super) struct PublishGate {
+    /// Notified when a save reaches the gate.
+    pub(super) reached: tokio::sync::Notify,
+    /// Lets the save go on.
+    pub(super) open: tokio::sync::Notify,
+}
+
+/// The error of an operation of a store that is shut down.
+fn shut_down_error() -> SnapshotStoreError {
+    SnapshotStoreError::Storage {
+        retryable: false,
+        source: anyhow::anyhow!("the filesystem snapshot store is shut down"),
+    }
 }
 
 impl RusticSnapshotStore {
@@ -188,12 +209,15 @@ impl RusticSnapshotStore {
             root: CancellationToken::new(),
             tracker: TaskTracker::new(),
             low_priority: LowPriority::new(policy.save_threads),
+            #[cfg(test)]
+            publish_gate: None,
         }
     }
 
     /// Cancels each operation, so each running storage call ends and no new call starts, and later
-    /// operations give `Storage`. A publish is not cancelled. The call waits until no blocking task,
-    /// backend, publish or delete of a dropped publish remains. The runtime must not drop before it
+    /// operations give `Storage`. A publish that starts before the cancel runs to its end. A save
+    /// that reaches its publish after the cancel publishes nothing and gives `Storage`. The call
+    /// waits until no blocking task, backend, publish or delete of a dropped publish remains. The runtime must not drop before it
     /// returns, because a storage call after its time driver stops aborts the process.
     pub(crate) async fn shut_down(&self) {
         self.root.cancel();
@@ -210,10 +234,7 @@ impl RusticSnapshotStore {
     /// Starts an operation. The token of the operation is cancelled when the guard drops.
     fn start(&self) -> Result<(CancellationToken, DropGuard), SnapshotStoreError> {
         if self.root.is_cancelled() {
-            return Err(SnapshotStoreError::Storage {
-                retryable: false,
-                source: anyhow::anyhow!("the filesystem snapshot store is shut down"),
-            });
+            return Err(shut_down_error());
         }
         let token = self.root.child_token();
         Ok((token.clone(), token.drop_guard()))
@@ -338,13 +359,22 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             })
             .await?;
         let (staged, info) = staged.ok_or(SnapshotStoreError::AlreadyExists)?;
-        // The publish is the commit point, so no cancel ends it. The tracker counts it, so
-        // `shut_down` waits for it, and the deadline limits that wait.
+        #[cfg(test)]
+        if let Some(gate) = &self.publish_gate {
+            gate.reached.notify_one();
+            gate.open.notified().await;
+        }
+        // The publish is the commit point, so no cancel ends it. The tracker counts it from here,
+        // so a `shut_down` that has not cancelled yet waits for it, and the deadline limits that wait.
         let files = self.files(scope, &CancellationToken::new());
-        self.tracker
-            .track_future(publish(&files, &staged, &self.tracker))
-            .await
-            .map_err(storage_failure)?;
+        let publishing = self
+            .tracker
+            .track_future(publish(&files, &staged, &self.tracker));
+        if self.root.is_cancelled() {
+            // No snapshot file is written. A later prune marks the packs of the save.
+            return Err(shut_down_error());
+        }
+        publishing.await.map_err(storage_failure)?;
         Ok(info)
     }
 
