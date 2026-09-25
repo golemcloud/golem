@@ -4428,12 +4428,20 @@ async fn unclaimed_retained_descendant_reports_only_settled_subtrees() {
 }
 
 #[test]
-async fn live_invocation_end_releases_retained_starts() {
-    // [NoOp, Start(A=2), Start(B=3), End(A=2→4)] — B is retained by A's await and never claimed
-    // before the invocation finishes live. Releasing at the live invocation end clears the
-    // retained set (so later durable calls take the plain live path) and a late claim now sees
-    // the replay tail rather than a stale retained Start.
-    let rs = replay_state_over(vec![noop(), start_now(), start_now(), end_for(2, 42)]).await;
+async fn closed_retained_starts_are_released_at_live_invocation_end() {
+    // [NoOp, Start(A=2), Start(B=3), End(B=3→4), End(A=2→5)] — A's await commits past B's Start
+    // (retained) and End (attached to it) before resolving at 5, and B is never claimed before
+    // the invocation finishes live. B is closed history, so releasing at the live invocation end
+    // clears the retained set (later durable calls take the plain live path) and a late claim now
+    // sees the replay tail rather than a stale retained Start.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(3, 43),
+        end_for(2, 42),
+    ])
+    .await;
     let handle_a = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -4442,10 +4450,11 @@ async fn live_invocation_end_releases_retained_starts() {
         .await
         .unwrap();
     match rs.await_resolution(handle_a).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
         other => panic!("expected Completed, got {other:?}"),
     }
     assert!(rs.has_unclaimed_retained_starts());
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
     rs.switch_cursor_to_live().await.unwrap();
     assert!(
         rs.has_unclaimed_retained_starts(),
@@ -4467,6 +4476,81 @@ async fn live_invocation_end_releases_retained_starts() {
         err.to_string().contains("end of replay"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+async fn unclosed_retained_starts_are_rejected_at_live_invocation_end() {
+    // [NoOp, Start(A=2), Start(B=3), End(A=2→4)] — B is retained by A's await, never claimed,
+    // and has no terminal in history. Finishing the live invocation would append
+    // `AgentInvocationFinished` after an unclosed Start, which the next reconstruction's
+    // boundary read rejects; the release must therefore fail now instead of warning, and must
+    // leave the retained Start in place.
+    let rs = replay_state_over(vec![noop(), start_now(), start_now(), end_for(2, 42)]).await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    rs.switch_cursor_to_live().await.unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let err = rs
+        .release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("unclosed unclaimed retained Start(s) at 3"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "a rejected release must not drop the retained Start"
+    );
+}
+
+#[test]
+async fn retained_terminals_the_cursor_clamped_past_are_found_at_live_invocation_end() {
+    // [NoOp, Start(A=2), Start(B=3), End(A=2→4), NoOp=5, End(B=3→6)]: A's resolution stops the
+    // drain at 4 because the NoOp at 5 is neither an awaited terminal nor a retainable Start.
+    // Switching to live then clamps the head to 6 without committing past B's End, so it is not
+    // attached to the retained Start. The release must still recognise B as closed history by
+    // reading the recorded prefix rather than rejecting it as unclosed.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(2, 42),
+        noop(),
+        end_for(3, 43),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+    rs.switch_cursor_to_live().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
+    assert!(rs.has_unclaimed_retained_starts());
+
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
 }
 
 #[test]

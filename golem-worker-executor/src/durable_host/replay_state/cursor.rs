@@ -3168,8 +3168,10 @@ impl ReplayState {
     /// result, so no replayed owner can claim them anymore; keeping them would make every later
     /// durable call take the replay admission path (see `WorkerState::durable_call_is_live`) for
     /// nothing. Mirrors the invocation-boundary tolerance of [`AbandonedStarts`] for a replayed
-    /// finish, except that an unclosed `Start` is not an error here: it sits at the live tail,
-    /// exactly like a lone `Start` the cursor clamps past when replay switches to live.
+    /// finish, including its structural rule: every released `Start` must already be closed by a
+    /// recorded `End`/`Cancelled`. An unclosed retained `Start` is a divergence error rather than
+    /// a warning, because appending `AgentInvocationFinished` after it would make the next
+    /// reconstruction's boundary read reject the history deterministically.
     ///
     /// Nothing is released while an entity body is still being reconstructed: a retained `Start`
     /// may be a descendant of that body whose owner has not been admitted yet.
@@ -3194,6 +3196,62 @@ impl ReplayState {
                     "Keeping unclaimed retained Starts across a live invocation end while an entity body is still reconstructing"
                 );
                 return Ok(());
+            }
+            // A retained `Start` normally has its terminal attached when the cursor commits past
+            // it. Replay may still have clamped the head to the target without reading every
+            // entry in between, so an unattached terminal is looked up in the recorded prefix
+            // before the `Start` is declared unclosed.
+            let mut unclosed: HashSet<OplogIndex> = st
+                .retained_starts
+                .iter()
+                .filter(|(_, retained)| retained.terminal.is_none())
+                .map(|(idx, _)| *idx)
+                .collect();
+            let replay_target = state.cursor.replay_target();
+            if let Some(first_unclosed) = unclosed.iter().min().copied() {
+                let mut next = first_unclosed.next();
+                while next <= replay_target && !unclosed.is_empty() {
+                    let available = u64::from(replay_target) - u64::from(next) + 1;
+                    let entries = state
+                        .cursor
+                        .read_oplog(next, CHUNK_SIZE.min(available))
+                        .await;
+                    let Some(&(last_read, _)) = entries.last() else {
+                        break;
+                    };
+                    for (index, entry) in entries {
+                        if index > replay_target {
+                            break;
+                        }
+                        if !st.skipped_regions.is_in_deleted_region(index)
+                            && let Some(start_index) = terminal_start_index(&entry)
+                        {
+                            unclosed.remove(&start_index);
+                        }
+                    }
+                    next = last_read.next();
+                }
+            }
+            if !unclosed.is_empty() {
+                let mut unclosed: Vec<_> = unclosed.into_iter().collect();
+                unclosed.sort();
+                let unclosed: Vec<_> = unclosed
+                    .into_iter()
+                    .map(|idx| {
+                        let OplogEntry::Start { function_name, .. } = &st.retained_starts[&idx].entry
+                        else {
+                            unreachable!("only Start entries are retained");
+                        };
+                        format!("{idx} ({function_name:?})")
+                    })
+                    .collect();
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "an End/Cancelled closing every unclaimed retained Start before the live invocation finished",
+                    format!(
+                        "live invocation of {owned_agent_id} finished with unclosed unclaimed retained Start(s) at {}",
+                        unclosed.join(", ")
+                    ),
+                ));
             }
             let released = std::mem::take(&mut st.retained_starts);
             state

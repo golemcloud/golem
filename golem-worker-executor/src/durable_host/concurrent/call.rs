@@ -1192,6 +1192,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
         let (
             is_live,
+            primary_runtime,
             replaying_incomplete_entity,
             replay_state,
             linear_memory,
@@ -1203,6 +1204,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             let ctx = get_ctx(access.data_mut());
             (
                 ctx.state.durable_call_is_live(),
+                ctx.runtime == OwnerRuntime::Agent,
                 ctx.entity_invocation_scope().is_some_and(|scope| {
                     scope.mode() == InvocationExecutionMode::ReplayingIncomplete
                 }),
@@ -1243,10 +1245,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 };
                 pending.finish().await?.require_live()?;
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
+            } else if primary_runtime {
+                // The primary Store dispatched this call while a retained recorded `Start` could
+                // still have been its own; another Store claimed the last such `Start` (or the
+                // live transition settled) in between, so there is nothing left to replay and
+                // the caller dispatches live.
+                Ok(ReplayAccessStartOutcome::ReplayEnded)
             } else {
                 Err(WorkerExecutorError::unexpected_oplog_entry(
                     format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                    "replay ended before a primary or completed-entity reconstruction claim",
+                    "replay ended before a completed-entity reconstruction claim",
                 ))
             };
         }
@@ -1268,12 +1276,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
             });
             start_guard.disarm();
-            return if prepared.replaying_incomplete_entity {
+            return if prepared.replaying_incomplete_entity || prepared.primary_runtime {
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
             } else {
                 Err(WorkerExecutorError::unexpected_oplog_entry(
                     format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                    "replay ended before a primary or completed-entity reconstruction claim",
+                    "replay ended before a completed-entity reconstruction claim",
                 ))
             };
         }
