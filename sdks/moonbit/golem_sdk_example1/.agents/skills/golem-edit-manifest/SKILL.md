@@ -72,10 +72,10 @@ components:
     dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps
     templates:                     # Parent template names (inherit build, env, plugins, files)
       - rust
-    componentWasm: target/wasm32-wasip1/debug/billing.wasm   # Path to built WASM
+    componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Path to built WASM
     outputWasm: golem-temp/billing.wasm                       # Path to final output WASM
     build:                         # Build commands (see Build Commands below)
-      - command: cargo build --target wasm32-wasip1
+      - command: cargo build --target wasm32-wasip2
     env:                           # Environment variables
       LOG_LEVEL: info
     tools:                         # Owner authorization; inherited by the component's agents
@@ -139,7 +139,7 @@ components:
     dir: service
 ```
 
-Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`, but a template may be inherited only through a single path: using two templates that both inherit the same template (e.g. `templates: [my-ts, ts-extra]` where both inherit `ts`) is rejected. The built-in templates (`rust`, `ts`, `effect`, `scala`, `moonbit`, and the `*-tool-middleware` variants) are provided by the CLI; don't define templates with these names.
+Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`, but a template may be inherited only through a single path: using two templates that both inherit the same template (e.g. `templates: [my-ts, ts-extra]` where both inherit `ts`) is rejected. The built-in templates (`rust`, `ts`, `effect`, `scala` and `moonbit`) are provided by the CLI; don't define templates with these names.
 
 Templates can declare the guest language of the components built with them via `guestLanguage` (`ts`, `effect`, `rust`, `scala` or `moonbit`). The built-in templates declare it, so templates inheriting them don't need to. A custom template that builds a component on its own (without inheriting a built-in template) should declare it, otherwise language-specific CLI features (dependency checks, bridge generation, REPL) are unavailable for its components. The templates applied to a component must not declare different languages.
 
@@ -253,14 +253,14 @@ The `build` array contains commands executed during `golem build`. Each entry is
 
 ```yaml
 build:
-  - command: cargo build --target wasm32-wasip1
+  - command: cargo build --target wasm32-wasip2
     dir: .                         # Optional working directory
     env:                           # Optional extra env vars
       RUSTFLAGS: "-C opt-level=2"
     rmdirs: [target/old]           # Directories to delete before running (runs before mkdirs)
     mkdirs: [target/new]           # Directories to create before running (runs after rmdirs)
     sources: ["src/**/*.rs"]       # Inputs for up-to-date checks
-    targets: ["target/wasm32-wasip1/debug/*.wasm"]  # Outputs for up-to-date checks
+    targets: ["target/wasm32-wasip2/debug/*.wasm"]  # Outputs for up-to-date checks
 ```
 
 ### TypeScript/QuickJS-specific commands
@@ -290,10 +290,10 @@ Define CLI commands at the application or component level:
 ```yaml
 customCommands:
   test:
-    - command: cargo test --target wasm32-wasip1
+    - command: cargo test --target wasm32-wasip2
       dir: .
   lint:
-    - command: cargo clippy --target wasm32-wasip1
+    - command: cargo clippy --target wasm32-wasip2
 ```
 
 Run with `golem exec <name>` (e.g., `golem exec test`).
@@ -324,8 +324,7 @@ environments:
     componentPresets: [release]    # Preset names to activate
     cli:
       format: json
-      redeployAgents: true
-      reset: true
+      redeployAgents: true         # Delete and recreate agents; agent state is lost
     deployment:
       compatibilityCheck: true
       versionCheck: true
@@ -358,8 +357,10 @@ auth:
 |-------|-------------|
 | `format` | Default output: `text`, `json`, `yaml`, `pretty`, `pretty-json`, `pretty-yaml`, `toon` |
 | `autoConfirm` | Auto-confirm prompts (`true`) |
-| `redeployAgents` | Redeploy agents by default (`true`) |
-| `reset` | Reset agents by default (`true`) |
+| `redeployAgents` | Equivalent to `--redeploy-agents`: delete and recreate agents; agent state is lost |
+| `reset` | Equivalent to `--reset`: delete existing agents for the deployed components after deployment, losing their state, and enable incompatibility-replacement fallbacks; the environment itself is retained |
+
+Configure at most one destructive default. If both are enabled, `reset` takes precedence.
 
 When `format: toon` is used, structured stdout is emitted as framed TOON documents. Parse exact `@toon` and `@end` marker lines, and treat the content between them as one TOON document. Stderr may still contain progress or diagnostics and should not be parsed as the structured payload.
 
@@ -404,6 +405,8 @@ Each deployment must define exactly one of:
 
 - `subdomain`: a single DNS label resolved through the target environment server (`my-app.localhost:9006` locally by default, `my-app.apps.golem.cloud` on built-in cloud).
 - `domain`: a full custom domain such as `api.example.com` for custom DNS or custom server environments.
+
+The optional `scheme` field is the public `http` or `https` scheme advertised in OpenAPI. Omission defaults to `http` for built-in local and implicit local environments and `https` for built-in cloud. Explicit values override these defaults. Custom server environments require an explicit value; the management URL scheme is not inferred. This does not configure the listener.
 
 ```yaml
 httpApi:
@@ -614,7 +617,7 @@ resourceDefaults:
       enforcementAction: reject
       unit: byte
       units: bytes
-    - name: connections
+    connections:
       limit:
         type: Concurrency
         value: 50
@@ -691,6 +694,7 @@ httpApi:
   deployments:
     staging:
       - domain: api-staging.example.com
+        scheme: https
         agents:
           MyAgent: {}
 ```

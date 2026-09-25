@@ -30,7 +30,7 @@
 
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableExecutionState, HostFailureKind,
-    InFunctionRetryHost, InFunctionRetryState,
+    InFunctionRetryHost, InFunctionRetryState, SemanticTrapRetryOverride,
 };
 use crate::durable_host::http::policy::{
     HttpRetryDisallowedReason, ResumeResponseAction, classify_resume_response,
@@ -91,6 +91,7 @@ fn resolve_matching_status_retry_policy(
 #[derive(Debug, Clone)]
 struct HttpBackgroundRetryFallbackToTrap {
     error_code: wasi_http_types::ErrorCode,
+    semantic_override: Option<SemanticTrapRetryOverride>,
 }
 
 impl std::fmt::Display for HttpBackgroundRetryFallbackToTrap {
@@ -101,25 +102,42 @@ impl std::fmt::Display for HttpBackgroundRetryFallbackToTrap {
 
 impl std::error::Error for HttpBackgroundRetryFallbackToTrap {}
 
-fn background_retry_fallback_to_trap(error_code: wasi_http_types::ErrorCode) -> wasmtime::Error {
+fn background_retry_fallback_to_trap(
+    error_code: wasi_http_types::ErrorCode,
+    semantic_override: Option<SemanticTrapRetryOverride>,
+) -> wasmtime::Error {
     wasmtime::Error::from_anyhow(anyhow::Error::new(HttpBackgroundRetryFallbackToTrap {
         error_code,
+        semantic_override,
     }))
 }
 
 pub(crate) fn take_http_background_retry_fallback(
     err: &wasmtime::Error,
-) -> Option<wasi_http_types::ErrorCode> {
+) -> Option<(
+    wasi_http_types::ErrorCode,
+    Option<SemanticTrapRetryOverride>,
+)> {
     let mut current: Option<&dyn std::error::Error> = Some(err.as_ref());
 
     while let Some(error) = current {
         if let Some(fallback) = error.downcast_ref::<HttpBackgroundRetryFallbackToTrap>() {
-            return Some(fallback.error_code.clone());
+            return Some((
+                fallback.error_code.clone(),
+                fallback.semantic_override.clone(),
+            ));
         }
         current = error.source();
     }
 
     None
+}
+
+#[derive(Debug, Clone)]
+pub enum HttpStreamInlineRetryOutcome {
+    Retried,
+    NotRetried,
+    FallBackToTrap(SemanticTrapRetryOverride),
 }
 
 /// Reasons why an HTTP request is not eligible for transparent inline retry.
@@ -538,12 +556,30 @@ pub fn send_reconstructed_request(
 /// Sends an HTTP request with interrupt-aware retry on transient errors.
 ///
 /// On transient `ErrorCode`, computes backoff delay via `get_delay`, sleeps with
-/// interrupt awareness, and retries. Returns `Ok(Some(response))` on success,
-/// `Ok(None)` when retries are exhausted or the delay exceeds `max_delay` (caller
-/// should fall back), or `Err` if an interrupt occurs during sleep.
+/// interrupt awareness, and retries.
 ///
 /// This is the in-context counterpart of `in_task_retry_loop` (which runs in
 /// spawned background tasks without interrupt awareness).
+enum InterruptAwareSendOutcome {
+    Response(IncomingResponse),
+    NotRetried,
+    FallBackToTrap(SemanticTrapRetryOverride),
+}
+
+fn classify_interrupt_aware_send_decision(
+    decision: AsyncRetryDecision,
+) -> Result<Duration, InterruptAwareSendOutcome> {
+    match decision {
+        AsyncRetryDecision::RetryAfterDelay(delay) => Ok(delay),
+        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap(None) => {
+            Err(InterruptAwareSendOutcome::NotRetried)
+        }
+        AsyncRetryDecision::FallBackToTrap(Some(semantic_override)) => {
+            Err(InterruptAwareSendOutcome::FallBackToTrap(semantic_override))
+        }
+    }
+}
+
 async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     request_state: &HttpRequestState,
@@ -551,7 +587,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     extra_headers: &[(String, String)],
     retry_function_name: Option<&'static str>,
     connection_pool: Option<HttpConnectionPool>,
-) -> Result<Option<IncomingResponse>, anyhow::Error> {
+) -> Result<InterruptAwareSendOutcome, anyhow::Error> {
     let mut retry_state = retry_function_name.map(|_| InFunctionRetryState::new());
     let reconstructed_body_len: u64 = body_chunks
         .iter()
@@ -590,12 +626,12 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
         future_resp.ready().await;
 
         match future_resp.unwrap_ready() {
-            Ok(Ok(resp)) => return Ok(Some(resp)),
-            Err(_trap) => return Ok(None),
+            Ok(Ok(resp)) => return Ok(InterruptAwareSendOutcome::Response(resp)),
+            Err(_trap) => return Ok(InterruptAwareSendOutcome::NotRetried),
             Ok(Err(ref error_code))
                 if classify_http_error_code(error_code) == HostFailureKind::Permanent =>
             {
-                return Ok(None);
+                return Ok(InterruptAwareSendOutcome::NotRetried);
             }
             Ok(Err(error_code)) => {
                 if let (Some(retry_state), Some(function_name)) =
@@ -607,11 +643,12 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                         None,
                         "transient",
                     );
-                    match retry_state
-                        .decide_retry_with_properties(ctx, function_name, &retry_properties)
-                        .await
-                    {
-                        AsyncRetryDecision::RetryAfterDelay(delay) => {
+                    match classify_interrupt_aware_send_decision(
+                        retry_state
+                            .decide_retry_with_properties(ctx, function_name, &retry_properties)
+                            .await,
+                    ) {
+                        Ok(delay) => {
                             // Interrupt-aware sleep
                             let interrupt = ctx.create_interrupt_signal();
                             let sleep = tokio::time::sleep(delay);
@@ -631,12 +668,10 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                                 }
                             }
                         }
-                        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
-                            return Ok(None);
-                        }
+                        Err(outcome) => return Ok(outcome),
                     }
                 } else {
-                    return Ok(None);
+                    return Ok(InterruptAwareSendOutcome::NotRetried);
                 }
             }
         }
@@ -1039,8 +1074,11 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                         AsyncRetryDecision::Exhausted => {
                             return Ok(Err(initial_error));
                         }
-                        AsyncRetryDecision::FallBackToTrap => {
-                            return Err(background_retry_fallback_to_trap(initial_error));
+                        AsyncRetryDecision::FallBackToTrap(semantic_override) => {
+                            return Err(background_retry_fallback_to_trap(
+                                initial_error,
+                                semantic_override,
+                            ));
                         }
                     }
 
@@ -1147,8 +1185,11 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                                     // The spawned retry task still feeds a live HTTP host call,
                                     // so preserve fallback as a trap signal instead of leaking an
                                     // HTTP error to guest code.
-                                    AsyncRetryDecision::FallBackToTrap => {
-                                        return Err(background_retry_fallback_to_trap(error_code));
+                                    AsyncRetryDecision::FallBackToTrap(semantic_override) => {
+                                        return Err(background_retry_fallback_to_trap(
+                                            error_code,
+                                            semantic_override,
+                                        ));
                                     }
                                 }
                             }
@@ -1167,13 +1208,14 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
 /// It reconstructs the request from the oplog, replays all prior body bytes into
 /// a new streaming body, sends the request, and swaps the resources in-place.
 ///
-/// Returns `Ok(true)` if retry succeeded (resources swapped, caller should re-attempt the write),
-/// `Ok(false)` if retry is not eligible,
+/// Returns `Retried` if retry succeeded (resources swapped, caller should re-attempt the write),
+/// `NotRetried` if retry is not eligible, and `FallBackToTrap` when the already-evaluated policy
+/// decision must be preserved by the caller's trap path.
 /// `Err` if retry failed fatally.
 pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_rep: u32,
-) -> Result<bool, anyhow::Error> {
+) -> Result<HttpStreamInlineRetryOutcome, anyhow::Error> {
     use wasmtime::component::Resource;
     use wasmtime_wasi_http::p2::bindings::http::types::FutureIncomingResponse;
     use wasmtime_wasi_http::p2::bindings::http::types::OutgoingBody;
@@ -1183,12 +1225,12 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     // 1. Find the request handle and state
     let request_handle = match ctx.state.find_request_handle_by_output_stream(stream_rep) {
         Some(h) => h,
-        None => return Ok(false),
+        None => return Ok(HttpStreamInlineRetryOutcome::NotRetried),
     };
 
     let request_state = match ctx.state.open_http_requests.get(&request_handle) {
         Some(s) => s.clone(),
-        None => return Ok(false),
+        None => return Ok(HttpStreamInlineRetryOutcome::NotRetried),
     };
 
     // 2. Check eligibility — use WritingRequestBody (body is still being written)
@@ -1201,7 +1243,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     )
     .is_err()
     {
-        return Ok(false);
+        return Ok(HttpStreamInlineRetryOutcome::NotRetried);
     }
 
     // 3. Check retry budget — decide_retry handles delay calculation, oplog error
@@ -1234,8 +1276,13 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 }
             }
         }
-        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
-            return Ok(false);
+        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap(None) => {
+            return Ok(HttpStreamInlineRetryOutcome::NotRetried);
+        }
+        AsyncRetryDecision::FallBackToTrap(Some(semantic_override)) => {
+            return Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(
+                semantic_override,
+            ));
         }
     }
 
@@ -1309,7 +1356,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
             .get_mut(&Resource::<WasiOutputStream>::new_borrow(stream_rep))?;
     *stream_entry = rebuilt.output_stream;
 
-    Ok(true)
+    Ok(HttpStreamInlineRetryOutcome::Retried)
 }
 
 /// Attempts response-body resumption inline retry for a response body stream read failure.
@@ -1322,13 +1369,14 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
 ///    preserves the original status code seen by the guest
 /// 5. Swaps the InputStream to the new response's body stream
 ///
-/// Returns `Ok(true)` if retry succeeded (stream swapped, caller should re-attempt read),
-/// `Ok(false)` if retry is not eligible or conditions not met,
+/// Returns `Retried` if retry succeeded (stream swapped, caller should re-attempt read),
+/// `NotRetried` if retry is not eligible or conditions are not met, and `FallBackToTrap` when the
+/// already-evaluated policy decision must be preserved by the caller's trap path.
 /// `Err` with a StreamError if content mismatch detected.
 pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_handle: u32,
-) -> Result<bool, anyhow::Error> {
+) -> Result<HttpStreamInlineRetryOutcome, anyhow::Error> {
     use wasmtime::component::Resource;
     use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
     use wasmtime_wasi_http::p2::bindings::http::types::IncomingBody as WasiIncomingBody;
@@ -1337,14 +1385,14 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
     //    The stream rep IS the request tracking handle for incoming body streams.
     let request_state = match ctx.state.open_http_requests.get(&stream_handle) {
         Some(s) => s.clone(),
-        None => return Ok(false),
+        None => return Ok(HttpStreamInlineRetryOutcome::NotRetried),
     };
 
     // Response-body resumption requires a tracked IncomingBody handle to properly
     // swap body+stream.
     let body_handle = match request_state.body_handle {
         Some(h) => h,
-        None => return Ok(false),
+        None => return Ok(HttpStreamInlineRetryOutcome::NotRetried),
     };
 
     // 2. Check response-body resumption eligibility
@@ -1357,7 +1405,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
     )
     .is_err()
     {
-        return Ok(false);
+        return Ok(HttpStreamInlineRetryOutcome::NotRetried);
     }
 
     // 3. Count bytes already delivered to the guest from the oplog
@@ -1372,7 +1420,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
     //    resumption is not supported because composing Range headers correctly is
     //    complex.
     if has_guest_range_header(request_state.request.headers.keys().map(|k| k.as_str())) {
-        return Ok(false);
+        return Ok(HttpStreamInlineRetryOutcome::NotRetried);
     }
 
     // Record and budget this response-body resumption as an in-function retry
@@ -1402,8 +1450,13 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
                 }
             }
         }
-        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
-            return Ok(false);
+        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap(None) => {
+            return Ok(HttpStreamInlineRetryOutcome::NotRetried);
+        }
+        AsyncRetryDecision::FallBackToTrap(Some(semantic_override)) => {
+            return Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(
+                semantic_override,
+            ));
         }
     }
 
@@ -1420,8 +1473,15 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
     )
     .await?
     {
-        Some(resp) => resp,
-        None => return Ok(false),
+        InterruptAwareSendOutcome::Response(resp) => resp,
+        InterruptAwareSendOutcome::NotRetried => {
+            return Ok(HttpStreamInlineRetryOutcome::NotRetried);
+        }
+        InterruptAwareSendOutcome::FallBackToTrap(semantic_override) => {
+            return Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(
+                semantic_override,
+            ));
+        }
     };
 
     let status = response.resp.status().as_u16();
@@ -1498,7 +1558,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
                 skip_len = skip_len,
                 "Resuming response body inline retry: body+stream swapped"
             );
-            Ok(true)
+            Ok(HttpStreamInlineRetryOutcome::Retried)
         }
         ResumeResponseAction::RangeNotSatisfiable => {
             // Range Not Satisfiable — content changed
@@ -1517,7 +1577,7 @@ pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::Work
                 consumed_len = consumed_len,
                 "Resuming response body inline retry: resume response not usable, falling back"
             );
-            Ok(false)
+            Ok(HttpStreamInlineRetryOutcome::NotRetried)
         }
     }
 }
@@ -1547,7 +1607,7 @@ pub(crate) enum StatusRetryOutcome {
     /// User-defined policy matched and signalled trap+replay (delay too large, etc.).
     /// Caller MUST escalate to the existing transient-host-failure trap path keyed on
     /// `request_state.begin_index()`.
-    FallBackToTrap,
+    FallBackToTrap(Option<SemanticTrapRetryOverride>),
 }
 
 /// Attempts to apply a user-defined HTTP retry policy keyed on response status code.
@@ -1661,7 +1721,7 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
             uri = %request_state.request.uri,
             "HTTP status retry matched inside atomic region; falling back to trap+replay"
         );
-        return Ok(StatusRetryOutcome::FallBackToTrap);
+        return Ok(StatusRetryOutcome::FallBackToTrap(None));
     }
 
     let exec_state = ctx.durable_execution_state();
@@ -1701,7 +1761,7 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
             uri = %request_state.request.uri,
             "HTTP status retry matched before request body finished; falling back to trap+replay"
         );
-        return Ok(StatusRetryOutcome::FallBackToTrap);
+        return Ok(StatusRetryOutcome::FallBackToTrap(None));
     }
 
     // The retry decision must land error entries on the request's begin index.
@@ -1773,14 +1833,14 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
             );
             Ok(StatusRetryOutcome::Exhausted)
         }
-        AsyncRetryDecision::FallBackToTrap => {
+        AsyncRetryDecision::FallBackToTrap(semantic_override) => {
             tracing::debug!(
                 policy = %matched.name,
                 status,
                 uri = %request_state.request.uri,
                 "HTTP status retry policy requested trap+replay"
             );
-            Ok(StatusRetryOutcome::FallBackToTrap)
+            Ok(StatusRetryOutcome::FallBackToTrap(semantic_override))
         }
     }
 }
@@ -1812,15 +1872,30 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
     // earlier inline retry error would drop the already-replayed prefix.
     let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index()).await?;
     let connection_pool = ctx.wasi_http.connection_pool.clone();
-    send_with_interrupt_aware_retries(ctx, request_state, &body_chunks, &[], None, connection_pool)
-        .await
+    match send_with_interrupt_aware_retries(
+        ctx,
+        request_state,
+        &body_chunks,
+        &[],
+        None,
+        connection_pool,
+    )
+    .await?
+    {
+        InterruptAwareSendOutcome::Response(response) => Ok(Some(response)),
+        InterruptAwareSendOutcome::NotRetried => Ok(None),
+        InterruptAwareSendOutcome::FallBackToTrap(_) => {
+            unreachable!("awaiting-response resend does not evaluate a retry policy")
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable_host::durability::SemanticTrapRetryVerdict;
     use golem_common::model::oplog::types::SerializableHttpMethod;
-    use golem_common::model::{Predicate, RetryPolicy};
+    use golem_common::model::{Predicate, RetryPolicy, RetryPolicyState};
     use test_r::test;
 
     fn make_exec_state() -> DurableExecutionState {
@@ -1830,6 +1905,37 @@ mod tests {
             assume_idempotence: true,
             max_in_function_retry_delay: Duration::from_secs(1),
         }
+    }
+
+    #[test]
+    fn nested_response_resend_fallback_preserves_the_complete_semantic_override() {
+        let retry_policy_state = RetryPolicyState::TimeBox {
+            started_at_millis: 1_000,
+            elapsed_millis: 750,
+            inner: Box::new(RetryPolicyState::Wrapper(Box::new(
+                RetryPolicyState::Counter(2),
+            ))),
+        };
+        let outcome = classify_interrupt_aware_send_decision(AsyncRetryDecision::FallBackToTrap(
+            Some(SemanticTrapRetryOverride {
+                retry_from: OplogIndex::from_u64(42),
+                policy_name: "method-and-uri-time-box".to_string(),
+                verdict: SemanticTrapRetryVerdict::Retry(Duration::from_secs(2)),
+                retry_policy_state: retry_policy_state.clone(),
+            }),
+        ))
+        .expect_err("the nested resend must hand its evaluated decision to the trap path");
+
+        let InterruptAwareSendOutcome::FallBackToTrap(semantic_override) = outcome else {
+            panic!("the evaluated fallback must not be collapsed to an ordinary non-retry")
+        };
+        assert_eq!(semantic_override.retry_from, OplogIndex::from_u64(42));
+        assert_eq!(semantic_override.policy_name, "method-and-uri-time-box");
+        assert_eq!(
+            semantic_override.verdict,
+            SemanticTrapRetryVerdict::Retry(Duration::from_secs(2))
+        );
+        assert_eq!(semantic_override.retry_policy_state, retry_policy_state);
     }
 
     fn make_request_state() -> HttpRequestState {

@@ -30,6 +30,7 @@ httpApi:
 - Each deployment has:
   - `subdomain`: a single DNS label (lowercase letters, digits, and hyphens only — no dots, port, or URL scheme) resolved through the target environment server. Local HTTP API deployments resolve to `<subdomain>.localhost:9006` by default, or `<subdomain>.localhost:<customRequestPort>` when `localServer.customRequestPort` is set to a stable nonzero port. Cloud HTTP API deployments resolve to `<subdomain>.apps.golem.cloud`.
   - `domain`: a full domain such as `api.example.com` for custom registered domains or custom server environments.
+  - `scheme` (optional): the public scheme (`http` or `https`) advertised in OpenAPI. It defaults to `http` for built-in local and implicit local environments and to `https` for built-in cloud environments. An explicit value overrides these defaults. Custom server environments must set it explicitly; Golem does not infer it from the server management URL. This field does not configure the HTTP listener.
   - `agents`: a map of agent type names (PascalCase) to their deployment options
   - `webhookUrl` (optional): path prefix for webhook callbacks; defaults to `/webhooks/`
 

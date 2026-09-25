@@ -36,7 +36,7 @@ use golem_common::model::durable_stream::{
     AttachmentId, AttemptId, PersistedStreamInvocationDescriptor, StartAttemptDescriptor,
     StreamExportFork, StreamExportForkAdmittedRecord, StreamExportForkCandidate,
     StreamForkCutRecord, StreamId, StreamInvocationId, StreamSessionAttachedRecord,
-    StreamSessionPreparedRecord, StreamSessionRecord,
+    StreamSessionExpiryPolicy, StreamSessionPreparedRecord, StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
@@ -465,7 +465,7 @@ fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) ->
         record: OplogPayload::Inline(Box::new(StreamSessionRecord::ExportForkAdmitted(
             StreamExportForkAdmittedRecord {
                 format_version: 1,
-                target,
+                target: target.clone(),
                 request_hash: vec![1; 32],
                 candidate: StreamExportForkCandidate {
                     export: StreamExportFork {
@@ -482,10 +482,20 @@ fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) ->
                         content_type: "application/octet-stream".into(),
                         initial_content_hash: vec![2; 32],
                         closed: false,
+                        target_expiry_policy: StreamSessionExpiryPolicy::None,
                     },
                     horizon: OplogIndex::from_u64(20),
                     cut: OplogIndex::from_u64(10),
                     selected: StreamId(uuid::Uuid::new_v4()),
+                    source_invocation: StreamInvocationId {
+                        callee_environment_id: EnvironmentId::new(),
+                        callee: target.clone(),
+                        callee_fingerprint: export_owner_fingerprint(),
+                        idempotency_key: IdempotencyKey::new(session.to_string()),
+                    },
+                    target_session_key: IdempotencyKey::new("target-session".into()),
+                    expiry_policy: StreamSessionExpiryPolicy::None,
+                    expiry_deadline_millis: None,
                     retained_through: None,
                     initial: None,
                 },
@@ -2887,6 +2897,15 @@ impl HasOplogService for TestCase {
 
 #[async_trait]
 impl OplogService for TestCase {
+    async fn staged_exists(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: uuid::Uuid,
+    ) -> Result<bool, String> {
+        unimplemented!()
+    }
+
     async fn lock_lifecycle(&self, _: &AgentId) -> crate::services::oplog::OplogLifecycleGuard {
         unreachable!()
     }
@@ -3129,7 +3148,10 @@ async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
     .unwrap();
     let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
+        public_session_id: session_key.idempotency_key.value.clone(),
         session_key: session_key.idempotency_key.clone(),
+        expiry_policy: StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
             format_version: 1,
             session_key: session_key.clone(),

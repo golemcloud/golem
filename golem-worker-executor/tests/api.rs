@@ -26,7 +26,7 @@ use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
 };
@@ -1995,11 +1995,12 @@ async fn interruption(
 
 /// Shard-assignment recovery must not acknowledge an assignment whose activations failed.
 ///
-/// Recovery reads each running worker's record twice: once to enumerate the shard, once more
-/// when the worker is activated. This fails the second read only, so enumeration succeeds and
-/// activation does not. The assignment must fail - the shard manager retries a failed one,
-/// whereas a worker skipped here would stay stopped, unrecorded, until an unrelated invocation
-/// happened to arrive - and the retry, once storage is back, must restart the worker.
+/// Recovery resolves each running worker's identity and metadata while enumerating the shard,
+/// then resolves its identity again when the worker is activated. This fails the activation read
+/// only, so enumeration succeeds and activation does not. The assignment must fail - the shard
+/// manager retries a failed one, whereas a worker skipped here would stay stopped, unrecorded,
+/// until an unrelated invocation happened to arrive - and the retry, once storage is back, must
+/// restart the worker.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -2071,16 +2072,16 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     })
     .await
     .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
-    // The unloaded shell would otherwise still be cached, and activation would reuse it without
-    // reading storage. Retire it as the idle-expiry sweep would, which is also the shape of an
-    // executor restart: recovery then has to rebuild the worker from its record.
+    // Retire the unloaded shell as the idle-expiry sweep would, so activation must reconstruct the
+    // worker and load its metadata. This is also the shape of an executor restart.
     executor.retire_unloaded_worker(&owned_agent_id).await?;
     assert!(!executor.worker_is_cached(&owned_agent_id).await);
 
-    // Enumeration reads the worker's record once; activation reads it again. Fail the second.
+    // Enumeration resolves the worker's identity, then loads its metadata (which resolves the
+    // identity again); activation resolves it once more. Fail the activation read.
     faults.fail_after(
         "read_cached_agent_mode",
-        1,
+        2,
         1,
         KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
     );
@@ -3885,12 +3886,26 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
         assert!(failure.contains("status"), "{failure}");
         assert!(executor.worker_is_cached(&owned).await);
         executor.get_worker_metadata(&worker_id).await?;
+        let metadata = Worker::get_latest_metadata(&all, &owned).await?.unwrap();
+        let reconstructed =
+            golem_worker_executor::worker::status::calculate_last_known_status_with_checkpoint(
+                &all,
+                &owned,
+                metadata.fingerprint,
+                metadata.agent_mode,
+                None,
+            )
+            .await
+            .map_err(anyhow::Error::msg)?
+            .unwrap();
+        assert_eq!(metadata.last_known_status, reconstructed);
 
         // The old attempt keeps its error, but all old writes have finished. An explicit retry
         // can now remove the persisted generation without a late actor restoring its index.
         executor.delete_worker(&worker_id).await?;
         assert!(!executor.worker_is_cached(&owned).await);
         assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+        assert!(Worker::get_latest_metadata(&all, &owned).await?.is_none());
         assert_eq!(hook.calls(WorkerDeletionStage::OwnedWorkJoined), 1);
         // Keeping the old shell alive retains its failed stop result across the explicit retry.
         assert_eq!(old_weak.upgrade().is_some(), !drop_old_shell);
@@ -4769,7 +4784,26 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 35 * 65536);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let initial_memory = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Create(create) => Some(create.initial_total_linear_memory_size),
+            _ => None,
+        })
+        .expect("the worker must have a Create entry");
+    let memory_growth: u64 = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(growth) => Some(growth.delta),
+            _ => None,
+        })
+        .sum();
+    assert!(initial_memory > 0);
+    assert_eq!(
+        metadata2.total_linear_memory_size,
+        initial_memory + memory_growth
+    );
     Ok(())
 }
 

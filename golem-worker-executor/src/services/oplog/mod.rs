@@ -127,6 +127,14 @@ pub trait OplogService: Debug + Send + Sync {
         Err("staged oplogs are unsupported by this oplog service".to_string())
     }
 
+    /// Checks whether one particular hidden stage still awaits publication.
+    async fn staged_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+    ) -> Result<bool, String>;
+
     /// Publishes a fully committed stage if no primary oplog exists. The caller must stop
     /// and drop its staged writer first. `false` means a competing target exists; errors may
     /// have indeterminate outcomes and must be reconciled using the target's fork provenance.
@@ -276,6 +284,9 @@ pub trait OplogService: Debug + Send + Sync {
 pub enum CommitLevel {
     /// Always commit immediately and do not return until it is done
     Always,
+    /// Flush and report entries, allowing ephemeral storage writes to finish asynchronously.
+    /// Durable oplogs still wait for persistence. Explicit protocol barriers use `Always`.
+    Deferred,
     /// Only commit immediately if the worker is durable
     DurableOnly,
 }
@@ -751,14 +762,6 @@ pub trait Oplog: Any + Debug + Send + Sync {
             })
     }
 
-    /// Notifies the oplog implementation that the worker's replay cursor committed a new
-    /// position: `last_replayed_index` is the index of the last replayed entry. This fires only
-    /// when replay progress is actually published (consuming an entry, skipping hint entries or
-    /// deleted regions, or switching to live mode) — speculative or random-access oplog reads
-    /// never trigger it. The default implementation ignores it; wrapper oplogs that track replay
-    /// progress (such as the debugging service's oplog) override it.
-    async fn on_replay_progress(&self, _last_replayed_index: OplogIndex) {}
-
     /// Gets the total number of entries in the oplog
     async fn length(&self) -> u64;
 
@@ -1111,7 +1114,7 @@ pub trait OplogOps: Oplog {
         method_name: Option<String>,
         consumed_fuel: u64,
         component_revision: ComponentRevision,
-    ) -> Result<OplogEntry, String> {
+    ) -> Result<OplogIndex, String> {
         let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
             i64::MAX
         } else {
@@ -1126,8 +1129,7 @@ pub trait OplogOps: Oplog {
             consumed_fuel,
             component_revision,
         };
-        self.add(entry.clone()).await;
-        Ok(entry)
+        Ok(self.add(entry).await)
     }
 
     async fn create_snapshot_based_update_description(

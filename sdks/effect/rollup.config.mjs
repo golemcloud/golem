@@ -16,33 +16,42 @@ import { defineConfig } from "rollup"
  */
 const external = (id) =>
   id === "agent-guest" ||
-  id === "tool-middleware-guest" ||
-  id === "agent-tool-middleware-guest" ||
   id === "node:sqlite" ||
   id === "effect" ||
+  id === "effect/unstable/http" ||
+  id === "effect/unstable/httpapi" ||
   id === "@golemcloud/effect-golem" ||
   id.startsWith("@golemcloud/effect-golem/") ||
   id.startsWith("golem:") ||
   id.startsWith("wasi:")
 
-function assertMiddlewareHostNeutral() {
-  return {
-    name: "assert-middleware-host-neutral",
-    generateBundle(_options, bundle) {
-      for (const output of Object.values(bundle)) {
-        if (output.type !== "chunk") continue
-        const forbidden = [...output.imports, ...output.dynamicImports].filter(
-          (id) => id === "golem:tool/host@0.1.0" || id === "node:sqlite",
+const httpFacades = [
+  ["effect/unstable/http", "GolemHttp", "effect-http"],
+  ["./src/effect-httpapi-shared.mjs", "GolemHttpApi", "effect-httpapi"],
+].map(([specifier, namespace, name]) => ({
+  input: `\0${name}`,
+  output: { file: `dist/${name}.mjs`, format: "esm" },
+  external: ["effect"],
+  plugins: [
+    {
+      name: "shared-effect-http",
+      resolveId(id) {
+        return id === `\0${name}` ? id : null
+      },
+      async load(id) {
+        if (id !== `\0${name}`) return null
+        const names = Object.keys(await import(specifier))
+        return (
+          `import { ${namespace} } from "effect";\n` +
+          names.map((key) => `export const ${key} = ${namespace}.${key};`).join("\n")
         )
-        if (forbidden.length > 0) {
-          this.error(`Middleware bundle reached agent-only hosts:\n${forbidden.join("\n")}`)
-        }
-      }
+      },
     },
-  }
-}
+  ],
+}))
 
 export default defineConfig([
+  ...httpFacades,
   {
     input: "src/index.ts",
     output: {
@@ -60,9 +69,38 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  {
+    input: "src/Ai.ts",
+    output: {
+      file: "dist/ai.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
+        tsconfigOverride: {
+          compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -87,9 +125,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -97,7 +136,6 @@ export default defineConfig([
           },
         },
       }),
-      assertMiddlewareHostNeutral(),
       terser(),
     ],
   },
@@ -113,7 +151,28 @@ export default defineConfig([
       sourcemap: false,
     },
     treeshake: false,
-    plugins: [resolve({ extensions: [".mjs", ".js"] }), commonjs(), terser()],
+    plugins: [
+      resolve({ extensions: [".mjs", ".js"] }),
+      commonjs(),
+      terser(),
+      {
+        name: "exclude-shared-documentation-assets",
+        generateBundle(_options, bundle) {
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type !== "chunk") continue
+            if (
+              Object.keys(chunk.modules).some((id) =>
+                /[/\\]httpapi[/\\]internal[/\\]httpApi(Scalar|Swagger)\.js$/.test(id),
+              )
+            ) {
+              this.error(
+                "Documentation UI assets must be bundled by applications, not the shared Effect runtime",
+              )
+            }
+          }
+        },
+      },
+    ],
   },
 
   // SqliteClient adapter. Externalizes `effect`, `effect-golem`, and
@@ -132,9 +191,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -162,9 +222,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -190,9 +251,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",
@@ -220,9 +282,10 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: "./tsconfig.json",
-        include: ["src/**/*", "golem-types/**/*"],
+        include: ["effect/src/**/*", "effect/golem-types/**/*", "http-contract/*.ts"],
         tsconfigOverride: {
           compilerOptions: {
+            rootDir: "..",
             declaration: false,
             sourceMap: true,
             module: "ESNext",

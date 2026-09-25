@@ -9,7 +9,7 @@ Code generation tools for the [Golem SDK for MoonBit](https://mooncakes.io/docs/
 Generates `golem_reexports.mbt` and updates the target package's `moon.pkg` link section with WASM export declarations.
 
 ```sh
-moon run cmd -- reexports <sdk-path> <target-dir> --role <role>
+moon run cmd -- reexports <sdk-path> <target-dir>
 ```
 
 **What it does:**
@@ -19,15 +19,15 @@ moon run cmd -- reexports <sdk-path> <target-dir> --role <role>
 
 ### `agents`
 
-Generates role-appropriate agent, tool, and middleware registration, serialization, dispatch, and
+Generates agent, tool, and middleware registration, serialization, dispatch, and
 typed client/wrapper code from source annotations.
 
 ```sh
-moon run cmd -- agents <project-root> --component-dir <component-dir> --role <role>
+moon run cmd -- agents <project-root> --component-dir <component-dir>
 ```
 
-`<role>` is `ordinary`, `tool-middleware`, or `combined`. The component directory is the only
-package the command mutates; project-root scanning supplies read-only project context.
+The component directory is the only package the command mutates; project-root scanning supplies
+read-only project context.
 
 **What it generates:**
 
@@ -40,11 +40,9 @@ package the command mutates; project-root scanning supplies read-only project co
 | `golem_tool_clients.mbt` | Typed tool clients (`<ToolName>Client`) and nested clients for subcommand trees |
 | `golem_tool_middlewares.mbt` | Monomorphic/universal adapters, descriptors, typed underlying wrappers, and middleware registration |
 
-Generation is role-sensitive. `ordinary` emits agent/ordinary-tool files, `tool-middleware` emits
-only pure middleware files, and `combined` emits both. It auto-adds only the required imports to
-the target `moon.pkg`; `reexports` additionally selects `gen`, `gen-tool-middleware`, or
-`gen-agent-tool-middleware`. The two commands persist and verify their shared role in
-`.golem-sdk-role` so mismatched generation cannot silently combine worlds.
+Generation handles all three categories together and emits empty registrations for categories the
+component does not define. It auto-adds only the required imports to the target `moon.pkg`, while
+`reexports` uses the SDK's single `gen` package.
 
 ## Supported Annotations
 
@@ -295,17 +293,16 @@ Typically invoked as build steps in a Golem application manifest:
 
 ```yaml
 build:
-  - command: moon run cmd -- reexports ../golem_sdk ../my_app/my_component --role tool-middleware
+  - command: moon run cmd -- reexports ../golem_sdk ../my_app/my_component
     dir: ../golem_sdk_tools
-  - command: moon run cmd -- agents ../my_app --component-dir my_component --role tool-middleware
+  - command: moon run cmd -- agents ../my_app --component-dir my_component
     dir: ../golem_sdk_tools
   - command: moon build --target wasm --release
   # ... wasm-tools component embed/new steps
 ```
 
-Embed pure middleware against SDK world `tool-middleware-guest`. Built-in Golem application
-templates expose this pipeline as `moonbit-tool-middleware`; use `moonbit` for ordinary components
-and `moonbit-agent-tool-middleware` for combined components.
+Embed every component against the SDK's `agent-guest` world. The built-in `moonbit` application
+template supports ordinary, standalone-middleware, and combined components.
 
 ## Requirements
 

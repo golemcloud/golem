@@ -441,15 +441,9 @@ mod tests {
             BTreeMap::from([
                 ("effect", GuestLanguage::Effect),
                 ("moonbit", GuestLanguage::MoonBit),
-                ("moonbit-agent-tool-middleware", GuestLanguage::MoonBit),
-                ("moonbit-tool-middleware", GuestLanguage::MoonBit),
                 ("rust", GuestLanguage::Rust),
                 ("scala", GuestLanguage::Scala),
-                ("scala-agent-tool-middleware", GuestLanguage::Scala),
-                ("scala-tool-middleware", GuestLanguage::Scala),
                 ("ts", GuestLanguage::TypeScript),
-                ("ts-agent-tool-middleware", GuestLanguage::TypeScript),
-                ("ts-tool-middleware", GuestLanguage::TypeScript),
             ])
         );
     }
@@ -457,13 +451,7 @@ mod tests {
     #[test]
     fn builtin_template_languages_follow_only_builtin_template_names() {
         let repo = AppTemplateRepo::get(false).unwrap();
-        let referenced = [
-            "ts-tool-middleware",
-            "rust-helpers",
-            "custom-ts",
-            "moonbit-local",
-        ]
-        .map(String::from);
+        let referenced = ["ts", "rust-helpers", "custom-ts", "moonbit-local"].map(String::from);
 
         assert_eq!(
             repo.builtin_template_languages(&referenced),
@@ -545,22 +533,6 @@ mod tests {
         let expected_commands = [
             ("moonbit", "debug", "agent-guest"),
             ("moonbit", "release", "agent-guest"),
-            ("moonbit-tool-middleware", "debug", "tool-middleware-guest"),
-            (
-                "moonbit-tool-middleware",
-                "release",
-                "tool-middleware-guest",
-            ),
-            (
-                "moonbit-agent-tool-middleware",
-                "debug",
-                "agent-tool-middleware-guest",
-            ),
-            (
-                "moonbit-agent-tool-middleware",
-                "release",
-                "agent-tool-middleware-guest",
-            ),
         ];
 
         let embed_command_count = application
@@ -652,7 +624,7 @@ mod tests {
             }
         }
 
-        // 3 component templates x 2 presets x (embed + new)
-        assert_eq!(checked, 12);
+        // 1 component template x 2 presets x (embed + new)
+        assert_eq!(checked, 4);
     }
 }

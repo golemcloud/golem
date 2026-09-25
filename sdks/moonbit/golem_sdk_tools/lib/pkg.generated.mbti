@@ -8,7 +8,9 @@ import {
 }
 
 // Values
-pub fn component_role_marker(ComponentRole) -> String
+pub fn compile_http_file_mapping(String, String) -> HttpFileMapping raise AgentParseError
+
+pub fn compile_http_file_mappings(Array[(String, String)]) -> Array[HttpFileMapping] raise AgentParseError
 
 pub fn component_target_dir(String, String) -> String
 
@@ -23,10 +25,6 @@ pub fn discover_packages(String) -> Array[PackageInfo] raise
 pub fn encode_qualified(String, String) -> ParamType
 
 pub fn ensure_pkg_import(String, String, String) -> String raise ComponentRoleError
-
-pub fn ensure_role_gen_import(String, String) -> String raise ComponentRoleError
-
-pub fn ensure_role_tool_import(String, String) -> String raise ComponentRoleError
 
 pub fn find_config_param(Array[(String, ParamType)]) -> (String, String, Int)?
 
@@ -48,7 +46,7 @@ pub fn generate_reexports(Array[FnSignature], String) -> @list.List[@syntax.Impl
 
 pub fn generate_tool_client_code(Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolEmitError
 
-pub fn generate_tool_middleware_registration(Array[ToolMiddlewareInfo], Array[ToolInfo], ComponentRole) -> @list.List[@syntax.Impl] raise ToolMiddlewareEmitError
+pub fn generate_tool_middleware_registration(Array[ToolMiddlewareInfo], Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolMiddlewareEmitError
 
 pub fn generate_tool_registration(Array[ToolInfo]) -> @list.List[@syntax.Impl] raise ToolEmitError
 
@@ -71,10 +69,6 @@ pub fn param_type_to_type_string(ParamType) -> String
 pub fn parse_agents(Array[(String, String)]) -> Array[AgentInfo] raise AgentParseError
 
 pub fn parse_agents_command_args(Array[String]) -> AgentsCommandOptions raise ComponentRoleError
-
-pub fn parse_component_role(String) -> ComponentRole raise ComponentRoleError
-
-pub fn parse_component_role_marker(String) -> ComponentRole raise ComponentRoleError
 
 pub fn parse_config_types(Array[(String, String)], package_path? : String) -> Array[ConfigTypeInfo] raise AgentParseError
 
@@ -100,9 +94,7 @@ pub fn parse_value_types(Array[(String, String)]) -> Array[ValueTypeInfo] raise 
 
 pub fn raise_component_role_error(String) -> Unit raise ComponentRoleError
 
-pub fn reconcile_generated_pkg_imports(String, Array[(String, String)], forbid_ambient_tool? : Bool) -> String raise ComponentRoleError
-
-pub fn reconcile_pure_role_pkg_imports(String) -> String raise ComponentRoleError
+pub fn reconcile_generated_pkg_imports(String, Array[(String, String)]) -> String raise ComponentRoleError
 
 pub fn rpc_function_name(String, String) -> String
 
@@ -117,8 +109,6 @@ pub fn unwrap_config_type(ParamType) -> ParamType?
 pub fn unwrap_secret_type(ParamType) -> ParamType?
 
 pub fn update_pkg_link(String, Array[String]) -> String
-
-pub fn validate_component_role(ComponentRole, Int, Bool) -> Unit raise ComponentRoleError
 
 pub fn validate_config_types(Array[AgentInfo], Array[ConfigTypeInfo], agent_package? : String) -> Unit raise AgentParseError
 
@@ -174,6 +164,7 @@ pub(all) struct AgentInfo {
   http_mount : HttpMountInfo?
   config_type : String?
 } derive(@debug.Debug)
+pub fn AgentInfo::is_http_router(Self) -> Bool
 
 pub(all) enum AgentMode {
   Durable
@@ -190,24 +181,32 @@ pub(all) enum AgentSnapshotting {
 pub(all) struct AgentsCommandOptions {
   project_root : String
   component_dir : String
-  role : ComponentRole
 } derive(Eq, @debug.Debug)
-
-pub(all) enum ComponentRole {
-  Ordinary
-  ToolMiddleware
-  Combined
-} derive(Eq, @debug.Debug)
-pub fn ComponentRole::allows_agent_registration(Self) -> Bool
-pub fn ComponentRole::allows_tool_middleware_registration(Self) -> Bool
-pub fn ComponentRole::allows_tool_registration(Self) -> Bool
-pub fn ComponentRole::gen_package(Self) -> String
-pub fn ComponentRole::name(Self) -> String
 
 pub(all) struct ConfigTypeInfo {
   name : String
   package_path : String
   fields : Array[(String, ParamType)]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamRouteInfo {
+  slots : Array[DurableStreamSlotInfo]
+  allow_external_writes : Bool?
+  allow_stream_delete : Bool?
+  allow_invocation_delete : Bool?
+  max_concurrent_readers_per_stream : UInt?
+  max_append_requests_per_second_per_stream : UInt?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct DurableStreamSlotInfo {
+  source : DurableStreamSlotSourceInfo
+  name : String?
+  content_type : String?
+} derive(Eq, @debug.Debug)
+
+pub(all) enum DurableStreamSlotSourceInfo {
+  Input(String)
+  Output(String)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct FnSignature {
@@ -218,11 +217,22 @@ pub(all) struct FnSignature {
 }
 
 pub(all) struct HttpEndpointInfo {
-  http_method : String
+  http_method : HttpMethodMatcher
   path : String
   headers : Array[(String, String)]
   auth : Bool?
   cors : Array[String]
+  durable_streams : DurableStreamRouteInfo?
+} derive(Eq, @debug.Debug)
+
+pub(all) enum HttpFileMapping {
+  Exact(Array[String], String)
+  Subtree(Array[String], String)
+} derive(Eq, @debug.Debug)
+
+pub(all) enum HttpMethodMatcher {
+  Concrete(String)
+  Any
 } derive(Eq, @debug.Debug)
 
 pub(all) struct HttpMountInfo {
@@ -231,6 +241,10 @@ pub(all) struct HttpMountInfo {
   phantom : Bool
   cors : Array[String]
   webhook_suffix : String?
+  router : Bool
+  static_bindings : Array[HttpFileMapping]
+  filesystem_bindings : Array[HttpFileMapping]
+  openapi_provider_method : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct MethodInfo {
@@ -304,7 +318,6 @@ pub(all) struct ReadOnlyInfo {
 pub(all) struct ReexportsCommandOptions {
   sdk_path : String
   target_dir : String
-  role : ComponentRole
 } derive(Eq, @debug.Debug)
 
 pub(all) enum SystemVariableKind {

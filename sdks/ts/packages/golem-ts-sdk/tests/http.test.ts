@@ -23,6 +23,93 @@ import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
 describe('agent HTTP routing (Phase 6)', () => {
+  it('compiles full durable stream route options without losing explicit false values', () => {
+    const durableStreams = {
+      slots: [
+        { source: 'input' as const, slot: 'input', name: 'messages' },
+        {
+          source: 'output' as const,
+          slot: '$result',
+          name: 'results',
+          contentType: 'application/vnd.golem.events',
+        },
+      ],
+      allowExternalWrites: true,
+      allowStreamDelete: false,
+      allowInvocationDelete: false,
+      load: {
+        maxConcurrentReadersPerStream: 8,
+        maxAppendRequestsPerSecondPerStream: 25,
+      },
+    };
+
+    const expected = {
+      slots: [
+        { source: { tag: 'input', val: 'input' }, name: 'messages', contentType: undefined },
+        {
+          source: { tag: 'output', val: '$result' },
+          name: 'results',
+          contentType: 'application/vnd.golem.events',
+        },
+      ],
+      allowExternalWrites: true,
+      allowStreamDelete: false,
+      allowInvocationDelete: false,
+      load: {
+        maxConcurrentReadersPerStream: 8,
+        maxAppendRequestsPerSecondPerStream: 25,
+      },
+    };
+
+    expect(http.compileEndpoint(http.post('/events', { durableStreams })).durableStreams).toEqual(
+      expected,
+    );
+
+    defineAgent({
+      name: 'durableStreamRoute',
+      id: {},
+      http: http.mount('/durable-stream-route'),
+      methods: {
+        events: method({
+          input: { input: z.string() },
+          returns: z.string(),
+          http: http.post('/events', { durableStreams }),
+        }),
+      },
+    });
+    expect(get('durableStreamRoute')!.methods[0].httpEndpoint[0].durableStreams).toEqual(expected);
+  });
+
+  it('omits durable stream metadata and preserves omitted nested options', () => {
+    expect(http.compileEndpoint(http.post('/plain')).durableStreams).toBeUndefined();
+    expect(
+      http.compileEndpoint(
+        http.post('/stream', {
+          durableStreams: { slots: [{ source: 'input', slot: 'input' }] },
+        }),
+      ).durableStreams,
+    ).toEqual({
+      slots: [{ source: { tag: 'input', val: 'input' }, name: undefined, contentType: undefined }],
+      allowExternalWrites: undefined,
+      allowStreamDelete: undefined,
+      allowInvocationDelete: undefined,
+      load: undefined,
+    });
+  });
+
+  it('rejects malformed durable stream option shapes at runtime', () => {
+    expect(() =>
+      http.compileEndpoint(http.post('/bad', { durableStreams: { slots: 'input' } as never })),
+    ).toThrow('durableStreams.slots must be an array');
+    expect(() =>
+      http.compileEndpoint(
+        http.post('/bad', {
+          durableStreams: { slots: [{ source: 'external', slot: 'input' }] } as never,
+        }),
+      ),
+    ).toThrow('source must be "input" or "output"');
+  });
+
   it('emits an http mount + per-method endpoint into the AgentType', () => {
     defineAgent({
       name: 'httpCounter',
@@ -51,6 +138,9 @@ describe('agent HTTP routing (Phase 6)', () => {
     expect(at.httpMount!.authDetails).toEqual({ required: false });
     expect(at.httpMount!.phantomAgent).toBe(false);
     expect(at.httpMount!.webhookSuffix).toEqual([]);
+    expect(at.httpMount!.staticBindings).toEqual([]);
+    expect(at.httpMount!.filesystemBindings).toEqual([]);
+    expect(at.httpMount!.openapiProviderMethod).toBeUndefined();
 
     const methods = Object.fromEntries(at.methods.map((m) => [m.name, m]));
 

@@ -18,7 +18,6 @@ pub type InputStream = wit_bindgen::StreamReader<
 >;
 pub use agent::*;
 pub use agent_config::*;
-#[cfg(feature = "export_golem_agentic_tool_middleware")]
 pub(crate) use agent_impl::Component;
 pub use agent_initiator::*;
 pub use agent_registry::*;

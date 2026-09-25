@@ -71,15 +71,15 @@ use golem_common::base_model::durable_stream::{
     STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRole, StreamAttachmentActivatedRecord,
     StreamAttachmentControlOperation, StreamAttachmentControlRequest,
     StreamAttachmentFinalizationReason, StreamAttachmentFinalizedRecord, StreamAttachmentKey,
-    StreamAttachmentPreparedRecord, StreamAttachmentRenewedRecord, StreamBindingRecord,
-    StreamCancelReason, StreamCancelRecord, StreamCancelRole, StreamCascadeDependentResult,
-    StreamCascadeOutboxRecord, StreamEndRecord, StreamEndResult, StreamExternalProducerStateRecord,
-    StreamId, StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
-    StreamProducerDeletingRecord, StreamRecordReference, StreamRegisteredRecord,
-    StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamRegistrationRecordCoordinate,
-    StreamSessionAttachedRecord, StreamSessionFinishedRecord, StreamSessionInputHighWaterRecord,
-    StreamSessionKey, StreamSessionMapping, StreamSessionMappingRecord,
-    StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind,
+    StreamAttachmentPreparedRecord, StreamBindingRecord, StreamCancelReason, StreamCancelRecord,
+    StreamCancelRole, StreamCascadeDependentResult, StreamCascadeOutboxRecord, StreamEndRecord,
+    StreamEndResult, StreamExternalProducerStateRecord, StreamId, StreamInvocationId,
+    StreamItemsPayload, StreamItemsRecord, StreamOffset, StreamProducerDeletingRecord,
+    StreamRecordReference, StreamRegisteredRecord, StreamRegistrationCoordinate,
+    StreamRegistrationInvocation, StreamRegistrationRecordCoordinate, StreamSessionAttachedRecord,
+    StreamSessionExpiryRefreshedRecord, StreamSessionFinishedRecord,
+    StreamSessionInputHighWaterRecord, StreamSessionKey, StreamSessionMapping,
+    StreamSessionMappingRecord, StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind,
     StreamSourceUnavailableRecord, StreamTerminalAuthor, StreamTopologyPreparedRecord,
 };
 use golem_common::base_model::environment::EnvironmentId;
@@ -415,7 +415,6 @@ pub enum StreamStoreError {
     StaleEpoch { current: u64, actual: u64 },
     InvalidEpoch { current: u64, actual: u64 },
     InvalidAttachmentState,
-    LeaseExpired,
     ProducerDeleting,
     ConsumerDeleting,
     ConsumerJournalAdvanced,
@@ -548,7 +547,6 @@ enum IndexedStreamAttachmentState {
     },
     Active {
         activated_at_millis: u64,
-        lease_expires_at_millis: u64,
     },
     Finalized {
         finalized_at_millis: u64,
@@ -572,7 +570,7 @@ pub enum StreamAttachmentState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-/// Current attachment phase and, while resumable, its lease deadline.
+/// Current attachment phase and its preparation deadline, if still prepared.
 pub struct StreamAttachmentView {
     pub key: StreamAttachmentKey,
     pub state: StreamAttachmentState,
@@ -627,7 +625,8 @@ pub struct DurableStreamStore {
     applied_fork_cuts: BTreeMap<OplogIndex, Arc<HashSet<StreamId>>>,
     commit: DurableStreamCommit,
     worker_tasks: std::sync::OnceLock<crate::worker::tasks::WorkerTasks>,
-    control_metadata_provider: std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode)>,
+    control_metadata_provider:
+        std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode, AgentFingerprint)>,
     environment_id: EnvironmentId,
     producer: AgentId,
     producer_fingerprint: AgentFingerprint,
@@ -637,6 +636,7 @@ pub struct DurableStreamStore {
     retirement: CancellationToken,
     durable_activity: Arc<ActivityGate>,
     mutations: mutation::MutationQueue,
+    publication_gate: Arc<Mutex<()>>,
     owned_operations: Arc<Semaphore>,
     owned_operation_bytes: Arc<Semaphore>,
     lifecycle_operations: Arc<Semaphore>,
@@ -648,6 +648,7 @@ pub struct DurableStreamStore {
     source_cancellations: RwLock<HashMap<StreamId, (u64, CancellationToken)>>,
     next_source_cancellation_id: AtomicU64,
     reconciliation_cursor: AtomicUsize,
+    reconcilable_attachment_count: AtomicU64,
     open_stream_count: AtomicUsize,
     live_join_capacity: usize,
     session_records_changed: Notify,
@@ -994,6 +995,21 @@ impl DurableStreamStore {
         }
 
         let open_stream_count = index.open_streams;
+        let reconcilable_attachment_count =
+            if index.loaded_metadata.contains(&ProducerMetadataKey::Global) {
+                index.active_attachment_count
+            } else {
+                index
+                    .attachments
+                    .values()
+                    .filter(|attachment| {
+                        !matches!(
+                            attachment.state,
+                            IndexedStreamAttachmentState::Finalized { .. }
+                        )
+                    })
+                    .count() as u64
+            };
         crate::metrics::durable_stream::add_open_streams(open_stream_count);
         if !index.streams.is_empty() {
             tracing::debug!(
@@ -1028,6 +1044,7 @@ impl DurableStreamStore {
             retirement: CancellationToken::new(),
             durable_activity: ActivityGate::new(),
             mutations: mutation::MutationQueue::new(),
+            publication_gate: Arc::new(Mutex::new(())),
             owned_operations: Arc::new(Semaphore::new(16)),
             owned_operation_bytes: Arc::new(Semaphore::new(256 * 1024 * 1024)),
             lifecycle_operations: Arc::new(Semaphore::new(16)),
@@ -1039,6 +1056,7 @@ impl DurableStreamStore {
             source_cancellations: RwLock::new(HashMap::new()),
             next_source_cancellation_id: AtomicU64::new(1),
             reconciliation_cursor: AtomicUsize::new(0),
+            reconcilable_attachment_count: AtomicU64::new(reconcilable_attachment_count),
             open_stream_count: AtomicUsize::new(open_stream_count),
             live_join_capacity,
             session_records_changed: Notify::new(),
@@ -1104,7 +1122,7 @@ pub trait StreamSegmentSource: Send + Sync {
 }
 
 #[async_trait]
-/// Reads producer history while validating and renewing a durable attachment.
+/// Reads producer history while validating a durable attachment.
 pub trait AttachedStreamSegmentSource: Send + Sync {
     /// Counts committed producer events not yet represented in the consumer journal.
     async fn journal_lag_events(
@@ -1143,7 +1161,7 @@ pub trait StreamAttachmentControl: Send + Sync {
         now_millis: u64,
     ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError>;
 
-    /// Makes a prepared attachment active and renews its lease.
+    /// Makes a prepared attachment active until it is explicitly finalized or superseded.
     async fn activate_attachment(
         &self,
         key: StreamAttachmentKey,
@@ -1155,13 +1173,6 @@ pub trait StreamAttachmentControl: Send + Sync {
         &self,
         key: &StreamAttachmentKey,
     ) -> Result<StreamAttachmentView, StreamStoreError>;
-
-    /// Extends the lease of the same attachment epoch.
-    async fn renew_attachment(
-        &self,
-        key: StreamAttachmentKey,
-        now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError>;
 
     /// Durably removes the consumer's remaining dependency on producer history.
     async fn finalize_attachment(

@@ -378,6 +378,9 @@ impl DurableStreamStore {
         events: Vec<CommittedProducerStreamEvent>,
         replayed: bool,
     ) -> Result<PublicationReceipt, StreamStoreError> {
+        if !replayed && events.iter().any(CommittedProducerStreamEvent::is_terminal) {
+            self.notify_session_records_changed(context);
+        }
         let bus = self.bus(stream_id)?;
         if !replayed {
             self.retain_committed_events(&events);

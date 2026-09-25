@@ -12,6 +12,12 @@ const Evidence = z.object({
   bytesRead: s.u64(),
 });
 
+const CompletionEvidence = z.object({
+  output: s.bytes(),
+  stdoutTerminal: z.string(),
+  resultTerminal: z.string(),
+});
+
 const Caller = defineAgent({
   name: "TsToolStreamingCaller",
   id: { name: z.string() },
@@ -23,6 +29,10 @@ const Caller = defineAgent({
     typedStdoutFailure: method({
       input: {},
       returns: z.string(),
+    }),
+    declaredErrorCompletion: method({
+      input: {},
+      returns: CompletionEvidence,
     }),
   },
 });
@@ -103,6 +113,42 @@ Caller.implement({
       }
       if (!(stdout.reason instanceof ToolStreamError)) throw stdout.reason;
       return stdout.reason.failure.tag;
+    },
+    async declaredErrorCompletion() {
+      const stdin = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      });
+      const invocation = TsStreamingClient.newClient().ts_streaming(
+        "declared-error",
+        stdin,
+      );
+      const chunks: Uint8Array[] = [];
+      const reader = invocation.stdout.getReader();
+      const [result, stdout] = await Promise.allSettled([
+        invocation.result,
+        (async () => {
+          while (true) {
+            const item = await reader.read();
+            if (item.done) return "finished";
+            chunks.push(item.value);
+          }
+        })(),
+      ]);
+      const output = new Uint8Array(
+        chunks.reduce((size, chunk) => size + chunk.byteLength, 0),
+      );
+      let offset = 0;
+      for (const chunk of chunks) {
+        output.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return {
+        output,
+        stdoutTerminal: stdout.status === "fulfilled" ? stdout.value : "failed",
+        resultTerminal: result.status === "rejected" ? "declared-error" : "ok",
+      };
     },
   },
 });

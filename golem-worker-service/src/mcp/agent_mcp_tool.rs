@@ -24,7 +24,7 @@ use golem_common::schema::graph::SchemaGraph;
 use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::IntoToolRoute;
 use rmcp::handler::server::tool::{CallToolHandler, ToolCallContext, ToolRoute};
-use rmcp::model::{CallToolResult, Tool};
+use rmcp::model::{CallToolResponse, Tool};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -48,12 +48,13 @@ impl CallToolHandler<GolemAgentMcpServer, ()> for AgentMcpTool {
     fn call(
         self,
         context: ToolCallContext<'_, GolemAgentMcpServer>,
-    ) -> BoxFuture<'_, Result<CallToolResult, ErrorData>> {
+    ) -> BoxFuture<'_, Result<CallToolResponse, ErrorData>> {
         async move {
             context
                 .service
                 .invoke_tool(context.arguments.unwrap_or_default(), &self)
                 .await
+                .map(Into::into)
         }
         .boxed()
     }

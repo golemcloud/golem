@@ -88,9 +88,8 @@ impl OplogArchiveService for BlobOplogArchiveService {
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
         self.blob_storage
+            .with("blob_oplog", "delete")
             .delete_dir(
-                "blob_oplog",
-                "delete",
                 BlobStorageNamespace::CompressedOplog {
                     environment_id: owned_agent_id.environment_id(),
                     component_id: owned_agent_id.component_id(),

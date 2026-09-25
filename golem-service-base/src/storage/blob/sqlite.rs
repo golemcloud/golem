@@ -17,8 +17,9 @@ use crate::db::{DBValue, PoolApi};
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
+    ExistsResult, blob_file_name_to_string, blob_parent_to_string, blob_path_is_root,
+    blob_path_to_string, validate_range, validate_relative_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -26,8 +27,81 @@ use bytes::Bytes;
 use chrono::NaiveDateTime;
 use futures::TryStreamExt;
 use futures::stream::BoxStream;
+use sqlx::Connection;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::ptr::NonNull;
+
+struct ReadBlob<'a> {
+    raw: NonNull<libsqlite3_sys::sqlite3_blob>,
+    _connection: PhantomData<&'a mut ()>,
+}
+
+impl<'a> ReadBlob<'a> {
+    fn open(
+        handle: &'a mut sqlx::sqlite::LockedSqliteHandle<'_>,
+        rowid: i64,
+    ) -> Result<Self, Error> {
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: SQLx excludes concurrent connection access while locked. The returned
+        // blob borrows that lock, and all names are static, NUL-terminated C strings.
+        let result = unsafe {
+            libsqlite3_sys::sqlite3_blob_open(
+                handle.as_raw_handle().as_ptr(),
+                c"main".as_ptr(),
+                c"blob_storage".as_ptr(),
+                c"value".as_ptr(),
+                rowid,
+                0,
+                &mut raw,
+            )
+        };
+        anyhow::ensure!(
+            result == libsqlite3_sys::SQLITE_OK,
+            "SQLite blob open failed ({result})"
+        );
+        Ok(Self {
+            raw: NonNull::new(raw).ok_or_else(|| anyhow!("SQLite returned no blob"))?,
+            _connection: PhantomData,
+        })
+    }
+
+    fn size(&self) -> u64 {
+        // SAFETY: the blob and its exclusively locked connection remain alive.
+        unsafe { libsqlite3_sys::sqlite3_blob_bytes(self.raw.as_ptr()) as u64 }
+    }
+
+    fn read(&mut self, offset: u64, length: usize) -> Result<Bytes, Error> {
+        let offset = i32::try_from(offset)?;
+        let length_i32 = i32::try_from(length)?;
+        let mut bytes = vec![0; length];
+        // SAFETY: the live blob is exclusively owned, the output buffer has length bytes,
+        // and SQLite checks the offset/length against the blob size.
+        let result = unsafe {
+            libsqlite3_sys::sqlite3_blob_read(
+                self.raw.as_ptr(),
+                bytes.as_mut_ptr().cast(),
+                length_i32,
+                offset,
+            )
+        };
+        anyhow::ensure!(
+            result == libsqlite3_sys::SQLITE_OK,
+            "SQLite blob read failed ({result})"
+        );
+        Ok(Bytes::from(bytes))
+    }
+}
+
+impl Drop for ReadBlob<'_> {
+    fn drop(&mut self) {
+        // SAFETY: close exactly once, before releasing the borrowed connection lock.
+        unsafe {
+            libsqlite3_sys::sqlite3_blob_close(self.raw.as_ptr());
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -136,6 +210,83 @@ impl BlobStorage for SqliteBlobStorage {
             let boxed: Pin<Box<dyn futures::Stream<Item = Result<Bytes, Error>> + Send>> =
                 Box::pin(stream);
             boxed
+        }))
+    }
+
+    async fn get_range_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        validate_relative_blob_path(path)?;
+        let namespace = Self::namespace(namespace);
+        let parent = blob_parent_to_string(path)?;
+        let name = blob_file_name_to_string(path)?;
+        // Acquire before spawning: the read pool bounds blocking tasks and pinned readers.
+        let mut connection = self.pool.acquire_blob_reader().await?;
+        let runtime = tokio::runtime::Handle::current();
+        let (ready, opened) = tokio::sync::oneshot::channel();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let reader = tokio::task::spawn_blocking(move || {
+            let mut ready = Some(ready);
+            let result = (|| -> Result<(), Error> {
+                let mut transaction = runtime.block_on(connection.begin())?;
+                let rowid: Option<(i64,)> = runtime.block_on(sqlx::query_as(
+                    "SELECT rowid FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE"
+                ).bind(namespace).bind(parent).bind(name).fetch_optional(&mut *transaction))?;
+                let Some((rowid,)) = rowid else {
+                    let _ = ready.take().unwrap().send(Ok(None));
+                    return Ok(());
+                };
+                // Keep one read snapshot from rowid lookup through the last chunk.
+                let mut handle = runtime.block_on(transaction.lock_handle())?;
+                let mut blob = ReadBlob::open(&mut handle, rowid)?;
+                let total_size = blob.size();
+                validate_range(offset, length, total_size)?;
+                if ready.take().unwrap().send(Ok(Some(total_size))).is_err() {
+                    return Ok(());
+                }
+                let mut position = offset;
+                let mut remaining = length;
+                while remaining > 0 && !sender.is_closed() {
+                    let count = remaining.min(BLOB_STREAM_CHUNK_SIZE as u64) as usize;
+                    let bytes = blob.read(position, count)?;
+                    if sender.blocking_send(Ok(bytes)).is_err() {
+                        break;
+                    }
+                    position += count as u64;
+                    remaining -= count as u64;
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                if let Some(ready) = ready {
+                    let _ = ready.send(Err(error));
+                } else {
+                    let _ = sender.blocking_send(Err(error));
+                }
+            }
+        });
+        let Some(total_size) = opened.await?? else {
+            return Ok(None);
+        };
+        let stream =
+            futures::stream::try_unfold((receiver, reader), |(mut receiver, reader)| async {
+                match receiver.recv().await {
+                    Some(bytes) => Ok(Some((bytes?, (receiver, reader)))),
+                    None => {
+                        reader.await?;
+                        Ok::<_, Error>(None)
+                    }
+                }
+            });
+        Ok(Some(BlobRangeStream {
+            total_size,
+            stream: Box::pin(stream),
         }))
     }
 

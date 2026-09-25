@@ -426,6 +426,10 @@ pub struct ResolvedManifestComponentsAndTools {
     pub components: BTreeMap<ComponentName, ComponentDeployProperties>,
     pub remote_tools: RemoteToolDeploymentPlan,
     pub tools_to_publish: BTreeSet<ToolName>,
+    pub environment_tool_middleware_bindings:
+        BTreeMap<ToolName, golem_common::model::tool::ToolBindingInput>,
+    pub agent_tool_middleware_bindings:
+        BTreeMap<AgentTypeName, BTreeMap<ToolName, golem_common::model::tool::ToolBindingInput>>,
 }
 
 #[derive(Debug, Default)]

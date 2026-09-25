@@ -42,6 +42,7 @@ async fn create_http_api_deployment_for_nonexitant_domain(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: Domain("testdomain.com".to_string()),
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -75,6 +76,7 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -132,6 +134,7 @@ async fn create_http_api_deployment_normalizes_webhooks_url(
         .create_http_api_deployment(
             &env.id.0,
             &HttpApiDeploymentCreation {
+                scheme: Default::default(),
                 domain,
                 agents: BTreeMap::from_iter([(
                     AgentTypeName("test-api".to_string()),
@@ -162,6 +165,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -176,6 +180,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
         .await?;
 
     let http_api_deployment_update = HttpApiDeploymentUpdate {
+        scheme: None,
         current_revision: http_api_deployment.revision,
         agents: Some(BTreeMap::from_iter([
             (
@@ -268,6 +273,7 @@ async fn update_http_api_deployment_normalizes_webhooks_url(
         .create_http_api_deployment(
             &env.id.0,
             &HttpApiDeploymentCreation {
+                scheme: Default::default(),
                 domain,
                 agents: BTreeMap::from_iter([(
                     AgentTypeName("test-api".to_string()),
@@ -284,6 +290,7 @@ async fn update_http_api_deployment_normalizes_webhooks_url(
         .update_http_api_deployment(
             &http_api_deployment.id.0,
             &HttpApiDeploymentUpdate {
+                scheme: None,
                 current_revision: http_api_deployment.revision,
                 agents: None,
                 webhook_prefix: Some("webhooks2".to_string()),
@@ -315,6 +322,7 @@ async fn update_http_api_deployment_openapi_endpoint_can_be_set_and_cleared(
         .create_http_api_deployment(
             &env.id.0,
             &HttpApiDeploymentCreation {
+                scheme: Default::default(),
                 domain,
                 agents: BTreeMap::from_iter([(
                     AgentTypeName("test-api".to_string()),
@@ -331,6 +339,7 @@ async fn update_http_api_deployment_openapi_endpoint_can_be_set_and_cleared(
         .update_http_api_deployment(
             &http_api_deployment.id.0,
             &HttpApiDeploymentUpdate {
+                scheme: None,
                 current_revision: http_api_deployment.revision,
                 webhook_prefix: None,
                 openapi_endpoint_prefix: Some("/docs/".to_string()),
@@ -357,6 +366,7 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -423,6 +433,7 @@ async fn cannot_create_two_http_api_deployments_for_same_domain(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -462,6 +473,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -476,6 +488,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
         .await?;
 
     let http_api_deployment_update = HttpApiDeploymentUpdate {
+        scheme: None,
         current_revision: http_api_deployment.revision.next()?,
         webhook_prefix: None,
         openapi_endpoint_prefix: None,
@@ -515,6 +528,7 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
     let client = deps.registry_service().client(&user.token).await;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -570,6 +584,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
         .await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
             AgentTypeName("HttpAgent".to_string()),
@@ -617,6 +632,7 @@ async fn cannot_access_http_api_deployment_from_another_user(
     let client_a = deps.registry_service().client(&user_a.token).await;
 
     let creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -658,6 +674,7 @@ async fn cannot_delete_http_api_deployment_from_another_user(
     let client_a = deps.registry_service().client(&user_a.token).await;
 
     let creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -695,6 +712,7 @@ async fn delete_with_wrong_revision_is_rejected(
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),
@@ -734,6 +752,7 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
     let client = deps.registry_service().client(&user.token).await;
 
     let creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain,
         agents: BTreeMap::from_iter([(
             AgentTypeName("test-api".to_string()),

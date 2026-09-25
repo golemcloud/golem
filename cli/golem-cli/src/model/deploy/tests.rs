@@ -16,6 +16,69 @@ use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaTypeDef, Sche
 use test_r::test;
 use uuid::Uuid;
 
+#[test]
+fn mcp_import_only_yaml_diff_preserves_configuration_and_hides_credentials() {
+    use golem_common::model::diff::Diffable;
+    use golem_common::model::mcp_import::{McpImportAuthInput, McpImportDeployment};
+
+    let input = McpImportDeployment {
+        url: "https://upstream.example/mcp".into(),
+        auth: Some(McpImportAuthInput {
+            bearer: Some("private-test-token".into()),
+            basic: None,
+        }),
+        security_scheme: None,
+        prefix: Some("upstream".into()),
+        include: None,
+        exclude: None,
+        version: None,
+    };
+    let (descriptor, _) = input.into_parts(EnvironmentId::new()).unwrap();
+    let deployment = diff::Deployment {
+        mcp_imports: BTreeMap::from([("0".into(), descriptor.clone().into())]),
+        ..Default::default()
+    };
+    let empty = diff::Deployment::default();
+    let diff = deployment.diff_with_current(&empty).unwrap().unwrap();
+    let agent_types = HashMap::new();
+    let display = |deployment| {
+        DeploymentDisplay::from_context(DeploymentDisplayContext {
+            masking: MaskingConfig::hide_secrets(),
+            mode: DeploymentDisplayMode::ChangedOnly,
+            deployment,
+            diff: &diff,
+            agent_types_by_component: &agent_types,
+        })
+        .unwrap()
+    };
+    let full = display(&deployment);
+    let yaml = full
+        .unified_yaml_diff_with_current(&display(&empty))
+        .unwrap();
+    assert!(yaml.contains("mcpImports"));
+    assert!(yaml.contains("https://upstream.example/mcp"));
+    assert!(!yaml.contains("private-test-token"));
+    let hash_only = diff::Deployment {
+        mcp_imports: BTreeMap::from([(
+            "0".into(),
+            diff::HashOf::from_hash(descriptor.hash().unwrap()),
+        )]),
+        ..Default::default()
+    };
+    assert!(
+        display(&hash_only)
+            .to_yaml_for_diff()
+            .unwrap()
+            .contains("mcpImports")
+    );
+    assert!(
+        display(&empty)
+            .unified_yaml_diff_with_current(&full)
+            .unwrap()
+            .contains("-mcpImports")
+    );
+}
+
 fn schema_str() -> SchemaType {
     SchemaType::string()
 }
@@ -36,6 +99,7 @@ fn http_method(input: SchemaType, output: OutputSchema) -> AgentMethodSchema {
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },
+            durable_streams: None,
         }],
         read_only: None,
     }

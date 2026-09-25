@@ -28,8 +28,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() -> Result<(), anyhow::Error> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {
-            config.durable_stream.validate()?;
-            config.invocation_results.validate()?;
+            config.validate()?;
             rustls::crypto::ring::default_provider()
                 .install_default()
                 .expect("Failed to install crypto provider");

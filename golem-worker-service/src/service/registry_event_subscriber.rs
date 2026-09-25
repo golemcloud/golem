@@ -17,7 +17,6 @@ use crate::mcp::McpCapabilityLookup;
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::AuthService;
 use golem_common::model::agent::RegistryInvalidationEvent;
-use golem_common::model::domain_registration::Domain;
 use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -71,8 +70,8 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
         match &event {
             RegistryInvalidationEvent::CursorExpired { .. } => {
                 warn!("Registry invalidation cursor expired, flushing all caches");
-                self.agent_resolution_cache.clear().await;
                 self.route_resolver.clear_all().await;
+                self.agent_resolution_cache.clear().await;
                 self.auth_service.clear_all_caches().await;
             }
             RegistryInvalidationEvent::DeploymentChanged {
@@ -106,10 +105,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                     domains = ?domains,
                     "Received domain registration changed event"
                 );
-                for domain_str in domains {
-                    let domain = Domain(domain_str.clone());
-                    self.route_resolver.invalidate_domain(&domain).await;
-                }
+                self.route_resolver.clear_all().await;
             }
             RegistryInvalidationEvent::AccountTokensInvalidated { account_id, .. } => {
                 debug!(
@@ -150,7 +146,11 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                 );
             }
             RegistryInvalidationEvent::ResourceDefinitionChanged { .. } => {}
-            RegistryInvalidationEvent::AgentSecretChanged { .. } => {}
+            RegistryInvalidationEvent::AgentSecretChanged { environment_id, .. } => {
+                self.route_resolver
+                    .invalidate_domains_for_environment(*environment_id)
+                    .await;
+            }
             RegistryInvalidationEvent::CardRevoked { .. } => {}
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,

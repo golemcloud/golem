@@ -75,6 +75,17 @@ export * from './host/checkpoint';
 export * from './host/durable';
 
 export { defineAgent } from './defineAgent';
+export { defineHttpRouter } from './defineHttpRouter';
+export type {
+  HttpRouterBuilder,
+  HttpRouterOptions,
+  HttpRouterContext,
+  WebHttpRouterContext,
+  HttpRouterHandler,
+  RawHttpRouterHandler,
+} from './defineHttpRouter';
+export { withRawHeaders } from './httpRouterWeb';
+export type { HttpRequest, HttpResponse, HttpHeader, FileExposure } from './httpRouterContract';
 export type {
   AgentDefinition,
   MethodOnlyAgentClientDefinition,
@@ -626,7 +637,11 @@ function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapt
       controller?.error(invocationCompleted);
       if (!terminated) {
         terminated = true;
-        await writer.finish();
+        try {
+          await writer.finish();
+        } catch {
+          // The writer's selected or drop terminal reports completion failure independently.
+        }
       }
     },
     abort,

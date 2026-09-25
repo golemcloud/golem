@@ -472,21 +472,11 @@ fn emit_monomorphic_tool_middleware_registration(
 pub fn generate_tool_middleware_registration(
   middlewares : Array[ToolMiddlewareInfo],
   tools : Array[ToolInfo],
-  role : ComponentRole,
 ) -> @list.List[@syntax.Impl] raise ToolMiddlewareEmitError {
-  if !role.allows_tool_middleware_registration() {
-    tool_middleware_emit_fail(
-      "component role '" + role.name() + "' does not export tool middleware",
-    )
-  }
   let buf = StringBuilder()
   let descriptor_tools = middleware_descriptor_tools(middlewares, tools)
   emit_tool_descriptor_support(
-    buf,
-    descriptor_tools,
-    "middleware",
-    false,
-    role is ToolMiddleware,
+    buf, descriptor_tools, "middleware", false, false,
   ) catch {
     ToolEmitError(message) => tool_middleware_emit_fail(message)
   }

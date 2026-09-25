@@ -23,6 +23,7 @@ use golem_common::retries::get_delay;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::warn;
 
 /// Whether an operation may be retried after it may already have been applied.
@@ -37,11 +38,12 @@ enum Idempotence {
     /// The result depends on whether *this* call performed the write, so the operation may only be
     /// retried when the backend is known not to have attempted it.
     ///
-    /// No method claims this today. `set_if_not_exists` and `compare_and_set_many` are the two
-    /// whose result depends on having done the write, and both are deliberately classified
-    /// `Idempotent` anyway - see the reasoning on each. The variant is kept because the distinction
-    /// it draws is real and the retry policy is built around it: a method that genuinely cannot
-    /// tolerate a repeated apply should say so here rather than reintroduce the concept.
+    /// No method claims this today. `set_if_not_exists`, `compare_and_set_many`, and
+    /// `compare_and_mutate_many` return flags whose meaning can change on a retry after a lost
+    /// response, but their callers deliberately tolerate that ambiguity in exchange for retrying
+    /// transient failures. The variant is kept because the distinction it draws is real and the
+    /// retry policy is built around it: a method that genuinely cannot tolerate a repeated apply
+    /// should say so here rather than reintroduce the concept.
     #[allow(
         dead_code,
         reason = "kept as the vocabulary for a future non-idempotent method"
@@ -159,6 +161,35 @@ impl KeyValueStorage for RetryingKeyValueStorage {
         .await
     }
 
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> Result<(), KeyValueStorageError> {
+        self.retry("set_with_expiry", Idempotent, || {
+            let namespace = namespace.clone();
+            async move {
+                self.inner
+                    .set_with_expiry(
+                        svc_name,
+                        api_name,
+                        entity_name,
+                        namespace,
+                        key,
+                        value,
+                        expiry,
+                    )
+                    .await
+            }
+        })
+        .await
+    }
+
     async fn set_many(
         &self,
         svc_name: &'static str,
@@ -185,12 +216,9 @@ impl KeyValueStorage for RetryingKeyValueStorage {
     /// truth: the comparison row now holds what this call itself wrote, so it no longer matches
     /// `expected`.
     ///
-    /// `StreamSessionIndex::catch_up_inner` is the only caller, and it discards the flag. It sits
-    /// in a loop that reloads the index after every attempt, with the comment "Reload after either
-    /// winning the CAS or observing another executor's progress" - so a spurious `false` takes the
-    /// same branch a genuine loss takes, re-reads state this call had already written, and finds
-    /// nothing left to do. Refusing to retry instead would surface a brief backend outage to the
-    /// durable-stream index as a hard failure, which is the defect this change exists to remove.
+    /// The invocation-result index is the only caller, and a spurious `false` makes it reload and
+    /// reconcile the state this call may already have written. Refusing to retry instead would
+    /// surface a brief backend outage as a hard failure.
     ///
     /// If a caller ever branches on the flag in a way an incorrect `false` would break, this is the
     /// line to change, and `NonIdempotent` still expresses it.
@@ -218,6 +246,42 @@ impl KeyValueStorage for RetryingKeyValueStorage {
                         expected,
                         deletes,
                         pairs,
+                    )
+                    .await
+            }
+        })
+        .await
+    }
+
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
+    ) -> Result<bool, KeyValueStorageError> {
+        // The derived-cache callers either discard `false` or reload and reconcile before making
+        // progress. Retrying therefore trades an accurate winning-attempt flag after a lost
+        // response for availability without weakening their compare-and-mutate invariants.
+        self.retry("compare_and_mutate_many", Idempotent, || {
+            let namespace = namespace.clone();
+            async move {
+                self.inner
+                    .compare_and_mutate_many(
+                        svc_name,
+                        api_name,
+                        entity_name,
+                        namespace,
+                        key,
+                        expected,
+                        sets,
+                        deletions,
+                        expiry,
                     )
                     .await
             }
@@ -739,6 +803,44 @@ mod tests {
             "the retry sees its own write and reports it as someone else's"
         );
         assert_eq!(flaky.attempts(), 2);
+    }
+
+    #[test]
+    async fn a_retried_compare_and_mutate_many_reports_false_for_its_own_write() {
+        let flaky = flaky(
+            KeyValueStorageError::Transient("connection reset".to_string()),
+            1,
+        );
+        flaky.apply_before_failing();
+        let storage = RetryingKeyValueStorage::new(flaky.storage.clone(), fast_retry(5));
+
+        let result = storage
+            .compare_and_mutate_many(
+                "test",
+                "api",
+                "entity",
+                namespace(),
+                "guard",
+                None,
+                &[("guard", b"installed".as_slice())],
+                &[],
+                Duration::from_secs(60),
+            )
+            .await;
+
+        assert_eq!(
+            result,
+            Ok(false),
+            "the retry sees its own mutation and reports a comparison mismatch"
+        );
+        assert_eq!(flaky.attempts(), 2);
+        assert_eq!(
+            flaky
+                .inner
+                .get("test", "api", "entity", namespace(), "guard")
+                .await,
+            Ok(Some(Bytes::from_static(b"installed")))
+        );
     }
 
     /// A failure to acquire a connection happens before the write is attempted, so even

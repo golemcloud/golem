@@ -974,27 +974,10 @@ impl ProducerStreamIndex {
             }
             StreamSessionRecord::AttachmentActivated(record) => {
                 validate_version(record.format_version)?;
-                if record.lease_expires_at_millis <= record.activated_at_millis {
-                    return Err(StreamStoreError::AttachmentConflict);
-                }
                 (
                     &record.key,
                     IndexedStreamAttachmentState::Active {
                         activated_at_millis: record.activated_at_millis,
-                        lease_expires_at_millis: record.lease_expires_at_millis,
-                    },
-                )
-            }
-            StreamSessionRecord::AttachmentRenewed(record) => {
-                validate_version(record.format_version)?;
-                if record.lease_expires_at_millis <= record.renewed_at_millis {
-                    return Err(StreamStoreError::AttachmentConflict);
-                }
-                (
-                    &record.key,
-                    IndexedStreamAttachmentState::Active {
-                        activated_at_millis: record.renewed_at_millis,
-                        lease_expires_at_millis: record.lease_expires_at_millis,
                     },
                 )
             }
@@ -1025,7 +1008,6 @@ impl ProducerStreamIndex {
                 record,
                 StreamSessionRecord::AttachmentPrepared(_)
                     | StreamSessionRecord::AttachmentActivated(_)
-                    | StreamSessionRecord::AttachmentRenewed(_)
             )
         {
             return Err(StreamStoreError::ProducerDeleting);
@@ -1113,16 +1095,6 @@ impl ProducerStreamIndex {
                     return Err(StreamStoreError::InvalidAttachmentState);
                 }
             },
-            StreamSessionRecord::AttachmentRenewed(record) => match existing.state {
-                IndexedStreamAttachmentState::Active {
-                    lease_expires_at_millis,
-                    ..
-                } if record.lease_expires_at_millis > lease_expires_at_millis => {
-                    AttachmentApplyOutcome::Changed
-                }
-                IndexedStreamAttachmentState::Active { .. } => AttachmentApplyOutcome::Replayed,
-                _ => return Err(StreamStoreError::InvalidAttachmentState),
-            },
             StreamSessionRecord::AttachmentFinalized(_) => match existing.state {
                 IndexedStreamAttachmentState::Prepared { .. }
                 | IndexedStreamAttachmentState::Active { .. } => AttachmentApplyOutcome::Changed,
@@ -1208,10 +1180,9 @@ impl ProducerStreamIndex {
                         StreamAttachmentState::Prepared,
                         Some(lease_expires_at_millis),
                     ),
-                    IndexedStreamAttachmentState::Active {
-                        lease_expires_at_millis,
-                        ..
-                    } => (StreamAttachmentState::Active, Some(lease_expires_at_millis)),
+                    IndexedStreamAttachmentState::Active { .. } => {
+                        (StreamAttachmentState::Active, None)
+                    }
                     IndexedStreamAttachmentState::Finalized { reason, .. } => {
                         (StreamAttachmentState::Finalized(reason), None)
                     }

@@ -18,7 +18,9 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
+use golem_service_base::storage::blob::{
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
+};
 use golem_service_base::stream::LoggedByteStream;
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -58,9 +60,8 @@ impl ComponentObjectStore {
     ) -> Result<Vec<u8>, Error> {
         let result = self
             .blob_storage
+            .with(COMPONENT_FILES_LABEL, "get")
             .get_raw(
-                COMPONENT_FILES_LABEL,
-                "get",
                 BlobStorageNamespace::Components { environment_id },
                 &PathBuf::from(object_key),
             )
@@ -91,9 +92,8 @@ impl ComponentObjectStore {
     ) -> Result<BoxStream<'static, Result<Vec<u8>, Error>>, Error> {
         let result = self
             .blob_storage
+            .with(COMPONENT_FILES_LABEL, "get_stream")
             .get_stream(
-                COMPONENT_FILES_LABEL,
-                "get_stream",
                 BlobStorageNamespace::Components { environment_id },
                 &PathBuf::from(object_key),
             )
@@ -131,18 +131,14 @@ impl ComponentObjectStore {
         let namespace = BlobStorageNamespace::Components { environment_id };
 
         let path = &PathBuf::from(object_key);
+        let blob_storage = self.blob_storage.with(COMPONENT_FILES_LABEL, "put");
 
-        let exists_result = self
-            .blob_storage
-            .exists(COMPONENT_FILES_LABEL, "put", namespace.clone(), path)
-            .await?;
+        let exists_result = blob_storage.exists(namespace.clone(), path).await?;
 
         match exists_result {
             ExistsResult::DoesNotExist => {
-                self.blob_storage
+                blob_storage
                     .put_raw(
-                        COMPONENT_FILES_LABEL,
-                        "put",
                         BlobStorageNamespace::Components { environment_id },
                         &PathBuf::from(object_key),
                         data.as_ref(),

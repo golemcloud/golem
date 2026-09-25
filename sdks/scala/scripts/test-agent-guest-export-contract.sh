@@ -4,7 +4,6 @@ set -euo pipefail
 sdk_root="$(cd "$(dirname "$0")/.." && pwd)"
 exports_dts="$sdk_root/wit/dts/exports.d.ts"
 guest_runtime="$sdk_root/core/js/src/main/scala/golem/runtime/guest/Guest.scala"
-middleware_exports_dts="$sdk_root/.generated/tool-middleware-guest-dts/exports.d.ts"
 middleware_guest_runtime="$sdk_root/core/js/src/main/scala/golem/runtime/guest/ToolMiddlewareGuest.scala"
 
 test_generated_agent_guest_namespace_is_exported_by_scala_runtime() {
@@ -68,11 +67,11 @@ test_generated_middleware_guest_namespace_is_exported_by_scala_runtime() {
         print namespace
         exit
       }
-    ' "$middleware_exports_dts"
+    ' "$exports_dts"
   })"
 
   if [[ -z "$namespace" ]]; then
-    echo "FAIL: could not find the generated discoverToolMiddlewares namespace in $middleware_exports_dts" >&2
+    echo "FAIL: could not find the generated discoverToolMiddlewares namespace in $exports_dts" >&2
     return 1
   fi
 

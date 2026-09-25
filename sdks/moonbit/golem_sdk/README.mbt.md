@@ -345,20 +345,20 @@ options(
 )
 ```
 
-Select the pure component template in `golem.yaml`:
+Select the default component template in `golem.yaml`:
 
 ```yaml
 components:
   myorg:message-middlewares:
-    templates: moonbit-tool-middleware
+    templates: moonbit
     dir: message_middlewares
 ```
 
-Then run `golem build`. The build uses the `tool-middleware` code-generation role, embeds the
-`tool-middleware-guest` world, and creates a `.tool-middleware.wasm` component. Generated startup
-code registers every declared middleware when the component loads. Do not import `tool` or use
-`ToolClient` in a pure package: pure middleware has no ambient `golem:tool/host` dispatch, and the
-runtime-provided `underlying` capability is its only path to the next inner layer.
+Then run `golem build`. The build uses the single code-generation path and `agent-guest` world.
+Generated startup code registers every declared middleware when the component loads, while unused
+agent and tool discovery returns empty lists. The world imports ambient `golem:tool/host`, but the
+runtime-provided `underlying` capability remains the only path to the next pinned middleware layer;
+ambient calls remain subject to runtime permissions.
 
 The underlying capability and invocation streams belong to one middleware invocation. Generated
 wrappers enforce once-only transfer, cleanup, and revocation when the handler returns, but MoonBit
@@ -418,6 +418,7 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 ## Features
 
 - **Agent registry** — register multiple agent types in a single component via `#derive.agent`
+- **HTTP routers** — named ephemeral routers, incremental byte streams, immutable files, and OpenAPI providers; ordinary durable agents can expose live files
 - **Custom data types** — `#derive.golem_schema` implements every nexessary trait to use custom data types on the public interface of your agents
 - **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`); stream-bearing methods are awaited, while stream-free methods also support fire-and-forget and scheduled invocations
 - **Runtime reflection** — discover agent types, pack reflected schemas, define caller-codec clients, or invoke direct `SchemaValue`s
@@ -467,6 +468,7 @@ one host-managed retry sequence.
 | `logging` | Structured logging with named loggers and level filtering |
 | `context` | Span-based tracing and invocation context |
 | `rpc` | Agent-to-agent RPC helpers |
+| `http` | Canonical `HttpRequest`, `HttpResponse`, `HttpHeader`, `openapi_json`, and outbound WASI HTTP |
 | `reflection` | Runtime discovery, reflected JSON packing, caller-defined static clients, and fully dynamic value invocation |
 | `tool-core` | Host-neutral tool descriptors, schemas, canonical input handling, and error model |
 | `tool` | Ordinary tool registry, dispatch, help rendering, and ambient typed RPC client runtime |

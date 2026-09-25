@@ -1,94 +1,146 @@
 import { Callout } from "nextra/components"
 
-# Golem CLI Permissions
+# Permissions
+
+<Callout type="info">
+  These commands operate against the selected server or profile and require the corresponding
+  account permissions.
+</Callout>
+
+Golem has three related permission-management surfaces:
+
+- **API tokens** authenticate automation that calls Golem APIs.
+- **Permission shares** grant bounded card authority from one account to another.
+- **Cards** carry authority in account and agent wallets.
+
+For the underlying model, see [Permissions and cards](/next/concepts/permissions).
 
 ## API tokens
 
-API tokens allow accessing the Golem APIs from external services. The `golem api-token` command allows managing the tokens of the current account.
-To manage them programmatically, check [the token API](/next/rest-api/token).
-
-### Listing existing tokens
-
-The following command lists all the tokens associated with your account:
+### List tokens
 
 ```shell copy
 golem api-token list
 ```
 
-### Creating a new token
-
-To create a new token, use the following command:
+### Create a token
 
 ```shell copy
 golem api-token new
 ```
 
-The command prints the new token's ID, expiration date and **secret**. The secret is only shown once, so make sure to save it.
+The command prints the token secret exactly once, including in structured output. Store it securely and do not put it in source control or logs.
 
-Optionally, an expiration date can be specified with `--expires-at` in RFC 3339 format (for example `2027-01-01T00:00:00Z`). If not specified, the default expiration date is `2100-01-01T00:00:00Z`.
-
-### Deleting a token
-
-Each token has a **token ID**. Use the `api-token delete` command to remove a token using its identifier:
+By default, the token uses `2100-01-01T00:00:00Z` as its expiry. Set an explicit RFC 3339 timestamp with a UTC offset when a shorter lifetime is appropriate:
 
 ```shell copy
-golem api-token delete 08bc0eac-5c51-40a5-8bc6-5c8928efb475
+golem api-token new --expires-at 2026-12-31T23:59:59Z
 ```
 
-## Sharing permissions with other accounts
+Timezone-less timestamps and relative durations such as `30d` are not accepted.
 
-Applications, environments, components and agents belong to an **account**. The details of the current account can be queried with:
+### Delete a token
+
+Use the token ID shown by `list` or `new`:
 
 ```shell copy
-golem account get
+golem api-token delete <token-id>
 ```
 
-Permissions can be shared with other accounts using **permission shares**, managed by the `golem account permission-share` command. A permission share has a **name**, a **target account** (identified by email) and a set of **permission grants**:
+Deleting a token prevents future API authentication with that secret. It does not revoke permission cards.
+
+## Account permission shares
+
+A permission share is owned by one account and targets another account by email address. Its lower positive and negative grants define the authority shared with the target. Golem materializes the share as a managed permission-share card.
+
+Permission strings use `class(owner) @ recipient : verb : resource`. For example, this grant lets the recipient view the owner's `shop` application:
+
+### Create a share
 
 ```shell copy
-golem account permission-share new target@example.com staging-access \
-  --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *' \
-  --lower-positive 'component(owner@example.com/my-app/staging/*) @ target@example.com : view : *'
+golem account permission-share new recipient@example.com deployers \
+  --lower-positive 'application(owner@example.com/shop) @ recipient@example.com : view :'
 ```
 
-Each grant has the form `<class>(<owner>) @ <recipient> : <verb> : <resource>`. The owner identifies the shared entities by the owning account's email, for example `<account-email>/<app>/<env>` for an environment and `<account-email>/<app>/<env>/<component>` for a component (`*` matches any). The recipient must be the target account of the share. For example, the first grant above allows `target@example.com` to **view** the `staging` environment of the `my-app` application owned by `owner@example.com`, and the second one to view all of its components. Grants passed with `--lower-positive` add permissions, while grants passed with `--lower-negative` exclude permissions from the share. Both flags can be specified multiple times.
+The positional arguments are the target account email and the share name. A share grant's recipient must be `*` or exactly the target account's email. Repeat either grant option to add more than one pattern. Use `--account <email>` or `--account-id <uuid>` to act on another account when your credentials allow it.
 
-Existing permission shares can be listed, inspected, updated and deleted:
+### List and inspect shares
+
+List shares owned by the selected account:
 
 ```shell copy
-# Shares owned by the current account
 golem account permission-share list
-# Shares received by the current account
+```
+
+List shares received by it instead:
+
+```shell copy
 golem account permission-share list --received
-
-golem account permission-share get <PERMISSION_SHARE_ID>
-golem account permission-share get-by-name staging-access
-golem account permission-share update <PERMISSION_SHARE_ID> --lower-positive '...'
-golem account permission-share delete <PERMISSION_SHARE_ID>
 ```
 
-<Callout>
-  `permission-share update` replaces the positive (or negative) grants of the share with the ones
-  provided in the command. Grant kinds not specified in the command are kept.
-</Callout>
-
-## Permission cards
-
-Granted permissions are represented by **cards**. Cards are owned by an account (for example the account's root card, cards created for permission shares and environment defaults, and the initial cards of agents), or are held in an agent's runtime wallet. Cards can be inspected and revoked with the `golem card` command:
+Get a share by ID or by its owner-scoped name:
 
 ```shell copy
-# Cards owned by the current account
+golem account permission-share get <permission-share-id>
+golem account permission-share get-by-name deployers
+```
+
+### Update or delete a share
+
+```shell copy
+golem account permission-share update <permission-share-id> \
+  --name deployment-operators \
+  --lower-positive '<permission-pattern>'
+
+golem account permission-share delete <permission-share-id>
+```
+
+On update, omitting `--name`, `--lower-positive`, or `--lower-negative` preserves that existing value. Supplying a grant option replaces the corresponding list; repeat it to provide the complete replacement list. Updates and deletes use the share's current revision and fail on a concurrent modification rather than overwriting it.
+
+Every successful update creates a replacement managed card and revokes the previous card and all its descendants, even when only the share name changes. Deleting the share revokes its managed card and descendants without replacement.
+
+## Inspect and revoke cards
+
+List all managed card kinds owned by the selected account:
+
+```shell copy
 golem card list
-# Only some kinds of cards
-golem card list --include-environment-defaults --include-agent-initials
-# Cards in an agent's wallet
-golem card list --agent 'CounterAgent("my-counter")'
-
-golem card get <CARD_ID>
 ```
 
-A card can be revoked using `card revoke`. Revoking a card also revokes **all of its descendants**, so this is a destructive operation and asks for confirmation:
+When any include flag is present, only the selected kinds are returned:
 
 ```shell copy
-golem card revoke <CARD_ID>
+golem card list --include-root --include-permission-shares
+golem card list --include-environment-defaults --include-agent-initials
 ```
+
+The account scope flags `--account <email>` and `--account-id <uuid>` are mutually exclusive.
+
+To inspect an agent's active wallet instead, use an agent reference. This activates the agent if necessary:
+
+```shell copy
+golem card list --agent <agent-reference>
+```
+
+Agent wallet listing cannot be combined with account scope or include flags.
+
+Inspect one card:
+
+```shell copy
+golem card get <card-id>
+```
+
+Revoke a card and all cards derived from it:
+
+```shell copy
+golem card revoke <card-id>
+```
+
+Revocation is destructive and prompts for confirmation unless the global `-Y`/`--yes` option is set. The output lists the card IDs revoked by the cascade.
+
+Permission-share cards, environment-default cards, and system cards cannot be revoked directly. Delete or update a permission share to revoke its managed authority; change the managing environment configuration for an environment-default card.
+
+<Callout type="warning">
+  The CLI does not derive, transfer, or install cards. Applications perform those operations through
+  the `golem:permissions` guest interfaces. Do not substitute API tokens for runtime permission cards.
+</Callout>

@@ -38,6 +38,8 @@ const LISTING_TTL: Duration = Duration::from_secs(10);
 /// IndexedStorage implementation that uses multiple separate SQLite databases depending
 /// on the namespace.
 pub struct MultiSqliteIndexedStorage {
+    // Preserve typed initialization failures so transient pool or migration errors enter the
+    // primary oplog retry policy instead of becoming permanent cache-loader failures.
     cache: Cache<String, (), SqliteIndexedStorage, IndexedStorageError>,
     hash_cache: Arc<Mutex<HashCache>>,
     /// The `.db` files under each meta-namespace prefix, sorted, with the time they were read.
@@ -95,9 +97,7 @@ impl MultiSqliteIndexedStorage {
             max_connections,
             foreign_keys,
         };
-        SqliteIndexedStorage::configured(&config)
-            .await
-            .map_err(IndexedStorageError::Other)
+        SqliteIndexedStorage::configured(&config).await
     }
 
     async fn storage_by_namespace(

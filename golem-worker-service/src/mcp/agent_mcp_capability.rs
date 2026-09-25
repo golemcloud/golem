@@ -26,7 +26,7 @@ use golem_common::schema::agent::{
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::is_multimodal_schema_type;
 use golem_common::schema::unstructured::{UnstructuredPayloadKind, unstructured_or_raw_kind};
-use rmcp::model::{Annotated, RawResource, RawResourceTemplate, Tool};
+use rmcp::model::{Resource, ResourceTemplate, Tool};
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -92,17 +92,12 @@ impl McpAgentCapability {
                 output_schema,
             } = get_mcp_tool_schema(&schema_graph, constructor, method);
 
-            let tool = Tool {
-                name: Cow::from(get_tool_name(agent_type_name, method)),
-                title: None,
-                description: Some(method.description.clone().into()),
-                input_schema: Arc::new(input_schema),
-                output_schema: output_schema.map(Arc::new),
-                annotations: None,
-                execution: None,
-                icons: None,
-                meta: None,
-            };
+            let mut tool = Tool::new(
+                Cow::from(get_tool_name(agent_type_name, method)),
+                method.description.clone(),
+                input_schema,
+            );
+            tool.output_schema = output_schema.map(Arc::new);
 
             Ok(Self::Tool(Box::new(AgentMcpTool {
                 environment_id: *environment_id,
@@ -130,19 +125,10 @@ impl McpAgentCapability {
 
             let kind = if constructor_param_names.is_empty() {
                 let uri = AgentMcpResource::static_uri(agent_type_name, method);
-                AgentMcpResourceKind::Static(Annotated::new(
-                    RawResource {
-                        uri,
-                        name,
-                        title: None,
-                        description: Some(method.description.clone()),
-                        mime_type,
-                        size: None,
-                        icons: None,
-                        meta: None,
-                    },
-                    None,
-                ))
+                let mut resource =
+                    Resource::new(uri, name).with_description(method.description.clone());
+                resource.mime_type = mime_type;
+                AgentMcpResourceKind::Static(resource)
             } else {
                 let uri_template = AgentMcpResource::template_uri(
                     agent_type_name,
@@ -150,17 +136,12 @@ impl McpAgentCapability {
                     &constructor_param_names,
                 );
                 AgentMcpResourceKind::Template {
-                    template: Annotated::new(
-                        RawResourceTemplate {
-                            uri_template,
-                            name,
-                            title: None,
-                            description: Some(method.description.clone()),
-                            mime_type,
-                            icons: None,
-                        },
-                        None,
-                    ),
+                    template: {
+                        let mut template = ResourceTemplate::new(uri_template, name)
+                            .with_description(method.description.clone());
+                        template.mime_type = mime_type;
+                        template
+                    },
                     constructor_param_names,
                 }
             };

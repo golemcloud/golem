@@ -16,6 +16,7 @@ use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueSt
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct NamespaceRoutedKeyValueStorage {
@@ -35,14 +36,22 @@ impl NamespaceRoutedKeyValueStorage {
         &self,
         namespace: &KeyValueStorageNamespace,
     ) -> &Arc<dyn KeyValueStorage + Send + Sync> {
-        match namespace {
-            KeyValueStorageNamespace::Worker { .. } => &self.cache,
-            KeyValueStorageNamespace::AgentStatus { .. } => &self.cache,
-            KeyValueStorageNamespace::AgentInvocationResultIndex { .. } => &self.cache,
-            KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => &self.cache,
-            KeyValueStorageNamespace::AgentDurableStreamSessionIndex { .. } => &self.cache,
-            _ => &self.persistent,
+        if Self::is_cache_namespace(namespace) {
+            &self.cache
+        } else {
+            &self.persistent
         }
+    }
+
+    fn is_cache_namespace(namespace: &KeyValueStorageNamespace) -> bool {
+        matches!(
+            namespace,
+            KeyValueStorageNamespace::Worker { .. }
+                | KeyValueStorageNamespace::AgentStatus { .. }
+                | KeyValueStorageNamespace::AgentInvocationResultIndex { .. }
+                | KeyValueStorageNamespace::AgentStatusCheckpoint { .. }
+                | KeyValueStorageNamespace::AgentDurableStreamSessionIndex { .. }
+        )
     }
 }
 
@@ -63,6 +72,36 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         }
         backend
             .set(svc_name, api_name, entity_name, namespace, key, value)
+            .await
+    }
+
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> Result<(), KeyValueStorageError> {
+        if !Self::is_cache_namespace(&namespace) {
+            return Err(KeyValueStorageError::Other(
+                "expiry is only supported for cache-routed namespaces".to_string(),
+            ));
+        }
+        let backend = self.backend_for_namespace(&namespace);
+        crate::metrics::workers::record_worker_kv_cache_value_size(value.len());
+        backend
+            .set_with_expiry(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                value,
+                expiry,
+            )
             .await
     }
 
@@ -112,6 +151,42 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
                 expected,
                 deletes,
                 pairs,
+            )
+            .await
+    }
+
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
+    ) -> Result<bool, KeyValueStorageError> {
+        if !Self::is_cache_namespace(&namespace) {
+            return Err(KeyValueStorageError::Other(
+                "expiry is only supported for cache-routed namespaces".to_string(),
+            ));
+        }
+        let backend = self.backend_for_namespace(&namespace);
+        for (_, value) in sets {
+            crate::metrics::workers::record_worker_kv_cache_value_size(value.len());
+        }
+        backend
+            .compare_and_mutate_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                expected,
+                sets,
+                deletions,
+                expiry,
             )
             .await
     }
@@ -355,6 +430,7 @@ mod tests {
         assert!(Arc::ptr_eq(
             storage.backend_for_namespace(&KeyValueStorageNamespace::AgentStatus {
                 agent_id: agent_id.into(),
+                fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
             }),
             &storage.cache,
         ));

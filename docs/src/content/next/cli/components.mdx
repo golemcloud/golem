@@ -14,7 +14,7 @@ To create a new component in an existing application directory (previously creat
 golem new --template <template-name> --component-name <component-name> .
 ```
 
-To see all the available component templates, use the `golem templates` command.
+List available templates with `golem templates`, or filter them by language, for example `golem templates rust`.
 
 This command only modifies the source code of the application, does not create anything on the server.
 
@@ -32,7 +32,13 @@ To build the whole application, use the `build` command without specifying a com
 golem build
 ```
 
-Both commands accept a `--preset <PRESET>` (`-P`) argument. The built-in templates define component presets, for example Rust components have a `debug` (default) and a `release` preset, the latter creating a more optimized version of the components. Presets can be fully customized by editing the _application manifest files_.
+Select a component preset with `--preset` (`-P`). For example, built-in Rust templates provide a `release` preset for optimized builds:
+
+```shell copy
+golem --preset release build
+```
+
+Presets can be customized in the application manifest.
 
 To deploy **all components** of an application, use:
 
@@ -42,69 +48,60 @@ golem deploy
 
 ## Component search
 
-### Using component name and the current revision
+### Using a component name and the currently deployed revision
 
-If you want to get the currently deployed revision of the component using its name you can use the `component get` command. If the component name is omitted, the component is selected based on the current directory.
+To get the current deployed revision of a component by name, use the `component get` command.
 
 ```shell copy
 golem component get example:component
 ```
 
-### Using component name and specific revision
+### Using a component name and specific revision
 
-To get a specific revision of a component, just pass the desired revision number as well:
+To get a specific component revision, pass its revision number as well:
 
 ```shell copy
 golem component get example:component 2
 ```
 
-### Getting component list
+### Getting the component list
 
-To list all the components deployed to the current environment you can use the `component list` command:
+List components in the selected environment's current deployment:
 
 ```shell copy
 golem component list
 ```
 
-<Callout>
-  Commands working with deployed components and agents operate on the selected environment. Use
-  `--environment <ENVIRONMENT>` (`-E`), `--local` (`-L`) or `--cloud` (`-C`) to select a different
-  one.
-</Callout>
-
 ## Updating component
 
 To update a component just run the `golem deploy` command again.
 
-If you want to trigger an update of all agents to the newly deployed revision you can use the `--update-agents <automatic|manual>` option.
-
-It is possible to change the **component's type** (from durable to ephemeral, or from ephemeral to durable) when
-updating the component by changing the manifest file.
+To update existing agents after deployment, pass an explicit update mode, for example `golem deploy --update-agents auto`. This is mutually exclusive with `--redeploy-agents` and `--reset`.
 
 ## Updating agents
 
-If you want to update all agents you can use `component update-agents` command.
+Use `component update-agents` to update durable agents that use an older revision than the selected component's currently deployed revision.
 
-This command gets all agents for the component that are not using the current revision and triggers an update for them one by one:
+It triggers updates one by one for the eligible agents:
 
 ```shell copy
 golem component update-agents example:component
 ```
 
-The update request is enqueued and processed by the agents asynchronously. Use the `--await` flag to wait for the updates to finish, and `--update-mode manual` to use manual instead of automatic updates.
-
-To update the agents of multiple components, use `golem update-agents`. It selects the components based on the current directory (all components when run from the application root), or they can be passed as arguments.
+By default, update requests are enqueued and processed asynchronously. Pass `--await` to wait for completion, or `--disable-wakeup` to leave suspended agents asleep until they next wake.
 
 <Callout type="warning">
   Note that automatic agent update is not guaranteed to succeed, if the updated component differs
   too much from the previous one.
 </Callout>
 
+Omit the positional component name to use directory-based component selection.
+
 ## Redeploying agents
 
-During the development of a Golem Component, it is often necessary to quickly rebuild the code, update the component and just restart all the test agents from scratch to test the changes.
+During development, it is often useful to deploy new component code and then restart its test agents from scratch.
 
-This is different from updating the agents as they will loose their state, but it can speed up the feedback loop during development.
+This is different from updating agents because they lose their state, but it can speed up the feedback loop during development.
 
 This workflow is supported by the `component redeploy-agents` command:
 
@@ -112,6 +109,6 @@ This workflow is supported by the `component redeploy-agents` command:
 golem component redeploy-agents example:component
 ```
 
-This command deletes all agents of the component and re-creates them with the same name, parameters, environment variables and configuration, using the current revision of the component.
+This command does not build or deploy code. It deletes and recreates **all** agents of the selected component using the currently deployed revision. Agent IDs, environment variables, and configuration are preserved, but agent state is lost.
 
-To redeploy the agents of multiple components, use `golem redeploy-agents` (components are selected the same way as for `golem update-agents`), or pass `--redeploy-agents` to `golem deploy`.
+Omit the positional component name to use directory-based component selection.

@@ -159,6 +159,9 @@ pub fn generate_client_code(
   }
   let buf = StringBuilder()
   for agent in agents {
+    if agent.is_http_router() {
+      continue
+    }
     match stream_bearing_constructor_param(agent, value_types_by_name) {
       Some(param) =>
         raise AgentParseError(

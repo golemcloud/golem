@@ -15,7 +15,9 @@
 use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::types::ObjectMetadata;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
+use golem_service_base::storage::blob::{
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -171,14 +173,15 @@ impl BlobStoreService for DefaultBlobStoreService {
     ) -> Result<(), BlobStoreError> {
         let namespace = BlobStorageNamespace::CustomStorage { environment_id };
         let path = Path::new(&container_name);
-        self.blob_storage
-            .delete_dir("blob_store", "clear", namespace.clone(), path)
+        let blob_storage = self.blob_storage.with("blob_store", "clear");
+        blob_storage
+            .delete_dir(namespace.clone(), path)
             .await
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
         // Re-create the empty container directory so the container continues to exist.
         // clear() semantics: remove all objects, keep the container itself.
-        self.blob_storage
-            .create_dir("blob_store", "clear", namespace, path)
+        blob_storage
+            .create_dir(namespace, path)
             .await
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
         Ok(())
@@ -190,9 +193,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
     ) -> Result<bool, BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "container_exists")
             .exists(
-                "blob_store",
-                "container_exists",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 Path::new(&container_name),
             )
@@ -214,9 +216,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         destination_object_name: String,
     ) -> Result<(), BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "copy_object")
             .copy(
-                "blob_store",
-                "copy_object",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 &Path::new(&source_container_name).join(&source_object_name),
                 &Path::new(&destination_container_name).join(&destination_object_name),
@@ -231,9 +232,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
     ) -> Result<(), BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "create_container")
             .create_dir(
-                "blob_store",
-                "create_container",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 Path::new(&container_name),
             )
@@ -248,9 +248,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
     ) -> Result<(), BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "delete_container")
             .delete_dir(
-                "blob_store",
-                "delete_container",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 Path::new(&container_name),
             )
@@ -266,9 +265,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         object_name: String,
     ) -> Result<(), BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "delete_object")
             .delete(
-                "blob_store",
-                "delete_object",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 &Path::new(&container_name).join(&object_name),
             )
@@ -288,9 +286,8 @@ impl BlobStoreService for DefaultBlobStoreService {
             .map(|object_name| Path::new(container_name).join(object_name))
             .collect();
         self.blob_storage
+            .with("blob_store", "delete_objects")
             .delete_many(
-                "blob_store",
-                "delete_objects",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 &paths,
             )
@@ -304,9 +301,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
     ) -> Result<Option<u64>, BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "get_container")
             .get_metadata(
-                "blob_store",
-                "get_container",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 Path::new(&container_name),
             )
@@ -325,9 +321,8 @@ impl BlobStoreService for DefaultBlobStoreService {
     ) -> Result<Vec<u8>, BlobStoreError> {
         let data = self
             .blob_storage
+            .with("blob_store", "get_data")
             .get_raw_slice(
-                "blob_store",
-                "get_data",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 &Path::new(&container_name).join(&object_name),
                 start,
@@ -351,9 +346,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         object_name: String,
     ) -> Result<bool, BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "has_object")
             .exists(
-                "blob_store",
-                "has_object",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 &Path::new(&container_name).join(&object_name),
             )
@@ -372,9 +366,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
     ) -> Result<Vec<String>, BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "list_objects")
             .list_dir(
-                "blob_store",
-                "list_objects",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 Path::new(&container_name),
             )
@@ -397,9 +390,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         destination_object_name: String,
     ) -> Result<(), BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "move_object")
             .r#move(
-                "blob_store",
-                "move_object",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 &Path::new(&source_container_name).join(&source_object_name),
                 &Path::new(&destination_container_name).join(&destination_object_name),
@@ -416,9 +408,8 @@ impl BlobStoreService for DefaultBlobStoreService {
     ) -> Result<ObjectMetadata, BlobStoreError> {
         match self
             .blob_storage
+            .with("blob_store", "object_info")
             .get_metadata(
-                "blob_store",
-                "object_info",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 &Path::new(&container_name).join(&object_name),
             )
@@ -445,9 +436,8 @@ impl BlobStoreService for DefaultBlobStoreService {
         data: &[u8],
     ) -> Result<(), BlobStoreError> {
         self.blob_storage
+            .with("blob_store", "write_data")
             .put_raw(
-                "blob_store",
-                "write_data",
                 BlobStorageNamespace::CustomStorage { environment_id },
                 &Path::new(container_name).join(object_name),
                 data,

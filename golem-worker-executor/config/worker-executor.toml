@@ -58,7 +58,6 @@ external_batch_max_size = "8388608 B"
 lease_ttl = "1m"
 reconciliation_batch_size = 256
 reconciliation_interval = "30s"
-renewal_interval = "20s"
 
 [engine]
 enable_fs_cache = false
@@ -181,6 +180,17 @@ max_invocation_context_stack_depth = 1024
 max_oplog_query_pages_size = 100
 max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
+
+[mcp_transport]
+concurrency = 16
+json_depth = 512
+listing_bytes = 16777216
+notifications = 1024
+pages = 64
+request_bytes = 8388608
+response_bytes = 16777216
+timeout = "1m"
+tools = 1024
 
 [memory]
 acquire_retry_delay = "500ms"
@@ -495,7 +505,6 @@ without_time = false
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
-# renewal_interval = "20s"
 #
 # [engine]
 # enable_fs_cache = false
@@ -607,6 +616,17 @@ without_time = false
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [mcp_transport]
+# concurrency = 16
+# json_depth = 512
+# listing_bytes = 16777216
+# notifications = 1024
+# pages = 64
+# request_bytes = 8388608
+# response_bytes = 16777216
+# timeout = "1m"
+# tools = 1024
 #
 # [memory]
 # acquire_retry_delay = "500ms"
@@ -905,7 +925,6 @@ without_time = false
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
-# renewal_interval = "20s"
 #
 # [engine]
 # enable_fs_cache = false
@@ -1003,6 +1022,17 @@ without_time = false
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [mcp_transport]
+# concurrency = 16
+# json_depth = 512
+# listing_bytes = 16777216
+# notifications = 1024
+# pages = 64
+# request_bytes = 8388608
+# response_bytes = 16777216
+# timeout = "1m"
+# tools = 1024
 #
 # [memory]
 # acquire_retry_delay = "500ms"

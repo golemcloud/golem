@@ -50,6 +50,16 @@ enum FilesystemCapability {
 message ToolEntityActivationPolicy {
   golem.component.ToolProvisionConfig provision = 1;
   golem.registry.CompiledToolBinding binding = 2;
+  McpImportActivation mcp_import = 3;
+}
+
+message McpImportActivation {
+  golem.common.EnvironmentId environment_id = 1;
+  uint64 deployment_revision = 2;
+  uint32 import_index = 3;
+  string upstream_tool_name = 4;
+  string protocol_version = 5;
+  bytes projected_tool = 6;
 }
 
 message ToolMiddlewareEntityActivationPolicy {

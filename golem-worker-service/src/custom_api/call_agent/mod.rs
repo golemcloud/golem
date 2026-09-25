@@ -41,7 +41,6 @@ use golem_service_base::custom_api::{
 };
 use golem_service_base::model::auth::AuthCtx;
 use http::{Method, StatusCode};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -72,7 +71,14 @@ impl CallAgentHandler {
             None
         };
 
-        let agent_id = self.build_agent_id(resolved_route, behaviour, phantom_id)?;
+        let agent_id = Self::build_agent_id(
+            resolved_route,
+            behaviour.component_id,
+            &behaviour.agent_type,
+            &behaviour.constructor_input,
+            &behaviour.constructor_parameters,
+            phantom_id,
+        )?;
 
         let request_method = request.underlying.method().clone();
 
@@ -92,9 +98,7 @@ impl CallAgentHandler {
             return Ok(not_modified);
         }
 
-        let parsed_body = request
-            .parse_request_body(&resolved_route.route.body)
-            .await?;
+        let parsed_body = request.parse_request_body(&behaviour.body).await?;
 
         let method_params =
             self.resolve_method_arguments(resolved_route, request, behaviour, parsed_body)?;
@@ -224,7 +228,7 @@ impl CallAgentHandler {
             return Ok(None);
         }
 
-        let mut headers: HashMap<http::HeaderName, String> = HashMap::new();
+        let mut headers = http::HeaderMap::new();
         add_read_only_cache_headers(
             &mut headers,
             agent_id,
@@ -269,19 +273,13 @@ impl CallAgentHandler {
     }
 
     pub(super) fn build_agent_id(
-        &self,
         resolved_route: &ResolvedRouteEntry,
-        behaviour: &CallAgentBehaviour,
+        component_id: golem_common::model::component::ComponentId,
+        agent_type: &golem_common::model::agent::AgentTypeName,
+        constructor_input: &golem_service_base::custom_api::CompiledInputSchema,
+        constructor_parameters: &[ConstructorParameter],
         phantom_id: Option<Uuid>,
     ) -> Result<AgentId, RequestHandlerError> {
-        let CallAgentBehaviour {
-            component_id,
-            agent_type,
-            constructor_input,
-            constructor_parameters,
-            ..
-        } = behaviour;
-
         let mut fields = Vec::with_capacity(constructor_parameters.len());
 
         for param in constructor_parameters {
@@ -311,7 +309,7 @@ impl CallAgentHandler {
             .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
 
         Ok(AgentId {
-            component_id: *component_id,
+            component_id,
             agent_id: agent_id.to_string(),
         })
     }
@@ -413,7 +411,7 @@ impl CallAgentHandler {
                         // wrapper (raw body -> `inline` case; DA: url-referenced
                         // request bodies are not accepted) or a bare `Binary`
                         // rich scalar (raw value as-is).
-                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
+                        wrap_unstructured_body_value(&behaviour.body, raw)?
                     }
 
                     _ => {
@@ -441,7 +439,7 @@ impl CallAgentHandler {
                         // wrapper (raw body -> `inline` case; DA: url-referenced
                         // request bodies are not accepted) or a bare `Text` rich
                         // scalar (raw value as-is).
-                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
+                        wrap_unstructured_body_value(&behaviour.body, raw)?
                     }
 
                     _ => {
@@ -500,7 +498,7 @@ fn is_cacheable_method(method: &Method) -> bool {
 /// the response (`Authorization` / session-header for principal-aware
 /// methods, plus any header-bound method parameters).
 fn add_read_only_cache_headers(
-    headers: &mut HashMap<http::HeaderName, String>,
+    headers: &mut http::HeaderMap,
     agent_id: &AgentId,
     oplog_index: Option<OplogIndex>,
     agent_fingerprint: Option<AgentFingerprint>,
@@ -510,7 +508,7 @@ fn add_read_only_cache_headers(
 ) {
     headers.insert(
         cache_header::CACHE_CONTROL,
-        build_cache_control_value(read_only),
+        http::HeaderValue::from_str(&build_cache_control_value(read_only)).unwrap(),
     );
 
     // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
@@ -525,7 +523,10 @@ fn add_read_only_cache_headers(
     if supports_http_revalidation(read_only)
         && let (Some(idx), Some(fp)) = (oplog_index, agent_fingerprint)
     {
-        headers.insert(cache_header::ETAG, build_etag_value(agent_id, fp, idx));
+        headers.insert(
+            cache_header::ETAG,
+            http::HeaderValue::from_str(&build_etag_value(agent_id, fp, idx)).unwrap(),
+        );
     }
 
     // Vary on every request header that may influence the response: the
@@ -551,7 +552,9 @@ fn add_read_only_cache_headers(
 fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
     match security {
         RichRouteSecurity::SessionFromHeader(s) => s.header_name.as_str(),
-        RichRouteSecurity::None | RichRouteSecurity::SecurityScheme(_) => "Authorization",
+        RichRouteSecurity::None
+        | RichRouteSecurity::SecurityScheme(_)
+        | RichRouteSecurity::Unavailable => "Authorization",
     }
 }
 

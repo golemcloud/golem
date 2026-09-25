@@ -5,7 +5,7 @@ import { Tabs } from "nextra/components"
 Golem agents use **WASI HTTP** for outgoing HTTP requests, but WASI HTTP does not support WebSocket upgrades.
 Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) that complements WASI HTTP and allows agents to open WebSocket connections, send and receive messages, and handle connection lifecycle events.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
     The Golem TypeScript SDK provides a WebSocket client API. `connectWebsocket` opens a
     connection and returns a `WebSocketHandle` with `send`, `receive`, `receiveWithTimeout`, and
@@ -33,7 +33,7 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
           ws.send("Hello, server!");
           try {
             for (;;) {
-              const message = ws.receive();
+              const message = await ws.receive();
               if (message.tag === "text") {
                 console.log("Text:", message.val);
               } else {
@@ -57,38 +57,67 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
 </Tabs.Tab>
 
 <Tabs.Tab>
+    The Effect SDK exposes a scoped Effect `Socket`. The surrounding scope closes the connection when the program finishes:
+
+    ```typescript
+    import { Effect, Fiber } from "effect"
+    import { Websocket } from "@golemcloud/effect-golem"
+
+    const run = Effect.scoped(
+      Effect.gen(function* () {
+        const socket = yield* Websocket.connect("wss://example.com/chat", {
+          closeCodeIsError: (code) => code !== 1000,
+        })
+        const reader = yield* Effect.forkChild(
+          socket.runString((message) => {
+            console.log("Received:", message)
+          }),
+        )
+
+        const write = yield* socket.writer
+        yield* write("Hello, server!")
+        yield* Fiber.join(reader)
+      }),
+    )
+    ```
+
+    This Effect runs inside an Effect Golem agent, whose runtime supplies the WebSocket host service. `Websocket.layer(...)` provides the same socket as an Effect `Layer` when layer composition is more convenient.
+</Tabs.Tab>
+
+<Tabs.Tab>
     The Golem Rust SDK provides its own WebSocket API inspired by the `tungstenite` library.
     The main types are `WebsocketConnection`, `WebSocketMessage`, and `WebSocketError`.
 
     ```rust
-    #[agent_implementation]
-    impl ExampleAgent for ExampleAgentImpl {
-        async fn run() -> Result<(), WebSocketError> {
-            let ws = WebsocketConnection::connect("wss://example.com/chat", None)?;
-            println!("Connected");
-            ws.send(&WebSocketMessage::Text("Hello, server!".to_string()))?;
-            loop {
-                match ws.receive().await {
-                    Ok(WebSocketMessage::Text(text)) => println!("Text: {text}"),
-                    Ok(WebSocketMessage::Binary(data)) => println!("Binary: {data:?}"),
-                    Err(WebSocketError::Closed(info)) => {
-                        if let Some(info) = info { println!("Closed [{}] \"{}\"", info.code, info.reason); }
-                        break;
-                    }
-                    Err(err) => return Err(err),
+    use golem_rust::{WebSocketError, WebSocketMessage, WebsocketConnection};
+
+    async fn run_websocket() -> Result<(), WebSocketError> {
+        let ws = WebsocketConnection::connect("wss://example.com/chat", None)?;
+        println!("Connected");
+        ws.send(&WebSocketMessage::Text("Hello, server!".to_string()))?;
+        loop {
+            match ws.receive().await {
+                Ok(WebSocketMessage::Text(text)) => println!("Text: {text}"),
+                Ok(WebSocketMessage::Binary(data)) => println!("Binary: {data:?}"),
+                Err(WebSocketError::Closed(info)) => {
+                    if let Some(info) = info { println!("Closed [{}] \"{}\"", info.code, info.reason); }
+                    break;
                 }
+                Err(err) => return Err(err),
             }
-            Ok(())
         }
+        Ok(())
     }
     ```
 </Tabs.Tab>
 
 <Tabs.Tab>
-    Scala compiles to JavaScript via Scala.js, so the standard browser `WebSocket` and `WebSocketStream` APIs
-    are available through Scala.js interop.
+    Golem's JavaScript runtime provides the standard `WebSocket` global. Add `scalajs-dom` to the Scala component and use its Scala.js facade:
 
     ```scala
+    import org.scalajs.dom.{CloseEvent, Event, MessageEvent, WebSocket}
+    import scala.concurrent.{Future, Promise}
+
     case class ExampleAgentImpl() extends ExampleAgent {
       def run(): Future[Unit] = {
         val done = Promise[Unit]()
@@ -115,15 +144,15 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
     and the common agent types are imported as `@common`:
 
     ```moonbit
-    pub fn ExampleAgent::run(self: Self) -> Unit raise @common.AgentError {
+    pub async fn ExampleAgent::run(self: Self) -> Unit raise @common.AgentError {
       let conn = match @websocket_client.WebsocketConnection::connect("wss://example.com/chat", None) {
         Ok(c) => c
-        Err(e) => raise @common.AgentError::InvalidInput("Connect failed: \{e}")
+        Err(e) => raise @common.AgentError::InvalidInput("Connect failed: \{Repr(e)}")
       }
       println("Connected")
       match conn.send(Text("Hello, server!")) {
         Ok(_) => ()
-        Err(e) => raise @common.AgentError::InvalidInput("Send failed: \{e}")
+        Err(e) => raise @common.AgentError::InvalidInput("Send failed: \{Repr(e)}")
       }
       // receive loop...
     }
@@ -134,11 +163,10 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
 
 ## WIT interface reference
 
-The underlying WIT interface is `golem:websocket@1.5.0`. It defines the `websocket-connection` resource type with the following methods:
+The underlying package is `golem:websocket@1.5.0`; its `golem:websocket/client@1.5.0` interface defines the `websocket-connection` resource type with the following methods:
 
 - **`connect`** — opens a WebSocket connection to the given URL, with optional headers
 - **`send`** — sends a text or binary message
-- **`receive`** — blocks until the next message arrives
-- **`receive-with-timeout`** — same as `receive` but with a timeout
+- **`receive`** — asynchronously waits for the next message
+- **`receive-with-timeout`** — waits up to the given number of milliseconds and returns `none` on expiry
 - **`close`** — initiates a graceful close handshake
-- **`subscribe`** — returns a pollable that resolves when a message is available

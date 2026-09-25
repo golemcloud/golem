@@ -150,65 +150,7 @@ async fn encode_invocation_error(error: ToolInvokeError<RawCustomToolError>) -> 
     }
 }
 
-#[cfg(all(
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-struct PureMiddlewareComponent;
-
-#[cfg(all(
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-impl crate::golem_tool_middleware::exports::golem::tool::tool_middleware_guest::Guest
-    for PureMiddlewareComponent
-{
-    fn discover_tool_middlewares() -> Result<Vec<wire::ToolMiddleware>, wire::ToolError> {
-        discover_tool_middlewares()
-    }
-
-    fn get_tool_middleware(name: String) -> Result<wire::ToolMiddleware, wire::ToolError> {
-        get_tool_middleware(name)
-    }
-
-    async fn invoke_tool_middleware(
-        middleware_name: String,
-        tool_name: String,
-        tool_metadata: wire::Tool,
-        parameters: crate::schema::wit::wire::TypedSchemaValue,
-        command_path: Vec<String>,
-        input: crate::schema::wit::wire::TypedSchemaValue,
-        stdin: Option<InputStream>,
-        stdout: Option<crate::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
-        principal: Principal,
-        wrapped: crate::tool_underlying_bindings::UnderlyingTool,
-    ) -> Result<wire::InvocationResult, wire::ToolError> {
-        invoke_tool_middleware(
-            middleware_name,
-            tool_name,
-            tool_metadata,
-            parameters,
-            command_path,
-            input,
-            stdin,
-            stdout,
-            principal,
-            wrapped,
-        )
-        .await
-    }
-}
-
-#[cfg(all(
-    feature = "export_golem_tool_middleware",
-    not(feature = "export_golem_agentic_tool_middleware")
-))]
-crate::golem_tool_middleware::export_golem_tool_middleware!(
-    PureMiddlewareComponent with_types_in crate::golem_tool_middleware
-);
-
-#[cfg(feature = "export_golem_agentic_tool_middleware")]
-impl crate::golem_agentic_tool_middleware::exports::golem::tool::tool_middleware_guest::Guest
+impl crate::golem_agentic::exports::golem::tool::tool_middleware_guest::Guest
     for crate::agentic::Component
 {
     fn discover_tool_middlewares() -> Result<Vec<wire::ToolMiddleware>, wire::ToolError> {

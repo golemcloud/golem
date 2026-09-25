@@ -22,6 +22,7 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::repo::is_transient_sqlx_error;
 
 pub mod memory;
 pub mod multi_sqlite;
@@ -48,6 +49,21 @@ pub enum IndexedStorageError {
 }
 
 impl IndexedStorageError {
+    /// Classifies failures that happen while a lazily-created backend is opened or migrated.
+    /// The indexed operation has not started yet, so a transient cause is safe to retry.
+    pub fn initialization_failed(context: &str, error: anyhow::Error) -> Self {
+        let transient = error
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+            .any(is_transient_sqlx_error);
+        let message = format!("{context}: {error:#}");
+        if transient {
+            Self::Transient(message)
+        } else {
+            Self::Other(message)
+        }
+    }
+
     pub fn is_retriable(&self) -> bool {
         matches!(self, IndexedStorageError::Transient(_))
     }
@@ -396,6 +412,16 @@ pub struct LabelledIndexedStorage<'a, S: IndexedStorage + ?Sized> {
 }
 
 impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
+    fn record(&self, operation: &'static str) {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "indexed",
+            operation,
+            self.svc_name,
+            self.api_name,
+            "",
+        );
+    }
+
     pub fn new(svc_name: &'static str, api_name: &'static str, storage: &'a S) -> Self {
         Self {
             svc_name,
@@ -405,6 +431,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
     }
 
     pub async fn number_of_replicas(&self) -> Result<u8, IndexedStorageError> {
+        self.record("number_of_replicas");
         self.storage
             .number_of_replicas(self.svc_name, self.api_name)
             .await
@@ -415,6 +442,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         replicas: u8,
         timeout: Duration,
     ) -> Result<u8, IndexedStorageError> {
+        self.record("wait_for_replicas");
         self.storage
             .wait_for_replicas(self.svc_name, self.api_name, replicas, timeout)
             .await
@@ -425,8 +453,31 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<bool, IndexedStorageError> {
+        self.record("exists");
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
+            .await
+    }
+
+    pub async fn move_if_absent(
+        &self,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        self.record("move_if_absent");
+        self.storage
+            .move_if_absent(
+                self.svc_name,
+                self.api_name,
+                source_namespace,
+                source_key,
+                target_namespace,
+                target_key,
+                expected_last_id,
+            )
             .await
     }
 
@@ -437,6 +488,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         resume: Option<ScanResume>,
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        self.record("scan");
         self.storage
             .scan_stable(
                 self.svc_name,
@@ -454,6 +506,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<u64, IndexedStorageError> {
+        self.record("length");
         self.storage
             .length(self.svc_name, self.api_name, namespace, key)
             .await
@@ -464,6 +517,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), IndexedStorageError> {
+        self.record("delete");
         self.storage
             .delete(self.svc_name, self.api_name, namespace, key)
             .await
@@ -475,6 +529,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         key: &str,
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError> {
+        self.record("drop_prefix");
         self.storage
             .drop_prefix(
                 self.svc_name,
@@ -495,6 +550,16 @@ pub struct LabelledEntityIndexedStorage<'a, S: IndexedStorage + ?Sized> {
 }
 
 impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
+    fn record(&self, operation: &'static str) {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "indexed",
+            operation,
+            self.svc_name,
+            self.api_name,
+            self.entity_name,
+        );
+    }
+
     pub fn new(
         svc_name: &'static str,
         api_name: &'static str,
@@ -517,6 +582,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         id: u64,
         value: &V,
     ) -> Result<(), IndexedStorageError> {
+        self.record("append");
         self.storage
             .append(
                 self.svc_name,
@@ -538,6 +604,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         id: u64,
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
+        self.record("append");
         self.storage
             .append(
                 self.svc_name,
@@ -578,6 +645,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
     ) -> Result<(), IndexedStorageError> {
+        self.record("append_many");
         self.storage
             .append_many(
                 self.svc_name,
@@ -598,6 +666,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         start_id: u64,
         end_id: u64,
     ) -> Result<Vec<(u64, V)>, IndexedStorageError> {
+        self.record("read");
         let values = self
             .storage
             .read(
@@ -625,6 +694,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         from: u64,
         count: u64,
     ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.record("read");
         self.storage
             .read(
                 self.svc_name,
@@ -644,6 +714,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.record("first");
         self.storage
             .first(
                 self.svc_name,
@@ -661,6 +732,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
+        self.record("first");
         if let Some((id, bytes)) = self
             .storage
             .first(
@@ -696,6 +768,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
+        self.record("last");
         if let Some((id, bytes)) = self
             .storage
             .last(
@@ -722,6 +795,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
+        self.record("last");
         self.storage
             .last_id(
                 self.svc_name,
@@ -741,6 +815,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.record("closest");
         self.storage
             .closest(
                 self.svc_name,
@@ -761,6 +836,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
+        self.record("closest");
         if let Some((id, bytes)) = self
             .storage
             .closest(
@@ -841,11 +917,35 @@ pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScanResume, scan_prefix_upper_bound, stable_scan_key_bounds};
+    use super::{IndexedStorageError, ScanResume, scan_prefix_upper_bound, stable_scan_key_bounds};
     use proptest::prelude::*;
     use test_r::test;
 
     test_r::enable!();
+
+    #[test]
+    fn transient_indexed_storage_initialization_failure_is_retryable() {
+        let error = IndexedStorageError::initialization_failed(
+            "pool initialization failed",
+            anyhow::Error::from(sqlx::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::WouldBlock,
+            ))),
+        );
+
+        assert!(matches!(error, IndexedStorageError::Transient(_)));
+        assert!(error.is_retriable());
+    }
+
+    #[test]
+    fn permanent_indexed_storage_initialization_failure_is_not_retried() {
+        let error = IndexedStorageError::initialization_failed(
+            "migration failed",
+            anyhow::Error::from(sqlx::Error::RowNotFound),
+        );
+
+        assert!(matches!(error, IndexedStorageError::Other(_)));
+        assert!(!error.is_retriable());
+    }
 
     #[test]
     fn scan_prefix_upper_bound_handles_unicode_boundaries() {

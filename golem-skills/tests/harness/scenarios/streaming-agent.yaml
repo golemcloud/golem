@@ -1,0 +1,98 @@
+name: "streaming-agent"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-streaming-agents"
+    prompt:
+      rust: >
+        In the test-app project, add two durable Rust agent types. `StreamingAgent` has a string
+        constructor parameter and an externally invokable `doubled` method that accepts an
+        `AgentStream<u32>` and returns an `AgentStream<u32>`. Transform each item lazily, preserve
+        order, and stop producing when the reader is dropped. `StreamingCaller` also has a string
+        constructor parameter and exposes a normal `stream_roundtrip` method returning `Vec<u32>`.
+        It must create an input stream containing 1, 2, and 3, call `StreamingAgent("main")` through
+        its typed agent client, consume the returned stream incrementally, and return `[2, 4, 6]`.
+        Do not collect the input before RPC or replace the stream-bearing method with a list-based
+        method. Make sure the project builds and deploys successfully. Do not run `bug_finder` or
+        delegate a review; the harness performs external verification.
+      ts: >
+        In the test-app project, add two durable TypeScript agent types. `StreamingAgent` has a
+        string constructor parameter and an externally invokable `doubled` method whose input and
+        return schemas are `s.stream(s.u32())`. Implement it with `AgentStream<number>` and transform
+        each item lazily while preserving order. `StreamingCaller` also has a string constructor
+        parameter and exposes a normal `streamRoundtrip` method returning an array of unsigned
+        32-bit numbers. It must create an input stream containing 1, 2, and 3, call
+        `StreamingAgent({ name: "main" })` through its typed agent client, consume the returned
+        stream incrementally, and return `[2, 4, 6]`. Do not collect the input before RPC or replace
+        the stream-bearing method with a list-based method. Make sure the project builds and
+        deploys successfully. Do not run `bug_finder` or delegate a review; the harness performs
+        external verification.
+      effect: >
+        In the Effect-based test-app project, add two durable agent types using the real
+        `@golemcloud/effect-golem` API. `StreamingAgent` has `{ name: Schema.String }` identity and
+        an externally invokable `doubled` method whose input and success schemas are
+        `WitTypes.AgentStream(Schema.Number)`. Use native Effect `Stream` values and transform each
+        item lazily while preserving order. `StreamingCaller` has the same identity shape and a
+        normal `streamRoundtrip` method whose success is an array of numbers. In a scope, it must
+        create `Stream.make(1, 2, 3)`, obtain the typed client for `StreamingAgent({ name: "main" })`,
+        call `doubled`, consume the returned stream incrementally, and return `[2, 4, 6]`. Import
+        both implementations from `src/main.ts`. Do not use the Promise-based TypeScript SDK or
+        replace the stream-bearing method with an array-based method. Make sure the project builds
+        and deploys successfully. Do not run `bug_finder` or delegate a review; the harness
+        performs external verification.
+      scala: >
+        In the test-app project, add two durable Scala agent types. `StreamingAgent` has a string
+        constructor parameter and an externally invokable `doubled` method that accepts
+        `golem.schema.AgentStream[Long]` and returns `Future[AgentStream[Long]]`. Transform each item
+        lazily with the stream API and preserve order. `StreamingCaller` also has a string
+        constructor parameter and exposes a normal `streamRoundtrip` method returning
+        `Future[List[Long]]`. It must create a demand-driven input stream containing 1, 2, and 3,
+        call `StreamingAgent("main")` through its typed agent client, pull the returned stream
+        incrementally, and return `[2, 4, 6]`. Do not collect the input before RPC or replace the
+        stream-bearing method with a list-based method. Make sure the project builds and deploys
+        successfully. Do not run `bug_finder` or delegate a review; the harness performs external
+        verification.
+      moonbit: >
+        In the test-app project, add two durable MoonBit agent types. `StreamingAgent` has a string
+        constructor parameter and an externally invokable `doubled` method that accepts and returns
+        `@schema.AgentStream[UInt]`. Use `AgentStream::produce`, transform each item lazily, preserve
+        order, and stop when the peer drops the reader. `StreamingCaller` also has a string
+        constructor parameter and exposes a normal `stream_roundtrip` method returning
+        `Array[UInt]`. It must create an input stream containing 1, 2, and 3 with
+        `@schema.AgentStream::produce`, call `StreamingAgent("main")` through its typed agent client,
+        read the returned stream incrementally, and return `[2, 4, 6]`. Do not collect the input
+        before RPC or replace the stream-bearing method with an array-based method. Make sure the
+        project builds and deploys successfully. Do not run `bug_finder` or delegate a review; the
+        harness performs external verification.
+    expectedSkills:
+      rust:
+        - "golem-streaming-agent-rust"
+      ts:
+        - "golem-streaming-agent-ts"
+      effect:
+        - "golem-streaming-agent-effect"
+      scala:
+        - "golem-streaming-agent-scala"
+      moonbit:
+        - "golem-streaming-agent-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-stream-roundtrip"
+    invoke_json:
+      agent: 'StreamingCaller("client")'
+      method:
+        rust: "stream_roundtrip"
+        ts: "streamRoundtrip"
+        effect: "streamRoundtrip"
+        scala: "streamRoundtrip"
+        moonbit: "stream_roundtrip"
+    expect:
+      result_json:
+        - path: "$"
+          equals: [2, 4, 6]

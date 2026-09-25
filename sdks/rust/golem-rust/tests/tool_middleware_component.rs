@@ -53,10 +53,10 @@ fn tool_middleware_cross_crate_components_and_compile_failures() {
     check_fixture(&fixture, &target, "all-sdk-features-native");
 
     let pure = build_component(&fixture, &target, "pure-middleware-component");
-    assert_component_contract(&component_wit(&pure), false, false, true, false);
+    assert_component_contract(&component_wit(&pure), true, true, true, true);
 
     let ordinary = build_component(&fixture, &target, "ordinary-agentic-component");
-    assert_component_contract(&component_wit(&ordinary), true, true, false, true);
+    assert_component_contract(&component_wit(&ordinary), true, true, true, true);
 
     let combined = build_component(&fixture, &target, "combined-agentic-middleware-component");
     assert_component_contract(&component_wit(&combined), true, true, true, true);

@@ -28,33 +28,18 @@ assert_lacks() {
   fi
 }
 
-for artifact in agent_guest.wasm tool_middleware_guest.wasm agent_tool_middleware_guest.wasm; do
-  if ! cmp -s "$sbt_wasm_dir/$artifact" "$mill_wasm_dir/$artifact"; then
-    echo "FAIL: sbt and Mill package different bytes for $artifact" >&2
-    exit 1
-  fi
-done
+artifact=agent_guest.wasm
+if ! cmp -s "$sbt_wasm_dir/$artifact" "$mill_wasm_dir/$artifact"; then
+  echo "FAIL: sbt and Mill package different bytes for $artifact" >&2
+  exit 1
+fi
 
 ordinary_wit="$(wasm-tools component wit "$sbt_wasm_dir/agent_guest.wasm")"
 assert_has "$ordinary_wit" "export golem:agent/guest@2.0.0;"
 assert_has "$ordinary_wit" "export golem:tool/guest@0.1.0;"
+assert_has "$ordinary_wit" "export golem:tool/tool-middleware-guest@0.1.0;"
 assert_has "$ordinary_wit" "import golem:tool/host@0.1.0;"
 assert_has "$ordinary_wit" "import golem:agent/durable-streams@2.0.0;"
-assert_lacks "$ordinary_wit" "export golem:tool/tool-middleware-guest@0.1.0;"
-
-middleware_wit="$(wasm-tools component wit "$sbt_wasm_dir/tool_middleware_guest.wasm")"
-assert_has "$middleware_wit" "export golem:tool/tool-middleware-guest@0.1.0;"
-assert_has "$middleware_wit" "import golem:agent/durable-streams@2.0.0;"
-assert_lacks "$middleware_wit" "export golem:agent/guest@2.0.0;"
-assert_lacks "$middleware_wit" "export golem:tool/guest@0.1.0;"
-assert_lacks "$middleware_wit" "import golem:tool/host@0.1.0;"
-
-combined_wit="$(wasm-tools component wit "$sbt_wasm_dir/agent_tool_middleware_guest.wasm")"
-assert_has "$combined_wit" "export golem:agent/guest@2.0.0;"
-assert_has "$combined_wit" "export golem:tool/guest@0.1.0;"
-assert_has "$combined_wit" "export golem:tool/tool-middleware-guest@0.1.0;"
-assert_has "$combined_wit" "import golem:tool/host@0.1.0;"
-assert_has "$combined_wit" "import golem:agent/durable-streams@2.0.0;"
 
 host_dts="$(cat "$sdk_root/wit/dts/golem_agent_2_0_0_host.d.ts")"
 streams_dts="$(cat "$sdk_root/wit/dts/golem_agent_2_0_0_durable_streams.d.ts")"
@@ -69,11 +54,9 @@ assert_has "$streams_dts" "append(request: DurableStreamAppendRequest)"
 assert_lacks "$streams_dts" "readDurableStreamBatch"
 assert_lacks "$streams_dts" "appendDurableStreamBatch"
 assert_lacks "$streams_dts" "DurableStreamProducer"
-for role_wit in "$ordinary_wit" "$middleware_wit" "$combined_wit"; do
-  assert_has "$role_wit" "resource durable-stream-reader"
-  assert_has "$role_wit" "resource durable-stream-writer"
-  assert_lacks "$role_wit" "read-durable-stream-batch"
-  assert_lacks "$role_wit" "append-durable-stream-batch"
-done
+assert_has "$ordinary_wit" "resource durable-stream-reader"
+assert_has "$ordinary_wit" "resource durable-stream-writer"
+assert_lacks "$ordinary_wit" "read-durable-stream-batch"
+assert_lacks "$ordinary_wit" "append-durable-stream-batch"
 
-echo "Scala guest role component contracts verified"
+echo "Scala guest component contract verified"

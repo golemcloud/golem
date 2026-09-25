@@ -178,6 +178,377 @@ fn assert_one_terminal_before_finished(
 
 #[test]
 #[tracing::instrument]
+async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent_secret::{
+        AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    };
+    use golem_service_base::model::agent_secret::AgentSecret;
+
+    let context = TestContext::new(last_unique_id);
+    let environment = Arc::new(TestEnvironmentStateService::default());
+    let secret_path = CanonicalAgentSecretPath(vec!["toolSecret".to_string()]);
+    let plaintext = "gol606-runtime-secret";
+    environment.set_agent_secret(AgentSecret {
+        id: AgentSecretId::new(),
+        environment_id: context.default_environment_id,
+        path: secret_path.clone(),
+        revision: AgentSecretRevision::INITIAL,
+        secret_type: SchemaGraph::anonymous(SchemaType::string()),
+        secret_value: Some(SchemaValue::String(plaintext.to_string())),
+    });
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-secret-policy-middleware")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let definition = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-secret-policy-audit")
+        .expect("secret policy middleware metadata");
+    let universal_definition = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-secret-policy-audit")
+        .expect("universal secret policy middleware metadata");
+    let agent_type = AgentTypeName("ToolSecretCaller".to_string());
+    let tool_name = ToolName::try_from("secret-policy-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![
+            (
+                universal_definition.name.as_str(),
+                empty_middleware_parameters(universal_definition),
+            ),
+            (
+                definition.name.as_str(),
+                secret_policy_middleware_parameters(definition, "restricted"),
+            ),
+            (
+                definition.name.as_str(),
+                secret_policy_middleware_parameters(definition, "allowed"),
+            ),
+        ],
+    );
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: agent_type.clone(),
+    };
+    let occurrences = &mut deployment
+        .tool_middleware_chains
+        .get_mut(&owner)
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap()
+        .occurrences;
+    occurrences[0].secret_keys_readable = SecretKeyScope::All;
+    occurrences[0].secret_keys_revealable = SecretKeyScope::Keys(Default::default());
+    occurrences[1].secret_keys_readable = SecretKeyScope::Keys(Default::default());
+    occurrences[1].secret_keys_revealable = SecretKeyScope::Keys(Default::default());
+    occurrences[2].secret_keys_readable = SecretKeyScope::All;
+    occurrences[2].secret_keys_revealable = SecretKeyScope::All;
+    let original_deployment = deployment.clone();
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let (promise_port, promise_server, mut promise_arrivals) =
+        start_promise_checkpoint_server().await;
+    let agent_id = agent_id!("ToolSecretCaller", "isolated-secret-policy");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([(
+                "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
+                promise_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "inspect_secret_policy",
+        data_value!(),
+    );
+    tokio::pin!(invocation);
+    let checkpoint = tokio::select! {
+        result = invocation.as_mut() => panic!("secret policy invocation settled before checkpoint: {result:?}"),
+        checkpoint = next_promise_checkpoint(&mut promise_arrivals, "secret-policy-before-access") => checkpoint?,
+    };
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Suspended,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+
+    let mut changed = original_deployment;
+    let changed_occurrences = &mut changed
+        .tool_middleware_chains
+        .get_mut(&owner)
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap()
+        .occurrences;
+    changed_occurrences[1].parameters =
+        secret_policy_middleware_parameters(definition, "changed-first");
+    changed_occurrences[1].secret_keys_readable = SecretKeyScope::All;
+    changed_occurrences[1].secret_keys_revealable = SecretKeyScope::All;
+    changed_occurrences[2].parameters =
+        secret_policy_middleware_parameters(definition, "changed-second");
+    changed_occurrences[2].secret_keys_readable = SecretKeyScope::Keys(Default::default());
+    changed_occurrences[2].secret_keys_revealable = SecretKeyScope::Keys(Default::default());
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(changed),
+    );
+    executor.simulated_crash(&worker_id).await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx: checkpoint.oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+    let after_forward =
+        next_promise_checkpoint(&mut promise_arrivals, "secret-policy-after-forward").await?;
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Suspended,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+    executor.simulated_crash(&worker_id).await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx: after_forward.oplog_idx,
+            },
+            vec![],
+        )
+        .await?;
+    let evidence = tokio::time::timeout(std::time::Duration::from_secs(30), invocation)
+        .await
+        .expect("pinned secret-policy invocation completes after restart")?
+        .into_typed::<SecretPolicyEvidence>()?;
+    assert!(
+        evidence.leaf_revealed,
+        "leaf authority must remain independent"
+    );
+    assert_eq!(evidence.middleware.len(), 3);
+    let restricted = evidence
+        .middleware
+        .iter()
+        .find(|observation| observation.label == "restricted")
+        .unwrap();
+    assert_eq!(
+        restricted,
+        &SecretPolicyObservation {
+            label: "restricted".to_string(),
+            config_resolved: false,
+            configured_secret_revealed: false,
+            input_secret_revealed: false,
+        }
+    );
+    let allowed = evidence
+        .middleware
+        .iter()
+        .find(|observation| observation.label == "allowed")
+        .unwrap();
+    assert_eq!(
+        allowed,
+        &SecretPolicyObservation {
+            label: "allowed".to_string(),
+            config_resolved: true,
+            configured_secret_revealed: true,
+            input_secret_revealed: true,
+        }
+    );
+    let universal = evidence
+        .middleware
+        .iter()
+        .find(|observation| observation.label == "universal")
+        .unwrap();
+    assert_eq!(
+        universal,
+        &SecretPolicyObservation {
+            label: "universal".to_string(),
+            config_resolved: true,
+            configured_secret_revealed: false,
+            input_secret_revealed: false,
+        }
+    );
+    let replayed_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let host_starts = |function_fragment: &str| {
+        replayed_oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(start)
+                        if start.function_name.contains(function_fragment)
+                ) && matches!(
+                    &entry.attribution,
+                    PublicOplogEntryAttribution::Entity(entity)
+                        if entity.invocation.entity.kind == PublicAgentEntityKind::ToolMiddleware
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let config_starts = host_starts("config");
+    let reveal_starts = host_starts("reveal");
+    assert_eq!(config_starts.len(), 3, "one config call per occurrence");
+    assert_eq!(
+        reveal_starts.len(),
+        5,
+        "restricted input, universal configured/input, and allowed configured/input reveals"
+    );
+    for start in config_starts.into_iter().chain(reveal_starts) {
+        let terminals = replayed_oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start.oplog_index)
+                    || matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == start.oplog_index)
+            })
+            .count();
+        assert_eq!(
+            terminals, 1,
+            "completed secret host call {} must replay exactly once",
+            start.oplog_index
+        );
+    }
+
+    let fresh = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "inspect_secret_policy",
+            data_value!(),
+        ),
+    )
+    .await
+    .expect("fresh secret-policy invocation uses the changed deployment")?
+    .into_typed::<SecretPolicyEvidence>()?;
+    assert!(fresh.leaf_revealed);
+    assert_eq!(
+        fresh.middleware,
+        vec![
+            SecretPolicyObservation {
+                label: "changed-second".to_string(),
+                config_resolved: false,
+                configured_secret_revealed: false,
+                input_secret_revealed: false,
+            },
+            SecretPolicyObservation {
+                label: "changed-first".to_string(),
+                config_resolved: true,
+                configured_secret_revealed: true,
+                input_secret_revealed: true,
+            },
+            SecretPolicyObservation {
+                label: "universal".to_string(),
+                config_resolved: true,
+                configured_secret_revealed: false,
+                input_secret_revealed: false,
+            },
+        ]
+    );
+
+    let public_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !format!("{public_oplog:?}").contains(plaintext),
+        "public oplog rendering must not contain secret plaintext"
+    );
+    let cli_shaped = serde_json::to_string(
+        &public_oplog
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "index": entry.oplog_index,
+                    "attribution": entry.attribution,
+                    "entry": entry.entry,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )?;
+    assert!(
+        !cli_shaped.contains(plaintext),
+        "CLI-shaped oplog JSON must not contain secret plaintext"
+    );
+    promise_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout("3m")]
 async fn universal_middleware_preserves_native_modes_effects_and_completed_replay(
     last_unique_id: &LastUniqueId,

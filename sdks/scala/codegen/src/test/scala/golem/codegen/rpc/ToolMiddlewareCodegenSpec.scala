@@ -103,11 +103,8 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
       content
     )
     assert(!content.contains("stdin: _root_.golem.tool.ToolInputStream"), content)
-    assert(
-      content.contains(
-        "ToolUnderlyingRuntime.staticInputModel(__descriptor, _root_.scala.List(\"nested\", \"inspect\"))"
-      )
-    )
+    assert(content.contains("PublicEchoCallProjection.__start_inspect"))
+    assert(content.contains("PublicEchoCallProjection.__underlyingBackend"))
     assert(content.contains("def __golemFromRaw(underlying: _root_.golem.tool.RawToolUnderlying)"))
   }
 

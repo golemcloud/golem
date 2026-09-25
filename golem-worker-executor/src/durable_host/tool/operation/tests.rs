@@ -35,6 +35,7 @@ fn activation(filesystem: FilesystemCapability) -> Arc<EntityActivation> {
             deployment_revision,
             EntityActivationPolicy::Tool {
                 provision: ToolProvisionConfig::default(),
+                mcp_import: None,
                 binding: Box::new(CompiledToolBinding {
                     deployment_revision,
                     release_id: None,

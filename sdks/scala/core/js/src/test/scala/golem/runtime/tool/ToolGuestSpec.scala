@@ -177,6 +177,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
     stdout: ToolHostApi.RawToolStdoutWriter,
     stdinCloses: () => Int,
     stdoutFinishes: () => Int,
+    stdoutFailures: () => Int,
     stdoutDisposals: () => Int
   )
 
@@ -186,6 +187,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
   ): InvocationAttachments = {
     var stdinCloses                                 = 0
     var stdoutFinishes                              = 0
+    var stdoutFailures                              = 0
     var stdoutDisposals                             = 0
     val done                                        = js.Dynamic.literal("done" -> true, "value" -> js.undefined)
     def resolved(value: js.Any): js.Promise[js.Any] =
@@ -214,7 +216,10 @@ object ToolGuestSpec extends ZIOSpecDefault {
         stdoutFinishes += 1
         cleanup(js.undefined)
       },
-      "fail" -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
+      "fail" -> js.Any.fromFunction1 { (_: js.Any) =>
+        stdoutFailures += 1
+        cleanup(js.undefined)
+      }
     )
     js.Dynamic.global.Reflect.set(
       rawStdout,
@@ -229,6 +234,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       rawStdout.asInstanceOf[ToolHostApi.RawToolStdoutWriter],
       () => stdinCloses,
       () => stdoutFinishes,
+      () => stdoutFailures,
       () => stdoutDisposals
     )
   }
@@ -523,9 +529,9 @@ object ToolGuestSpec extends ZIOSpecDefault {
         assertTrue(hasNoResult, attachments.stdoutFinishes() == 1)
       }
     },
-    test("provider invocation default-finishes stdout after a declared error") {
+    test("provider invocation preserves a declared error when default-finishing stdout fails") {
       val tool        = stdoutTool("guest-stdout-error")
-      val attachments = invocationAttachments()
+      val attachments = invocationAttachments(cleanupFails = true)
       ToolRegistry.registerInvoker(
         tool,
         stdoutInvoker(
@@ -654,10 +660,12 @@ object ToolGuestSpec extends ZIOSpecDefault {
       } yield assertTrue(
         syncError.getMessage.contains(syncFailure.getMessage),
         syncAttachments.stdinCloses() == 1,
-        syncAttachments.stdoutFinishes() == 1,
+        syncAttachments.stdoutFinishes() == 0,
+        syncAttachments.stdoutFailures() == 1,
         asyncError.getMessage.contains(asyncFailure.getMessage),
         asyncAttachments.stdinCloses() == 1,
-        asyncAttachments.stdoutFinishes() == 1
+        asyncAttachments.stdoutFinishes() == 0,
+        asyncAttachments.stdoutFailures() == 1
       )
     },
     test("malformed input releases invocation attachments before returning invalid-input") {

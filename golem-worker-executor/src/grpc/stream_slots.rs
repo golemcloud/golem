@@ -16,7 +16,7 @@
 
 use crate::worker;
 use golem_api_grpc::proto::golem::{common, workerexecutor::v1 as proto};
-use golem_common::model::durable_stream::StreamOffset;
+use golem_common::model::durable_stream::{StreamOffset, StreamSessionExpiryPolicy};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 impl From<worker::CreateStreamSessionResult> for proto::CreateStreamSessionSuccess {
@@ -25,7 +25,54 @@ impl From<worker::CreateStreamSessionResult> for proto::CreateStreamSessionSucce
             session: result.session,
             replayed: result.replayed,
             component_revision: result.component_revision.into(),
+            invocation_key: Some(result.invocation_key.into()),
+            expiry_policy: Some(expiry_policy_to_proto(result.expiry_policy)),
+            expiry_deadline_millis: result.expiry_deadline_millis,
         }
+    }
+}
+
+fn expiry_policy_to_proto(value: StreamSessionExpiryPolicy) -> proto::StreamSessionExpiryPolicy {
+    use proto::stream_session_expiry_policy::Kind;
+    proto::StreamSessionExpiryPolicy {
+        kind: Some(match value {
+            StreamSessionExpiryPolicy::None => Kind::None(common::Empty {}),
+            StreamSessionExpiryPolicy::Sliding { ttl_seconds } => Kind::TtlSeconds(ttl_seconds),
+            StreamSessionExpiryPolicy::Absolute { expires_at_millis } => {
+                Kind::ExpiresAtMillis(expires_at_millis)
+            }
+        }),
+    }
+}
+
+pub(crate) fn expiry_policy_from_proto(
+    value: Option<proto::StreamSessionExpiryPolicy>,
+) -> Result<StreamSessionExpiryPolicy, WorkerExecutorError> {
+    use proto::stream_session_expiry_policy::Kind;
+    match value.and_then(|value| value.kind) {
+        None | Some(Kind::None(_)) => Ok(StreamSessionExpiryPolicy::None),
+        Some(Kind::TtlSeconds(ttl_seconds)) => {
+            Ok(StreamSessionExpiryPolicy::Sliding { ttl_seconds })
+        }
+        Some(Kind::ExpiresAtMillis(expires_at_millis)) => {
+            Ok(StreamSessionExpiryPolicy::Absolute { expires_at_millis })
+        }
+    }
+}
+
+pub(crate) fn creation_intent_from_proto(
+    value: i32,
+) -> Result<worker::StreamSessionCreationIntent, WorkerExecutorError> {
+    match proto::StreamSessionCreationIntent::try_from(value) {
+        Ok(proto::StreamSessionCreationIntent::ExplicitPut) => {
+            Ok(worker::StreamSessionCreationIntent::ExplicitPut)
+        }
+        Ok(proto::StreamSessionCreationIntent::LazyPost) => {
+            Ok(worker::StreamSessionCreationIntent::LazyPost)
+        }
+        Ok(proto::StreamSessionCreationIntent::Unspecified) | Err(_) => Err(
+            WorkerExecutorError::invalid_request("stream session creation intent is required"),
+        ),
     }
 }
 
@@ -52,6 +99,30 @@ impl TryFrom<proto::ReadStreamSlotRequest> for worker::ReadStreamSlotRequest {
             max_bytes: request.max_bytes,
             wait_millis: request.wait_millis,
             expected_method: request.expected_method,
+            admission: match proto::StreamSlotReadAdmission::try_from(request.admission) {
+                Ok(proto::StreamSlotReadAdmission::TouchingOriginGet)
+                    if request.invocation_key.is_none() =>
+                {
+                    worker::StreamSlotReadAdmission::TouchingOriginGet
+                }
+                Ok(proto::StreamSlotReadAdmission::Head) if request.invocation_key.is_none() => {
+                    worker::StreamSlotReadAdmission::Head
+                }
+                Ok(proto::StreamSlotReadAdmission::Continuation) => {
+                    worker::StreamSlotReadAdmission::Continuation(
+                        request.invocation_key.map(Into::into).ok_or_else(|| {
+                            WorkerExecutorError::invalid_request(
+                                "stream read continuation requires an invocation key",
+                            )
+                        })?,
+                    )
+                }
+                _ => {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "invalid stream read admission",
+                    ));
+                }
+            },
         })
     }
 }
@@ -92,6 +163,9 @@ impl From<worker::ReadStreamSlotResult> for proto::ReadStreamSlotSuccess {
             tombstoned: value.tombstoned,
             writable: value.writable,
             fork: value.fork,
+            invocation_key: Some(value.invocation_key.into()),
+            expiry_policy: Some(expiry_policy_to_proto(value.expiry_policy)),
+            expiry_deadline_millis: value.expiry_deadline_millis,
         }
     }
 }
@@ -121,33 +195,41 @@ impl From<proto::AppendToStreamSlotRequest> for worker::AppendToStreamSlotReques
 }
 
 impl From<worker::AppendToStreamSlotResult> for proto::AppendToStreamSlotResponse {
-    fn from(outcome: worker::AppendToStreamSlotResult) -> Self {
+    fn from(result: worker::AppendToStreamSlotResult) -> Self {
         use proto::append_to_stream_slot_response::Result as Outcome;
         Self {
-            result: Some(match outcome {
-                worker::AppendToStreamSlotResult::Accepted(offset) => {
+            result: Some(match result.outcome {
+                worker::AppendStreamSlotOutcome::Accepted(offset) => {
                     Outcome::Accepted(proto::AppendAccepted {
                         offset: offset.0.to_vec(),
                     })
                 }
-                worker::AppendToStreamSlotResult::Duplicate {
+                worker::AppendStreamSlotOutcome::Duplicate {
                     offset,
                     highest_sequence,
                 } => Outcome::Duplicate(proto::AppendDuplicate {
                     offset: offset.0.to_vec(),
                     highest_sequence,
                 }),
-                worker::AppendToStreamSlotResult::EpochFenced(current_epoch) => {
+                worker::AppendStreamSlotOutcome::EpochFenced(current_epoch) => {
                     Outcome::EpochFenced(proto::AppendEpochFenced { current_epoch })
                 }
-                worker::AppendToStreamSlotResult::SequenceGap { expected, received } => {
+                worker::AppendStreamSlotOutcome::SequenceGap { expected, received } => {
                     Outcome::SequenceGap(proto::AppendSequenceGap { expected, received })
                 }
-                worker::AppendToStreamSlotResult::Closed => Outcome::Closed(common::Empty {}),
-                worker::AppendToStreamSlotResult::NotFound => Outcome::NotFound(common::Empty {}),
-                worker::AppendToStreamSlotResult::Gone => Outcome::Gone(common::Empty {}),
-                worker::AppendToStreamSlotResult::ReadOnly => Outcome::ReadOnly(common::Empty {}),
+                worker::AppendStreamSlotOutcome::Closed => Outcome::Closed(common::Empty {}),
+                worker::AppendStreamSlotOutcome::NotFound => Outcome::NotFound(common::Empty {}),
+                worker::AppendStreamSlotOutcome::Gone => Outcome::Gone(common::Empty {}),
+                worker::AppendStreamSlotOutcome::ReadOnly => Outcome::ReadOnly(common::Empty {}),
             }),
+            invocation_key: result.invocation_key.map(Into::into),
+            expiry_policy: result.expiry_policy.map(expiry_policy_to_proto),
+            expiry_deadline_millis: result.expiry_deadline_millis,
+            stream_head_offset: result
+                .stream_head_offset
+                .map(|offset| offset.0.to_vec())
+                .unwrap_or_default(),
+            stream_closed: result.stream_closed,
         }
     }
 }
@@ -191,6 +273,7 @@ mod tests {
             fork_offset: first.0.to_vec(),
             sub_offset: 2,
             oplog_index: 23,
+            invocation_key: Some(golem_common::model::IdempotencyKey::new("fork".into()).into()),
         };
         let result = proto::ReadStreamSlotSuccess::from(worker::ReadStreamSlotResult {
             items: vec![
@@ -215,6 +298,9 @@ mod tests {
             tombstoned: false,
             writable: true,
             fork: Some(fork.clone()),
+            invocation_key: golem_common::model::IdempotencyKey::new("invocation".into()),
+            expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 },
+            expiry_deadline_millis: Some(40_000),
         });
         assert_eq!(
             result.items,
@@ -254,6 +340,7 @@ mod tests {
             max_items: 7,
             max_bytes: 203,
             wait_millis: 19,
+            admission: proto::StreamSlotReadAdmission::Head as i32,
             ..Default::default()
         };
         let domain = worker::ReadStreamSlotRequest::try_from(request.clone()).unwrap();
@@ -332,12 +419,22 @@ mod tests {
     #[test]
     fn stream_slot_append_outcomes_keep_sequence_coordinates_distinct() {
         use proto::append_to_stream_slot_response::Result as Outcome;
+        let result = |outcome| worker::AppendToStreamSlotResult {
+            outcome,
+            invocation_key: None,
+            expiry_policy: None,
+            expiry_deadline_millis: None,
+            stream_head_offset: None,
+            stream_closed: None,
+        };
         let offset = StreamOffset::new(OplogIndex::from_u64(531), 2);
-        let duplicate =
-            proto::AppendToStreamSlotResponse::from(worker::AppendToStreamSlotResult::Duplicate {
-                offset,
-                highest_sequence: Some(17),
-            });
+        let mut duplicate_result = result(worker::AppendStreamSlotOutcome::Duplicate {
+            offset,
+            highest_sequence: Some(17),
+        });
+        duplicate_result.stream_head_offset = Some(offset);
+        duplicate_result.stream_closed = Some(true);
+        let duplicate = proto::AppendToStreamSlotResponse::from(duplicate_result);
         assert_eq!(
             duplicate.result,
             Some(Outcome::Duplicate(proto::AppendDuplicate {
@@ -345,12 +442,14 @@ mod tests {
                 highest_sequence: Some(17)
             }))
         );
-        let gap = proto::AppendToStreamSlotResponse::from(
-            worker::AppendToStreamSlotResult::SequenceGap {
+        assert_eq!(duplicate.stream_head_offset, offset.0.to_vec());
+        assert_eq!(duplicate.stream_closed, Some(true));
+        let gap = proto::AppendToStreamSlotResponse::from(result(
+            worker::AppendStreamSlotOutcome::SequenceGap {
                 expected: 7,
                 received: 11,
             },
-        );
+        ));
         assert_eq!(
             gap.result,
             Some(Outcome::SequenceGap(proto::AppendSequenceGap {
@@ -360,24 +459,24 @@ mod tests {
         );
         for (domain, expected) in [
             (
-                worker::AppendToStreamSlotResult::Closed,
+                worker::AppendStreamSlotOutcome::Closed,
                 Outcome::Closed(common::Empty {}),
             ),
             (
-                worker::AppendToStreamSlotResult::NotFound,
+                worker::AppendStreamSlotOutcome::NotFound,
                 Outcome::NotFound(common::Empty {}),
             ),
             (
-                worker::AppendToStreamSlotResult::Gone,
+                worker::AppendStreamSlotOutcome::Gone,
                 Outcome::Gone(common::Empty {}),
             ),
             (
-                worker::AppendToStreamSlotResult::ReadOnly,
+                worker::AppendStreamSlotOutcome::ReadOnly,
                 Outcome::ReadOnly(common::Empty {}),
             ),
         ] {
             assert_eq!(
-                proto::AppendToStreamSlotResponse::from(domain).result,
+                proto::AppendToStreamSlotResponse::from(result(domain)).result,
                 Some(expected)
             );
         }

@@ -837,11 +837,10 @@ function registerTool<N extends string>(
 export const registeredTools = () => [...registry.values()]
 export const resetTools = () => registry.clear()
 export const findCommand = (r: Registered, path: readonly string[]) => r.bodies.get(path.join("/"))
-/** Canonical host input order: inherited globals, positionals, tail, options, then flags. */
-export const canonicalInputFields = (
+const canonicalInputArguments = (
   definition: ToolDefinition,
   path: readonly string[],
-): Fields | undefined => {
+): ReadonlyArray<ArgumentSpec> | undefined => {
   let command = definition.model
   const inherited: ArgumentSpec[] = []
   for (const segment of path) {
@@ -860,7 +859,61 @@ export const canonicalInputFields = (
     ...args.filter((a) => a.kind === "option" && !a.global),
     ...args.filter((a) => a.kind === "flag" && !a.global),
   ]
-  return Object.fromEntries(ordered.map((argument) => [argument.name, argument.schema]))
+  return ordered
+}
+
+const canonicalArgumentSchema = (argument: ArgumentSpec): Schema.Top => {
+  const optional =
+    (argument.kind === "option" || argument.kind === "positional") &&
+    !(argument.options.required ?? argument.kind === "positional") &&
+    argument.options.default === undefined &&
+    !argument.repeatable
+  return optional ? Schema.NullOr(argument.schema) : argument.schema
+}
+
+/** Canonical host input order and effective wire schemas. */
+export const canonicalInputFields = (
+  definition: ToolDefinition,
+  path: readonly string[],
+): Fields | undefined => {
+  const arguments_ = canonicalInputArguments(definition, path)
+  return arguments_
+    ? Object.fromEntries(
+        arguments_.map((argument) => [argument.name, canonicalArgumentSchema(argument)]),
+      )
+    : undefined
+}
+
+/** Values supplied by command-line parsing when optional arguments are omitted. */
+export const canonicalInputDefaults = (
+  definition: ToolDefinition,
+  path: readonly string[],
+): Readonly<Record<string, unknown>> | undefined => {
+  const arguments_ = canonicalInputArguments(definition, path)
+  if (!arguments_) return undefined
+  return Object.fromEntries(
+    arguments_.flatMap((argument): Array<readonly [string, unknown]> => {
+      if (argument.kind === "flag")
+        return [
+          [argument.name, argument.flag === "count" ? 0 : (argument.options.default ?? false)],
+        ]
+      if (argument.kind === "tail")
+        return ((argument.options as { readonly min?: number }).min ?? 0) > 0
+          ? []
+          : [[argument.name, []]]
+      const required = argument.options.required ?? argument.kind === "positional"
+      if (required) return []
+      if (argument.options.default !== undefined) return [[argument.name, argument.options.default]]
+      if (argument.repeatable)
+        return [
+          [
+            argument.name,
+            resolveRoot(Effect.runSync(compile(argument.schema))).tag === "map" ? new Map() : [],
+          ],
+        ]
+      return [[argument.name, null]]
+    }),
+  )
 }
 export const implementationAt = (
   impl: ToolImplementation,

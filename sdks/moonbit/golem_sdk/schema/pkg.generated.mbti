@@ -134,6 +134,7 @@ pub impl FromSchema for Char
 pub impl FromSchema for Int
 pub impl FromSchema for Int64
 pub impl FromSchema for UInt
+pub impl FromSchema for UInt16
 pub impl FromSchema for UInt64
 pub impl FromSchema for Float
 pub impl FromSchema for Double
@@ -164,6 +165,7 @@ pub impl IntoSchema for Char
 pub impl IntoSchema for Int
 pub impl IntoSchema for Int64
 pub impl IntoSchema for UInt
+pub impl IntoSchema for UInt16
 pub impl IntoSchema for UInt64
 pub impl IntoSchema for Float
 pub impl IntoSchema for Double

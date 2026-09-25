@@ -12,25 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(not(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-)))]
+#[cfg(not(feature = "export_golem_agentic"))]
 pub use crate::bindings::golem::agent::common::Principal;
-#[cfg(not(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-)))]
+#[cfg(not(feature = "export_golem_agentic"))]
 pub use crate::bindings::golem::tool::streams::ToolStdoutWriter;
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub use crate::golem_agentic::golem::agent::common::Principal;
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub use crate::golem_agentic::golem::tool::streams::ToolStdoutWriter;
 pub use crate::schema::tool::Tool;
 pub use crate::schema::tool::{
@@ -72,24 +60,13 @@ pub use tool_middleware_registry::{
     get_tool_middleware_invoker_by_name, register_tool_middleware,
 };
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 pub(crate) use crate::schema::tool::wit::wire;
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 pub(crate) mod invocation_result;
 mod tool_middleware;
-#[cfg(any(
-    feature = "export_golem_tool_middleware",
-    feature = "export_golem_agentic_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 mod tool_middleware_impl;
 mod tool_middleware_registry;
 

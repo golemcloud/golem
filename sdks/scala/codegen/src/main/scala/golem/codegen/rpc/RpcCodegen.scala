@@ -61,7 +61,7 @@ object RpcCodegen {
       if (obj.pkg.isEmpty) obj.name else s"${obj.pkg}.${obj.name}"
     }.toSet
 
-    agents.foreach { agent =>
+    agents.filter(_.metadata.kind == "regular").foreach { agent =>
       val clientName = s"${agent.simpleName}Client"
       val clientFqn  =
         if (agent.packageName.isEmpty) clientName

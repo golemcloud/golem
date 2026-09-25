@@ -840,7 +840,7 @@ async fn audit(
     }
 
     #[test]
-    fn pure_middleware_feature_compiles_generated_definition_and_authoring_surfaces() {
+    fn default_world_compiles_generated_middleware_definition_and_authoring_surfaces() {
         let output = cargo_tool_crate_with_dependency(
             "pure-middleware-generated-surfaces",
             "pure-middleware-generated-surfaces",
@@ -872,12 +872,12 @@ impl EchoMiddleware for Policy {
 }
 "#,
             "check",
-            "golem-rust = { path = PATH, features = [\"export_golem_tool_middleware\"] }",
+            "golem-rust = { path = PATH, features = [\"export_golem_agentic\"] }",
         );
 
         assert!(
             output.status.success(),
-            "the pure middleware feature must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
+            "the default world must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }

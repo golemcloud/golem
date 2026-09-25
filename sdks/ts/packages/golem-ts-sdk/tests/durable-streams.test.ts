@@ -11,13 +11,20 @@ import {
   type DurableStreamErrorKind,
   type DurableStreamReadRequest,
 } from 'golem:agent/durable-streams@2.0.0';
-import type { Secret } from 'golem:core/types@2.0.0';
+import type { Secret as SecretHandle } from 'golem:core/types@2.0.0';
+import { getConfigValue } from 'golem:agent/host@2.0.0';
+import { reveal } from 'golem:secrets/reveal@0.1.0';
 import {
   createDurableByteWriter,
   createDurableJsonWriter,
   readDurableByteStream,
   readDurableJsonStream,
 } from '../src/durableStreams';
+import { Secret } from '../src/secret';
+import { SECRET_INTERNAL } from '../src/internal/schema-model/secretInternal';
+import { secretHandleToSchemaValue } from '../src/bridge/schema';
+import { schemaValueToWit } from '../src/internal/schema-model';
+import { compileConfig } from '../src/config';
 import { s } from '../src/schema/markers';
 import { agentStreamToHandle, agentStreamFromHandle } from '../src/schema/agentStream';
 import { compileSchema } from '../src/schema/adapter';
@@ -32,6 +39,16 @@ const readerHandles: (DurableStreamReader & { [Symbol.dispose]: ReturnType<typeo
 const writerHandles: (DurableStreamWriter & { [Symbol.dispose]: ReturnType<typeof vi.fn> })[] = [];
 const url = 'https://streams.example/events';
 const encoder = new TextEncoder();
+const rawSecret = () => ({ [Symbol.dispose]: vi.fn() }) as unknown as SecretHandle;
+const [authDeclaration] = compileConfig({ auth: s.secret(z.string()) });
+const auth = (...handles: SecretHandle[]) => {
+  for (const handle of handles) {
+    vi.mocked(getConfigValue).mockReturnValueOnce(
+      schemaValueToWit(secretHandleToSchemaValue(handle)),
+    );
+  }
+  return new Secret<string>(authDeclaration);
+};
 const batch = (
   payload: string | number[],
   patch: Partial<DurableStreamBatch> = {},
@@ -79,16 +96,72 @@ afterEach(() => {
 });
 
 describe('external Durable Stream readers', () => {
+  it('borrows auth from config without revealing plaintext and releases the owned capability', async () => {
+    const dispose = vi.fn();
+    const handle = { [Symbol.dispose]: dispose } as unknown as SecretHandle;
+    readers.mockImplementationOnce((_options, borrowed) => {
+      expect(borrowed).toBe(handle);
+      expect(dispose).not.toHaveBeenCalled();
+      const reader = { read, [Symbol.dispose]: vi.fn() };
+      readerHandles.push(reader);
+      return reader;
+    });
+
+    const stream = readDurableByteStream({ url, auth: auth(handle) });
+
+    expect(readers).toHaveBeenCalledExactlyOnceWith(
+      { url, mode: 'bytes', timeoutMs: 30000n },
+      handle,
+    );
+    expect(reveal).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    await stream.return();
+  });
+
+  it('keeps raw capabilities private and releases each fresh handle on success or failure', async () => {
+    const firstDispose = vi.fn();
+    const secondDispose = vi.fn();
+    const failedDispose = vi.fn();
+    const first = { [Symbol.dispose]: firstDispose } as unknown as SecretHandle;
+    const second = { [Symbol.dispose]: secondDispose } as unknown as SecretHandle;
+    const failed = { [Symbol.dispose]: failedDispose } as unknown as SecretHandle;
+    const secret = auth(first, second, failed);
+
+    const firstStream = readDurableByteStream({ url, auth: secret });
+    const secondStream = readDurableByteStream({ url, auth: secret });
+    readers.mockImplementationOnce(() => {
+      throw new Error('constructor failed');
+    });
+    expect(() => readDurableByteStream({ url, auth: secret })).toThrow('constructor failed');
+
+    expect(vi.mocked(getConfigValue)).toHaveBeenCalledTimes(3);
+    expect(firstDispose).toHaveBeenCalledTimes(1);
+    expect(secondDispose).toHaveBeenCalledTimes(1);
+    expect(failedDispose).toHaveBeenCalledTimes(1);
+    expect(reveal).not.toHaveBeenCalled();
+    expect(Object.getOwnPropertySymbols(Secret.prototype)).not.toContain(SECRET_INTERNAL);
+
+    const attacker = vi.fn();
+    const forged = { [SECRET_INTERNAL]: attacker } as unknown as Secret<string>;
+    expect(() => readDurableByteStream({ url, auth: forged })).toThrow('Invalid config Secret');
+    expect(attacker).not.toHaveBeenCalled();
+    expect(vi.mocked(getConfigValue)).toHaveBeenCalledTimes(3);
+
+    await firstStream.return();
+    await secondStream.return();
+  });
+
   it('captures descriptors once, isolates handles and releases unused or failed readers', async () => {
-    const auth = {} as Secret;
-    const options = { url, auth, timeoutMs: 1739 };
+    const firstAuth = rawSecret();
+    const secondAuth = rawSecret();
+    const options = { url, auth: auth(firstAuth, secondAuth), timeoutMs: 1739 };
     const first = readDurableByteStream(options);
     options.url = 'https://other.example/bytes';
     options.timeoutMs = 23;
     const second = readDurableByteStream(options);
     expect(readers.mock.calls).toEqual([
-      [{ url, mode: 'bytes', timeoutMs: 1739n }, auth],
-      [{ url: options.url, mode: 'bytes', timeoutMs: 23n }, auth],
+      [{ url, mode: 'bytes', timeoutMs: 1739n }, firstAuth],
+      [{ url: options.url, mode: 'bytes', timeoutMs: 23n }, secondAuth],
     ]);
     expect(readerHandles[0]).not.toBe(readerHandles[1]);
     expect(read).not.toHaveBeenCalled();
@@ -237,6 +310,34 @@ describe('external Durable Stream readers', () => {
 });
 
 describe('external Durable Stream writers', () => {
+  it('borrows auth only during construction and disposes it when construction fails', async () => {
+    const successDispose = vi.fn();
+    const failedDispose = vi.fn();
+    const success = { [Symbol.dispose]: successDispose } as unknown as SecretHandle;
+    const failed = { [Symbol.dispose]: failedDispose } as unknown as SecretHandle;
+    const secret = auth(success, failed);
+    writers.mockImplementationOnce((_options, borrowed) => {
+      expect(borrowed).toBe(success);
+      expect(successDispose).not.toHaveBeenCalled();
+      const writer = { append, [Symbol.dispose]: vi.fn() };
+      writerHandles.push(writer);
+      return writer;
+    });
+
+    const writer = createDurableByteWriter({ url, auth: secret });
+    expect(successDispose).toHaveBeenCalledTimes(1);
+
+    writers.mockImplementationOnce(() => {
+      throw new Error('writer construction failed');
+    });
+    expect(() => createDurableByteWriter({ url, auth: secret })).toThrow(
+      'writer construction failed',
+    );
+    expect(failedDispose).toHaveBeenCalledTimes(1);
+    expect(reveal).not.toHaveBeenCalled();
+    await writer.dispose();
+  });
+
   it('resolves uncertain data before disposal and retains the handle if resolution fails', async () => {
     const writer = createDurableByteWriter({ url, producerId: 'dispose', maxRetries: 0 });
     append.mockRejectedValueOnce(failure('transport')).mockRejectedValueOnce(failure('transport'));
@@ -310,8 +411,8 @@ describe('external Durable Stream writers', () => {
     append
       .mockRejectedValueOnce(failure('rate-limited', 730n))
       .mockResolvedValueOnce(receipt({ nextOffset: undefined, closed: true }));
-    const auth = {} as Secret;
-    const options = { url, producerId: 'stable', auth };
+    const handle = rawSecret();
+    const options = { url, producerId: 'stable', auth: auth(handle) };
     const writer = createDurableByteWriter(options);
     const data = new Uint8Array([3, 241, 27]);
     const operation = writer.append(data, { close: true });
@@ -342,7 +443,7 @@ describe('external Durable Stream writers', () => {
         contentType: 'application/octet-stream',
         timeoutMs: 30000n,
       },
-      auth,
+      handle,
     );
     expect(append.mock.contexts).toEqual([writerHandles[0], writerHandles[0]]);
     expect(writerHandles[0][Symbol.dispose]).toHaveBeenCalledTimes(1);

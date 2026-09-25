@@ -18,6 +18,7 @@ use std::fmt::{Debug, Formatter};
 pub struct HttpTestContext {
     pub user: TestUserContext<EnvBasedTestDependencies>,
     pub env_id: EnvironmentId,
+    pub component_id: golem_common::model::component::ComponentId,
     pub application_name: String,
     pub environment_name: String,
     pub deployment_revision: DeploymentRevision,
@@ -55,6 +56,25 @@ pub async fn make_test_context_with_openapi_endpoint(
     package_name: &str,
     openapi_endpoint: String,
 ) -> anyhow::Result<HttpTestContext> {
+    make_test_context_with_files(
+        deps,
+        agent_and_http_options,
+        component_name,
+        package_name,
+        openapi_endpoint,
+        &[],
+    )
+    .await
+}
+
+pub async fn make_test_context_with_files(
+    deps: &EnvBasedTestDependencies,
+    agent_and_http_options: Vec<(AgentTypeName, HttpApiDeploymentAgentOptions)>,
+    component_name: &str,
+    package_name: &str,
+    openapi_endpoint: String,
+    files: &[(&str, Vec<golem_test_framework::model::IFSEntry>)],
+) -> anyhow::Result<HttpTestContext> {
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (application, env) = user
@@ -76,12 +96,14 @@ pub async fn make_test_context_with_openapi_endpoint(
         )
         .await?;
 
-    user.component(&env.id, component_name)
-        .name(package_name)
-        .store()
-        .await?;
+    let mut component = user.component(&env.id, component_name).name(package_name);
+    for (agent_type, files) in files {
+        component = component.with_files(agent_type, files);
+    }
+    let component = component.store().await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter(agent_and_http_options),
         webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
@@ -110,6 +132,7 @@ pub async fn make_test_context_with_openapi_endpoint(
         base_url,
         user,
         env_id: env.id,
+        component_id: component.id,
         application_name: application.name.0,
         environment_name: env.name.0,
         deployment_revision: deployment.revision,

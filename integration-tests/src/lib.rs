@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod benchmarks;
+pub mod invocation_session;
 
 #[cfg(test)]
 test_r::enable!();

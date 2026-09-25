@@ -8,9 +8,11 @@ use super::super::error::RequestHandlerError;
 use super::super::route_resolver::ResolvedRouteEntry;
 use super::super::{RichRequest, RouteExecutionResult};
 use super::encoding::metadata_response;
+use super::session::{canonical_content_type, declared_slot};
 use super::{DurableStreamsHandler, response, route_method};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ForkStreamSlotRequest, fork_stream_slot_rejection, fork_stream_slot_response,
+    ForkStreamSlotRequest, StreamSessionExpiryPolicy, fork_stream_slot_rejection,
+    fork_stream_slot_response,
 };
 use golem_common::model::AgentId;
 use golem_common::model::durable_stream::StreamOffset;
@@ -33,7 +35,13 @@ impl DurableStreamsHandler {
         target_fork: &str,
         session: &str,
         slot: &str,
+        public_slot: &str,
+        allow_external_writes: bool,
+        expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let declared_slot = declared_slot(behaviour, slot)?.ok_or_else(|| {
+            anyhow::anyhow!("request resolved to undeclared stream slot '{slot}'")
+        })?;
         if self.forks.max_forks_per_second == 0 {
             return Ok(response(StatusCode::CONFLICT));
         }
@@ -53,15 +61,18 @@ impl DurableStreamsHandler {
             &source,
             target_fork,
             session,
-            slot,
+            public_slot,
         ) {
             Ok(parsed) => parsed,
             Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
         };
         let source_agent_id = match parsed.source_fork.as_deref() {
-            Some(fork) => self.call_agent.build_agent_id(
+            Some(fork) => super::CallAgentHandler::build_agent_id(
                 route,
-                behaviour,
+                behaviour.component_id,
+                &behaviour.agent_type,
+                &behaviour.constructor_input,
+                &behaviour.constructor_parameters,
                 Some(fork_phantom_id(root_agent_id, fork)),
             )?,
             None => root_agent_id.clone(),
@@ -80,14 +91,7 @@ impl DurableStreamsHandler {
             Ok(value) => value.unwrap_or(0),
             Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
         };
-        let content_type = header!("content-type").map(|value| {
-            value
-                .split(';')
-                .next()
-                .unwrap_or_default()
-                .trim()
-                .to_owned()
-        });
+        let content_type = header!("content-type");
         let closed =
             header!("stream-closed").is_some_and(|value| value.eq_ignore_ascii_case("true"));
         let mut body = request
@@ -99,9 +103,26 @@ impl DurableStreamsHandler {
         body.read_to_end(&mut initial_content)
             .await
             .map_err(anyhow::Error::from)?;
+        if !allow_external_writes && (!initial_content.is_empty() || closed) {
+            return Ok(response(StatusCode::FORBIDDEN));
+        }
+        if !initial_content.is_empty()
+            && content_type.as_ref().is_some_and(|value| {
+                !value
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .eq_ignore_ascii_case(&declared_slot.content_type)
+            })
+        {
+            return Ok(response(StatusCode::CONFLICT));
+        }
         if initial_content.len() > self.max_append_body_bytes {
             return Ok(response(StatusCode::PAYLOAD_TOO_LARGE));
         }
+        let executor_content_type = (!initial_content.is_empty() && content_type.is_some())
+            .then(|| canonical_content_type(declared_slot.representation).to_owned());
         let result = self
             .worker_service
             .fork_stream_slot(
@@ -117,25 +138,36 @@ impl DurableStreamsHandler {
                     source_path: parsed.canonical,
                     fork_offset,
                     sub_offset,
-                    content_type,
+                    content_type: executor_content_type,
                     max_forks_per_session: self.forks.max_forks_per_session,
                     max_forks_per_second: self.forks.max_forks_per_second,
                     max_copied_bytes: self.forks.max_copied_bytes,
                     initial_content,
                     closed,
+                    expiry_policy,
                 },
             )
             .await?;
         match result {
             fork_stream_slot_response::Result::Success(success) => {
                 let metadata = self
-                    .read_slot(route, target_agent_id, session, slot, Vec::new(), 0, 0)
+                    .read_slot_admitted(
+                        route,
+                        target_agent_id,
+                        session,
+                        slot,
+                        Vec::new(),
+                        0,
+                        0,
+                        golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission::Continuation,
+                        success.invocation_key.clone(),
+                    )
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("fork succeeded without stream metadata"))?;
                 if metadata.tombstoned {
                     return Ok(response(StatusCode::CONFLICT));
                 }
-                let mut out = metadata_response(&metadata, true)?;
+                let mut out = metadata_response(&metadata, true, declared_slot)?;
                 out.status = if success.replayed {
                     StatusCode::OK
                 } else {
@@ -143,7 +175,12 @@ impl DurableStreamsHandler {
                 };
                 out.headers.insert(
                     http::header::LOCATION,
-                    request.underlying.uri().path().to_owned(),
+                    request
+                        .underlying
+                        .uri()
+                        .path()
+                        .parse()
+                        .map_err(anyhow::Error::from)?,
                 );
                 Ok(out)
             }
@@ -167,7 +204,7 @@ impl DurableStreamsHandler {
                 if status == StatusCode::TOO_MANY_REQUESTS && rejected.retry_after_seconds > 0 {
                     out.headers.insert(
                         http::header::RETRY_AFTER,
-                        rejected.retry_after_seconds.to_string(),
+                        rejected.retry_after_seconds.into(),
                     );
                 }
                 Ok(out)
@@ -268,4 +305,46 @@ pub(super) fn fork_phantom_id(root: &AgentId, fork: &str) -> Uuid {
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     Uuid::from_bytes(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::invocation_session_public::new_durable_stream_session_id;
+    use test_r::test;
+
+    #[test]
+    fn fork_source_path_is_validated_with_the_public_slot_alias() {
+        let target_fork = new_durable_stream_session_id();
+        let source_fork = new_durable_stream_session_id();
+        let session = new_durable_stream_session_id();
+        let public_slot = "responses";
+        let target =
+            format!("/api/forks/{target_fork}/invocations/{session}/streams/{public_slot}");
+
+        let origin = format!("/api/invocations/{session}/streams/{public_slot}");
+        let parsed =
+            parse_source_path(&target, &origin, &target_fork, &session, public_slot).unwrap();
+        assert_eq!(parsed.source_fork, None);
+        assert_eq!(parsed.canonical, origin);
+
+        let fork_source =
+            format!("/api/forks/{source_fork}/invocations/{session}/streams/{public_slot}");
+        let parsed =
+            parse_source_path(&target, &fork_source, &target_fork, &session, public_slot).unwrap();
+        assert_eq!(parsed.source_fork.as_deref(), Some(source_fork.as_str()));
+        assert_eq!(parsed.canonical, fork_source);
+
+        let canonical_slot_source = format!("/api/invocations/{session}/streams/$result");
+        assert!(
+            parse_source_path(
+                &target,
+                &canonical_slot_source,
+                &target_fork,
+                &session,
+                public_slot,
+            )
+            .is_err()
+        );
+    }
 }

@@ -886,7 +886,12 @@ impl ComponentCommandHandler {
             .filter(|declared_agent| !exported_agents.contains_key(declared_agent))
             .collect::<BTreeSet<_>>();
 
-        let (remote_tools, tools_to_publish) = self
+        let (
+            remote_tools,
+            tools_to_publish,
+            environment_tool_middleware_bindings,
+            agent_tool_middleware_bindings,
+        ) = self
             .resolve_manifest_tool_deployments(
                 environment,
                 resolved_tool_grants,
@@ -901,6 +906,8 @@ impl ComponentCommandHandler {
             components,
             remote_tools,
             tools_to_publish,
+            environment_tool_middleware_bindings,
+            agent_tool_middleware_bindings,
         })
     }
 
@@ -996,7 +1003,12 @@ impl ComponentCommandHandler {
         unknown_declared_agents: &BTreeSet<AgentTypeName>,
         has_remote_tools: bool,
         ambient_tools: &[golem_common::model::deployment::DeploymentPlanAmbientToolEntry],
-    ) -> anyhow::Result<(RemoteToolDeploymentPlan, BTreeSet<ToolName>)> {
+    ) -> anyhow::Result<(
+        RemoteToolDeploymentPlan,
+        BTreeSet<ToolName>,
+        BTreeMap<ToolName, ToolBindingInput>,
+        BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+    )> {
         let plugin_grants = if has_remote_tools {
             self.ctx
                 .environment_handler()
@@ -1202,6 +1214,9 @@ impl ComponentCommandHandler {
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
+        let has_mcp_imports = app
+            .mcp_imports(app.environment_name())
+            .is_some_and(|imports| !imports.is_empty());
         validate_tool_binding_references(
             &mut issues,
             environment_tool_bindings.keys(),
@@ -1210,6 +1225,7 @@ impl ComponentCommandHandler {
             app.selected_environment_source(),
             &implementations,
             &ambient_names,
+            has_mcp_imports,
         );
         for agent_name in agent_components.keys() {
             if let Some(agent) = resolved_agents.agent(agent_name) {
@@ -1221,7 +1237,56 @@ impl ComponentCommandHandler {
                     Some(agent.source()),
                     &implementations,
                     &ambient_names,
+                    has_mcp_imports,
                 );
+            }
+        }
+        let mut dynamic_environment_bindings = BTreeMap::new();
+        let mut dynamic_agent_bindings = BTreeMap::new();
+        if has_mcp_imports {
+            for (raw_name, state) in &environment_tool_bindings {
+                if let Ok(name) = ToolName::try_from(raw_name.as_str())
+                    && !implementations.contains_key(&name)
+                    && !ambient_names.contains(&name)
+                {
+                    dynamic_environment_bindings.insert(
+                        name.clone(),
+                        resolve_dynamic_tool_binding_input(
+                            &mut issues,
+                            &name,
+                            state,
+                            "environments.tools",
+                            None,
+                            app.selected_environment_source(),
+                        ),
+                    );
+                }
+            }
+            for agent_name in agent_components.keys() {
+                let Some(agent) = resolved_agents.agent(agent_name) else {
+                    continue;
+                };
+                for (raw_name, state) in agent.tool_bindings() {
+                    if let Ok(name) = ToolName::try_from(raw_name.as_str())
+                        && !implementations.contains_key(&name)
+                        && !ambient_names.contains(&name)
+                    {
+                        dynamic_agent_bindings
+                            .entry(agent_name.clone())
+                            .or_insert_with(BTreeMap::new)
+                            .insert(
+                                name.clone(),
+                                resolve_dynamic_tool_binding_input(
+                                    &mut issues,
+                                    &name,
+                                    state,
+                                    "agents.tools",
+                                    Some(agent_name),
+                                    Some(agent.source()),
+                                ),
+                            );
+                    }
+                }
             }
         }
         let mut used_tools = BTreeSet::new();
@@ -1235,6 +1300,7 @@ impl ComponentCommandHandler {
                 Some(component.source()),
                 &implementations,
                 &ambient_names,
+                false,
             );
             used_tools.extend(
                 app.component(component_name)
@@ -1690,6 +1756,8 @@ impl ComponentCommandHandler {
                 pending_initial_files: pending_remote_initial_files,
             },
             published_tools,
+            dynamic_environment_bindings,
+            dynamic_agent_bindings,
         ))
     }
 
@@ -2670,6 +2738,7 @@ fn validate_tool_binding_references<'a>(
     source: Option<&std::path::Path>,
     implementations: &BTreeMap<ToolName, Vec<DiscoveredToolImplementation>>,
     ambient_names: &BTreeSet<ToolName>,
+    allow_dynamic_tools: bool,
 ) {
     for raw_name in names {
         let field_path = format!("{field_prefix}.{raw_name}");
@@ -2691,6 +2760,13 @@ fn validate_tool_binding_references<'a>(
             Ok(tool_name)
                 if implementations.contains_key(&tool_name)
                     || ambient_names.contains(&tool_name) => {}
+            Ok(_) if allow_dynamic_tools => issues.push(ToolValidationIssue::warning(
+                ToolValidationPhase::BindingReferences,
+                ToolValidationCode::UnknownToolReference,
+                path,
+                source.map(std::path::Path::to_path_buf),
+                "Binding references a tool that is not currently discoverable; retaining it for an MCP import",
+            )),
             Ok(_) => issues.push(ToolValidationIssue::error(
                 ToolValidationPhase::BindingReferences,
                 ToolValidationCode::UnknownToolReference,
@@ -2706,6 +2782,74 @@ fn validate_tool_binding_references<'a>(
                 message,
             )),
         }
+    }
+}
+
+fn resolve_dynamic_tool_binding_input(
+    issues: &mut Vec<ToolValidationIssue>,
+    tool_name: &ToolName,
+    state: &ToolBindingState,
+    field_prefix: &str,
+    agent_name: Option<&AgentTypeName>,
+    source: Option<&std::path::Path>,
+) -> ToolBindingInput {
+    let entity_path = |field: &str| {
+        let field_path = format!("{field_prefix}.{tool_name}.{field}");
+        match agent_name {
+            Some(agent_name) => ToolEntityPath::agent(agent_name, field_path),
+            None => ToolEntityPath::tool(tool_name, field_path),
+        }
+    };
+    let readable = resolve_secret_scope(
+        issues,
+        &state.secret_keys_readable,
+        entity_path("secretKeysReadable"),
+        source,
+    );
+    let config_keys_readable = resolve_config_scope(
+        issues,
+        &state.config_keys_readable,
+        entity_path("configKeysReadable"),
+        source,
+    );
+    let requested_revealable = resolve_secret_scope(
+        issues,
+        &state.secret_keys_revealable,
+        entity_path("secretKeysRevealable"),
+        source,
+    );
+    let revealable = requested_revealable.intersection(&readable);
+    if revealable != requested_revealable {
+        issues.push(ToolValidationIssue::warning(
+            ToolValidationPhase::BindingSemantics,
+            ToolValidationCode::RevealableScopeNarrowed,
+            entity_path("secretKeysRevealable"),
+            source.map(std::path::Path::to_path_buf),
+            "Revealable secret keys outside the readable scope were dropped",
+        ));
+    }
+    ToolBindingInput {
+        version: None,
+        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        account: None,
+        config_keys_readable,
+        secret_keys_readable: readable,
+        secret_keys_revealable: revealable,
+        filesystem_access: state.filesystem_access,
+        middleware: match state.middleware_installations() {
+            Ok(middleware) => middleware,
+            Err(message) => {
+                issues.push(ToolValidationIssue::error(
+                    ToolValidationPhase::BindingSemantics,
+                    ToolValidationCode::InvalidParameters,
+                    entity_path("middleware"),
+                    source.map(std::path::Path::to_path_buf),
+                    message,
+                ));
+                None
+            }
+        },
+        middleware_merge_mode: agent_name.and(state.middleware_merge_mode),
     }
 }
 
@@ -3411,8 +3555,8 @@ mod component_config_tests {
 #[cfg(test)]
 mod tool_binding_tests {
     use super::{
-        effective_remote_tool_bindings, resolve_config_scope, resolve_secret_scope,
-        resolve_tool_binding_input, validate_effective_tool_binding,
+        effective_remote_tool_bindings, resolve_config_scope, resolve_dynamic_tool_binding_input,
+        resolve_secret_scope, resolve_tool_binding_input, validate_effective_tool_binding,
         validate_tool_binding_references,
     };
     use crate::model::app_raw::{
@@ -3454,11 +3598,96 @@ mod tool_binding_tests {
             Some(Path::new("golem.yaml")),
             &BTreeMap::new(),
             &BTreeSet::new(),
+            false,
         );
         assert_eq!(issues.len(), 3);
         assert_eq!(issues[0].code, ToolValidationCode::UnknownToolReference);
         assert_eq!(issues[1].code, ToolValidationCode::InvalidName);
         assert_eq!(issues[2].code, ToolValidationCode::ReservedMiddleware);
+    }
+
+    #[test]
+    fn dynamic_import_binding_preserves_explicit_empty_middleware_and_ignores_native_identity() {
+        let state = ToolBindingState {
+            version: Some("not-used-for-imports".to_string()),
+            parameters: [("not-used".to_string(), serde_json::json!(true))]
+                .into_iter()
+                .collect(),
+            account: Some("not-used@example.com".to_string()),
+            middleware: Some(Vec::new()),
+            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+            ..Default::default()
+        };
+        let tool_name = ToolName::try_from("projected-tool").unwrap();
+        let agent_name = AgentTypeName("CoderAgent".to_string());
+        let mut issues = Vec::new();
+
+        let environment = resolve_dynamic_tool_binding_input(
+            &mut issues,
+            &tool_name,
+            &state,
+            "environments.tools",
+            None,
+            Some(Path::new("golem.yaml")),
+        );
+        let agent = resolve_dynamic_tool_binding_input(
+            &mut issues,
+            &tool_name,
+            &state,
+            "agents.tools",
+            Some(&agent_name),
+            Some(Path::new("agents.yaml")),
+        );
+
+        assert!(issues.is_empty());
+        assert_eq!(environment.version, None);
+        assert_eq!(environment.account, None);
+        assert_eq!(environment.parameters.0, serde_json::json!({}));
+        assert_eq!(environment.middleware, Some(Vec::new()));
+        assert_eq!(environment.middleware_merge_mode, None);
+        assert_eq!(agent.middleware, Some(Vec::new()));
+        assert_eq!(
+            agent.middleware_merge_mode,
+            Some(ToolMiddlewareMergeMode::Replace)
+        );
+    }
+
+    #[test]
+    fn projected_tool_reference_is_warning_only_when_imports_exist() {
+        for (allow_dynamic, expected_severity) in [
+            (true, ToolValidationSeverity::Warning),
+            (false, ToolValidationSeverity::Error),
+        ] {
+            let names = ["projected-tool".to_string()];
+            let mut issues = Vec::new();
+            validate_tool_binding_references(
+                &mut issues,
+                names.iter(),
+                "environments.tools",
+                None,
+                Some(Path::new("golem.yaml")),
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                allow_dynamic,
+            );
+            assert_eq!(issues.len(), 1);
+            assert_eq!(issues[0].severity, expected_severity);
+        }
+
+        let names = ["malformed name".to_string()];
+        let mut issues = Vec::new();
+        validate_tool_binding_references(
+            &mut issues,
+            names.iter(),
+            "environments.tools",
+            None,
+            Some(Path::new("golem.yaml")),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            true,
+        );
+        assert_eq!(issues[0].severity, ToolValidationSeverity::Error);
+        assert_eq!(issues[0].code, ToolValidationCode::InvalidName);
     }
 
     fn keys(values: &[&str]) -> SecretKeyScope {

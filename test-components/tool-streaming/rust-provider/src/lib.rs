@@ -4,7 +4,8 @@ use golem_rust::agentic::{
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, ToolError, tool_definition, tool_implementation,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, ToolError, decode_schema_value,
+    encode_schema_graph, tool_definition, tool_implementation,
 };
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
@@ -13,6 +14,51 @@ const MARKER: &[u8] = b"marker:";
 #[tool_definition(version = "1.0.0")]
 pub trait MiddlewareProbe {
     async fn apply(&self, value: String) -> String;
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct SecretPolicyObservation {
+    pub label: String,
+    pub config_resolved: bool,
+    pub configured_secret_revealed: bool,
+    pub input_secret_revealed: bool,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema)]
+pub struct SecretPolicyEvidence {
+    pub middleware: Vec<SecretPolicyObservation>,
+    pub leaf_revealed: bool,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait SecretPolicyProbe {
+    async fn inspect(&self, value: GuestSecretHandle) -> SecretPolicyEvidence;
+}
+
+fn reveal_string(value: &GuestSecretHandle) -> Result<String, String> {
+    let graph =
+        golem_rust::schema::try_into_schema_graph::<String>().map_err(|error| error.to_string())?;
+    let expected = encode_schema_graph(&graph).map_err(|error| error.to_string())?;
+    let value = value
+        .with_handle(|handle| {
+            golem_rust::bindings::golem::secrets::reveal::reveal(handle, &expected)
+        })
+        .ok_or_else(|| "secret handle was transferred".to_string())?
+        .map_err(|error| format!("{error:?}"))?;
+    let value = decode_schema_value(value).map_err(|error| error.to_string())?;
+    String::from_value(&value).map_err(|error| error.to_string())
+}
+
+struct SecretPolicyProbeImpl;
+
+#[tool_implementation]
+impl SecretPolicyProbe for SecretPolicyProbeImpl {
+    async fn inspect(&self, value: GuestSecretHandle) -> SecretPolicyEvidence {
+        SecretPolicyEvidence {
+            middleware: Vec::new(),
+            leaf_revealed: reveal_string(&value).is_ok(),
+        }
+    }
 }
 
 struct MiddlewareProbeImpl;
@@ -1004,7 +1050,6 @@ impl Streaming for StreamingImpl {
         }
 
         if mode == "declared-error" {
-            let _ = stdout.finish().await;
             return Err(StreamingError::Declared {
                 bytes_read: summary.bytes_read,
             });
