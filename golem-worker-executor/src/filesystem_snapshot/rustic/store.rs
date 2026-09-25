@@ -25,9 +25,9 @@ use super::fault::{Operation, classify, is_file_missing, is_storage_failure, sto
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
-    ClaimChoice, Percent, PruneLedger, claims_directory, end_claims, list_claims,
-    needs_repository_size, next_claim, prune_due, read_ledger, release_claim, repository_bytes,
-    take_claim, write_ledger,
+    ClaimChoice, Percent, PruneLedger, claims_directory, end_claims, list_claims, list_freed,
+    needs_repository_size, next_claim, prune_due, read_ledger, record_freed, release_claim,
+    remove_freed, repository_bytes, take_claim, write_ledger,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -289,9 +289,9 @@ impl RusticSnapshotStore {
         }
     }
 
-    /// Adds the freed bytes to the ledger of the scope, and prunes the repository when a prune is
-    /// due. The ledger keeps the freed bytes before the prune starts, so a delete that runs again
-    /// after a failed prune prunes again. It lists the packs only when their size can make a prune due.
+    /// Writes a record of the freed bytes, and prunes the repository when a prune is due. The
+    /// record stays until a prune succeeds, so a delete that runs again after a failed prune prunes
+    /// again. It lists the packs only when their size can make a prune due.
     /// A due prune runs only after the delete takes a claim of its ledger, and only when the ledger
     /// did not change after the claim. A failed prune deletes the claim, and a prune that succeeds
     /// deletes each claim of its ledger.
@@ -302,23 +302,26 @@ impl RusticSnapshotStore {
         freed: u64,
     ) -> Result<(), SnapshotStoreError> {
         let files = self.files(scope, token);
-        let ledger = read_ledger(&files)
-            .await
-            .map_err(storage_failure)?
-            .with_deleted(freed);
         if freed > 0 {
-            write_ledger(&files, &ledger)
-                .await
-                .map_err(storage_failure)?;
+            record_freed(&files, freed).await.map_err(storage_failure)?;
         }
+        let ledger = read_ledger(&files).await.map_err(storage_failure)?;
+        let records = list_freed(&files).await.map_err(storage_failure)?;
         let now = Timestamp::now_utc();
         let grace = self.policy.prune.keep_delete;
-        let size = if needs_repository_size(&ledger, now, grace) {
+        let size = if needs_repository_size(&ledger, records.bytes, now, grace) {
             repository_bytes(&files).await.map_err(storage_failure)?
         } else {
             0
         };
-        if !prune_due(&ledger, now, size, self.policy.prune_threshold, grace) {
+        if !prune_due(
+            &ledger,
+            records.bytes,
+            now,
+            size,
+            self.policy.prune_threshold,
+            grace,
+        ) {
             return Ok(());
         }
         let claims = claims_directory(&ledger);
@@ -367,6 +370,7 @@ impl RusticSnapshotStore {
         write_ledger(&files, &PruneLedger::after_prune(now, marked_packs))
             .await
             .map_err(storage_failure)?;
+        remove_freed(&files, &records).await;
         end_claims(&files, &claims).await;
         Ok(())
     }

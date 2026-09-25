@@ -15,9 +15,9 @@
 //! When a delete of the store prunes the repository of its scope.
 //!
 //! The scope keeps a small ledger blob next to the files of the repository. The ledger holds the
-//! packed bytes that deleted snapshots added since the last prune, the time of the last prune, and
-//! whether that prune marked packs that a later prune removes. Two deletes at the same time can
-//! lose a count. A lost count only delays a prune.
+//! time of the last prune, and whether that prune marked packs that a later prune removes. Only the
+//! delete that holds the claim of a prune writes it. Each delete that freed bytes writes a record
+//! of its own, with the count in the name, and a prune that succeeds deletes the records it counted.
 //!
 //! A delete whose prune is due takes a claim before it prunes, so two deletes that read the same
 //! ledger make one prune. The claims of a ledger are in one directory, named by the time of the last
@@ -26,7 +26,7 @@
 use super::files::SnapshotFiles;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::model::Timestamp;
-use golem_service_base::storage::blob::PutIfAbsent;
+use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -38,11 +38,12 @@ pub(super) const LEDGER_PATH: &str = "golem/prune-ledger";
 /// The directory of the prune claims, relative to the root of the namespace of the scope.
 const CLAIMS_PATH: &str = "golem/prune-claims";
 
+/// The directory of the records of freed bytes, relative to the root of the namespace of the scope.
+const FREED_PATH: &str = "golem/prune-freed";
+
 /// What the scope did since its last prune.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct PruneLedger {
-    /// The packed bytes that the deleted snapshots added, since the last prune.
-    pub(super) freed_bytes: u64,
     /// The time of the last prune.
     pub(super) last_prune: Option<Timestamp>,
     /// Whether the last prune marked packs that a later prune removes.
@@ -50,18 +51,9 @@ pub(super) struct PruneLedger {
 }
 
 impl PruneLedger {
-    /// Gives the ledger after a delete of snapshots that added `bytes` packed bytes.
-    pub(super) fn with_deleted(self, bytes: u64) -> Self {
-        Self {
-            freed_bytes: self.freed_bytes.saturating_add(bytes),
-            ..self
-        }
-    }
-
     /// Gives the ledger after a prune at `now` that marked packs or not.
     pub(super) fn after_prune(now: Timestamp, marked_packs: bool) -> Self {
         Self {
-            freed_bytes: 0,
             last_prune: Some(now),
             awaiting_removal: marked_packs,
         }
@@ -99,8 +91,13 @@ fn passed_since(time: Timestamp, now: Timestamp, grace: Duration) -> bool {
 
 /// Tells whether [`prune_due`] needs the size of the repository at `now`. Only freed bytes after
 /// the grace period, without marked packs, need it.
-pub(super) fn needs_repository_size(ledger: &PruneLedger, now: Timestamp, grace: Duration) -> bool {
-    grace_passed(ledger, now, grace) && ledger.freed_bytes > 0 && !ledger.awaiting_removal
+pub(super) fn needs_repository_size(
+    ledger: &PruneLedger,
+    freed_bytes: u64,
+    now: Timestamp,
+    grace: Duration,
+) -> bool {
+    grace_passed(ledger, now, grace) && freed_bytes > 0 && !ledger.awaiting_removal
 }
 
 /// Tells whether a prune is due at `now`.
@@ -111,13 +108,13 @@ pub(super) fn needs_repository_size(ledger: &PruneLedger, now: Timestamp, grace:
 /// freed nothing and marked nothing.
 pub(super) fn prune_due(
     ledger: &PruneLedger,
+    freed_bytes: u64,
     now: Timestamp,
     repository_bytes: u64,
     threshold: Percent,
     grace: Duration,
 ) -> bool {
-    let work =
-        ledger.freed_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal;
+    let work = freed_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal;
     grace_passed(ledger, now, grace) && work
 }
 
@@ -155,6 +152,71 @@ pub(super) async fn write_ledger(
     files
         .put("write_ledger", Path::new(LEDGER_PATH), &content)
         .await
+}
+
+/// The freed bytes of the records that a listing found, and the paths of the records it counted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct FreedRecords {
+    pub(super) bytes: u64,
+    pub(super) counted: Vec<Box<Path>>,
+}
+
+/// Reads the freed bytes from the name of a record, `<bytes>-<unique part>`.
+pub(super) fn parse_freed(name: &str) -> Option<u64> {
+    let (bytes, unique) = name.split_once('-')?;
+    if unique.is_empty() {
+        return None;
+    }
+    bytes.parse().ok()
+}
+
+/// Sums the freed bytes of the listed records. A record whose name does not parse counts as zero
+/// bytes, and it is not counted, so a prune leaves it in place.
+pub(super) fn count_freed(listed: &[ListedBlob]) -> FreedRecords {
+    listed
+        .iter()
+        .filter_map(|blob| {
+            let bytes = parse_freed(blob.path.file_name()?.to_str()?)?;
+            Some((bytes, blob.path.clone()))
+        })
+        .fold(FreedRecords::default(), |records, (bytes, path)| {
+            let mut counted = records.counted;
+            counted.push(path);
+            FreedRecords {
+                bytes: records.bytes.saturating_add(bytes),
+                counted,
+            }
+        })
+}
+
+/// Writes a record of the freed bytes of one delete.
+pub(super) async fn record_freed(files: &SnapshotFiles, bytes: u64) -> anyhow::Result<()> {
+    let path = Path::new(FREED_PATH).join(format!("{bytes}-{}", uuid::Uuid::new_v4()));
+    files.put("write_freed", &path, &[]).await
+}
+
+/// Lists the records of freed bytes, and sums them.
+pub(super) async fn list_freed(files: &SnapshotFiles) -> anyhow::Result<FreedRecords> {
+    Ok(count_freed(
+        &files
+            .list_below("list_freed", Path::new(FREED_PATH))
+            .await?,
+    ))
+}
+
+/// Deletes the counted records after a prune. A failure gives a warning, because a record that
+/// stays only makes the next prune come earlier.
+pub(super) async fn remove_freed(files: &SnapshotFiles, records: &FreedRecords) {
+    stream::iter(&records.counted)
+        .for_each(|path| async move {
+            if let Err(error) = files.delete("delete_freed", path).await {
+                warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to delete a record of freed bytes of a filesystem snapshot scope"
+                );
+            }
+        })
+        .await;
 }
 
 /// A claim of a prune that a listing found: its number, and its time when its content parses.
@@ -281,12 +343,14 @@ fn parse_claim(content: &[u8]) -> Option<Timestamp> {
 mod tests {
     use super::super::files::SnapshotFiles;
     use super::{
-        ClaimChoice, LEDGER_PATH, ListedClaim, Percent, PruneLedger, claims_directory, list_claims,
-        needs_repository_size, next_claim, prune_due, read_ledger, take_claim, write_ledger,
+        ClaimChoice, FREED_PATH, FreedRecords, LEDGER_PATH, ListedClaim, Percent, PruneLedger,
+        claims_directory, count_freed, list_claims, list_freed, needs_repository_size, next_claim,
+        parse_freed, prune_due, read_ledger, record_freed, take_claim, write_ledger,
     };
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::storage::blob::BlobStorageNamespace;
+    use golem_service_base::storage::blob::ListedBlob;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use pretty_assertions::assert_eq;
     use std::path::Path;
@@ -304,13 +368,8 @@ mod tests {
         Timestamp::from(millis)
     }
 
-    fn ledger(
-        freed_bytes: u64,
-        last_prune_millis: Option<u64>,
-        awaiting_removal: bool,
-    ) -> PruneLedger {
+    fn ledger(last_prune_millis: Option<u64>, awaiting_removal: bool) -> PruneLedger {
         PruneLedger {
-            freed_bytes,
             last_prune: last_prune_millis.map(Timestamp::from),
             awaiting_removal,
         }
@@ -332,7 +391,8 @@ mod tests {
         let now = at(10_000_000);
         let due = |freed, repository_bytes| {
             prune_due(
-                &ledger(freed, None, false),
+                &ledger(None, false),
+                freed,
                 now,
                 repository_bytes,
                 TEN_PERCENT,
@@ -357,7 +417,8 @@ mod tests {
         let last = 1_000_000;
         let full = |now| {
             prune_due(
-                &ledger(1000, Some(last), true),
+                &ledger(Some(last), true),
+                1000,
                 at(now),
                 1000,
                 TEN_PERCENT,
@@ -382,7 +443,8 @@ mod tests {
         let after_grace = at(last + GRACE_MILLIS);
         let due = |awaiting_removal| {
             prune_due(
-                &ledger(0, Some(last), awaiting_removal),
+                &ledger(Some(last), awaiting_removal),
+                0,
                 after_grace,
                 1000,
                 TEN_PERCENT,
@@ -396,13 +458,13 @@ mod tests {
     #[test]
     fn a_zero_threshold_prunes_after_each_delete_that_freed_bytes() {
         let now = at(10_000_000);
-        let due = |ledger| prune_due(&ledger, now, 1000, Percent(0), Duration::ZERO);
+        let due = |ledger, freed| prune_due(&ledger, freed, now, 1000, Percent(0), Duration::ZERO);
 
         assert_eq!(
             [
-                due(ledger(0, None, false)),
-                due(ledger(1, None, false)),
-                due(ledger(1, Some(10_000_000), false)),
+                due(ledger(None, false), 0),
+                due(ledger(None, false), 1),
+                due(ledger(Some(10_000_000), false), 1),
             ],
             [false, true, true]
         );
@@ -412,7 +474,7 @@ mod tests {
     fn only_freed_bytes_after_the_grace_period_without_marked_packs_need_the_repository_size() {
         let last = 1_000_000;
         let needs = |freed, awaiting_removal, now| {
-            needs_repository_size(&ledger(freed, Some(last), awaiting_removal), at(now), GRACE)
+            needs_repository_size(&ledger(Some(last), awaiting_removal), freed, at(now), GRACE)
         };
 
         assert_eq!(
@@ -456,7 +518,7 @@ mod tests {
     #[test]
     async fn a_claim_is_taken_one_time_and_listed_with_its_time() {
         let files = new_files();
-        let directory = claims_directory(&ledger(1, Some(42), false));
+        let directory = claims_directory(&ledger(Some(42), false));
         let now = at(10_000_000);
 
         let first = take_claim(&files, &directory, 0, now).await.unwrap();
@@ -480,23 +542,66 @@ mod tests {
     }
 
     #[test]
-    fn a_delete_adds_its_bytes_and_a_prune_starts_the_ledger_again() {
-        let deleted = ledger(5, Some(7), true)
-            .with_deleted(10)
-            .with_deleted(u64::MAX);
-
+    fn a_prune_starts_the_ledger_again() {
         assert_eq!(
             (
-                deleted,
                 PruneLedger::after_prune(at(42), true),
                 PruneLedger::after_prune(at(43), false)
             ),
-            (
-                ledger(u64::MAX, Some(7), true),
-                ledger(0, Some(42), true),
-                ledger(0, Some(43), false)
-            )
+            (ledger(Some(42), true), ledger(Some(43), false))
         );
+    }
+
+    #[test]
+    fn the_freed_bytes_of_a_record_are_the_number_before_the_first_dash() {
+        assert_eq!(
+            [
+                parse_freed("123-0f4e"),
+                parse_freed("0-a-b"),
+                parse_freed("123"),
+                parse_freed("123-"),
+                parse_freed("x-0f4e"),
+                parse_freed("-0f4e"),
+            ],
+            [Some(123), Some(0), None, None, None, None]
+        );
+    }
+
+    #[test]
+    fn the_records_that_parse_are_summed_and_counted_and_the_others_stay() {
+        let blob = |name: &str| ListedBlob {
+            path: Path::new(FREED_PATH).join(name).into(),
+            size: 0,
+        };
+
+        let records = count_freed(&[
+            blob("5-a"),
+            blob("not-a-count"),
+            blob(&format!("{}-b", u64::MAX)),
+            blob("7"),
+        ]);
+
+        assert_eq!(
+            records,
+            FreedRecords {
+                bytes: u64::MAX,
+                counted: vec![
+                    Path::new(FREED_PATH).join("5-a").into(),
+                    Path::new(FREED_PATH).join(format!("{}-b", u64::MAX)).into(),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    async fn a_record_of_freed_bytes_is_written_and_listed() {
+        let files = new_files();
+
+        record_freed(&files, 40).await.unwrap();
+        record_freed(&files, 2).await.unwrap();
+        let listed = list_freed(&files).await.unwrap();
+
+        assert_eq!((listed.bytes, listed.counted.len()), (42, 2));
     }
 
     #[test]
@@ -504,7 +609,6 @@ mod tests {
         // The ledger keeps the time of the last prune as ISO 8601 text with milliseconds.
         let files = new_files();
         let written = PruneLedger {
-            freed_bytes: 123,
             last_prune: Some(Timestamp::from(Timestamp::now_utc().to_millis())),
             awaiting_removal: true,
         };

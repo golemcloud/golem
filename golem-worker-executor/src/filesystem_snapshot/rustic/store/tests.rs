@@ -18,7 +18,7 @@
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
 use super::super::files::SnapshotFiles;
-use super::super::prune::{Percent, PruneLedger, read_ledger, write_ledger};
+use super::super::prune::{Percent, PruneLedger, count_freed, read_ledger, write_ledger};
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
@@ -164,6 +164,20 @@ async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScop
     })
     .await
     .unwrap()
+}
+
+/// Gives the sum of the records of freed bytes of the scope.
+async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) -> u64 {
+    let listed = storage
+        .list_blobs_below(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new("golem/prune-freed"),
+        )
+        .await
+        .unwrap();
+    count_freed(&listed).bytes
 }
 
 /// Waits until the condition holds, or until the limit ends. Gives whether the condition holds.
@@ -783,12 +797,13 @@ async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_per
 
     store.delete(&scope, &name("p-deleted")).await.unwrap();
     let after_first = ledger(&storage, &scope).await;
+    let after_first_freed = freed(&storage, &scope).await;
     store.delete(&scope, &name("p-none")).await.unwrap();
     let packs_after = blobs(&*storage, &scope.0, "data/").await;
 
     assert_eq!(
         (
-            after_first.freed_bytes,
+            after_first_freed,
             after_first.last_prune.is_some(),
             after_first.awaiting_removal,
             packs_after.len() < packs_before.len(),
@@ -807,14 +822,24 @@ fn data_listings(calls: &[(&'static str, String)]) -> usize {
         .count()
 }
 
-/// Writes a ledger with freed bytes, no marked packs, and a last prune at the time.
+/// Writes a ledger with no marked packs and a last prune at the time, and a record of one freed
+/// byte.
 async fn set_last_prune<S: BlobStorage + 'static>(
     storage: &Arc<S>,
     scope: &SnapshotScope,
     last_prune: golem_common::model::Timestamp,
 ) {
+    storage
+        .put_raw(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new("golem/prune-freed/1-test"),
+            b"",
+        )
+        .await
+        .unwrap();
     let ledger = PruneLedger {
-        freed_bytes: 1,
         last_prune: Some(last_prune),
         awaiting_removal: false,
     };
@@ -899,12 +924,13 @@ async fn a_failed_listing_of_the_packs_gives_storage_and_records_no_prune() {
 
     let deleted = store.delete(&scope, &name("p-deleted")).await;
     let after = ledger(&storage, &scope).await;
+    let after_freed = freed(&storage, &scope).await;
 
     assert!(
         deleted.as_ref().is_err_and(|error| is_storage(error, true)),
         "{deleted:?}"
     );
-    assert_eq!((after.freed_bytes > 0, after.last_prune), (true, None));
+    assert_eq!((after_freed > 0, after.last_prune), (true, None));
 }
 
 /// Counts the prunes among the recorded calls. A prune lists the packs, and no other step of a
@@ -927,6 +953,115 @@ async fn save_each(store: &RusticSnapshotStore, scope: &SnapshotScope, names: &[
                 .unwrap();
         })
         .await;
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_ledger() {
+    // The gate holds the first delete after its record write and its ledger read. The second
+    // delete prunes to its end. The first delete then goes on with the ledger that it read.
+    let held = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let held = held.clone();
+        move |op_label, _| {
+            if op_label == "list_freed" && !held.swap(true, Ordering::SeqCst) {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let paused = tokio::spawn({
+        let store = store.clone();
+        let scope = scope.clone();
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let paused_held = eventually(|| held.load(Ordering::SeqCst)).await;
+
+    let pruned = store.delete(&scope, &name("p-2")).await;
+    let after_prune = ledger(&storage, &scope).await;
+    storage.open_gate();
+    let paused = tokio::time::timeout(LIMIT, paused).await;
+    let after_all = ledger(&storage, &scope).await;
+
+    assert!(pruned.is_ok(), "{pruned:?}");
+    assert!(matches!(paused, Ok(Ok(Ok(())))), "{paused:?}");
+    assert_eq!(
+        (
+            paused_held,
+            prunes(&storage.calls()),
+            after_prune.last_prune.is_some(),
+            after_all,
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, 1, true, after_prune, Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_record_that_a_delete_adds_during_a_prune_stays_for_the_next_prune() {
+    // The gate holds the prune at its listing of the packs, and a record comes in meanwhile.
+    let claimed = Arc::new(AtomicBool::new(false));
+    let held = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let (claimed, held) = (claimed.clone(), held.clone());
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "list"
+                && path == Path::new("data")
+                && claimed.load(Ordering::SeqCst)
+                && !held.swap(true, Ordering::SeqCst)
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let pruning = tokio::spawn({
+        let store = store.clone();
+        let scope = scope.clone();
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let prune_held = eventually(|| held.load(Ordering::SeqCst)).await;
+
+    storage
+        .put_raw(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new("golem/prune-freed/7-late"),
+            b"",
+        )
+        .await
+        .unwrap();
+    storage.open_gate();
+    let pruned = tokio::time::timeout(LIMIT, pruning).await;
+
+    assert!(matches!(pruned, Ok(Ok(Ok(())))), "{pruned:?}");
+    assert_eq!(
+        (
+            prune_held,
+            blobs(&*storage, &scope.0, "golem/prune-freed/").await,
+            freed(&storage, &scope).await,
+        ),
+        (true, vec!["golem/prune-freed/7-late".to_string()], 7)
+    );
 }
 
 #[test]
@@ -1154,7 +1289,7 @@ async fn a_claim_older_than_the_grace_period_does_not_block_a_prune() {
 
 #[test]
 #[timeout("60s")]
-async fn a_prune_that_succeeds_deletes_the_claims_of_its_ledger() {
+async fn a_prune_that_succeeds_deletes_the_claims_and_the_counted_records_of_freed_bytes() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
@@ -1169,8 +1304,9 @@ async fn a_prune_that_succeeds_deletes_the_claims_of_its_ledger() {
         (
             ledger(&storage, &scope).await.last_prune.is_some(),
             blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+            blobs(&*storage, &scope.0, "golem/prune-freed/").await,
         ),
-        (true, Vec::<String>::new())
+        (true, Vec::<String>::new(), Vec::<String>::new())
     );
 }
 
@@ -1195,10 +1331,11 @@ async fn a_delete_below_the_threshold_does_not_prune() {
 
     store.delete(&scope, &name("p-deleted")).await.unwrap();
     let after = ledger(&storage, &scope).await;
+    let after_freed = freed(&storage, &scope).await;
 
     assert_eq!(
         (
-            after.freed_bytes > 0,
+            after_freed > 0,
             after.last_prune,
             blobs(&*storage, &scope.0, "data/").await,
         ),
@@ -1232,12 +1369,13 @@ async fn no_second_prune_runs_within_the_grace_period() {
     let after_first = ledger(&storage, &scope).await;
     store.delete(&scope, &name("p-b")).await.unwrap();
     let after_second = ledger(&storage, &scope).await;
+    let after_second_freed = freed(&storage, &scope).await;
 
     assert_eq!(
         (
             after_first.last_prune.is_some(),
             after_second.last_prune == after_first.last_prune,
-            after_second.freed_bytes > 0,
+            after_second_freed > 0,
         ),
         (true, true, true)
     );
@@ -1277,9 +1415,11 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
 
     let failed = store.delete(&scope, &name("p-deleted")).await;
     let after_failure = ledger(&storage, &scope).await;
+    let after_failure_freed = freed(&storage, &scope).await;
     refuse.store(false, Ordering::SeqCst);
     let retried = store.delete(&scope, &name("p-deleted")).await;
     let after_retry = ledger(&storage, &scope).await;
+    let after_retry_freed = freed(&storage, &scope).await;
 
     assert!(
         failed.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -1287,10 +1427,10 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
     );
     assert_eq!(
         (
-            after_failure.freed_bytes > 0,
+            after_failure_freed > 0,
             after_failure.last_prune,
             retried.is_ok(),
-            after_retry.freed_bytes,
+            after_retry_freed,
             after_retry.last_prune.is_some(),
         ),
         (true, None, true, 0, true)
@@ -2112,10 +2252,11 @@ async fn a_due_prune_that_marks_a_pack_that_no_index_lists_records_the_marked_pa
 
     store.delete(&scope, &name("p-unknown")).await.unwrap();
     let after = ledger(&storage, &scope).await;
+    let after_freed = freed(&storage, &scope).await;
 
     assert_eq!(
         (
-            after.freed_bytes,
+            after_freed,
             after.last_prune.is_some_and(|last| last.to_millis() > 0),
             after.awaiting_removal,
             blobs(&*storage, &scope.0, "data/")
@@ -2222,10 +2363,7 @@ async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
 
     store.delete(&scope, &name("p-deleted")).await.unwrap();
 
-    assert_eq!(
-        (added > 1, ledger(&storage, &scope).await.freed_bytes),
-        (true, added)
-    );
+    assert_eq!((added > 1, freed(&storage, &scope).await), (true, added));
 }
 
 #[test]
@@ -2401,7 +2539,8 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
 #[test]
 async fn the_storage_calls_of_a_prune_run_at_nice_19() {
     // The forget of a delete runs before the ledger read at the normal priority. The ledger calls,
-    // the listing of the packs and the claim calls run on the async runtime.
+    // the calls of the freed records, the listing of the packs and the claim calls run on the
+    // async runtime.
     let (storage, calls) = nice_recording_storage();
     let store = store(storage, policy(LONG_DEADLINE, ALWAYS, Duration::ZERO));
     let scope = new_scope();
@@ -2429,6 +2568,9 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
                 "read_claim",
                 "write_claim",
                 "delete_claims",
+                "write_freed",
+                "list_freed",
+                "delete_freed",
             ]
             .contains(&op_label.as_str())
         })
