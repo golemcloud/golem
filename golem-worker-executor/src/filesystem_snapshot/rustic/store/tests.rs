@@ -1198,6 +1198,87 @@ async fn a_prune_deletes_the_older_ledger_entries_and_keeps_a_newer_one() {
     );
 }
 
+/// Gives the time in the one claim of the scope, when the scope has one claim that parses.
+async fn claim_time(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> Option<u64> {
+    let claims = blobs(storage, &scope.0, "golem/prune-claims/").await;
+    let [claim] = claims.as_slice() else {
+        return None;
+    };
+    let content = storage
+        .get_raw("test", "test", scope.0.clone(), Path::new(claim))
+        .await
+        .ok()??;
+    std::str::from_utf8(&content).ok()?.parse().ok()
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
+    // The gate holds the prune at its listing of the packs for longer than the grace period.
+    let grace = Duration::from_millis(400);
+    let claimed = Arc::new(AtomicBool::new(false));
+    let held = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let (claimed, held) = (claimed.clone(), held.clone());
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "list"
+                && path == Path::new("data")
+                && claimed.load(Ordering::SeqCst)
+                && !held.swap(true, Ordering::SeqCst)
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(storage.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let pruning = tokio::spawn({
+        let store = store.clone();
+        let scope = scope.clone();
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let prune_held = eventually(|| held.load(Ordering::SeqCst)).await;
+    let first = claim_time(&storage, &scope).await.unwrap_or(u64::MAX);
+    let wanted = first.saturating_add(u64::try_from(grace.as_millis()).unwrap_or(u64::MAX));
+
+    let refreshed = tokio::time::timeout(
+        LIMIT,
+        futures::stream::repeat(())
+            .then(|()| async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                claim_time(&storage, &scope).await
+            })
+            .filter(|time| std::future::ready(time.is_some_and(|time| time >= wanted)))
+            .boxed()
+            .next(),
+    )
+    .await
+    .is_ok();
+    let second = store.delete(&scope, &name("p-2")).await;
+    let prunes_while_held = prunes(&storage.calls());
+    storage.open_gate();
+    let pruned = tokio::time::timeout(LIMIT, pruning).await;
+
+    assert!(second.is_ok(), "{second:?}");
+    assert!(matches!(pruned, Ok(Ok(Ok(())))), "{pruned:?}");
+    assert_eq!(
+        (
+            prune_held,
+            refreshed,
+            prunes_while_held,
+            prunes(&storage.calls()),
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, true, 1, 1, Vec::<String>::new())
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
@@ -2752,6 +2833,7 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
                 "delete_freed",
                 "list_ledgers",
                 "delete_ledger",
+                "refresh_claim",
             ]
             .contains(&op_label.as_str())
         })

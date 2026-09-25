@@ -388,6 +388,42 @@ pub(super) async fn take_claim(
     Ok(written == PutIfAbsent::Written)
 }
 
+/// Gives the time between two writes of a live claim: a fourth of the grace period, or a fourth of
+/// the margin for clock skew when the grace period is zero.
+pub(super) fn refresh_period(grace: Duration) -> Duration {
+    if grace.is_zero() {
+        CLOCK_SKEW_MARGIN / 4
+    } else {
+        grace / 4
+    }
+}
+
+/// Writes the claim with the number again, with the current time, at each period, until the
+/// caller drops the future. A failed write gives a warning.
+pub(super) async fn keep_claim_fresh(
+    files: &SnapshotFiles,
+    directory: &Path,
+    number: u64,
+    period: Duration,
+) {
+    let path = directory.join(number.to_string());
+    stream::repeat(())
+        .then(|()| tokio::time::sleep(period))
+        .for_each(|()| {
+            let path = &path;
+            async move {
+                let content = Timestamp::now_utc().to_millis().to_string();
+                if let Err(error) = files.put("refresh_claim", path, content.as_bytes()).await {
+                    warn!(
+                        error = %format!("{error:#}"),
+                        "Failed to write the prune claim of a filesystem snapshot scope again"
+                    );
+                }
+            }
+        })
+        .await;
+}
+
 /// Deletes the claim with the number. A failure gives a warning, because a claim only delays a
 /// prune until its grace period passed.
 pub(super) async fn release_claim(files: &SnapshotFiles, directory: &Path, number: u64) {

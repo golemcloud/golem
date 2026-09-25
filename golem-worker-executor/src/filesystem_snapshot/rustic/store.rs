@@ -25,9 +25,9 @@ use super::fault::{Operation, classify, is_file_missing, is_storage_failure, sto
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
-    ClaimChoice, Percent, claims_directory, end_claims, list_claims, list_freed,
-    needs_repository_size, next_claim, prune_due, read_ledger, record_freed, release_claim,
-    remove_freed, remove_older_ledgers, repository_bytes, take_claim, write_ledger,
+    ClaimChoice, Percent, claims_directory, end_claims, keep_claim_fresh, list_claims, list_freed,
+    needs_repository_size, next_claim, prune_due, read_ledger, record_freed, refresh_period,
+    release_claim, remove_freed, remove_older_ledgers, repository_bytes, take_claim, write_ledger,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -43,6 +43,7 @@ use crate::filesystem_snapshot::{
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
 use anyhow::Context;
 use async_trait::async_trait;
+use futures::future::{self, Either};
 use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::BlobStorage;
 use rustic_core::jiff::tz::TimeZone;
@@ -55,6 +56,7 @@ use rustic_core::{
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
@@ -357,11 +359,16 @@ impl RusticSnapshotStore {
         let key = self.key.clone();
         let settings = self.policy.prune;
         let low_priority = self.low_priority;
-        let pruned = self
-            .blocking(Operation::Prune, move || {
-                low_priority.run("fs-snap-prune", move || prune(backend, &key, &settings))
-            })
-            .await;
+        let pruning = self.blocking(Operation::Prune, move || {
+            low_priority.run("fs-snap-prune", move || prune(backend, &key, &settings))
+        });
+        // The claim is written again while the prune runs, so a prune slower than the grace
+        // period keeps its claim. The writes stop when the prune ends.
+        let refreshing = keep_claim_fresh(&files, &claims, number, refresh_period(grace));
+        let pruned = match future::select(pin!(pruning), pin!(refreshing)).await {
+            Either::Left((pruned, _)) => pruned,
+            Either::Right(((), pruning)) => pruning.await,
+        };
         let report = match pruned {
             Ok(report) => report,
             Err(error) => {
