@@ -56,6 +56,10 @@ type Mount struct {
 	// WebhookSuffix is an optional, literal-only path suffix advertised for
 	// webhooks.
 	WebhookSuffix string
+	// ExposeFiles serves files from the agent's own filesystem under the mount,
+	// in order. Only a durable, non-phantom agent whose Id fields are all
+	// captured by the mount path may expose files.
+	ExposeFiles []FileMapping
 }
 
 // Endpoint is one HTTP route for a method: a verb plus a path suffix (appended
@@ -70,6 +74,9 @@ type Endpoint struct {
 	auth      *bool      // nil = inherit the mount; non-nil = override
 	authCount int        // how many times EndpointAuth was applied (>1 is a misuse)
 	cors      []string
+
+	streams      *StreamRoute // nil = Durable Streams defaults
+	streamsCount int          // how many times DurableStreams was applied (>1 is a misuse)
 }
 
 // wireBind maps a wire name (a header or query-parameter name) to the input
@@ -350,6 +357,16 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		webhook = witSegments(wp.segs)
 	}
 
+	files, ferrs := compileFileMappings(e.mount.ExposeFiles)
+	for _, fe := range ferrs {
+		rec("", "ExposeFiles %s", fe)
+	}
+	if len(e.mount.ExposeFiles) > 0 {
+		for _, oe := range validateFileOwner(e, mp) {
+			rec("", "%s", oe)
+		}
+	}
+
 	mount := common.HttpMountDetails{
 		PathPrefix:    witSegments(mp.segs),
 		AuthDetails:   witTypes.Some(common.AuthDetails{Required: e.mount.Auth}),
@@ -357,6 +374,8 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		CorsOptions:   common.CorsOptions{AllowedPatterns: e.mount.CORS},
 		WebhookSuffix: webhook,
 
+		StaticBindings:        []common.FileMapping{},
+		FilesystemBindings:    files,
 		OpenapiProviderMethod: witTypes.None[string](),
 	}
 
@@ -366,7 +385,7 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		inNames := fieldNameSet(m.inFields)
 		inKind := fieldKindMap(m.inFields)
 		for _, ep := range m.endpoints {
-			det, eerrs := validateAndCompileEndpoint(ep, inNames, inKind, mountVars)
+			det, eerrs := validateAndCompileEndpoint(ep, inNames, inKind, mountVars, methodStreamSlots(m.inFields, m.outType))
 			for _, ee := range eerrs {
 				rec(name, "%s", ee)
 			}
@@ -377,7 +396,7 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	return witTypes.Some(mount), endpoints, errs
 }
 
-func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map[string]reflect.Kind, mountVars map[string]bool) (common.HttpEndpointDetails, []string) {
+func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map[string]reflect.Kind, mountVars map[string]bool, slots streamSlots) (common.HttpEndpointDetails, []string) {
 	var errs []string
 	if ep.authCount > 1 {
 		errs = append(errs, fmt.Sprintf("%s %q: EndpointAuth set %d times (an endpoint has one auth setting)", ep.method, ep.path, ep.authCount))
@@ -435,6 +454,9 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 		}
 	}
 
+	streams, serrs := compileStreamRoute(ep, slots, bound)
+	errs = append(errs, serrs...)
+
 	if isBodyless(ep.method) {
 		for _, f := range sortedKeys(inNames) {
 			if bound[f] == 0 {
@@ -467,7 +489,7 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 		AuthDetails: auth,
 		CorsOptions: common.CorsOptions{AllowedPatterns: ep.cors},
 
-		DurableStreams: witTypes.None[common.DurableStreamRouteOptions](),
+		DurableStreams: streams,
 	}
 	return det, errs
 }

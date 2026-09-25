@@ -37,6 +37,7 @@ type methodEntry struct {
 	endpoints []Endpoint      // HTTP routes, if any
 	readOnly  *readOnlyConfig // non-nil => read-only method with a cache policy
 	outCodec  *codec          // nil => unit output
+	outType   reflect.Type    // nil => unit output
 	// invoke is the erased dispatcher produced by Implement. Calling it is a
 	// direct func-value call: no reflection is used to reach the handler.
 	invoke func(state any, agentID string, in types.SchemaValueTree) (out *types.SchemaValueTree, err error)
@@ -363,6 +364,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	me := &methodEntry{name: m.name, desc: m.desc, inFields: d.structFields(inType), endpoints: m.endpoints, readOnly: m.readOnly}
 	if outType != reflect.TypeFor[Unit]() {
 		me.outCodec = d.compile(outType)
+		me.outType = outType
 	}
 
 	me.invoke = func(state any, agentID string, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {

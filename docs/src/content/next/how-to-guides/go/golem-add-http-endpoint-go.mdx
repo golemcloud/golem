@@ -67,6 +67,57 @@ The handlers are ordinary handlers (see [`golem-add-agent-go`](/next/how-to-guid
 
 `golem.GET`, `golem.POST`, `golem.PUT`, `golem.DELETE`, and `golem.Custom("VERB", "/path")`. `GET`/`HEAD` are bodyless — bind their inputs from path/query/header.
 
+## Durable Stream Route Customization
+
+A method that takes or returns `golem.AgentStream`s is served as a Durable Streams URL family. `golem.DurableStreams` customizes it:
+
+```go
+type UploadIn struct {
+    Chunks golem.AgentStream[byte]
+    File   string
+}
+
+Upload = Agent.Method[UploadIn, int64]("upload",
+    golem.HTTP(golem.POST("/upload?file={file}", golem.DurableStreams(golem.StreamRoute{
+        Slots: []golem.StreamSlot{
+            {Input: "chunks", Name: "data", ContentType: "application/vnd.example.media"},
+            {Result: true, Name: "size"},
+        },
+        NoStreamDelete:      true,
+        NoInvocationDelete:  true,
+        MaxReadersPerStream: 8,
+    }))))
+```
+
+- A slot is selected by exactly one of `Input` (an `AgentStream` input field, by the same schema name `golem.Query`/`golem.Header` bind), `Output` (an `AgentStream` field of the returned struct) or `Result: true` (the returned value itself).
+- `Name` changes the public URL and OpenAPI name; the canonical name is no longer accepted.
+- `ContentType` is allowed only for a direct `AgentStream[byte]` slot and must be a concrete non-text, non-JSON MIME type without parameters or wildcards. Other streams stay `application/json`. SSE still uses `text/event-stream` with base64 data.
+- `NoExternalWrites`, `NoStreamDelete` and `NoInvocationDelete` remove that protocol operation (`405` with an exact `Allow` header); leaving them `false` keeps the operation.
+- `MaxReadersPerStream` is 1 through 16 and applies to long-poll and SSE. `MaxAppendsPerSecond` must not be combined with `NoExternalWrites`. A limit rejection is `429` with `Retry-After: 1`; limits are per route and worker-service node, not cluster-wide.
+- A stream input cannot be bound from the path, query or a header.
+
+## Serving the Agent's Own Files
+
+`Mount.ExposeFiles` serves files from the agent's filesystem under its mount, without calling a method:
+
+```go
+var Agent = golem.DefineAgent[ID](golem.Spec{
+    Name: "MediaAgent",
+    HTTP: &golem.Mount{
+        Path: "/media/{name}",
+        ExposeFiles: []golem.FileMapping{
+            {Route: "/latest", Path: "/latest.txt"},       // one file
+            {Route: "/files/*", Path: "/public/$1"},       // a directory tree
+        },
+    },
+})
+```
+
+- The agent must be durable and not a phantom, and every `ID` field must be a scalar captured exactly once by `Mount.Path` (no `{*rest}`), so a request names exactly one agent.
+- Mappings are tried in order; repeating a route with another path gives a fallback. A subtree route ends in `/*` and its path in `/$1`.
+- Only `GET` and `HEAD` are served, with ranges and conditional requests. There is no directory listing, implicit index file or symlink following — expose only directories meant for HTTP.
+- Files the constructor or a method writes (with `os.WriteFile`) are served as they change.
+
 ## Key Constraints
 
 - Every `ID` field must appear as a `{var}` in `Mount.Path` (else the platform can't identify the instance); path vars may also be literals or the trailing catch-all `{*rest}`.
