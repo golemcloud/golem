@@ -834,11 +834,9 @@ impl CursorTx<'_> {
         let Some((head_idx, head)) = self.st.replay_buffer.front() else {
             return Ok(());
         };
-        let Some(attribution) = head.entity_attribution() else {
-            return Ok(());
-        };
-        let owner = match (reader, attribution) {
-            (PositionalReader::Ordinary, None) => return Ok(()),
+        let owner = match (reader, head.entity_attribution()) {
+            (_, EntityAttribution::Unattributed)
+            | (PositionalReader::Ordinary, EntityAttribution::Agent) => return Ok(()),
             (PositionalReader::InvocationBoundary, _) => {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                     "AgentInvocationFinished",
@@ -847,7 +845,7 @@ impl CursorTx<'_> {
                     ),
                 ));
             }
-            (PositionalReader::Ordinary, Some(owner)) => owner,
+            (PositionalReader::Ordinary, EntityAttribution::EntityBody(owner)) => owner,
         };
         let owner_can_consume = self.st.retained_starts.contains_key(&owner)
             || self.st.claimed_starts.contains(&owner)
@@ -3857,9 +3855,11 @@ pub(super) enum PositionalReader {
 fn positional_reader_accepts(scope: Option<OplogIndex>) -> impl FnMut(&OplogEntry) -> bool {
     move |entry| {
         !CursorTx::is_retainable_start(entry)
-            && entry
-                .entity_attribution()
-                .is_none_or(|attribution| attribution == scope)
+            && match entry.entity_attribution() {
+                EntityAttribution::Unattributed => true,
+                EntityAttribution::Agent => scope.is_none(),
+                EntityAttribution::EntityBody(owner) => scope == Some(owner),
+            }
     }
 }
 

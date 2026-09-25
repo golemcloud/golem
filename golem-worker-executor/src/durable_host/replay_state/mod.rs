@@ -24,8 +24,9 @@ use golem_common::model::entity::{
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, DurableFunctionType, HostRequest, HostResponse, HostResponseGolemApiFork,
-    LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection, ScopeScanState,
+    AtomicOplogIndex, DurableFunctionType, EntityAttribution, HostRequest, HostResponse,
+    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection,
+    ScopeScanState,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{

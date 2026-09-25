@@ -341,6 +341,38 @@ async fn claim_rejected_tool_reconstruction(
     }
 }
 
+/// Strict custom-root claim on behalf of a replaying Store, through the production
+/// [`ReplayState::claim_custom_start_for_store`]: the tests here never expect a replay-end or
+/// live-Store continuation, so those outcomes are failures.
+async fn claim_custom_start(
+    rs: &ReplayState,
+    expected_function_name: &HostFunctionName,
+    expected_function_type: &DurableFunctionType,
+    expected_parent_start_index: Option<OplogIndex>,
+    expected_invocation_id: uuid::Uuid,
+    expected_request: &HostRequest,
+) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
+    match rs
+        .claim_custom_start_for_store(
+            expected_function_name,
+            expected_function_type,
+            expected_parent_start_index,
+            expected_invocation_id,
+            expected_request,
+            false,
+        )
+        .await?
+    {
+        CustomStartClaimOutcome::Claimed(claimed) => Ok(claimed),
+        CustomStartClaimOutcome::ReplayEnded => {
+            panic!("strict custom claim {expected_invocation_id} reached the replay end")
+        }
+        CustomStartClaimOutcome::StoreAlreadyLive => {
+            panic!("strict custom claim {expected_invocation_id} was issued for a live Store")
+        }
+    }
+}
+
 fn custom_request(value: i32) -> HostRequest {
     HostRequest::Custom(value.into_typed_schema_value().unwrap())
 }
@@ -437,16 +469,16 @@ async fn completed_custom_invocation_drains_nested_custom_subtree() {
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     match rs.await_resolution_outcome(claimed.handle).await.unwrap() {
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. }) => {
             assert_eq!(end_idx, OplogIndex::from_u64(5));
@@ -466,16 +498,16 @@ async fn incomplete_custom_invocation_drains_completed_descendants_then_reexecut
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
     assert!(matches!(
         rs.await_resolution_outcome(claimed.handle).await.unwrap(),
@@ -540,16 +572,16 @@ async fn custom_replay_skips_interleaved_observational_tree_without_stealing_sib
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     let sibling = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -585,16 +617,16 @@ async fn custom_replay_skips_nested_observational_calls_and_stream_frames_by_ide
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
@@ -617,16 +649,16 @@ async fn outer_custom_replay_skips_observational_calls_owned_by_nested_custom_in
     ])
     .await;
 
-    let outer = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let outer = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(outer.handle).await.unwrap(),
@@ -645,16 +677,16 @@ async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
@@ -675,16 +707,16 @@ async fn delivered_observational_completion_does_not_block_custom_live_fallback(
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
@@ -705,16 +737,16 @@ async fn observational_call_finishing_after_custom_terminal_is_still_skipped() {
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
@@ -739,16 +771,16 @@ async fn custom_replay_skips_observational_cancellation() {
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
@@ -770,26 +802,26 @@ async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_o
     ])
     .await;
     let name = HostFunctionName::Custom("generator".to_string());
-    let second = rs
-        .claim_custom_start_matching_invocation_id(
-            &name,
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(2),
-            &no_input,
-        )
-        .await
-        .unwrap();
-    let first = rs
-        .claim_custom_start_matching_invocation_id(
-            &name,
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &no_input,
-        )
-        .await
-        .unwrap();
+    let second = claim_custom_start(
+        &rs,
+        &name,
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(2),
+        &no_input,
+    )
+    .await
+    .unwrap();
+    let first = claim_custom_start(
+        &rs,
+        &name,
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &no_input,
+    )
+    .await
+    .unwrap();
     assert_eq!(first.handle.start_idx(), OplogIndex::from_u64(2));
     assert_eq!(second.handle.start_idx(), OplogIndex::from_u64(3));
     assert!(matches!(
@@ -813,30 +845,30 @@ async fn custom_claim_rejects_changed_request_for_same_invocation_id() {
     ])
     .await;
 
-    let result = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(2),
-        )
-        .await;
+    let result = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(2),
+    )
+    .await;
     let Err(err) = result else {
         panic!("a replayed custom request must match its recorded payload");
     };
     assert!(format!("{err}").contains("recorded request payload differs"));
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .expect("failed validation must not leave claim state behind");
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .expect("failed validation must not leave claim state behind");
     assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
 }
 
@@ -851,15 +883,15 @@ async fn custom_claim_rejects_reused_invocation_id() {
     ])
     .await;
 
-    let result = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await;
+    let result = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await;
     let Err(err) = result else {
         panic!("custom invocation IDs are single-use");
     };
@@ -876,15 +908,15 @@ async fn custom_claim_rejects_start_without_invocation_id() {
     ])
     .await;
 
-    let result = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("generator".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &no_input,
-        )
-        .await;
+    let result = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("generator".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &no_input,
+    )
+    .await;
     let Err(err) = result else {
         panic!("custom replay must require a deterministic invocation ID");
     };
@@ -912,16 +944,16 @@ async fn custom_claim_never_claims_observational_start_with_same_invocation_id()
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(2),
-            &request,
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(2),
+        &request,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(4));
 }
@@ -938,16 +970,16 @@ async fn custom_claim_ignores_start_without_invocation_id_before_exact_match() {
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(2),
-            &request,
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(2),
+        &request,
+    )
+    .await
+    .unwrap();
     assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(3));
 }
 
@@ -960,15 +992,15 @@ async fn custom_claim_rejects_wrong_metadata_for_exact_id() {
     ])
     .await;
 
-    let result = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(2),
-            &request,
-        )
-        .await;
+    let result = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(2),
+        &request,
+    )
+    .await;
     let Err(err) = result else {
         panic!("an exact invocation ID with divergent metadata must be rejected");
     };
@@ -986,16 +1018,16 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
     let name = HostFunctionName::Custom("operation".to_string());
     let invocation_id = uuid::Uuid::from_u128(1);
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &name,
-            &DurableFunctionType::ReadRemote,
-            None,
-            invocation_id,
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &name,
+        &DurableFunctionType::ReadRemote,
+        None,
+        invocation_id,
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         rs.await_resolution_outcome(claimed.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { .. })
@@ -1003,16 +1035,16 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
 
     drop(rs);
     let rs = replay_state_over(entries).await;
-    let claimed_again = rs
-        .claim_custom_start_matching_invocation_id(
-            &name,
-            &DurableFunctionType::ReadRemote,
-            None,
-            invocation_id,
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let claimed_again = claim_custom_start(
+        &rs,
+        &name,
+        &DurableFunctionType::ReadRemote,
+        None,
+        invocation_id,
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     assert_eq!(claimed_again.handle.start_idx(), OplogIndex::from_u64(2));
 }
 
@@ -1618,16 +1650,16 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("durable-operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            Uuid::from_u128(1),
-            &custom_request(41),
-        )
-        .await
-        .expect("recorded durable operation must be claimable");
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("durable-operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        Uuid::from_u128(1),
+        &custom_request(41),
+    )
+    .await
+    .expect("recorded durable operation must be claimable");
     match rs
         .await_resolution_outcome(claimed.handle)
         .await

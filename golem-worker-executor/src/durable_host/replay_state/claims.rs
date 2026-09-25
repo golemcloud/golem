@@ -871,43 +871,9 @@ impl ReplayState {
     /// Claims a custom durable invocation root and marks it as a logical subtree. Descendant
     /// custom invocations recorded under this owner are drained while the root resolution is
     /// awaited, because replay returns the root's persisted result without executing its body.
-    #[cfg(test)]
-    pub async fn claim_custom_start_matching_invocation_id(
-        &self,
-        expected_function_name: &HostFunctionName,
-        expected_function_type: &DurableFunctionType,
-        expected_parent_start_index: Option<OplogIndex>,
-        expected_invocation_id: uuid::Uuid,
-        expected_request: &HostRequest,
-    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
-        match self
-            .claim_custom_start_for_store(
-                expected_function_name,
-                expected_function_type,
-                expected_parent_start_index,
-                expected_invocation_id,
-                expected_request,
-                false,
-            )
-            .await?
-        {
-            CustomStartClaimOutcome::Claimed(claimed) => Ok(claimed),
-            CustomStartClaimOutcome::ReplayEnded => {
-                Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("custom durable Start {{ invocation_id: {expected_invocation_id} }}"),
-                    "no Start with the required custom invocation ID before the replay target"
-                        .to_string(),
-                ))
-            }
-            CustomStartClaimOutcome::StoreAlreadyLive => {
-                unreachable!("strict custom claims are never issued on behalf of a live Store")
-            }
-        }
-    }
-
-    /// Like [`Self::claim_custom_start_matching_invocation_id`], but reports
-    /// [`CustomStartClaimOutcome::ReplayEnded`] instead of failing when no `Start` carries the
-    /// invocation id and the cursor has already reached the replay target, and
+    ///
+    /// Reports [`CustomStartClaimOutcome::ReplayEnded`] when no `Start` carries the invocation id
+    /// and the cursor has already reached the replay target, and
     /// [`CustomStartClaimOutcome::StoreAlreadyLive`] when no `Start` carries it and the claiming
     /// Store's own liveness `store_live` already holds. A custom invocation admitted after the
     /// live transition while unclaimed retained `Start`s exist (see
