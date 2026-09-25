@@ -1307,7 +1307,10 @@ async fn oplog_processor_crash_stress(
     // automatic flushing. Entries will accumulate in ForwardingOplog's in-memory
     // buffer and never be sent to the plugin worker.
     tracing::info!("Restarting executor(s) with high flush thresholds...");
-    cluster_control.kill_all().await;
+    cluster_control
+        .kill_all_and_wait(60_000)
+        .await
+        .map_err(anyhow::Error::msg)?;
     cluster_control
         .restart_all_with_env_vars(vec![
             (
@@ -1362,7 +1365,10 @@ async fn oplog_processor_crash_stress(
     // Phase 4: Restart executor(s) with default thresholds so that recovery
     // can replay missed entries and new invocations flush promptly.
     tracing::info!("Restarting executor(s) with default flush thresholds...");
-    cluster_control.kill_all().await;
+    cluster_control
+        .kill_all_and_wait(60_000)
+        .await
+        .map_err(anyhow::Error::msg)?;
     cluster_control.restart_all().await;
 
     // Wait for the worker to recover after executor restart

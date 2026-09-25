@@ -21,6 +21,7 @@ use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::Level;
@@ -31,6 +32,9 @@ pub struct SpawnedWorkerExecutor {
     grpc_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     logger: Arc<Mutex<Option<ChildProcessLogger>>>,
+    reaped: AtomicBool,
+    generation: AtomicU64,
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
     executable: PathBuf,
     working_directory: PathBuf,
     rdb: Arc<dyn Rdb>,
@@ -95,6 +99,9 @@ impl SpawnedWorkerExecutor {
             grpc_port,
             child: Arc::new(Mutex::new(Some(child))),
             logger: Arc::new(Mutex::new(Some(logger))),
+            reaped: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             executable: executable.to_path_buf(),
             working_directory: working_directory.to_path_buf(),
             rdb,
@@ -196,8 +203,60 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         self.grpc_port
     }
 
-    async fn kill(&self) {
-        self.blocking_kill();
+    async fn kill_and_wait(&self, deadline: tokio::time::Instant) -> anyhow::Result<()> {
+        let _guard = tokio::time::timeout_at(deadline, self.lifecycle.lock()).await?;
+        {
+            let mut child = self.child.lock().unwrap();
+            match child.as_mut() {
+                Some(child) => {
+                    if child.try_wait()?.is_none() {
+                        child.kill()?;
+                    }
+                }
+                None if self.is_reaped() => return Ok(()),
+                None => anyhow::bail!("worker executor child handle was lost without reaping"),
+            }
+        }
+        loop {
+            {
+                let mut child = self.child.lock().unwrap();
+                if child
+                    .as_mut()
+                    .expect("lifecycle lock owns child")
+                    .try_wait()?
+                    .is_some()
+                {
+                    child.take();
+                    self.logger.lock().unwrap().take();
+                    self.reaped.store(true, Ordering::Release);
+                    return Ok(());
+                }
+            }
+            // Retain the child on timeout or cancellation so exit can still be
+            // observed and reaped by a subsequent call.
+            tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_millis(10)))
+                .await?;
+        }
+    }
+
+    fn is_reaped(&self) -> bool {
+        self.reaped.load(Ordering::Acquire)
+    }
+
+    async fn lock_reaped(&self) -> anyhow::Result<Box<dyn Send + Sync>> {
+        let guard = self.lifecycle.clone().lock_owned().await;
+        anyhow::ensure!(
+            self.is_reaped(),
+            "executor must be reaped before storage mutation"
+        );
+        Ok(Box::new(guard))
+    }
+
+    fn metrics_endpoint(&self) -> Option<(String, u64)> {
+        Some((
+            format!("http://localhost:{}/metrics", self.http_port),
+            self.generation.load(Ordering::Acquire),
+        ))
     }
 
     async fn restart(&self) {
@@ -205,6 +264,13 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
     }
 
     async fn restart_with_extra_env_vars(&self, extra_env_vars: Vec<(String, String)>) {
+        let _guard = self.lifecycle.lock().await;
+        assert!(
+            self.child.lock().unwrap().is_none(),
+            "cannot restart an unreaped executor"
+        );
+        self.reaped.store(false, Ordering::Release);
+        self.generation.fetch_add(1, Ordering::AcqRel);
         if extra_env_vars.is_empty() {
             info!("Restarting golem-worker-executor {}", self.grpc_port);
         } else {

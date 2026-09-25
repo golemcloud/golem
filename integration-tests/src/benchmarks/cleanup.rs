@@ -21,6 +21,7 @@
 use async_trait::async_trait;
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::environment::EnvironmentId;
+use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use tracing::warn;
@@ -33,10 +34,6 @@ use uuid::Uuid;
 /// [`MockCleanupClient`] (in tests) to inject failures.
 #[async_trait]
 pub trait CleanupClient: Send + Sync {
-    /// Returns `(component_id, revision)` pairs for all components in the env.
-    async fn list_env_components(&self, env_id: &Uuid) -> anyhow::Result<Vec<(Uuid, u64)>>;
-    async fn delete_component(&self, id: &Uuid, revision: u64) -> anyhow::Result<()>;
-
     /// Returns domain-registration IDs for the env.
     async fn list_env_domain_registrations(&self, env_id: &Uuid) -> anyhow::Result<Vec<Uuid>>;
     async fn delete_domain_registration(&self, id: &Uuid) -> anyhow::Result<()>;
@@ -70,26 +67,6 @@ impl<C: RegistryServiceClient + Send + Sync> RegistryCleanupAdapter<C> {
 
 #[async_trait]
 impl<C: RegistryServiceClient + Send + Sync> CleanupClient for RegistryCleanupAdapter<C> {
-    async fn list_env_components(&self, env_id: &Uuid) -> anyhow::Result<Vec<(Uuid, u64)>> {
-        let page = self
-            .inner
-            .list_environment_components(env_id)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        Ok(page
-            .values
-            .into_iter()
-            .map(|c| (c.id.0, c.revision.into()))
-            .collect())
-    }
-
-    async fn delete_component(&self, id: &Uuid, revision: u64) -> anyhow::Result<()> {
-        self.inner
-            .delete_component(id, revision)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e:?}"))
-    }
-
     async fn list_env_domain_registrations(&self, env_id: &Uuid) -> anyhow::Result<Vec<Uuid>> {
         let page = self
             .inner
@@ -158,88 +135,85 @@ impl<C: RegistryServiceClient + Send + Sync> CleanupClient for RegistryCleanupAd
 
 // ── Core cleanup logic (testable via CleanupClient) ───────────────────────────
 
-/// Steps 1–4 of the cascading cleanup: components → domain registrations →
+/// Steps 1–3 of the cascading cleanup: domain registrations →
 /// environment → application.  Does **not** delete the account.
 ///
-/// Every step is best-effort: failures are warned and cleanup continues.
+/// Every step is best-effort: failures are recorded and cleanup continues.
 ///
-/// **Note:** Server-side cascading delete is incomplete (golemcloud/golem#3291).
-pub async fn cleanup_env_and_app_with(client: &dyn CleanupClient, env_id: &Uuid) {
-    // Step 1: components
-    match client.list_env_components(env_id).await {
-        Ok(components) => {
-            for (cid, rev) in components {
-                if let Err(e) = client.delete_component(&cid, rev).await {
-                    warn!("cleanup: delete component {cid} failed (best-effort): {e:?}");
-                }
-            }
-        }
-        Err(e) => warn!("cleanup: list components for env {env_id} failed (best-effort): {e:?}"),
-    }
-
-    // Step 2: domain registrations
+/// Deployment snapshots prevent explicit component deletion, even after the
+/// environment is soft-deleted. The owning account must be deleted separately
+/// with [`cleanup_account_with`] to complete ownership-boundary cleanup.
+pub async fn cleanup_env_and_app_with(
+    client: &dyn CleanupClient,
+    env_id: &Uuid,
+    recorder: &BenchmarkRecorder,
+) {
+    // Step 1: domain registrations
     match client.list_env_domain_registrations(env_id).await {
         Ok(ids) => {
             for id in ids {
                 if let Err(e) = client.delete_domain_registration(&id).await {
-                    warn!("cleanup: delete domain registration {id} failed (best-effort): {e:?}");
+                    record_failure(recorder, "delete-domain-registration", e);
                 }
             }
         }
-        Err(e) => {
-            warn!(
-                "cleanup: list domain registrations for env {env_id} failed \
-                 (best-effort): {e:?}"
-            )
-        }
+        Err(e) => record_failure(recorder, "list-domain-registrations", e),
     }
 
-    // Step 3: environment (also captures app_id for step 4)
+    // Step 2: environment (also captures app_id for step 3)
     let app_id = match client.get_env_app_id_and_revision(env_id).await {
         Ok((app_id, rev)) => {
             if let Err(e) = client.delete_environment(env_id, rev).await {
-                warn!("cleanup: delete environment {env_id} failed (best-effort): {e:?}");
+                record_failure(recorder, "delete-environment", e);
             }
             Some(app_id)
         }
         Err(e) => {
-            warn!("cleanup: get environment {env_id} failed (best-effort): {e:?}");
+            record_failure(recorder, "get-environment", e);
             None
         }
     };
 
-    // Step 4: application (only when app_id is known from step 3)
+    // Step 3: application (only when app_id is known from step 2)
     if let Some(app_id) = app_id {
         match client.get_application_revision(&app_id).await {
             Ok(rev) => {
                 if let Err(e) = client.delete_application(&app_id, rev).await {
-                    warn!("cleanup: delete application {app_id} failed (best-effort): {e:?}");
+                    record_failure(recorder, "delete-application", e);
                 }
             }
-            Err(e) => {
-                warn!("cleanup: get application {app_id} failed (best-effort): {e:?}")
-            }
+            Err(e) => record_failure(recorder, "get-application", e),
         }
     }
 }
 
-/// Step 5 of the cascading cleanup: deletes the user account.
-pub async fn cleanup_account_with(client: &dyn CleanupClient, account_id: &Uuid) {
+/// Step 4 of the cascading cleanup: deletes the owning user account.
+pub async fn cleanup_account_with(
+    client: &dyn CleanupClient,
+    account_id: &Uuid,
+    recorder: &BenchmarkRecorder,
+) {
     match client.get_account_revision(account_id).await {
         Ok(rev) => {
             if let Err(e) = client.delete_account(account_id, rev).await {
-                warn!("cleanup: delete account {account_id} failed (best-effort): {e:?}");
+                record_failure(recorder, "delete-account", e);
             }
         }
-        Err(e) => {
-            warn!("cleanup: get account {account_id} failed (best-effort): {e:?}")
-        }
+        Err(e) => record_failure(recorder, "get-account", e),
     }
+}
+
+fn record_failure(recorder: &BenchmarkRecorder, operation: &str, error: anyhow::Error) {
+    warn!(operation, error = %error, "Benchmark cleanup failed; continuing cleanup");
+    recorder.failure(
+        &ResultKey::primary(format!("cleanup-{operation}")),
+        format!("{error:#}"),
+    );
 }
 
 // ── High-level wrappers (take a TestUserContext) ──────────────────────────────
 
-/// Steps 1–4: components, domain registrations, environment, application.
+/// Steps 1–3: domain registrations, environment, application.
 ///
 /// For benchmarks whose iterations create one user with multiple envs/apps
 /// (e.g. cold-start-unknown), call this once per env then call
@@ -247,17 +221,21 @@ pub async fn cleanup_account_with(client: &dyn CleanupClient, account_id: &Uuid)
 pub async fn cleanup_env_and_app(
     user: &TestUserContext<BenchmarkTestDependencies>,
     env_id: &EnvironmentId,
+    recorder: &BenchmarkRecorder,
 ) {
     let client = user.deps.registry_service().client(&user.token).await;
     let adapter = RegistryCleanupAdapter::new(client);
-    cleanup_env_and_app_with(&adapter, &env_id.0).await;
+    cleanup_env_and_app_with(&adapter, &env_id.0, recorder).await;
 }
 
-/// Step 5: deletes the user account.
-pub async fn cleanup_account(user: &TestUserContext<BenchmarkTestDependencies>) {
+/// Step 4: deletes the owning user account.
+pub async fn cleanup_account(
+    user: &TestUserContext<BenchmarkTestDependencies>,
+    recorder: &BenchmarkRecorder,
+) {
     let client = user.deps.registry_service().client(&user.token).await;
     let adapter = RegistryCleanupAdapter::new(client);
-    cleanup_account_with(&adapter, &user.account_id.0).await;
+    cleanup_account_with(&adapter, &user.account_id.0, recorder).await;
 }
 
 /// Convenience wrapper for the common single-env-per-user case:
@@ -265,9 +243,10 @@ pub async fn cleanup_account(user: &TestUserContext<BenchmarkTestDependencies>) 
 pub async fn cleanup_user_state(
     user: &TestUserContext<BenchmarkTestDependencies>,
     env_id: &EnvironmentId,
+    recorder: &BenchmarkRecorder,
 ) {
-    cleanup_env_and_app(user, env_id).await;
-    cleanup_account(user).await;
+    cleanup_env_and_app(user, env_id, recorder).await;
+    cleanup_account(user, recorder).await;
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -294,7 +273,7 @@ pub mod tests {
         /// Ordered log of every operation attempted.
         pub calls: Arc<Mutex<Vec<&'static str>>>,
         /// The `application_id` returned by `get_env_app_id_and_revision`
-        /// (used to verify step-4 precondition propagation in tests).
+        /// (used to verify step-3 precondition propagation in tests).
         pub app_id: Uuid,
     }
 
@@ -325,19 +304,6 @@ pub mod tests {
 
     #[async_trait]
     impl CleanupClient for MockCleanupClient {
-        async fn list_env_components(&self, _: &Uuid) -> anyhow::Result<Vec<(Uuid, u64)>> {
-            self.record("list_env_components");
-            if self.fail_ops.contains("list_env_components") {
-                Err(anyhow::anyhow!("simulated failure"))
-            } else {
-                Ok(vec![(Uuid::new_v4(), 0)])
-            }
-        }
-
-        async fn delete_component(&self, _: &Uuid, _: u64) -> anyhow::Result<()> {
-            self.result("delete_component")
-        }
-
         async fn list_env_domain_registrations(&self, _: &Uuid) -> anyhow::Result<Vec<Uuid>> {
             self.record("list_env_domain_registrations");
             if self.fail_ops.contains("list_env_domain_registrations") {
@@ -395,8 +361,6 @@ pub mod tests {
 
     fn all_ops() -> Vec<&'static str> {
         vec![
-            "list_env_components",
-            "delete_component",
             "list_env_domain_registrations",
             "delete_domain_registration",
             "get_env_app_id_and_revision",
@@ -408,13 +372,15 @@ pub mod tests {
         ]
     }
 
-    fn run(mock: &MockCleanupClient) {
+    fn run(mock: &MockCleanupClient) -> BenchmarkRecorder {
         let env_id = Uuid::new_v4();
         let account_id = Uuid::new_v4();
+        let recorder = BenchmarkRecorder::new();
         block_on(async {
-            cleanup_env_and_app_with(mock, &env_id).await;
-            cleanup_account_with(mock, &account_id).await;
+            cleanup_env_and_app_with(mock, &env_id, &recorder).await;
+            cleanup_account_with(mock, &account_id, &recorder).await;
         });
+        recorder
     }
 
     fn contains(calls: &[&str], op: &str) -> bool {
@@ -426,31 +392,14 @@ pub mod tests {
     #[test]
     fn all_steps_run_on_success() {
         let (mock, calls) = MockCleanupClient::new(&[]);
-        run(&mock);
+        let recorder = run(&mock);
+        assert!(recorder.failures().is_empty());
         let calls = calls.lock().unwrap().clone();
-        for op in all_ops() {
-            assert!(
-                contains(&calls, op),
-                "expected '{op}' to be called; got: {calls:?}"
-            );
-        }
+        assert_eq!(calls, all_ops());
     }
 
     #[test]
     fn step1_list_failure_continues() {
-        let (mock, calls) = MockCleanupClient::new(&["list_env_components"]);
-        run(&mock);
-        let calls = calls.lock().unwrap().clone();
-        assert!(
-            contains(&calls, "list_env_domain_registrations"),
-            "{calls:?}"
-        );
-        assert!(contains(&calls, "get_env_app_id_and_revision"), "{calls:?}");
-        assert!(contains(&calls, "get_account_revision"), "{calls:?}");
-    }
-
-    #[test]
-    fn step2_list_failure_continues() {
         let (mock, calls) = MockCleanupClient::new(&["list_env_domain_registrations"]);
         run(&mock);
         let calls = calls.lock().unwrap().clone();
@@ -458,27 +407,27 @@ pub mod tests {
         assert!(contains(&calls, "get_account_revision"), "{calls:?}");
     }
 
-    /// `get_env_app_id_and_revision` (step 3 get) fails → step 4 is skipped
-    /// (no app_id available) but step 5 still runs.
+    /// `get_env_app_id_and_revision` (step 2 get) fails → step 3 is skipped
+    /// (no app_id available) but step 4 still runs.
     #[test]
-    fn step3_get_failure_skips_step4_runs_step5() {
+    fn step2_get_failure_skips_step3_runs_step4() {
         let (mock, calls) = MockCleanupClient::new(&["get_env_app_id_and_revision"]);
         run(&mock);
         let calls = calls.lock().unwrap().clone();
         assert!(
             !contains(&calls, "get_application_revision"),
-            "step 4 must be skipped when step 3 get fails; got: {calls:?}"
+            "step 3 must be skipped when step 2 get fails; got: {calls:?}"
         );
         assert!(
             contains(&calls, "get_account_revision"),
-            "step 5 must still run; got: {calls:?}"
+            "step 4 must still run; got: {calls:?}"
         );
     }
 
     /// `delete_environment` fails but get succeeded, so app_id is available:
-    /// step 4 and step 5 both run.
+    /// step 3 and step 4 both run.
     #[test]
-    fn step3_delete_failure_still_runs_step4_and_step5() {
+    fn step2_delete_failure_still_runs_step3_and_step4() {
         let (mock, calls) = MockCleanupClient::new(&["delete_environment"]);
         run(&mock);
         let calls = calls.lock().unwrap().clone();
@@ -487,20 +436,20 @@ pub mod tests {
     }
 
     #[test]
-    fn step4_failure_continues_to_step5() {
+    fn step3_failure_continues_to_step4() {
         let (mock, calls) = MockCleanupClient::new(&["get_application_revision"]);
         run(&mock);
         let calls = calls.lock().unwrap().clone();
         assert!(
             contains(&calls, "get_account_revision"),
-            "step 5 should run after step 4 failure; got: {calls:?}"
+            "step 4 should run after step 3 failure; got: {calls:?}"
         );
     }
 
-    /// `get_account_revision` (step 5 get) fails → function completes without
+    /// `get_account_revision` (step 4 get) fails → function completes without
     /// panic and `delete_account` is not attempted.
     #[test]
-    fn step5_get_failure_no_delete_and_completes() {
+    fn step4_get_failure_no_delete_and_completes() {
         let (mock, calls) = MockCleanupClient::new(&["get_account_revision"]);
         run(&mock);
         let calls = calls.lock().unwrap().clone();
@@ -516,14 +465,33 @@ pub mod tests {
     #[test]
     fn all_steps_fail_no_short_circuit() {
         let (mock, calls) = MockCleanupClient::new(&all_ops());
-        run(&mock); // must not panic
+        let recorder = run(&mock);
+        assert_eq!(recorder.failures().values().map(Vec::len).sum::<usize>(), 3);
         let calls = calls.lock().unwrap().clone();
-        assert!(contains(&calls, "list_env_components"), "{calls:?}");
         assert!(
             contains(&calls, "list_env_domain_registrations"),
             "{calls:?}"
         );
         assert!(contains(&calls, "get_env_app_id_and_revision"), "{calls:?}");
         assert!(contains(&calls, "get_account_revision"), "{calls:?}");
+    }
+
+    #[test]
+    fn every_delete_failure_is_recorded_and_cleanup_continues() {
+        let operations = [
+            "delete_domain_registration",
+            "delete_environment",
+            "delete_application",
+            "delete_account",
+        ];
+        let (mock, calls) = MockCleanupClient::new(&operations);
+        let recorder = run(&mock);
+        assert_eq!(*calls.lock().unwrap(), all_ops());
+        let failures = recorder.failures();
+        assert_eq!(failures.len(), operations.len());
+        for operation in operations {
+            let key = ResultKey::primary(format!("cleanup-{}", operation.replace('_', "-")));
+            assert_eq!(failures[&key].len(), 1);
+        }
     }
 }

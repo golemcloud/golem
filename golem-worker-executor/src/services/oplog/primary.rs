@@ -563,9 +563,8 @@ impl OplogService for PrimaryOplogService {
         let stage_key = Self::staged_oplog_key(&owned_agent_id.agent_id, stage_id);
         let target_key = Self::oplog_key(&owned_agent_id.agent_id);
         self.indexed_storage
+            .with("oplog", "publish_staged")
             .move_if_absent(
-                "oplog",
-                "publish_staged",
                 IndexedStorageNamespace::StagedOpLog {
                     agent_id: owned_agent_id.agent_id.clone(),
                     agent_mode,
