@@ -225,10 +225,14 @@ run together in the post-publication reconciler, preserving the deletion gate: a
 acquire mutually referring cold workers on different executors, so awaiting them before publication
 would create a cycle. Local readiness does not authorize a merely prepared stream attachment. The
 reconciler folds only through the committed `last_known_status.oplog_idx`. Once its topology cache
-has no dirty sessions and the producer has no active attachments, it parks on committed stream-state
-notifications instead of polling the oplog; active attachments retain the configured renewal
-deadline, and failed recovery retains periodic retry. Each reconciler uses a child of the executor
-shutdown token, so graph shutdown stops new periodic passes. Explicit owner retirement, revert, and
+has no unfinished recovery, it parks on committed stream-state notifications even while attachments
+are active. First producer load wakes a worker with no prior stream history; committed terminals
+wake deferred session completion after the status fold. Only failed or unfinished recovery arms a
+retry deadline. Stale producer attachments are reconciled lazily, including before deletion decides
+which dependencies remain. A source read repairs a missing producer activation only after checking
+the exact committed Active consumer topology; healthy reads do not enter the mutation lane.
+Each reconciler uses a child of the executor shutdown token, so graph shutdown stops new recovery
+passes and wakes parked reconcilers. Explicit owner retirement, revert, and
 deletion cancel and join the reconciler's in-flight pass; TTL cache retirement does not itself cancel
 or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
