@@ -576,7 +576,8 @@ mod tests {
     }
 
     #[test]
-    fn a_time_more_than_the_margin_ahead_counts_as_missing() {
+    fn the_margin_extends_the_grace_period_and_a_time_more_than_the_margin_ahead_counts_as_missing()
+    {
         let now = 10_000_000;
         let margin = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap();
         let due = |last| prune_due(&ledger(Some(last), false), 1, at(now), 0, Percent(0), GRACE);
@@ -591,12 +592,32 @@ mod tests {
             )
         };
 
+        let grace = u64::try_from(GRACE.as_millis()).unwrap();
+
         assert_eq!(
             (
-                [due(now + margin), due(now + margin + 1)],
-                [claim(now + margin), claim(now + margin + 1)]
+                [
+                    due(now - grace),
+                    due(now - grace - margin),
+                    due(now + margin),
+                    due(now + margin + 1)
+                ],
+                [
+                    claim(now - grace),
+                    claim(now - grace - margin),
+                    claim(now + margin),
+                    claim(now + margin + 1)
+                ]
             ),
-            ([false, true], [ClaimChoice::Held, ClaimChoice::Claim(1)])
+            (
+                [false, true, false, true],
+                [
+                    ClaimChoice::Held,
+                    ClaimChoice::Claim(1),
+                    ClaimChoice::Held,
+                    ClaimChoice::Claim(1)
+                ]
+            )
         );
     }
 
