@@ -60,10 +60,10 @@ pub fn[T : @schema.WireSchema + @schema.FromWire] load_config_value(
 }
 
 ///|
-/// Read the secret value, building its schema graph from `T`.
-pub fn[T : @schema.WireSchema + @schema.FromWire] Secret::get(
+/// Load a fresh opaque capability for this secret without revealing it.
+fn[T : @schema.WireSchema] Secret::load_handle(
   self : Secret[T],
-) -> T raise @common.AgentError {
+) -> @types.Secret raise @common.AgentError {
   let tag = (@schema.TypeTag::{ } : @schema.TypeTag[T])
   let inner_wire_graph = @schema.wire_schema(tag)
   let nodes = inner_wire_graph.type_nodes.copy()
@@ -93,6 +93,38 @@ pub fn[T : @schema.WireSchema + @schema.FromWire] Secret::get(
         "secret handle has already been transferred and can no longer be revealed",
       )
   }
+  raw_handle
+}
+
+///|
+/// Borrow a fresh opaque capability for this secret. The capability is dropped
+/// after `action` returns and the plaintext is never revealed.
+pub fn[T : @schema.WireSchema, R] Secret::with_handle(
+  self : Secret[T],
+  action : (@types.Secret) -> R raise,
+) -> R raise {
+  let raw_handle = self.load_handle()
+  with_owned_handle(raw_handle, action)
+}
+
+///|
+fn[R] with_owned_handle(
+  raw_handle : @types.Secret,
+  action : (@types.Secret) -> R raise,
+) -> R raise {
+  defer raw_handle.drop()
+  action(raw_handle)
+}
+
+///|
+/// Read the secret value, building its schema graph from `T`.
+pub fn[T : @schema.WireSchema + @schema.FromWire] Secret::get(
+  self : Secret[T],
+) -> T raise @common.AgentError {
+  let inner_wire_graph = @schema.wire_schema(
+    (@schema.TypeTag::{ } : @schema.TypeTag[T]),
+  )
+  let raw_handle = self.load_handle()
   let reveal_result = @reveal.reveal(raw_handle, inner_wire_graph)
   raw_handle.drop()
   let revealed_wire_value = match reveal_result {

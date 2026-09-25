@@ -45,6 +45,7 @@
 
 import { getConfigValue } from 'golem:agent/host@2.0.0';
 import { AgentConfigSource } from 'golem:agent/common@2.0.0';
+import type { Secret as RawSecret } from 'golem:core/types@2.0.0';
 import {
   SchemaGraph,
   SchemaValue,
@@ -59,7 +60,7 @@ import { SchemaCodec } from './schema/codec';
 import { Secret } from './secret';
 import { reveal } from 'golem:secrets/reveal@0.1.0';
 import { SECRET_INTERNAL } from './internal/schema-model/secretInternal';
-import { peekGuestSecretHandle } from './internal/schema-model/secretHandle';
+import { releaseGuestSecretHandle } from './internal/schema-model/secretHandle';
 
 /**
  * The agent's config spec: a single record of named fields, each a
@@ -257,15 +258,26 @@ function readLocalLeaf(d: ConfigDeclaration): unknown {
 }
 
 function secretLeaf(d: ConfigDeclaration): Secret<unknown> {
-  return new Secret(() => {
+  const withHandle = <R>(use: (handle: RawSecret) => R): R => {
     const sv = schemaValueFromWit(getConfigValue(d.path, schemaGraphToWit(d.graph)));
     if (sv.tag !== 'secret')
       throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
-    const raw = peekGuestSecretHandle(SECRET_INTERNAL, sv.handle);
+    const raw = releaseGuestSecretHandle(SECRET_INTERNAL, sv.handle);
     if (raw === undefined)
       throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
-    return d.codec.fromValue(schemaValueFromWit(reveal(raw, schemaGraphToWit(d.codec.graph))));
-  });
+    try {
+      return use(raw);
+    } finally {
+      (raw as RawSecret & { [Symbol.dispose](): void })[Symbol.dispose]();
+    }
+  };
+  return new Secret(
+    () =>
+      withHandle((raw) =>
+        d.codec.fromValue(schemaValueFromWit(reveal(raw, schemaGraphToWit(d.codec.graph)))),
+      ),
+    withHandle,
+  );
 }
 
 /**

@@ -27,15 +27,21 @@ export function compiledConfig(nodes: ConfigNode[]) {
       const value = Object.fromEntries(node.children.map((child) => [child.name, read(child)]));
       return node.requiredKeys.some((key) => value[key] === undefined) ? undefined : value;
     }
-    if (node.secret)
-      return new Secret(() => {
+    if (node.secret) {
+      const withHandle = <R>(use: (handle: RawSecret) => R): R => {
         const raw = readConcrete(node.codec, getConfigValue(node.path, node.graph)) as RawSecret;
         try {
-          return readConcrete(node.secret!.codec, reveal(raw, node.secret!.graph));
+          return use(raw);
         } finally {
           (raw as RawSecret & { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
         }
-      });
+      };
+      return new Secret(
+        () =>
+          withHandle((raw) => readConcrete(node.secret!.codec, reveal(raw, node.secret!.graph))),
+        withHandle,
+      );
+    }
     return readConcrete(node.codec, getConfigValue(node.path, node.graph));
   };
   return {

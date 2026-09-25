@@ -18,6 +18,11 @@
 // and `toJSON()` throws so the handle can never be accidentally serialized into
 // a log line or a snapshot.
 
+import type { Secret as RawSecret } from 'golem:core/types@2.0.0';
+
+type SecretHandleProvider = <R>(use: (handle: RawSecret) => R) => R;
+const handleProviders = new WeakMap<Secret<unknown>, SecretHandleProvider>();
+
 /**
  * A lazy, log-safe handle over a `secret<inner>` config field. Obtained from
  * `this.config.<field>` (and `InitContext.config.<field>`) for any field
@@ -30,7 +35,12 @@
  *   the whole config object) can never leak the plaintext.
  */
 export class Secret<T> {
-  constructor(private readonly read: () => T) {}
+  constructor(
+    private readonly read: () => T,
+    withHandle?: SecretHandleProvider,
+  ) {
+    if (withHandle !== undefined) handleProviders.set(this, withHandle);
+  }
 
   /**
    * Reveal and decode the current plaintext value.
@@ -52,4 +62,13 @@ export class Secret<T> {
       'Secret values are not serializable; call .get() to read the plaintext (and avoid logging it)',
     );
   }
+}
+
+export function withConfigSecretHandle<R>(
+  secret: Secret<unknown>,
+  use: (handle: RawSecret) => R,
+): R {
+  const provider = handleProviders.get(secret);
+  if (provider === undefined) throw new TypeError('Invalid config Secret');
+  return provider(use);
 }
