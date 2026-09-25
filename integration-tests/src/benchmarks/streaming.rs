@@ -21,7 +21,9 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, ResultKey, RunConfig};
+use golem_test_framework::benchmark::{
+    Benchmark, BenchmarkError, BenchmarkRecorder, BenchmarkResultValue, ResultKey, RunConfig,
+};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -72,8 +74,8 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> StreamingContext {
-        StreamingContext {
+    ) -> BenchmarkResultValue<StreamingContext> {
+        Ok(StreamingContext {
             deps: BenchmarkTestDependencies::new(
                 mode,
                 verbosity,
@@ -82,34 +84,46 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
                 otlp,
             )
             .await,
-        }
+        })
     }
 
-    async fn cleanup(context: StreamingContext) {
-        context.deps.kill_all().await
+    async fn cleanup(context: StreamingContext) -> BenchmarkResultValue {
+        context.deps.kill_all().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
-    async fn setup_iteration(&self, context: &StreamingContext) -> IterationContext {
-        let user = context.deps.user().await.unwrap();
-        let (_, env) = user.app_and_env().await.unwrap();
+    async fn setup_iteration(
+        &self,
+        context: &StreamingContext,
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<IterationContext> {
+        let user = context
+            .deps
+            .user()
+            .await
+            .map_err(|error| BenchmarkError::new("setup-user", error))?;
+        let (_, env) = user
+            .app_and_env()
+            .await
+            .map_err(|error| BenchmarkError::new("setup-environment", error))?;
         let (component, caller) = if TOOL {
             let component = user
                 .component(&env.id, "golem_it_tool_streaming_rust_caller_release")
                 .name("golem-it:tool-streaming-rust-caller")
                 .store()
                 .await
-                .unwrap();
+                .map_err(|error| BenchmarkError::new("setup-caller-component", error))?;
             user.component(&env.id, "golem_it_tool_streaming_rust_provider_release")
                 .name("golem-it:tool-streaming-rust-provider")
                 .with_tool_agent_binding("streaming", "ToolStreamingCaller")
-                .unwrap()
+                .map_err(|error| BenchmarkError::new("setup-tool-binding", error))?
                 .store()
                 .await
-                .unwrap();
+                .map_err(|error| BenchmarkError::new("setup-provider-component", error))?;
             (component, "ToolStreamingCaller")
         } else {
             let component = user
@@ -117,22 +131,28 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
                 .name("golem-it:agent-rpc-rust")
                 .store()
                 .await
-                .unwrap();
+                .map_err(|error| BenchmarkError::new("setup-rpc-component", error))?;
             (component, "StreamingRpcCaller")
         };
         let agent_ids = (0..self.config.size)
             .map(|index| agent_id!(caller, format!("streaming-{index}")))
             .collect();
-        IterationContext {
+        Ok(IterationContext {
             user,
             component,
             agent_ids,
-            chunk_count: self.config.length.try_into().expect("chunk count fits u32"),
+            chunk_count: self.config.length.try_into().map_err(|error| {
+                BenchmarkError::new("setup-parameters", format!("invalid chunk count: {error}"))
+            })?,
             env_id: env.id,
-        }
+        })
     }
 
-    async fn warmup(&self, _context: &StreamingContext, iteration: &IterationContext) {
+    async fn warmup(
+        &self,
+        _context: &StreamingContext,
+        iteration: &IterationContext,
+    ) -> BenchmarkResultValue {
         let results = iteration
             .agent_ids
             .iter()
@@ -142,8 +162,10 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
             .await;
 
         for result in results {
-            assert_stream_result(&result.value, iteration.chunk_count);
+            let result = result?;
+            stream_result(&result.value, iteration.chunk_count)?;
         }
+        Ok(())
     }
 
     async fn run(
@@ -151,7 +173,7 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
         _context: &StreamingContext,
         iteration: &IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
+    ) -> BenchmarkResultValue {
         let results = iteration
             .agent_ids
             .iter()
@@ -161,8 +183,9 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
             .await;
 
         for result in results {
+            let result = result?;
             result.record(&recorder, "", Self::name());
-            let (first, total) = assert_stream_result(&result.value, iteration.chunk_count);
+            let (first, total) = stream_result(&result.value, iteration.chunk_count)?;
             recorder.duration(
                 &ResultKey::primary("guest-time-to-first-chunk"),
                 Duration::from_nanos(first),
@@ -172,23 +195,30 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
                 Duration::from_nanos(total),
             );
         }
+        Ok(())
     }
 
-    async fn cleanup_iteration(&self, _context: &StreamingContext, iteration: IterationContext) {
+    async fn cleanup_iteration(
+        &self,
+        _context: &StreamingContext,
+        iteration: IterationContext,
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
         let ids = iteration
             .agent_ids
             .iter()
             .filter_map(|id| AgentId::from_agent_id(iteration.component.id, id).ok())
             .collect::<Vec<_>>();
-        delete_workers(&iteration.user, &ids).await;
-        cleanup_user_state(&iteration.user, &iteration.env_id).await;
+        delete_workers(&iteration.user, &ids, &recorder).await;
+        cleanup_user_state(&iteration.user, &iteration.env_id, &recorder).await;
+        Ok(())
     }
 }
 
 async fn invoke_streaming_caller(
     iteration: &IterationContext,
     agent_id: &ParsedAgentId,
-) -> InvokeResult {
+) -> BenchmarkResultValue<InvokeResult> {
     // Measure the whole request, without retrying or discarding timed-out intervals.
     let started = Instant::now();
     let value = tokio::time::timeout(
@@ -201,9 +231,14 @@ async fn invoke_streaming_caller(
         ),
     )
     .await
-    .expect("streaming benchmark exceeded its 10-minute deadline")
-    .expect("streaming benchmark invocation failed");
-    InvokeResult {
+    .map_err(|_| {
+        BenchmarkError::new(
+            "stream-complete",
+            "streaming benchmark exceeded its 10-minute deadline",
+        )
+    })?
+    .map_err(|error| BenchmarkError::new("stream-complete", error))?;
+    Ok(InvokeResult {
         accumulated_time: started.elapsed(),
         value: value
             .into_return_value()
@@ -212,12 +247,15 @@ async fn invoke_streaming_caller(
         retries: 0,
         timeouts: 0,
         failures: vec![],
-    }
+    })
 }
 
-fn assert_stream_result(value: &[SchemaValue], expected_chunks: u32) -> (u64, u64) {
+fn stream_result(value: &[SchemaValue], expected_chunks: u32) -> BenchmarkResultValue<(u64, u64)> {
     let [SchemaValue::Record { fields }] = value else {
-        panic!("expected one benchmark result record, got {value:?}")
+        return Err(BenchmarkError::new(
+            "stream-correctness",
+            format!("expected one benchmark result record, got {value:?}"),
+        ));
     };
     let [
         SchemaValue::U64(first),
@@ -225,12 +263,22 @@ fn assert_stream_result(value: &[SchemaValue], expected_chunks: u32) -> (u64, u6
         SchemaValue::U32(chunks),
     ] = fields.as_slice()
     else {
-        panic!("unexpected benchmark result fields: {fields:?}")
+        return Err(BenchmarkError::new(
+            "stream-correctness",
+            format!("unexpected benchmark result fields: {fields:?}"),
+        ));
     };
-    assert_eq!(*chunks, expected_chunks);
-    assert!(
-        *first <= *total,
-        "first chunk cannot arrive after completion"
-    );
-    (*first, *total)
+    if *chunks != expected_chunks {
+        return Err(BenchmarkError::new(
+            "stream-correctness",
+            format!("expected {expected_chunks} chunks, got {chunks}"),
+        ));
+    }
+    if *first > *total {
+        return Err(BenchmarkError::new(
+            "stream-correctness",
+            "first chunk cannot arrive after completion",
+        ));
+    }
+    Ok((*first, *total))
 }

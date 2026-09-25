@@ -70,9 +70,9 @@ vi.mock('golem:agent/host@2.0.0', () => ({
     }
     return [typeName, typed, phantomId];
   }),
-  getConfigValue: () => {
+  getConfigValue: vi.fn(() => {
     throw new Error('getConfigValue is not mocked in this test setup');
-  },
+  }),
   createWebhook: () => 'https://example.com/webhook',
   WasmRpc: MockWasmRpc,
 }));
@@ -140,9 +140,9 @@ vi.mock('golem:api/oplog@1.5.0', () => ({
 vi.mock('golem:quota/types@1.5.0', () => ({}));
 
 vi.mock('golem:secrets/reveal@0.1.0', () => ({
-  reveal: () => {
+  reveal: vi.fn(() => {
     throw new Error('reveal is not mocked in this test setup');
-  },
+  }),
 }));
 
 (globalThis as any).currentAgentId = 'foo-agent(123)';

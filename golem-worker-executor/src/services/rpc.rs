@@ -1772,6 +1772,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             joined_origin_observer: acceptance.joined_origin_observer,
             tool_name: None,
             command_path: Vec::new(),
+            terminal_cursor_stream_ids: Vec::new(),
         });
         acceptance
             .streams
