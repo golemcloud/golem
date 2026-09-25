@@ -1220,7 +1220,9 @@ async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_end
         .await
         .is_err();
     storage.open_gate();
-    let stopped = tokio::time::timeout(LIMIT, &mut shutting).await.is_ok();
+    // A finished future must not be polled again, so the second wait runs only after a first wait
+    // that timed out.
+    let stopped = !waited || tokio::time::timeout(LIMIT, &mut shutting).await.is_ok();
     let saved = tokio::time::timeout(LIMIT, saving).await;
 
     assert!(matches!(&saved, Ok(Ok(Ok(_)))), "{saved:?}");
