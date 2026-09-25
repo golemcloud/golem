@@ -18,7 +18,7 @@
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
 use super::super::files::SnapshotFiles;
-use super::super::prune::{PruneLedger, read_ledger};
+use super::super::prune::{Percent, PruneLedger, read_ledger};
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
@@ -52,6 +52,12 @@ use test_r::{test, test_gen};
 /// The longest time that a test waits for an operation or for the work of a store to end.
 const LIMIT: Duration = Duration::from_secs(10);
 
+/// A prune threshold that a delete never reaches.
+const NEVER: Percent = Percent(u16::MAX);
+
+/// A prune threshold of zero bytes, so each delete that frees bytes prunes.
+const ALWAYS: Percent = Percent(0);
+
 /// A deadline that no call of these tests reaches, so a held call ends only by a cancel.
 const LONG_DEADLINE: Duration = Duration::from_secs(60);
 
@@ -68,7 +74,7 @@ fn key() -> RepositoryKey {
 
 /// The policy of the configuration, with the deadline, the prune threshold and the grace period
 /// of the test.
-fn policy(deadline: Duration, prune_threshold: u64, grace: Duration) -> StorePolicy {
+fn policy(deadline: Duration, prune_threshold: Percent, grace: Duration) -> StorePolicy {
     StorePolicy {
         deadline,
         prune: PruneSettings {
@@ -224,7 +230,7 @@ fn the_policy_takes_the_configured_values_and_the_options_are_strict() {
             Duration::from_secs(15 * 60),
             true,
             RepackLimits::Rustic,
-            64 * 1024 * 1024,
+            Percent(10),
         )
     );
     assert_eq!(
@@ -271,7 +277,7 @@ async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = fixture_tree();
@@ -325,7 +331,7 @@ async fn a_save_whose_index_write_fails_publishes_nothing_and_leaves_the_name_fr
             }
         }
     });
-    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
     let tree = fixture_tree();
 
@@ -372,7 +378,7 @@ async fn a_publish_that_reaches_the_deadline_and_lands_late_publishes_nothing() 
     });
     let store = store(
         storage.clone(),
-        policy(Duration::from_secs(1), u64::MAX, Duration::ZERO),
+        policy(Duration::from_secs(1), NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = one_file_tree("late");
@@ -408,7 +414,7 @@ async fn a_second_save_of_an_unchanged_tree_writes_no_pack() {
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = fixture_tree();
@@ -454,7 +460,7 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
                 Script::Pass
             }
         });
-    let policy = policy(LONG_DEADLINE, u64::MAX, Duration::ZERO);
+    let policy = policy(LONG_DEADLINE, NEVER, Duration::ZERO);
     let (first, second) = (
         store(storage.clone(), policy),
         store(storage.clone(), policy),
@@ -524,7 +530,10 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
             }
         }
     });
-    let store = store(storage.clone(), policy(LONG_DEADLINE, 1, Duration::ZERO));
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
     let scope = new_scope();
     let (old_tree, new_tree) = (one_file_tree("old"), fixture_tree());
     store
@@ -583,7 +592,7 @@ async fn a_restore_whose_pack_reads_fail_gives_a_retryable_storage_error() {
             }
         }
     });
-    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
     let tree = fixture_tree();
     store
@@ -615,7 +624,7 @@ async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_d
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = one_file_tree("readable");
@@ -667,7 +676,7 @@ async fn a_restore_that_cannot_set_an_extended_attribute_gives_destination() {
     }
     let store = store(
         Arc::new(InMemoryBlobStorage::new()),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     store
@@ -711,7 +720,7 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = one_file_tree("kept");
@@ -752,7 +761,10 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
 #[test]
 async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_period() {
     let storage = Arc::new(InMemoryBlobStorage::new());
-    let store = store(storage.clone(), policy(LONG_DEADLINE, 1, Duration::ZERO));
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
@@ -783,12 +795,89 @@ async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_per
     );
 }
 
+/// Counts the listings of the packs among the recorded calls.
+fn data_listings(calls: &[(&'static str, String)]) -> usize {
+    calls
+        .iter()
+        .filter(|(op_label, _)| *op_label == "list_data")
+        .count()
+}
+
+#[test]
+async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    let (first, second) = (one_file_tree("first"), one_file_tree("second"));
+    store
+        .save(&scope, &name("p-1"), first.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-2"), second.path(), None)
+        .await
+        .unwrap();
+    let before_first = storage.calls().len();
+
+    store.delete(&scope, &name("p-1")).await.unwrap();
+    let before_second = storage.calls().len();
+    store.delete(&scope, &name("p-2")).await.unwrap();
+    let calls = storage.calls();
+
+    assert_eq!(
+        (
+            data_listings(&calls[before_first..before_second]),
+            data_listings(&calls[before_second..]),
+            ledger(&storage, &scope).await.freed_bytes > 0,
+        ),
+        (1, 0, true)
+    );
+}
+
+#[test]
+async fn a_failed_listing_of_the_packs_gives_storage_and_records_no_prune() {
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+        if op_label == "list_data" {
+            Script::Refuse
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), one_file_tree("kept"));
+    store
+        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .await
+        .unwrap();
+
+    let deleted = store.delete(&scope, &name("p-deleted")).await;
+    let after = ledger(&storage, &scope).await;
+
+    assert!(
+        deleted.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{deleted:?}"
+    );
+    assert_eq!((after.freed_bytes > 0, after.last_prune), (true, None));
+}
+
 #[test]
 async fn a_delete_below_the_threshold_does_not_prune() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), one_file_tree("kept"));
@@ -820,7 +909,7 @@ async fn no_second_prune_runs_within_the_grace_period() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, 1, Duration::from_secs(3600)),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
     );
     let scope = new_scope();
     let trees = [one_file_tree("a"), one_file_tree("b"), one_file_tree("c")];
@@ -868,7 +957,10 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
             }
         }
     });
-    let store = store(storage.clone(), policy(LONG_DEADLINE, 1, Duration::ZERO));
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
@@ -906,7 +998,10 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
 #[test]
 async fn a_deleted_scope_holds_no_blob() {
     let storage = Arc::new(InMemoryBlobStorage::new());
-    let store = store(storage.clone(), policy(LONG_DEADLINE, 1, Duration::ZERO));
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), one_file_tree("second"));
     store
@@ -942,7 +1037,7 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
     store(
         counted.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     )
     .save(&new_scope(), &name("p-dropped"), tree.path(), None)
     .await
@@ -962,7 +1057,7 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
                         Script::Pass
                     }
                 });
-                let policy = policy(LONG_DEADLINE, u64::MAX, Duration::ZERO);
+                let policy = policy(LONG_DEADLINE, NEVER, Duration::ZERO);
                 let dropping = store(storage.clone(), policy);
                 let scope = new_scope();
                 let ended = drop_when(
@@ -1023,7 +1118,7 @@ async fn shut_down_ends_running_operations_before_it_returns() {
         });
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = fixture_tree();
@@ -1093,7 +1188,7 @@ async fn a_dropped_operation_stops_its_blocking_work() {
         });
         let store = store(
             storage.clone(),
-            policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
         );
         let scope = new_scope();
         let tree = fixture_tree();
@@ -1208,7 +1303,7 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = three_file_tree();
@@ -1242,7 +1337,7 @@ async fn a_full_save_reads_each_file() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = three_file_tree();
@@ -1270,7 +1365,7 @@ async fn the_parent_of_a_save_is_the_named_snapshot_also_when_a_newer_snapshot_e
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = three_file_tree();
@@ -1308,7 +1403,7 @@ async fn a_save_without_a_parent_or_with_a_parent_that_the_scope_does_not_hold_r
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = three_file_tree();
@@ -1355,7 +1450,7 @@ async fn a_save_whose_read_of_the_snapshot_files_fails_while_it_finds_the_parent
     });
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = one_file_tree("parent");
@@ -1404,7 +1499,7 @@ async fn a_failed_read_of_a_snapshot_file_fails_stat_and_list_with_a_retryable_s
             }
         }
     });
-    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
@@ -1440,7 +1535,7 @@ async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
             }
         }
     });
-    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
@@ -1464,7 +1559,7 @@ async fn a_delete_that_frees_nothing_writes_no_ledger() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = one_file_tree("kept");
@@ -1517,7 +1612,7 @@ async fn a_save_of_a_relative_directory_path_gives_source_and_writes_nothing() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
 
@@ -1539,7 +1634,7 @@ async fn a_save_of_a_regular_file_gives_source_and_writes_nothing() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
 
@@ -1559,7 +1654,7 @@ async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
-        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
     let tree = fixture_tree();
@@ -1592,7 +1687,7 @@ async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
                 Script::Pass
             }
         });
-    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
     let tree = one_file_tree("never saved");
 
@@ -1613,7 +1708,10 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
     // Packs of zeros with the sizes of the index give the prune a decryption error, not a failed
     // storage call. The forget before the prune has succeeded, so the delete gives `Storage`.
     let storage = Arc::new(InMemoryBlobStorage::new());
-    let store = store(storage.clone(), policy(LONG_DEADLINE, 1, Duration::ZERO));
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
@@ -1718,7 +1816,7 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
     // the normal priority. The second save reads the config, the index, the snapshot files and
     // the trees of its parent, and writes the added file.
     let (storage, calls) = nice_recording_storage();
-    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
     let tree = fixture_tree();
     store
@@ -1751,10 +1849,10 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
 #[cfg(target_os = "linux")]
 #[test]
 async fn the_storage_calls_of_a_prune_run_at_nice_19() {
-    // The forget of a delete runs before the ledger read at the normal priority, and the ledger
-    // read and writes run on the async runtime. The prune runs between them.
+    // The forget of a delete runs before the ledger read at the normal priority. The ledger calls
+    // and the listing of the packs run on the async runtime, and the prune runs after them.
     let (storage, calls) = nice_recording_storage();
-    let store = store(storage, policy(LONG_DEADLINE, 1, Duration::ZERO));
+    let store = store(storage, policy(LONG_DEADLINE, ALWAYS, Duration::ZERO));
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
@@ -1771,7 +1869,9 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
     let prune = taken_calls(&calls)
         .into_iter()
         .skip_while(|(op_label, _, _)| op_label != "read_ledger")
-        .filter(|(op_label, _, _)| op_label != "read_ledger" && op_label != "write_ledger")
+        .filter(|(op_label, _, _)| {
+            !["read_ledger", "write_ledger", "list_data"].contains(&op_label.as_str())
+        })
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -1785,7 +1885,7 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
 async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
     let process_nice = super::super::priority::own_nice();
     let (storage, calls) = nice_recording_storage();
-    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
     let tree = fixture_tree();
     store
@@ -1823,7 +1923,7 @@ async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
     let process_nice = super::super::priority::own_nice();
     let store = store(
         Arc::new(InMemoryBlobStorage::new()),
-        policy(LONG_DEADLINE, 1, Duration::ZERO),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
     );
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
@@ -1867,7 +1967,7 @@ async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_n
     // The deleted snapshot shares a pack with the kept one, so the prune repacks that pack. The
     // prune reads the index files and repacks with rayon, on the workers of the pool of the prune.
     let (storage, calls) = nice_recording_storage();
-    let base = policy(LONG_DEADLINE, 1, Duration::ZERO);
+    let base = policy(LONG_DEADLINE, ALWAYS, Duration::ZERO);
     let store = store(
         storage,
         StorePolicy {

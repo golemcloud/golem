@@ -24,7 +24,10 @@ use super::backend::BlobBackend;
 use super::fault::{Operation, classify, is_file_missing, is_storage_failure, storage_failure};
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
-use super::prune::{PruneLedger, prune_due, read_ledger, write_ledger};
+use super::prune::{
+    Percent, PruneLedger, needs_repository_size, prune_due, read_ledger, repository_bytes,
+    write_ledger,
+};
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
 use super::{
@@ -57,8 +60,9 @@ use tokio::runtime::Handle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 
-/// The packed bytes that deleted snapshots must free before a delete prunes the scope.
-const PRUNE_THRESHOLD_BYTES: u64 = 64 * 1024 * 1024;
+/// The share of the size of the repository that deleted snapshots must free before a delete prunes
+/// the scope.
+const PRUNE_THRESHOLD: Percent = Percent(10);
 
 /// How long a pack that a prune marks stays before a later prune deletes it. It is also the
 /// shortest time between two prunes of one scope. It must be longer than the longest save and the
@@ -79,8 +83,9 @@ pub(super) struct StorePolicy {
     pub(super) restore_reader_threads: NonZeroUsize,
     /// The settings of a prune. `keep_delete` is also the shortest time between two prunes.
     pub(super) prune: PruneSettings,
-    /// The packed bytes that deleted snapshots must free before a delete prunes.
-    pub(super) prune_threshold: u64,
+    /// The share of the size of the repository that deleted snapshots must free before a delete
+    /// prunes.
+    pub(super) prune_threshold: Percent,
 }
 
 impl StorePolicy {
@@ -96,7 +101,7 @@ impl StorePolicy {
                 keep_delete: PRUNE_GRACE,
                 repack: RepackLimits::Rustic,
             },
-            prune_threshold: PRUNE_THRESHOLD_BYTES,
+            prune_threshold: PRUNE_THRESHOLD,
         }
     }
 }
@@ -260,7 +265,7 @@ impl RusticSnapshotStore {
 
     /// Adds the freed bytes to the ledger of the scope, and prunes the repository when a prune is
     /// due. The ledger keeps the freed bytes before the prune starts, so a delete that runs again
-    /// after a failed prune prunes again.
+    /// after a failed prune prunes again. It lists the packs only when their size can make a prune due.
     async fn prune_when_due(
         &self,
         scope: &SnapshotScope,
@@ -278,12 +283,13 @@ impl RusticSnapshotStore {
                 .map_err(storage_failure)?;
         }
         let now = Timestamp::now_utc();
-        if !prune_due(
-            &ledger,
-            now,
-            self.policy.prune_threshold,
-            self.policy.prune.keep_delete,
-        ) {
+        let grace = self.policy.prune.keep_delete;
+        let size = if needs_repository_size(&ledger, now, grace) {
+            repository_bytes(&files).await.map_err(storage_failure)?
+        } else {
+            0
+        };
+        if !prune_due(&ledger, now, size, self.policy.prune_threshold, grace) {
             return Ok(());
         }
         let backend = Arc::new(self.backend(scope, token)?);

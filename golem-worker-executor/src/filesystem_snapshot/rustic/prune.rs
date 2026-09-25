@@ -59,25 +59,61 @@ impl PruneLedger {
     }
 }
 
-/// Tells whether a prune is due at `now`.
-///
-/// A prune is due when the grace period passed since the last prune, and the freed bytes reach the
-/// threshold or the last prune marked packs. A threshold of zero counts as one byte, so a prune
-/// never runs for a scope that freed nothing and marked nothing.
-pub(super) fn prune_due(
-    ledger: &PruneLedger,
-    now: Timestamp,
-    threshold: u64,
-    grace: Duration,
-) -> bool {
-    let grace_passed = ledger.last_prune.is_none_or(|last| {
+/// The path of the packs of a repository, relative to the root of the namespace of the scope.
+const DATA_PATH: &str = "data";
+
+/// A share of the size of a repository, in percent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Percent(pub(super) u16);
+
+impl Percent {
+    /// Gives this share of the bytes, rounded down.
+    fn of(self, bytes: u64) -> u64 {
+        u64::try_from(u128::from(bytes) * u128::from(self.0) / 100).unwrap_or(u64::MAX)
+    }
+}
+
+/// Tells whether the grace period passed at `now` since the last prune.
+fn grace_passed(ledger: &PruneLedger, now: Timestamp, grace: Duration) -> bool {
+    ledger.last_prune.is_none_or(|last| {
         now.to_millis()
             >= last
                 .to_millis()
                 .saturating_add(u64::try_from(grace.as_millis()).unwrap_or(u64::MAX))
-    });
-    let work = ledger.freed_bytes >= threshold.max(1) || ledger.awaiting_removal;
-    grace_passed && work
+    })
+}
+
+/// Tells whether [`prune_due`] needs the size of the repository at `now`. Only freed bytes after
+/// the grace period, without marked packs, need it.
+pub(super) fn needs_repository_size(ledger: &PruneLedger, now: Timestamp, grace: Duration) -> bool {
+    grace_passed(ledger, now, grace) && ledger.freed_bytes > 0 && !ledger.awaiting_removal
+}
+
+/// Tells whether a prune is due at `now`.
+///
+/// A prune is due when the grace period passed since the last prune, and the freed bytes reach the
+/// threshold share of `repository_bytes` or the last prune marked packs. A threshold of zero bytes
+/// counts as one byte, so a prune never runs for a scope that freed nothing and marked nothing.
+pub(super) fn prune_due(
+    ledger: &PruneLedger,
+    now: Timestamp,
+    repository_bytes: u64,
+    threshold: Percent,
+    grace: Duration,
+) -> bool {
+    let work =
+        ledger.freed_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal;
+    grace_passed(ledger, now, grace) && work
+}
+
+/// Gives the size of the repository of the scope: the sum of the sizes of its packs.
+pub(super) async fn repository_bytes(files: &SnapshotFiles) -> anyhow::Result<u64> {
+    Ok(files
+        .list_below("list_data", Path::new(DATA_PATH))
+        .await?
+        .iter()
+        .map(|blob| blob.size)
+        .fold(0, u64::saturating_add))
 }
 
 /// Reads the ledger of the scope. A scope without a ledger, or with a ledger that does not parse,
@@ -109,7 +145,10 @@ pub(super) async fn write_ledger(
 #[cfg(test)]
 mod tests {
     use super::super::files::SnapshotFiles;
-    use super::{LEDGER_PATH, PruneLedger, prune_due, read_ledger, write_ledger};
+    use super::{
+        LEDGER_PATH, Percent, PruneLedger, needs_repository_size, prune_due, read_ledger,
+        write_ledger,
+    };
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::storage::blob::BlobStorageNamespace;
@@ -121,9 +160,9 @@ mod tests {
     use test_r::test;
     use uuid::Uuid;
 
-    const MIB: u64 = 1024 * 1024;
-    const THRESHOLD: u64 = 64 * MIB;
-    const GRACE: Duration = Duration::from_secs(3600);
+    const TEN_PERCENT: Percent = Percent(10);
+    const GRACE: Duration = Duration::from_secs(15 * 60);
+    const GRACE_MILLIS: u64 = 15 * 60 * 1000;
     const DEADLINE: Duration = Duration::from_secs(2);
 
     fn at(millis: u64) -> Timestamp {
@@ -153,28 +192,39 @@ mod tests {
     }
 
     #[test]
-    fn a_prune_is_due_when_the_freed_bytes_reach_the_threshold() {
+    fn a_prune_is_due_when_the_freed_bytes_reach_ten_percent_of_the_repository() {
         let now = at(10_000_000);
+        let due = |freed, repository_bytes| {
+            prune_due(
+                &ledger(freed, None, false),
+                now,
+                repository_bytes,
+                TEN_PERCENT,
+                GRACE,
+            )
+        };
 
         assert_eq!(
             [
-                prune_due(&ledger(THRESHOLD - 1, None, false), now, THRESHOLD, GRACE),
-                prune_due(&ledger(THRESHOLD, None, false), now, THRESHOLD, GRACE),
-                prune_due(&ledger(THRESHOLD + 1, None, false), now, THRESHOLD, GRACE),
+                due(99, 1000),
+                due(100, 1000),
+                due(101, 1000),
+                due(0, 0),
+                due(1, 0),
             ],
-            [false, true, true]
+            [false, true, true, false, true]
         );
     }
 
     #[test]
     fn no_second_prune_runs_within_the_grace_period() {
         let last = 1_000_000;
-        let grace_millis = 3_600_000;
         let full = |now| {
             prune_due(
-                &ledger(THRESHOLD, Some(last), true),
+                &ledger(1000, Some(last), true),
                 at(now),
-                THRESHOLD,
+                1000,
+                TEN_PERCENT,
                 GRACE,
             )
         };
@@ -182,9 +232,9 @@ mod tests {
         assert_eq!(
             [
                 full(last),
-                full(last + grace_millis - 1),
-                full(last + grace_millis),
-                full(last + grace_millis + 1),
+                full(last + GRACE_MILLIS - 1),
+                full(last + GRACE_MILLIS),
+                full(last + GRACE_MILLIS + 1),
             ],
             [false, false, true, true]
         );
@@ -193,28 +243,50 @@ mod tests {
     #[test]
     fn marked_packs_make_a_prune_due_after_the_grace_period_without_freed_bytes() {
         let last = 1_000_000;
-        let after_grace = at(last + 3_600_000);
+        let after_grace = at(last + GRACE_MILLIS);
+        let due = |awaiting_removal| {
+            prune_due(
+                &ledger(0, Some(last), awaiting_removal),
+                after_grace,
+                1000,
+                TEN_PERCENT,
+                GRACE,
+            )
+        };
 
-        assert_eq!(
-            [
-                prune_due(&ledger(0, Some(last), true), after_grace, THRESHOLD, GRACE),
-                prune_due(&ledger(0, Some(last), false), after_grace, THRESHOLD, GRACE),
-            ],
-            [true, false]
-        );
+        assert_eq!([due(true), due(false)], [true, false]);
     }
 
     #[test]
     fn a_zero_threshold_prunes_after_each_delete_that_freed_bytes() {
         let now = at(10_000_000);
+        let due = |ledger| prune_due(&ledger, now, 1000, Percent(0), Duration::ZERO);
 
         assert_eq!(
             [
-                prune_due(&ledger(0, None, false), now, 0, Duration::ZERO),
-                prune_due(&ledger(1, None, false), now, 0, Duration::ZERO),
-                prune_due(&ledger(1, Some(10_000_000), false), now, 0, Duration::ZERO),
+                due(ledger(0, None, false)),
+                due(ledger(1, None, false)),
+                due(ledger(1, Some(10_000_000), false)),
             ],
             [false, true, true]
+        );
+    }
+
+    #[test]
+    fn only_freed_bytes_after_the_grace_period_without_marked_packs_need_the_repository_size() {
+        let last = 1_000_000;
+        let needs = |freed, awaiting_removal, now| {
+            needs_repository_size(&ledger(freed, Some(last), awaiting_removal), at(now), GRACE)
+        };
+
+        assert_eq!(
+            [
+                needs(1, false, last + GRACE_MILLIS),
+                needs(1, false, last + GRACE_MILLIS - 1),
+                needs(0, false, last + GRACE_MILLIS),
+                needs(1, true, last + GRACE_MILLIS),
+            ],
+            [true, false, false, false]
         );
     }
 
