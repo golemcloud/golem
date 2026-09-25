@@ -88,6 +88,8 @@ private[reflection] object ReflectionConformanceCorpus {
     "canonical/quantity-wide-mantissa",
     "canonical/omitted-options",
     "canonical/binary-mime",
+    "canonical/constrained-text-without-language",
+    "canonical/constrained-binary-without-mime",
     "errors/s64-plus",
     "errors/s64-leading-zero",
     "errors/s64-negative-zero",
@@ -99,6 +101,8 @@ private[reflection] object ReflectionConformanceCorpus {
     "errors/quantity-negative-zero",
     "errors/quantity-extra-field",
     "errors/binary-noncanonical-base64",
+    "errors/binary-invalid-mime",
+    "errors/text-extra-field",
     "json-schema/s64",
     "json-schema/s64-restrictions",
     "json-schema/u32-restrictions",
@@ -199,6 +203,28 @@ private[reflection] object ReflectionConformanceCorpus {
       "expected": {
         "bytes": "-_8",
         "mimeType": "application/octet-stream"
+      }
+    },
+    {
+      "id": "canonical/constrained-text-without-language",
+      "operation": "roundtrip",
+      "fixture": "constrained-text",
+      "input": {
+        "text": "hello"
+      },
+      "expected": {
+        "text": "hello"
+      }
+    },
+    {
+      "id": "canonical/constrained-binary-without-mime",
+      "operation": "roundtrip",
+      "fixture": "constrained-binary",
+      "input": {
+        "bytes": "AQI"
+      },
+      "expected": {
+        "bytes": "AQI"
       }
     },
     {
@@ -331,6 +357,30 @@ private[reflection] object ReflectionConformanceCorpus {
       }
     },
     {
+      "id": "errors/binary-invalid-mime",
+      "operation": "reject",
+      "fixture": "binary",
+      "input": {
+        "bytes": "AQ",
+        "mimeType": "not a mime"
+      },
+      "expected": {
+        "kind": "invalid-json"
+      }
+    },
+    {
+      "id": "errors/text-extra-field",
+      "operation": "reject",
+      "fixture": "constrained-text",
+      "input": {
+        "text": "hello",
+        "extra": true
+      },
+      "expected": {
+        "kind": "invalid-json"
+      }
+    },
+    {
       "id": "json-schema/s64",
       "operation": "json-schema",
       "fixture": "s64",
@@ -436,6 +486,7 @@ private[reflection] object ReflectionConformanceCorpus {
           },
           "mimeType": {
             "type": "string",
+            "pattern": "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$",
             "enum": [
               "image/png",
               "application/octet-stream"

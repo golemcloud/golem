@@ -54,6 +54,7 @@ object SchemaRef {
 private object CanonicalJson {
   private val SignedIntegerPattern   = "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$".r
   private val UnsignedIntegerPattern = "^(?:0|[1-9][0-9]*)$".r
+  private val MimeTypePattern        = "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$".r
   private val U64Max                 = (BigInt(1) << 64) - 1
 
   def pack(graph: SchemaGraph, schema: SchemaType, json: Json): Either[SchemaIssue, SchemaValue] =
@@ -232,8 +233,12 @@ private object CanonicalJson {
           restrictions.minBytes.map(value => "minLength" -> number(base64UrlLength(value))).toList ++
             restrictions.maxBytes.map(value => "maxLength" -> number(base64UrlLength(value))).toList
         val mimeType = restrictions.mimeTypes match {
-          case Some(values) => typed("string", "enum" -> Json.Array(values.map(Json.String): _*))
-          case None         => typed("string")
+          case Some(values) => typed(
+              "string",
+              "pattern" -> Json.String(MimeTypePattern.regex),
+              "enum"    -> Json.Array(values.map(Json.String): _*)
+            )
+          case None => typed("string", "pattern" -> Json.String(MimeTypePattern.regex))
         }
         typed(
           "object",
@@ -464,9 +469,11 @@ private object CanonicalJson {
       case BinaryType(_) =>
         val jsonFields = fields(json)
         if (!jsonFields.keySet.subsetOf(Set("bytes", "mimeType"))) fail("binary JSON contains unknown fields")
+        val mimeType = jsonFields.get("mimeType").map(string)
+        mimeType.foreach(value => if (!MimeTypePattern.pattern.matcher(value).matches()) fail("invalid MIME type"))
         BinaryValue(
           decodeBase64Url(string(jsonFields.getOrElse("bytes", fail("missing field 'bytes'")))),
-          jsonFields.get("mimeType").map(string)
+          mimeType
         )
       case PathType(_)  => PathValue(string(json))
       case UrlType(_)   => UrlValue(string(json))
@@ -570,6 +577,7 @@ private object CanonicalJson {
       case (TextType(_), TextValue(text, language)) =>
         Json.Object((List("text" -> Json.String(text)) ++ language.map(value => "language" -> Json.String(value))): _*)
       case (BinaryType(_), BinaryValue(bytes, mimeType)) =>
+        mimeType.foreach(value => if (!MimeTypePattern.pattern.matcher(value).matches()) fail("invalid MIME type"))
         Json.Object(
           (List("bytes" -> Json.String(encodeBase64Url(bytes))) ++ mimeType.map(value =>
             "mimeType" -> Json.String(value)

@@ -357,11 +357,12 @@ fn SchemaRef::validate_refinements(
       }
       match r.languages {
         Some(allowed) =>
-          if !(match language {
-              Some(lang) => allowed.contains(lang)
-              None => false
-            }) {
-            raise Schema("text language is not allowed")
+          match language {
+            Some(lang) =>
+              if !allowed.contains(lang) {
+                raise Schema("text language is not allowed")
+              }
+            None => ()
           }
         None => ()
       }
@@ -394,11 +395,19 @@ fn SchemaRef::validate_refinements(
       }
       match r.mime_types {
         Some(allowed) =>
-          if !(match mime_type {
-              Some(mime) => allowed.contains(mime)
-              None => false
-            }) {
-            raise Schema("binary MIME type is not allowed")
+          match mime_type {
+            Some(mime) =>
+              if !allowed.contains(mime) {
+                raise Schema("binary MIME type is not allowed")
+              }
+            None => ()
+          }
+        None => ()
+      }
+      match mime_type {
+        Some(mime) =>
+          if !is_valid_mime_type(mime) {
+            raise Schema("invalid MIME type")
           }
         None => ()
       }
@@ -603,6 +612,11 @@ fn json_string(value : Json) -> String raise ReflectError {
     String(value) => value
     _ => raise Json("expected a JSON string")
   }
+}
+
+///|
+fn is_valid_mime_type(value : String) -> Bool {
+  re"^[A-Za-z0-9!#$&^_.+\-]+/[A-Za-z0-9!#$&^_.+\-]+$".execute(value) is Some(_)
 }
 
 ///|
@@ -961,7 +975,12 @@ fn SchemaRef::unpack(
         "bytes": Json::string(binary_to_json(bytes)),
       }
       match mime {
-        Some(mime) => fields["mimeType"] = Json::string(mime)
+        Some(mime) => {
+          if !is_valid_mime_type(mime) {
+            raise Json("invalid MIME type")
+          }
+          fields["mimeType"] = Json::string(mime)
+        }
         None => ()
       }
       Json::object(fields)
@@ -1189,6 +1208,10 @@ fn SchemaRef::pack(
     }
     Text(_) => {
       let fields = json_object(json)
+      guard fields.length() <= 2 &&
+        (fields.length() == 1 || fields.contains("language")) else {
+        raise Json("unexpected text JSON field")
+      }
       Text(
         json_string(required_field(fields, "text")),
         fields.get("language").map(json_string),
@@ -1214,9 +1237,17 @@ fn SchemaRef::pack(
         (fields.length() == 1 || fields.contains("mimeType")) else {
         raise Json("unexpected binary JSON field")
       }
+      let mime_type = fields.get("mimeType").map(json_string)
+      match mime_type {
+        Some(mime) =>
+          if !is_valid_mime_type(mime) {
+            raise Json("invalid MIME type")
+          }
+        None => ()
+      }
       Binary(
         binary_from_json(json_string(required_field(fields, "bytes"))),
-        fields.get("mimeType").map(json_string),
+        mime_type,
       )
     }
     Quantity(_) => {

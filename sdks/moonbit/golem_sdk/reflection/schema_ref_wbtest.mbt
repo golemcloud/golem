@@ -121,6 +121,9 @@ test "JSON Schema retains text and binary constraints" {
         }),
         "mimeType": Json::object({
           "type": Json::string("string"),
+          "pattern": Json::string(
+            "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$",
+          ),
           "enum": Json::array([Json::string("image/png")]),
         }),
       }),
@@ -463,6 +466,62 @@ test "binary JSON round-trips unpadded base64url and MIME type" {
   } noraise {
     _ => fail("expected padded base64url to be rejected")
   }
+  try
+    schema.pack_json(
+      Json::object({
+        "bytes": Json::string("AQ"),
+        "mimeType": Json::string("not a mime"),
+      }),
+    )
+  catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected invalid MIME type to be rejected")
+  }
+  try
+    schema.unpack_json(
+      @model.SchemaValue::Binary(([1] : FixedArray[Byte]), Some("not a mime")),
+    )
+  catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected invalid MIME type to be rejected")
+  }
+}
+
+///|
+test "constrained text and binary metadata remain optional" {
+  let text = test_schema(
+    Text({
+      languages: Some(["en"]),
+      min_length: None,
+      max_length: None,
+      regex: None,
+    }),
+  )
+  text.validate_value(@model.SchemaValue::Text("hello", None))
+  try
+    text.pack_json(
+      Json::object({
+        "text": Json::string("hello"),
+        "extra": Json::boolean(true),
+      }),
+    )
+  catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected unknown text field to be rejected")
+  }
+  let binary = test_schema(
+    Binary({
+      min_bytes: None,
+      max_bytes: None,
+      mime_types: Some(["image/png"]),
+    }),
+  )
+  binary.validate_value(
+    @model.SchemaValue::Binary(([1] : FixedArray[Byte]), None),
+  )
 }
 
 ///|

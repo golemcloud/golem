@@ -1045,7 +1045,7 @@ function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonV
   }
   return false
 }
-const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/u
+const MIME_TYPE_PATTERN = new RegExp("^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$", "u")
 const BASE64URL_PATTERN =
   "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$"
 

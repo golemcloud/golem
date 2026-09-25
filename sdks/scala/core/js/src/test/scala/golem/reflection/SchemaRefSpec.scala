@@ -147,6 +147,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
       val text             = textProperties.get("text").one
       val binaryProperties = properties.get("content").one.toOption.get.get("properties").one.toOption.get
       val bytes            = binaryProperties.get("bytes").one
+      val mimeType         = binaryProperties.get("mimeType").one
       val pattern          = bytes.flatMap(_.get("pattern").one) match {
         case Right(Json.String(value)) => value
         case other                     => throw new AssertionError(s"expected binary pattern, got $other")
@@ -164,8 +165,9 @@ object SchemaRefSpec extends ZIOSpecDefault {
         pattern == "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
         canonical,
         nonCanonical,
-        binaryProperties.get("mimeType").one.flatMap(_.get("enum").one) ==
-          Right(Json.Array(Json.String("image/png")))
+        mimeType.flatMap(_.get("pattern").one) ==
+          Right(Json.String("^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$")),
+        mimeType.flatMap(_.get("enum").one) == Right(Json.Array(Json.String("image/png")))
       )
     },
     test("union export keeps discriminator and branch body while packing enforces the rule") {
@@ -453,6 +455,21 @@ object SchemaRefSpec extends ZIOSpecDefault {
         .get
       val expected = Json.Number(BigDecimal((Int.MaxValue.toLong * 4 + 2) / 3))
       assertTrue(bytes.get("minLength").one == Right(expected), bytes.get("maxLength").one == Right(expected))
+    },
+    test("binary MIME syntax is canonical while MIME metadata stays optional") {
+      val ref = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(BinaryType(BinaryRestrictions(mimeTypes = Some(List("image/png")))))
+        )
+      )
+      val withoutMime = Json.Object("bytes" -> Json.String("AQ"))
+      val invalidMime = Json.Object("bytes" -> Json.String("AQ"), "mimeType" -> Json.String("not a mime"))
+      assertTrue(
+        ref.validateJson(withoutMime).isRight,
+        ref.packJson(invalidMime).isLeft,
+        ref.unpackJson(BinaryValue(Vector[Byte](1), Some("not a mime"))).isLeft
+      )
     },
     test("throwing config codecs return schema encode failures") {
       val definition = AgentClientDefinition.full[String, String](

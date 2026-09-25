@@ -501,7 +501,12 @@ fn schema_json(graph : @model.SchemaGraph, schema : @model.SchemaType) -> Json {
           )
         None => ()
       }
-      let mime : Map[String, Json] = { "type": Json::string("string") }
+      let mime : Map[String, Json] = {
+        "type": Json::string("string"),
+        "pattern": Json::string(
+          "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$",
+        ),
+      }
       match restrictions.mime_types {
         Some(values) => mime["enum"] = schema_strings(values)
         None => ()
