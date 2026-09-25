@@ -10,12 +10,22 @@ It is guaranteed that this idempotency key will always be the same (per occurren
 
 To generate an idempotency key:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import { generateIdempotencyKey } from "@golemcloud/golem-ts-sdk";
 
 const key = generateIdempotencyKey();
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```typescript
+import { Effect } from "effect"
+import { Durability } from "@golemcloud/effect-golem"
+
+const key = Effect.gen(function* () {
+  return yield* Durability.generateIdempotencyKey
+})
 ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -43,7 +53,7 @@ let key = @api.generate_idempotency_key()
 
 It is possible to query **metadata** for Golem agents. This metadata is defined by the `AgentMetadata` interface:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     ```typescript
     /**
@@ -57,7 +67,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
       /** Environment variables seen by the agent */
       env: [string, string][];
       /** Configuration variables seen by the agent */
-      configVars: [string, string][];
+      config: [string, string][];
       /** The current agent status */
       status: AgentStatus;
       /** The component revision the agent is running with */
@@ -76,6 +86,16 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 
     </Tabs.Tab>
     <Tabs.Tab>
+    Effect TypeScript re-exports the host `AgentMetadata` type as `Agents.AgentMetadata`. Query metadata through Effect values:
+
+    ```typescript
+    import { Agents } from "@golemcloud/effect-golem"
+
+    const self = Agents.getSelfMetadata
+    const other = (agentId: Agents.AgentId) => Agents.getAgentMetadata(agentId)
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
     ```rust
     /// Metadata about an agent
     pub struct AgentMetadata {
@@ -86,7 +106,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
       /// Environment variables seen by the agent
       pub env: Vec<(String, String)>,
       /// Configuration variables seen by the agent
-      pub config_vars: Vec<(String, String)>,
+      pub config: Vec<(String, String)>,
       /// The current agent status
       pub status: AgentStatus,
       /// The component revision the agent is running with
@@ -100,7 +120,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 
     There are two exported functions to query agent metadata:
 
-    - `get_self_metadata()` returns the metadata for the current agent
+    - `get_self_metadata()` returns `Result<AgentMetadata, AgentOperationError>` for the current agent
     - `get_agent_metadata(agent_id: &AgentId)` returns `Some(AgentMetadata)` for a specific agent given by its `AgentId`, or `None` if it does not exist
 
     </Tabs.Tab>
@@ -113,7 +133,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
       agentId: HostApi.AgentIdLiteral,
       args: List[String],
       env: Map[String, String],
-      configVars: Map[String, String],
+      config: Map[String, String],
       status: HostApi.AgentStatus,
       componentRevision: BigInt,
       retryCount: BigInt,
@@ -139,12 +159,12 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
       agent_id : @rpcTypes.AgentId
       args : Array[String]
       env : Array[(String, String)]
-      config_vars : Array[(String, String)]
+      config : Array[(String, String)]
       status : @api.AgentStatus
       component_revision : UInt64
       retry_count : UInt64
       environment_id : @api.EnvironmentId
-    } derive(Show, Eq)
+    }
     ```
 
     There are two exported functions to query agent metadata:
@@ -166,7 +186,7 @@ Agent enumeration is a feature of Golem available both through the public HTTP A
 
 The following example demonstrates how to use the agent enumeration API:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import {
@@ -207,8 +227,18 @@ while ((batch = getter.getNext()) !== undefined) {
     </Tabs.Tab>
 
     <Tabs.Tab>
+```typescript
+import { Stream } from "effect"
+import { Agents } from "@golemcloud/effect-golem"
+
+const enumerateAgents = (componentId: Agents.ComponentId) =>
+  Agents.getAgents({ componentId, precise: true }).pipe(Stream.runCollect)
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
 ```rust
-use golem_rust::bindings::golem::api::host::{
+use golem_rust::{
     AgentAllFilter, AgentAnyFilter, AgentMetadata, AgentPropertyFilter, AgentStatus,
     AgentStatusFilter, ComponentId, FilterComparator, GetAgents,
 };
@@ -228,7 +258,7 @@ let getter = GetAgents::new(component_id, Some(&filter), true);
 
 let mut agents: Vec<AgentMetadata> = vec![];
 
-while let Some(batch) = getter.get_next() {
+while let Some(batch) = getter.get_next()? {
     agents.extend(batch);
 }
 ```
@@ -295,11 +325,11 @@ while true {
     </Tabs.Tab>
 </Tabs>
 
-The third parameter enables `precise` mode. In this mode, Golem will calculate the latest metadata for each returned agent; otherwise, it uses only the last cached values.
+The `precise` parameter or option enables precise mode. In this mode, Golem calculates the latest metadata for each returned agent; otherwise, it uses only the last cached values.
 
 ### Update an agent
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 To trigger an update for a given agent from one component version to another, use the `updateAgent` function:
 
@@ -320,15 +350,33 @@ updateAgent(agentId, targetRevision, "automatic")
     </Tabs.Tab>
 
     <Tabs.Tab>
+To update an agent from Effect TypeScript, pass the target revision and mode to `Agents.updateAgent`:
+
+```typescript
+import { Effect } from "effect"
+import { Agents } from "@golemcloud/effect-golem"
+
+const updateSelf = Effect.gen(function* () {
+  const metadata = yield* Agents.getSelfMetadata
+  yield* Agents.updateAgent({
+    agentId: metadata.agentId,
+    targetRevision: 1n,
+    mode: "automatic",
+  })
+})
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
 To trigger an update for a given agent from one component version to another, use the `update_agent` function:
 
 ```rust
-use golem_rust::bindings::golem::api::host::{get_self_metadata, update_agent, UpdateMode};
+use golem_rust::{get_self_metadata, update_agent, UpdateMode};
 
-let agent_id = get_self_metadata().agent_id;
+let agent_id = get_self_metadata()?.agent_id;
 let target_component_revision = 1u64;
 
-update_agent(&agent_id, target_component_revision, UpdateMode::Automatic);
+update_agent(&agent_id, target_component_revision, UpdateMode::Automatic)?;
 ```
     </Tabs.Tab>
 
@@ -399,7 +447,7 @@ The resource is affine: `finish` consumes it, and it cannot be completed twice. 
 
 The request, response, operation name, and observational host calls are intended to support observability. They may appear in oplog inspection, logs, and metrics. Use useful schemas and names, but redact credentials and personal data, and avoid recording unnecessary or unbounded payloads.
 
-Use an SDK combinator instead of handling the live resource manually. Rust provides `golem_rust::durability::Durability::run`, `run_async`, `run_infallible`, and `run_infallible_async`; TypeScript provides `durable`; Scala provides `DurabilityApi.durable` and `durableAsync`; MoonBit provides `@api.durable` and `durable_async`. These combinators own begin/replay/finish/drop and evaluate the operation body only for a live invocation.
+Use an SDK combinator instead of handling the live resource manually. Rust provides `golem_rust::durability::Durability::run`, `run_async`, `run_infallible`, and `run_infallible_async`; TypeScript provides `durable`; Effect TypeScript provides `Durability.wrap` and `wrapInfallible`; Scala provides `DurabilityApi.durable` and `durableAsync`; MoonBit provides `@api.durable` and `durable_async`. These combinators own begin/replay/finish/drop and evaluate the operation body only for a live invocation.
 
 ### Invocation context
 
@@ -407,7 +455,7 @@ Golem associates an **invocation context** with each invocation, which contains 
 
 The spans are not automatically sent to any tracing system but they can be reconstructed from the oplog, for example using **oplog processor plugins**, to provide real-time tracing information.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 To get the current invocation context, use the `currentContext` host function, imported from `golem:api/context@1.5.0`:
 
@@ -461,13 +509,31 @@ If `finish` is not explicitly called on the span, it is going to be finished whe
 </Tabs.Tab>
 
     <Tabs.Tab>
+Effect TypeScript installs a Golem-backed tracer automatically. Use `Tracing.currentContext` for an immutable snapshot of the host context and normal Effect spans for custom work:
+
+```typescript
+import { Effect } from "effect"
+import { Tracing } from "@golemcloud/effect-golem"
+
+const operation = Effect.gen(function* () {
+  const context = yield* Tracing.currentContext
+  return context.traceId
+}).pipe(Effect.withSpan("my-operation"))
+```
+
+Use `Tracing.traceContextHeaders`, `withForwardedHeaders`, and `withInvocationParent` for explicit propagation.
+
+These Effects are intended to run inside an Effect agent handler, where the dispatcher installs the required host services.
+</Tabs.Tab>
+
+    <Tabs.Tab>
 To get the current invocation context, use the `current_context` host function, imported from `golem_rust::bindings::golem::api::context`:
 
 ```rust
 /**
  * Invocation context support
  */
-fn current_context(): InvocationContext;
+pub fn current_context() -> InvocationContext;
 ```
 
 The `InvocationContext` resource exposes various methods for querying attributes of the invocation context:
@@ -602,9 +668,9 @@ To export traces, logs, and metrics to an external system, see the [Observabilit
 
 Although Golem agents can store their state completely in their own memory, it is possible to use the `wasi:keyvalue` interface to store key-value pairs in a Golem managed key value storage.
 
-This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. The keys are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
+This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. Storage is shared across agents and components within the same environment.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         There are two primary modules for using the key-value store:
         - `wasi:keyvalue/eventual@0.1.0` defines an API for an eventually consistent key-value store
@@ -654,50 +720,40 @@ This can be useful if state needs to be shared between different agents or if th
         ```typescript
         export class OutgoingValue {
             static newOutgoingValue(): OutgoingValue;
-            /**
-             * Writes the value to the output-stream asynchronously.
-             * If any other error occurs, it returns an `Err(error)`.
-             * @throws Error
-             */
-            outgoingValueWriteBodyAsync(): OutgoingValueBodyAsync;
-            /**
-             * Writes the value to the output-stream synchronously.
-             * If any other error occurs, it returns an `Err(error)`.
-             * @throws Error
-             */
-            outgoingValueWriteBodySync(value: OutgoingValueBodySync): void;
+            outgoingValueWriteBodyAsync(data: AsyncIterable<number>): void;
+            outgoingValueWriteBodySync(value: Uint8Array): void;
         }
 
         export class IncomingValue {
-            /**
-             * Consumes the value synchronously and returns the value as a list of bytes.
-             * If any other error occurs, it returns an `Err(error)`.
-             * @throws Error
-             */
-            incomingValueConsumeSync(): IncomingValueSyncBody;
-            /**
-             * Consumes the value asynchronously and returns the value as an `input-stream`.
-             * If any other error occurs, it returns an `Err(error)`.
-             * @throws Error
-             */
-            incomingValueConsumeAsync(): IncomingValueAsyncBody;
-            /**
-             * The size of the value in bytes.
-             * If the size is unknown or unavailable, this function returns an `Err(error)`.
-             * @throws Error
-             */
+            incomingValueConsumeSync(): Uint8Array;
+            incomingValueConsumeAsync(): AsyncIterable<number>;
             incomingValueSize(): bigint;
         }
-
-        export type OutgoingValueBodyAsync = OutputStream;
-        export type OutgoingValueBodySync = Uint8Array;
-        export type IncomingValueAsyncBody = InputStream;
-        export type IncomingValueSyncBody = Uint8Array;
         ```
 
         The streaming variants of setting and consuming the values may be used by the underlying implementation to directly
         stream the data to the key-value store. For small values, the sync variants are more convenient, directly taking and returning
         a `Uint8Array`.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        Effect TypeScript provides scoped byte and schema-typed bucket APIs:
+
+        ```typescript
+        import { Effect, Option } from "effect"
+        import { KeyValue } from "@golemcloud/effect-golem"
+
+        const program = Effect.scoped(
+          Effect.gen(function* () {
+            const bucket = yield* KeyValue.openBucket("shared")
+            yield* bucket.set("greeting", new TextEncoder().encode("hello"))
+            const value = yield* bucket.get("greeting")
+            return Option.map(value, (bytes) => new TextDecoder().decode(bytes))
+          }),
+        )
+        ```
+
+        Buckets also provide batch operations, `keys`, and `forSchema`. Atomic increment/compare-and-swap and cache APIs are not currently exposed.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -778,13 +834,13 @@ This can be useful if state needs to be shared between different agents or if th
                  * If any other error occurs, it returns an `Err(error)`.
                  * @throws Error
                  */
-                pub fn incoming_value_consume_sync(&self) -> Result<IncomingValueSyncBody, Error>;
+                pub fn incoming_value_consume_sync(&self) -> Result<Vec<u8>, Error>;
                 /**
                  * Consumes the value asynchronously and returns the value as an `input-stream`.
                  * If any other error occurs, it returns an `Err(error)`.
                  * @throws Error
                  */
-                pub fn incoming_value_consume_async(&self) -> Result<IncomingValueAsyncBody, Error>;
+                pub fn incoming_value_consume_async(&self) -> Result<StreamReader<u8>, Error>;
                 /**
                  * The size of the value in bytes.
                  * If the size is unknown or unavailable, this function returns an `Err(error)`.
@@ -793,10 +849,6 @@ This can be useful if state needs to be shared between different agents or if th
                 pub fn incoming_value_size(&self) -> Result<u64, Error>;
             }
 
-            pub type OutgoingValueBodyAsync = OutputStream;
-            pub type OutgoingValueBodySync = Vec<u8>;
-            pub type IncomingValueAsyncBody = InputStream;
-            pub type IncomingValueSyncBody = Vec<u8>;
             ```
 
             The streaming variants of setting and consuming the values may be used by the underlying implementation to directly
@@ -808,6 +860,8 @@ This can be useful if state needs to be shared between different agents or if th
         The Scala SDK exposes the underlying `wasi:keyvalue/eventual@0.1.0`, `wasi:keyvalue/eventual-batch@0.1.0`, and `wasi:keyvalue/types@0.1.0` modules through the `golem.wasi.KeyValue` wrapper.
 
         The primary interface to work with key-value pairs is the `Bucket` class:
+
+        The following declarations summarize the public API shape; they are not definitions to copy into your application.
 
         ```scala
         import golem.wasi.KeyValue
@@ -869,7 +923,9 @@ This can be useful if state needs to be shared between different agents or if th
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The generated `wasi:keyvalue` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/keyvalue/eventual`, `golemcloud/golem_sdk/interface/wasi/keyvalue/eventualBatch`, and `golemcloud/golem_sdk/interface/wasi/keyvalue/types` packages. Assuming they are imported as `@eventual`, `@eventualBatch`, `@types`, `@streams`, and `@wasiKeyvalueError`:
+        The generated `wasi:keyvalue` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/keyvalue/eventual`, `golemcloud/golem_sdk/interface/wasi/keyvalue/eventualBatch`, and `golemcloud/golem_sdk/interface/wasi/keyvalue/types` packages. Assuming they are imported as `@eventual`, `@eventualBatch`, and `@types`, with `golemcloud/golem_sdk/async-core` imported as `@async-core` and the key-value error package as `@wasiKeyvalueError`:
+
+        The declarations below summarize the generated API shape; they are not definitions to copy into your application.
 
         The primary interface to work with the key-value pairs consists of the four basic operations:
 
@@ -919,20 +975,24 @@ This can be useful if state needs to be shared between different agents or if th
         ```moonbit
         pub fn Bucket::open_bucket(String) -> Result[Self, @wasiKeyvalueError.Error_]
 
-        pub(all) struct OutgoingValue(Int) derive(Eq, Show)
+        pub(all) struct OutgoingValue(Int)
         pub fn OutgoingValue::new_outgoing_value() -> Self
         pub fn OutgoingValue::outgoing_value_write_body_sync(
           Self,
           FixedArray[Byte],
         ) -> Result[Unit, @wasiKeyvalueError.Error_]
+        pub fn OutgoingValue::outgoing_value_write_body_async(
+          Self,
+          @async-core.Stream[Byte],
+        ) -> Result[Unit, @wasiKeyvalueError.Error_]
 
-        pub(all) struct IncomingValue(Int) derive(Eq, Show)
+        pub(all) struct IncomingValue(Int)
         pub fn IncomingValue::incoming_value_consume_sync(
           Self,
         ) -> Result[FixedArray[Byte], @wasiKeyvalueError.Error_]
         pub fn IncomingValue::incoming_value_consume_async(
           Self,
-        ) -> Result[@streams.InputStream, @wasiKeyvalueError.Error_]
+        ) -> Result[@async-core.Stream[Byte], @wasiKeyvalueError.Error_]
         pub fn IncomingValue::incoming_value_size(
           Self,
         ) -> Result[UInt64, @wasiKeyvalueError.Error_]
@@ -944,9 +1004,9 @@ This can be useful if state needs to be shared between different agents or if th
 
 ### The WASI Blob Store interface
 
-The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. The blobs are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
+The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. Storage is shared across agents and components within the same environment.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         The Blob Store API organizes blobs identified by _object names_ into **containers**. The `wasi:blobstore/blobstore` module exports functions to create, get and delete these containers by name:
 
@@ -1022,7 +1082,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
              * returns list of objects in the container. Order is undefined.
              * @throws Error
              */
-            listObjects(): StreamObjectNames;
+            listObjects(): AsyncIterable<ObjectName>;
             /**
              * deletes object.
              * does not return error if object did not exist.
@@ -1052,7 +1112,26 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         }
         ```
 
-        `IncomingValue` can consume blob data either synchronously as a `Uint8Array` or asynchronously as an `InputStream`. To write blob data, create an `OutgoingValue` and obtain its `OutputStream` via `outgoingValueWriteBody()`.
+        `IncomingValue` can consume blob data either synchronously as a `Uint8Array` or asynchronously as an `AsyncIterable<number>`. To write blob data asynchronously, pass an `AsyncIterable<number>` to `outgoingValueWriteBody(data)`.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        Effect TypeScript provides scoped containers with byte and schema-typed operations:
+
+        ```typescript
+        import { Effect } from "effect"
+        import { Blobstore } from "@golemcloud/effect-golem"
+
+        const program = Effect.scoped(
+          Effect.gen(function* () {
+            const container = yield* Blobstore.getOrCreateContainer("documents")
+            yield* container.writeData("hello.txt", new TextEncoder().encode("hello"))
+            return yield* container.getData("hello.txt")
+          }),
+        )
+        ```
+
+        Containers also support listing, metadata, deletion, ranges, and `forSchema`.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -1115,7 +1194,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
             /**
              * returns list of objects in the container. Order is undefined.
              */
-            pub fn list_objects(&self) -> Result<StreamObjectNames, Error>
+            pub fn list_objects(&self) -> Result<StreamReader<String>, Error>
             /**
              * deletes object.
              * does not return error if object did not exist.
@@ -1140,14 +1219,17 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         }
         ```
 
-        `IncomingValue` can be consumed either synchronously as a `Vec<u8>` or asynchronously as an `InputStream`. To write blob data, create an `OutgoingValue` and obtain its `OutputStream` via `outgoing_value_write_body()`.
+        `IncomingValue` can be consumed either synchronously as a `Vec<u8>` or asynchronously as a `StreamReader<u8>`. To write blob data asynchronously, pass a `StreamReader<u8>` to `outgoing_value_write_body` and drive the retained writer.
     </Tabs.Tab>
 
     <Tabs.Tab>
         The Scala SDK exposes the underlying `wasi:blobstore` modules through the `golem.wasi.Blobstore` wrapper:
 
+        The following declarations summarize the public API shape; they are not definitions to copy into your application.
+
         ```scala
         import golem.wasi.Blobstore
+        import scala.concurrent.Future
 
         object Blobstore {
           final case class ObjectId(container: String, name: String)
@@ -1165,6 +1247,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
 
         ```scala
         import golem.wasi.Blobstore
+        import scala.concurrent.Future
 
         object Blobstore {
           final class Container {
@@ -1172,7 +1255,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
             def info(): ContainerMetadata
             def getData(objectName: String, start: Long, end: Long): Array[Byte]
             def writeData(objectName: String, data: Array[Byte]): Unit
-            def listObjects(): List[String]
+            def listObjects(): Future[List[String]]
             def deleteObject(name: String): Unit
             def deleteObjects(names: List[String]): Unit
             def hasObject(name: String): Boolean
@@ -1186,7 +1269,9 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The generated `wasi:blobstore` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/blobstore/blobstore`, `golemcloud/golem_sdk/interface/wasi/blobstore/container`, and `golemcloud/golem_sdk/interface/wasi/blobstore/types` packages. Assuming they are imported as `@blobstore`, `@container`, `@types`, and `@streams`:
+        The generated `wasi:blobstore` bindings are exposed through the `golemcloud/golem_sdk/interface/wasi/blobstore/blobstore`, `golemcloud/golem_sdk/interface/wasi/blobstore/container`, and `golemcloud/golem_sdk/interface/wasi/blobstore/types` packages. Assuming they are imported as `@blobstore`, `@container`, and `@types`, with `golemcloud/golem_sdk/async-core` imported as `@async-core`:
+
+        The declarations below summarize the generated API shape; they are not definitions to copy into your application.
 
         The Blob Store API organizes blobs identified by _object names_ into **containers**. The `@blobstore` package exports functions to create, get and delete these containers by name:
 
@@ -1225,7 +1310,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         A `Container` resource in the `@container` package provides read-write access for the blobs in it:
 
         ```moonbit
-        pub(all) struct Container(Int) derive(Show, Eq)
+        pub(all) struct Container(Int)
 
         /// returns container name
         pub fn Container::name(self : Container) -> Result[String, String]
@@ -1252,7 +1337,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         ) -> Result[Unit, String]
 
         /// returns list of objects in the container. Order is undefined.
-        pub fn Container::list_objects(self : Container) -> Result[@container.StreamObjectNames, String]
+        pub fn Container::list_objects(self : Container) -> Result[@async-core.Stream[String], String]
 
         /// deletes object.
         /// does not return error if object did not exist.
@@ -1277,6 +1362,6 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         pub fn Container::clear(self : Container) -> Result[Unit, String]
         ```
 
-        `IncomingValue` can be consumed either synchronously as a `FixedArray[Byte]` or asynchronously as an `@streams.InputStream`. To write blob data, create an `OutgoingValue` with `@types.OutgoingValue::new_outgoing_value()` and obtain its `@streams.OutputStream` via `outgoing_value_write_body()`.
+        `IncomingValue` can be consumed either synchronously as a `FixedArray[Byte]` or asynchronously as an `@async-core.Stream[Byte]`. To write blob data, create an `OutgoingValue` with `@types.OutgoingValue::new_outgoing_value()` and pass an `@async-core.Stream[Byte]` to `outgoing_value_write_body`.
     </Tabs.Tab>
 </Tabs>

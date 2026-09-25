@@ -40,6 +40,7 @@ pub mod typescript;
 
 use camino::Utf8Path;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
+use golem_common::schema::agent::AgentTypeKind;
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
 use golem_common::schema::{
@@ -97,6 +98,9 @@ pub(crate) fn validate_host_managed_agent_bridge_policy(
     agent: &AgentTypeSchema,
     mode: BridgeMode,
 ) -> anyhow::Result<()> {
+    if agent.kind == AgentTypeKind::HttpRouter {
+        anyhow::bail!("HTTP routers do not have ordinary agent clients");
+    }
     for field in agent.constructor.input_schema.fields() {
         if matches!(field.source, FieldSource::UserSupplied) {
             validate_host_managed_bridge_root(

@@ -54,6 +54,13 @@ const (
 type AgentMode = uint8
 
 const (
+	AgentTypeKindRegular    uint8 = 0
+	AgentTypeKindHttpRouter uint8 = 1
+)
+
+type AgentTypeKind = uint8
+
+const (
 	AutoInjectedKindPrincipal uint8 = 0
 )
 
@@ -187,8 +194,105 @@ type ReadOnlyConfig struct {
 	UsesPrincipal bool
 }
 
+type ExactFileMapping struct {
+	PublicPath []string
+	FilePath   string
+}
+
+type SubtreeFileMapping struct {
+	PublicPrefix   []string
+	FilesystemRoot string
+}
+
+const (
+	FileMappingExact   uint8 = 0
+	FileMappingSubtree uint8 = 1
+)
+
+type FileMapping struct {
+	tag   uint8
+	value any
+}
+
+func (self FileMapping) Tag() uint8 {
+	return self.tag
+}
+
+func (self FileMapping) Exact() ExactFileMapping {
+	if self.tag != FileMappingExact {
+		panic("tag mismatch")
+	}
+	return self.value.(ExactFileMapping)
+}
+func (self FileMapping) Subtree() SubtreeFileMapping {
+	if self.tag != FileMappingSubtree {
+		panic("tag mismatch")
+	}
+	return self.value.(SubtreeFileMapping)
+}
+
+func MakeFileMappingExact(value ExactFileMapping) FileMapping {
+	return FileMapping{FileMappingExact, value}
+}
+func MakeFileMappingSubtree(value SubtreeFileMapping) FileMapping {
+	return FileMapping{FileMappingSubtree, value}
+}
+
 type CorsOptions struct {
 	AllowedPatterns []string
+}
+
+const (
+	DurableStreamSlotSourceInput  uint8 = 0
+	DurableStreamSlotSourceOutput uint8 = 1
+)
+
+type DurableStreamSlotSource struct {
+	tag   uint8
+	value any
+}
+
+func (self DurableStreamSlotSource) Tag() uint8 {
+	return self.tag
+}
+
+func (self DurableStreamSlotSource) Input() string {
+	if self.tag != DurableStreamSlotSourceInput {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self DurableStreamSlotSource) Output() string {
+	if self.tag != DurableStreamSlotSourceOutput {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+
+func MakeDurableStreamSlotSourceInput(value string) DurableStreamSlotSource {
+	return DurableStreamSlotSource{DurableStreamSlotSourceInput, value}
+}
+func MakeDurableStreamSlotSourceOutput(value string) DurableStreamSlotSource {
+	return DurableStreamSlotSource{DurableStreamSlotSourceOutput, value}
+}
+
+type DurableStreamSlotOptions struct {
+	Source      DurableStreamSlotSource
+	Name        witTypes.Option[string]
+	ContentType witTypes.Option[string]
+}
+
+type DurableStreamRouteLoadOptions struct {
+	MaxConcurrentReadersPerStream       witTypes.Option[uint32]
+	MaxAppendRequestsPerSecondPerStream witTypes.Option[uint32]
+}
+
+type DurableStreamRouteOptions struct {
+	Slots                 []DurableStreamSlotOptions
+	AllowExternalWrites   witTypes.Option[bool]
+	AllowStreamDelete     witTypes.Option[bool]
+	AllowInvocationDelete witTypes.Option[bool]
+	Load                  witTypes.Option[DurableStreamRouteLoadOptions]
 }
 
 const (
@@ -202,6 +306,7 @@ const (
 	HttpMethodTrace   uint8 = 7
 	HttpMethodPatch   uint8 = 8
 	HttpMethodCustom  uint8 = 9
+	HttpMethodAny     uint8 = 10
 )
 
 type HttpMethod struct {
@@ -249,6 +354,9 @@ func MakeHttpMethodPatch() HttpMethod {
 }
 func MakeHttpMethodCustom(value string) HttpMethod {
 	return HttpMethod{HttpMethodCustom, value}
+}
+func MakeHttpMethodAny() HttpMethod {
+	return HttpMethod{HttpMethodAny, nil}
 }
 
 const (
@@ -332,20 +440,25 @@ type AuthDetails struct {
 }
 
 type HttpMountDetails struct {
-	PathPrefix    []PathSegment
-	AuthDetails   witTypes.Option[AuthDetails]
-	PhantomAgent  bool
-	CorsOptions   CorsOptions
-	WebhookSuffix []PathSegment
+	PathPrefix         []PathSegment
+	AuthDetails        witTypes.Option[AuthDetails]
+	PhantomAgent       bool
+	CorsOptions        CorsOptions
+	WebhookSuffix      []PathSegment
+	StaticBindings     []FileMapping
+	FilesystemBindings []FileMapping
+	// The name of a parameterless router method that returns the OpenAPI document as a string.
+	OpenapiProviderMethod witTypes.Option[string]
 }
 
 type HttpEndpointDetails struct {
-	HttpMethod  HttpMethod
-	PathSuffix  []PathSegment
-	HeaderVars  []HeaderVariable
-	QueryVars   []QueryVariable
-	AuthDetails witTypes.Option[AuthDetails]
-	CorsOptions CorsOptions
+	HttpMethod     HttpMethod
+	PathSuffix     []PathSegment
+	HeaderVars     []HeaderVariable
+	QueryVars      []QueryVariable
+	AuthDetails    witTypes.Option[AuthDetails]
+	CorsOptions    CorsOptions
+	DurableStreams witTypes.Option[DurableStreamRouteOptions]
 }
 
 type AgentMethod struct {
@@ -533,6 +646,7 @@ type AgentConfigDeclaration struct {
 // semantic root of the agent type.
 type AgentType struct {
 	TypeName       string
+	Kind           AgentTypeKind
 	Description    string
 	SourceLanguage string
 	Schema         golem_core_types.SchemaGraph

@@ -1,4 +1,4 @@
-import { Callout, Tabs } from "nextra/components"
+import { Tabs } from "nextra/components"
 
 # Defining Golem Components
 
@@ -6,12 +6,21 @@ import { Callout, Tabs } from "nextra/components"
 
 Golem's **command line interface** provides a set of predefined, Golem-specific **templates** to choose from as a starting point.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 To get started from scratch, first create a new application using the TypeScript template:
 
 ```shell copy
 golem new --template ts --yes my-app
+cd my-app
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+To get started from scratch, first create a new application using the Effect TypeScript template:
+
+```shell copy
+golem new --template effect --yes my-app
 cd my-app
 ```
     </Tabs.Tab>
@@ -53,10 +62,16 @@ golem templates
 
 Then create a new component using the chosen template:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```shell copy
 golem new . --template ts --component-name my:component --yes
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```shell copy
+golem new . --template effect --component-name my:component --yes
 ```
     </Tabs.Tab>
 
@@ -106,7 +121,7 @@ checks. Invocation-scoped underlying access still advances the pinned middleware
 
 Defining Golem agents is done using the Golem SDK, which is included in all the templates provided by `golem`.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 An agent is declared with `defineAgent(...)` and given its behaviour with `.implement(...)`:
 
@@ -128,6 +143,27 @@ export const MyAgentImpl = MyAgent.implement({
         // ...
     },
 });
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+An Effect agent is declared with `defineAgent(...)` and registered with `.implement(...)`. Methods return Effects:
+
+```typescript
+import { Effect, Schema } from "effect"
+import { defineAgent, method } from "@golemcloud/effect-golem"
+
+export const MyAgent = defineAgent({
+  name: "MyAgent",
+  id: {},
+  methods: {
+    ping: method({ input: {}, success: Schema.String }),
+  },
+})
+
+MyAgent.implement({
+  init: () => Effect.void,
+  methods: () => ({ ping: () => Effect.succeed("pong") }),
+})
 ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -199,7 +235,7 @@ Every agent must define a **constructor** with an arbitrary number of parameters
 
 For example, an agent working on a particular user's particular request could be defined as:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -212,6 +248,20 @@ export const RequestHandler = defineAgent({
         // ...
     },
 });
+```
+    </Tabs.Tab>
+    <Tabs.Tab>
+```typescript
+import { Schema } from "effect"
+import { defineAgent } from "@golemcloud/effect-golem"
+
+export const RequestHandler = defineAgent({
+  name: "RequestHandler",
+  id: { userId: Schema.String, requestId: Schema.String },
+  methods: {
+    // ...
+  },
+})
 ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -245,11 +295,7 @@ fn RequestHandler::new(user_id : String, request_id : String) -> RequestHandler 
     </Tabs.Tab>
 </Tabs>
 
-An agent with a constructor like this can be identified by `request-handler("user-123", "request-456")`.
-
-<Callout type="info">
-    Note that the agent name is converted to _kebab-case_ (`request-handler`) when referred to in an agent identifier. This is due to some technical implementation details of the underlying Golem runtime. You can learn more about these mappings on the [name mapping page](/next/name-mapping).
-</Callout>
+The Effect agent shown here is identified by `RequestHandler("user-123", "request-456")`; agent identifiers preserve the declared agent name.
 
 ### Agent methods
 
@@ -263,7 +309,7 @@ This metadata is stored in the Golem component and can be used when exposing the
 
 The following example shows the use of how to attach these metadata to simple agent methods in different languages
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -288,6 +334,35 @@ export const RequestHandler = defineAgent({
         }),
     },
 });
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```typescript
+import { Schema } from "effect"
+import { defineAgent, method } from "@golemcloud/effect-golem"
+
+const TaskDetails = Schema.Struct({
+  description: Schema.String,
+  priority: Schema.Number,
+})
+const RequestHandlerStatus = Schema.Struct({
+  status: Schema.Literals(["success", "failure"]),
+  summary: Schema.String,
+})
+
+export const RequestHandler = defineAgent({
+  name: "RequestHandler",
+  id: { userId: Schema.String, requestId: Schema.String },
+  methods: {
+    addDetails: method({
+      input: { details: TaskDetails },
+      success: RequestHandlerStatus,
+      description: "Adds details and returns the current status.",
+      promptHint: "Enter new details about the task",
+    }),
+  },
+})
 ```
     </Tabs.Tab>
 
@@ -384,18 +459,22 @@ pub fn RequestHandler::add_details(
 
 </Tabs>
 
-Agent methods can be both sync or async.
+Agent methods can be both sync or async. Effect TypeScript handlers always return an `Effect`, whether the work represented by that Effect is synchronous or asynchronous.
 
 ### Supported data types
-The SDK supports a large variety of data types to be used in agent constructors and agent methods, both in parameter and return type position. When a type is not supported, it will report an error at compile time.
+The SDK supports a large variety of data types in agent constructors and agent methods, both in parameter and return type position. Validation timing is SDK-specific; Effect TypeScript validates whether its schemas have an unambiguous Golem representation during registration and discovery.
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-    In TypeScript, most serializable user-defined types work as expected. Prefer named type aliases or interfaces for parameters and return types, and use string literal unions instead of TypeScript enums. See the [page about data type mapping](/next/type-mapping) for more details.
+    In TypeScript, declare constructor parameters, method inputs, and return values using supported runtime schemas, such as Zod schemas. Use `z.object(...)` for records and `z.enum(...)` for string alternatives; TypeScript types are inferred from these schemas.
     </Tabs.Tab>
 
     <Tabs.Tab>
-    In Rust, any data type that implements the `golem_rust::Schema` trait can be used as a constructor parameter or as a parameter or return type of an agent method. For user-defined types, `#[derive(Schema)]` is usually enough to derive the implementation automatically. See the [page about data type mapping](/next/type-mapping) for more details about the supported built-in types.
+    Effect TypeScript uses Effect `Schema` values for IDs, method inputs, successes, and typed errors. User-defined records use `Schema.Struct`, and variants use schemas such as `Schema.Union`. Ambiguous unions and schemas without a Golem representation are rejected during registration or discovery.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    In Rust, any data type that implements the `golem_rust::agentic::Schema` trait can be used as a constructor parameter or as a parameter or return type of an agent method. For user-defined types, `#[derive(Schema)]` is usually enough to derive the implementation automatically. See the [page about data type mapping](/next/type-mapping) for more details about the supported built-in types.
 
     Note that parameters must be passed by value to agent methods, not as references (`Schema` is not implemented for `&T`).
     </Tabs.Tab>
@@ -409,13 +488,15 @@ The SDK supports a large variety of data types to be used in agent constructors 
     </Tabs.Tab>
 </Tabs>
 
-Check the [page about data type mapping](/next/type-mapping) to learn how each type is mapped to **JSON** when using the invocation API.
-
 ### Library support
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     See the [JS APIs](/next/js-apis) page for a detailed overview of all the supported Web Platform and Node.js APIs. Most 3rd party libraries can be installed using `npm` and used in the agent code, as long as they only rely on the supported APIs and do not require native addons.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Packages compatible with the template's pinned Effect version can be installed with `npm`. They must rely on Web Platform or supported Node.js APIs and must not require native addons.
     </Tabs.Tab>
 
     <Tabs.Tab>
@@ -434,7 +515,7 @@ Check the [page about data type mapping](/next/type-mapping) to learn how each t
 ### Agent mode - durable or ephemeral
 By default every agent is **durable**. To define an **ephemeral agent**, override the agent mode in the agent definition:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     ```typescript
     export const EphemeralAgent = defineAgent({
@@ -445,6 +526,19 @@ By default every agent is **durable**. To define an **ephemeral agent**, overrid
         // ...
       },
     });
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```typescript
+    export const EphemeralAgent = defineAgent({
+      name: "EphemeralAgent",
+      mode: "ephemeral",
+      id: { name: Schema.String },
+      methods: {
+        // ...
+      },
+    })
     ```
     </Tabs.Tab>
 
@@ -488,26 +582,33 @@ By default every agent is **durable**. To define an **ephemeral agent**, overrid
 
 It is often required to pass _configuration values_ to agents when they are started.
 
-In general Golem supports three different ways of doing this:
+Golem supports two ways of doing this:
 
-1. Defining a list of string arguments passed to the agent, available as **command line arguments**
-2. Defining a list of key-value pairs passed to the agent, available as **environment variables**.
-3. Defining dedicated configuration key-value pairs (experimental).
+1. Defining key-value pairs available as **environment variables**.
+2. Defining dedicated typed configuration values.
 
-### Command line arguments and environment variables
+### Environment variables
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
-Command line arguments and environment variables are accessible through the `node:process` module:
+Environment variables are accessible through the `node:process` module:
 
 ```typescript
-import { argv, env } from "node:process";
+import { env } from "node:process";
+```
+</Tabs.Tab>
+
+<Tabs.Tab>
+Environment variables are available through `node:process`:
+
+```typescript
+import { env } from "node:process"
 ```
 </Tabs.Tab>
 
 
 <Tabs.Tab>
-Command line arguments and environment variables are accessible through the `std::env` module:
+Environment variables are accessible through the `std::env` module:
 ```rust
 use std::env;
 let agent_id = env::var("GOLEM_AGENT_ID").unwrap();
@@ -527,9 +628,8 @@ val agentId = env("GOLEM_AGENT_ID")
 
 
 <Tabs.Tab>
-Command line arguments and environment variables are accessible through the `@environment` module:
+Environment variables are accessible through the `@environment` module:
 ```moonbit
-let args = @environment.get_arguments()
 let env = @environment.get_environment()
 ```
 </Tabs.Tab>
@@ -541,7 +641,7 @@ Environment variables can be specified when an agent is **explicitly created**, 
 - `GOLEM_AGENT_ID` - the ID of the agent
 - `GOLEM_AGENT_TYPE` - the agent type (first part of the agent ID)
 - `GOLEM_COMPONENT_ID` - the ID of the agent's component
-- `GOLEM_COMPONENT_VERSION` - the version of the component used for this agent
+- `GOLEM_COMPONENT_REVISION` - the revision of the component used for this agent
 
 In addition to these, when using [Agent to Agent communication](/next/develop/rpc), agents created by remote calls **inherit the environment variables of the caller**.
 
@@ -562,13 +662,7 @@ components:
 
 ### Per-agent configuration
 
-In Golem 1.5, configuration is primarily per-agent rather than per-component. The configuration follows a cascade hierarchy:
-
-```
-componentTemplates → components → agents → presets
-```
-
-Each level can define `env` (environment variables) and `files` (initial filesystem), with more specific levels overriding more general ones.
+Configuration resolves from the component template and component first. Agent templates are then applied, followed by agent properties, environment presets, and finally custom presets. Each level can define `env` (environment variables) and `files` (initial filesystem), with later, more specific levels overriding earlier ones according to their merge modes.
 
 #### Agent-level configuration in golem.yaml
 

@@ -20,6 +20,7 @@ import golem.config.{AgentConfigDeclaration, ConfigSchema}
 import golem.runtime.annotations.{description, prompt, readOnly}
 import golem.runtime.{
   AgentMetadata,
+  AgentTypeKind,
   CachePolicy,
   ConstructorMetadata,
   FieldSource,
@@ -33,6 +34,11 @@ import golem.runtime.{
 }
 import golem.schema.{IntoSchema, SchemaGraph}
 import golem.runtime.http.{
+  DurableStreamRouteLoadOptions,
+  DurableStreamRouteOptions,
+  DurableStreamSlotOptions,
+  DurableStreamSlotSource,
+  HttpAgentValidation,
   HeaderVariable,
   HttpEndpointDetails,
   HttpMethod,
@@ -46,6 +52,22 @@ import golem.runtime.http.{
 import scala.quoted.*
 
 object AgentDefinitionMacro {
+  private final case class EndpointSelector(method: String, path: String)
+  private final case class StreamSlot(
+    selector: EndpointSelector,
+    source: String,
+    slot: String,
+    name: Option[String],
+    contentType: Option[String]
+  )
+  private final case class StreamOptions(
+    selector: EndpointSelector,
+    writes: Option[Boolean],
+    streamDelete: Option[Boolean],
+    invocationDelete: Option[Boolean],
+    readers: Option[Int],
+    appends: Option[Int]
+  )
   private val schemaHint: String =
     "\nHint: IntoSchema is derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
@@ -64,6 +86,7 @@ object AgentDefinitionMacro {
     def defaultTypeNameFromTrait(sym: Symbol): String =
       sym.name
 
+    val router             = HttpDeclarationMacro.isRouter(typeSymbol)
     val hasAgentDefinition =
       typeSymbol.annotations.exists {
         case Apply(Select(New(tpt), _), _)
@@ -72,22 +95,27 @@ object AgentDefinitionMacro {
         case _ => false
       }
 
+    if (router && hasAgentDefinition) report.errorAndAbort("Use either @httpRouter or @agentDefinition, not both")
     val agentTypeName =
-      agentDefinitionTypeName(typeSymbol).map(validateTypeName).getOrElse {
-        if !hasAgentDefinition then
-          report.errorAndAbort(s"Missing @agentDefinition(...) on agent trait: ${typeSymbol.fullName}")
-        defaultTypeNameFromTrait(typeSymbol)
-      }
+      if (router) HttpDeclarationMacro.string(typeSymbol, "typeName", 0)
+      else
+        agentDefinitionTypeName(typeSymbol).map(validateTypeName).getOrElse {
+          if !hasAgentDefinition then
+            report.errorAndAbort(s"Missing @agentDefinition(...) on agent trait: ${typeSymbol.fullName}")
+          defaultTypeNameFromTrait(typeSymbol)
+        }
 
     val traitDescription = annotationString(typeSymbol, TypeRepr.of[description]).orElse(docstringText(typeSymbol))
     // Note: `@agentDefinition` has a default `mode = Durable`. We omit that default in metadata via
     // `agentDefinitionMode`.
-    val traitMode = agentDefinitionMode(typeSymbol)
+    val traitMode = if (router) Some(Expr("ephemeral")) else agentDefinitionMode(typeSymbol)
 
     // --- HTTP mount extraction from @agentDefinition ---
-    val httpMountExpr: Expr[Option[HttpMountDetails]] = extractHttpMount(typeSymbol, agentTypeName)
-    val hasMount                                      = extractAgentDefinitionStringArg(typeSymbol, "mount", positionalIndex = 2).exists(_.nonEmpty)
-    val isEphemeral                                   = agentDefinitionModeString(typeSymbol).contains("ephemeral")
+    val httpMountExpr: Expr[Option[HttpMountDetails]] =
+      if (router) HttpDeclarationMacro.routerMount(typeSymbol) else extractHttpMount(typeSymbol, agentTypeName)
+    val hasMount =
+      router || extractAgentDefinitionStringArg(typeSymbol, "mount", positionalIndex = 2).exists(_.nonEmpty)
+    val isEphemeral = router || agentDefinitionModeString(typeSymbol).contains("ephemeral")
 
     // Ephemeral + @readOnly is not allowed.
     if (isEphemeral) {
@@ -104,6 +132,15 @@ object AgentDefinitionMacro {
 
     val methods = typeSymbol.methodMembers.collect {
       case method if method.flags.is(Flags.Deferred) && method.isDefDef =>
+        val handler  = HttpDeclarationMacro.has(method, "httpHandler")
+        val provider = HttpDeclarationMacro.has(method, "openApiProvider")
+        if ((handler || provider) && !router) report.errorAndAbort("HTTP roles require @httpRouter")
+        if (router && (handler == provider))
+          report.errorAndAbort("router-method-role: each method must have exactly one HTTP role")
+        if (router && (HttpDeclarationMacro.has(method, "endpoint") || extractHeaderVars(method).nonEmpty))
+          report.errorAndAbort("handler-endpoint-policy: router policy belongs to the mount")
+        if (provider && method.paramSymss.flatten.exists(_.isTerm))
+          report.errorAndAbort("provider-schema: provider must be parameterless")
         methodMetadata(method, agentTypeName, hasMount)
     }
 
@@ -116,7 +153,9 @@ object AgentDefinitionMacro {
       val mountSegments     = HttpRouteParser.parsePathOnly(mountPath, "mount").getOrElse(Nil)
       val idPrincipalParams = idConstructorPrincipalParams(typeRepr)
       if (idPrincipalParams.nonEmpty) {
-        val mount = HttpMountDetails(mountSegments, false, false, Nil, Nil)
+        if (HttpDeclarationMacro.exposesFiles(typeSymbol))
+          report.errorAndAbort("filesystem-constructor: caller-dependent identities cannot expose files")
+        val mount = HttpMountDetails(mountSegments, false, false, Nil, Nil, Nil, Nil, None)
         HttpValidation.validateMountVarsAreNotPrincipal(agentTypeName, mount, idPrincipalParams) match {
           case Left(err) => report.errorAndAbort(err)
           case Right(()) => ()
@@ -142,24 +181,28 @@ object AgentDefinitionMacro {
         '{ Snapshotting.Enabled(SnapshottingConfig.EveryN(${ Expr(count) })) }
     }
 
+    val kindExpr = if (router) '{ AgentTypeKind.HttpRouter } else '{ AgentTypeKind.Regular }
     '{
-      AgentMetadata(
-        name = ${
-          Expr(agentTypeName)
-        },
-        description = ${
-          optionalString(traitDescription)
-        },
-        mode = ${
-          optionalExprString(traitMode)
-        },
-        methods = ${
-          Expr.ofList(methods)
-        },
-        constructor = $idSchema,
-        httpMount = $httpMountExpr,
-        config = $configExpr,
-        snapshotting = $snapshottingExpr
+      HttpAgentValidation.checked(
+        AgentMetadata(
+          name = ${
+            Expr(agentTypeName)
+          },
+          kind = $kindExpr,
+          description = ${
+            optionalString(traitDescription)
+          },
+          mode = ${
+            optionalExprString(traitMode)
+          },
+          methods = ${
+            Expr.ofList(methods)
+          },
+          constructor = $idSchema,
+          httpMount = $httpMountExpr,
+          config = $configExpr,
+          snapshotting = $snapshottingExpr
+        )
       )
     }
   }
@@ -267,8 +310,11 @@ object AgentDefinitionMacro {
     val outputSchema = methodOutputSchema(method)
 
     // --- HTTP endpoint extraction ---
-    val headerVars       = extractHeaderVars(method)
-    val endpointDetails  = extractEndpoints(method, headerVars)
+    val headerVars      = extractHeaderVars(method)
+    val endpointDetails =
+      if (HttpDeclarationMacro.has(method, "httpHandler"))
+        List('{ HttpEndpointDetails(HttpMethod.Any, Nil, Nil, Nil, None, None) })
+      else extractEndpoints(method, headerVars)
     val endpointListExpr = Expr.ofList(endpointDetails)
 
     // --- Compile-time validation ---
@@ -479,13 +525,24 @@ object AgentDefinitionMacro {
     }
 
     constructorClass match {
+      case None if HttpDeclarationMacro.isRouter(typeSymbol) =>
+        '{
+          ConstructorMetadata(
+            name = None,
+            description = $descriptionExpr,
+            promptHint = None,
+            input = InputMetadata.empty
+          )
+        }
       case None =>
         report.errorAndAbort(
           s"Agent trait $name must define a `class Id(...)` to declare its constructor parameters. Use `class Id()` for agents with no constructor parameters."
         )
       case Some(classSym) =>
         val primaryCtor = classSym.primaryConstructor
-        val params      = primaryCtor.paramSymss.flatten.collect {
+        if (HttpDeclarationMacro.isRouter(typeSymbol) && primaryCtor.paramSymss.flatten.exists(_.isTerm))
+          report.errorAndAbort("router-constructor: router constructors are parameterless")
+        val params = primaryCtor.paramSymss.flatten.collect {
           case sym if sym.isTerm =>
             sym.tree match {
               case v: ValDef => (sym.name, v.tpt.tpe)
@@ -705,12 +762,26 @@ object AgentDefinitionMacro {
   )(symbol: quotes.reflect.Symbol, agentName: String): Expr[Option[HttpMountDetails]] = {
     import quotes.reflect.*
 
-    val mountPath = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
+    val filesystemExpr = HttpDeclarationMacro.mappings(symbol, "agentDefinition", "exposeFiles", 8)
+    val mountPath      = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
     mountPath match {
-      case None     => '{ None }
+      case None =>
+        '{
+          require($filesystemExpr.isEmpty, "exposeFiles requires an HTTP mount")
+          None
+        }
       case Some(mp) =>
         val pathSegments = HttpRouteParser.parsePathOnly(mp, "mount") match {
-          case Left(err)       => report.errorAndAbort(s"Invalid mount path in @agentDefinition for '$agentName': $err")
+          case Left(err)                                                    => report.errorAndAbort(s"Invalid mount path in @agentDefinition for '$agentName': $err")
+          case Right(segments) if HttpDeclarationMacro.exposesFiles(symbol) =>
+            segments.map {
+              case PathSegment.Literal(value) =>
+                val decoded = golem.runtime.http.FileMappingParser
+                  .publicPath("/" + value)
+                  .fold(error => report.errorAndAbort(s"filesystem-mount: $error"), identity)
+                PathSegment.Literal(decoded.head)
+              case segment => segment
+            }
           case Right(segments) => segments
         }
 
@@ -739,7 +810,10 @@ object AgentDefinitionMacro {
           authRequired = authRequired,
           phantomAgent = phantomAgent,
           corsAllowedPatterns = corsPatterns,
-          webhookSuffix = webhookSuffix
+          webhookSuffix = webhookSuffix,
+          staticBindings = Nil,
+          filesystemBindings = Nil,
+          openapiProviderMethod = None
         )
         HttpValidation.validateNoCatchAllInMount(agentName, mount) match {
           case Left(err) => report.errorAndAbort(err)
@@ -753,7 +827,10 @@ object AgentDefinitionMacro {
               authRequired = $authExpr,
               phantomAgent = $phantomExpr,
               corsAllowedPatterns = $corsExpr,
-              webhookSuffix = $webhookExpr
+              webhookSuffix = $webhookExpr,
+              staticBindings = Nil,
+              filesystemBindings = $filesystemExpr,
+              openapiProviderMethod = None
             )
           )
         }
@@ -806,6 +883,134 @@ object AgentDefinitionMacro {
     Quotes
   )(method: quotes.reflect.Symbol, headerVars: List[HeaderVariable]): List[Expr[HttpEndpointDetails]] = {
     import quotes.reflect.*
+
+    def stringArg(args: List[Term], name: String, index: Int): Option[String] =
+      args.collectFirst { case NamedArg(`name`, Literal(StringConstant(v))) => v }
+        .orElse(args.lift(index).collect { case Literal(StringConstant(v)) => v })
+
+    def stripTerm(term: Term): Term = term match {
+      case Inlined(_, _, value) => stripTerm(value)
+      case Typed(value, _)      => stripTerm(value)
+      case NamedArg(_, value)   => stripTerm(value)
+      case _                    => term
+    }
+
+    def isDefaultArg(term: Term): Boolean = {
+      val value = stripTerm(term)
+      value.symbol != Symbol.noSymbol && value.symbol.name.contains("$default$")
+    }
+
+    def durableStreamArg(args: List[Term], name: String, index: Int): Option[Term] =
+      args.collectFirst { case NamedArg(`name`, value) if !isDefaultArg(value) => value }
+        .orElse(args.lift(index).filter {
+          case NamedArg(_, _) => false
+          case value          => !isDefaultArg(value)
+        })
+
+    def durableStreamStringArg(
+      args: List[Term],
+      name: String,
+      index: Int,
+      annotation: String
+    ): Option[String] =
+      durableStreamArg(args, name, index).map { value =>
+        stripTerm(value) match {
+          case Literal(StringConstant(result)) => result
+          case _                               => report.errorAndAbort(s"@$annotation argument '$name' must be a string literal", value.pos)
+        }
+      }
+
+    def durableStreamBoolArg(args: List[Term], name: String, index: Int): Option[Boolean] =
+      durableStreamArg(args, name, index).map { value =>
+        stripTerm(value) match {
+          case Literal(BooleanConstant(result)) => result
+          case _                                => report.errorAndAbort(s"@durableStreams argument '$name' must be a boolean literal", value.pos)
+        }
+      }
+
+    def durableStreamIntArg(args: List[Term], name: String, index: Int): Option[Int] =
+      durableStreamArg(args, name, index).map { value =>
+        stripTerm(value) match {
+          case Literal(IntConstant(result)) => result
+          case _                            => report.errorAndAbort(s"@durableStreams argument '$name' must be an integer literal", value.pos)
+        }
+      }
+
+    val endpoints = method.annotations.collect {
+      case Apply(Select(New(tpt), _), args)
+          if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.endpoint" =>
+        EndpointSelector(stringArg(args, "method", 0).getOrElse(""), stringArg(args, "path", 1).getOrElse(""))
+    }
+    def selector(args: List[Term], annotation: String): EndpointSelector = {
+      val requested = EndpointSelector(
+        durableStreamStringArg(args, "endpointMethod", 0, annotation).getOrElse(""),
+        durableStreamStringArg(args, "endpointPath", 1, annotation).getOrElse("")
+      )
+      if (requested.method.isEmpty != requested.path.isEmpty)
+        report.errorAndAbort(
+          s"@$annotation on method '${method.name}' must specify both endpointMethod and endpointPath"
+        )
+      val matches =
+        if (requested.method.isEmpty) endpoints
+        else endpoints.filter(e => e.method.equalsIgnoreCase(requested.method) && e.path == requested.path)
+      if (matches.size != 1) {
+        val reason =
+          if (requested.method.isEmpty) "selector is ambiguous or missing"
+          else "selector does not match exactly one @endpoint"
+        report.errorAndAbort(s"@$annotation on method '${method.name}': $reason")
+      }
+      matches.head
+    }
+    val slots = method.annotations.collect {
+      case Apply(Select(New(tpt), _), args)
+          if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.durableStreamSlot" =>
+        val selected = selector(args, "durableStreamSlot")
+        val source   = durableStreamStringArg(args, "source", 2, "durableStreamSlot").getOrElse(
+          report.errorAndAbort(s"@durableStreamSlot on method '${method.name}' must specify source")
+        )
+        val slot = durableStreamStringArg(args, "slot", 3, "durableStreamSlot")
+          .filter(_.nonEmpty)
+          .getOrElse(report.errorAndAbort(s"@durableStreamSlot on method '${method.name}' must specify slot"))
+        if (source != "input" && source != "output")
+          report.errorAndAbort(s"@durableStreamSlot source must be 'input' or 'output', found '$source'")
+        StreamSlot(
+          selected,
+          source,
+          slot,
+          durableStreamStringArg(args, "name", 4, "durableStreamSlot").filter(_.nonEmpty),
+          durableStreamStringArg(args, "contentType", 5, "durableStreamSlot").filter(_.nonEmpty)
+        )
+    }.reverse
+    slots
+      .groupBy(s => (s.selector, s.source, s.slot))
+      .collectFirst { case (key, values) if values.size > 1 => key }
+      .foreach { key =>
+        report.errorAndAbort(s"duplicate @durableStreamSlot for ${key._2} slot '${key._3}' on method '${method.name}'")
+      }
+    val routeOptions = method.annotations.collect {
+      case Apply(Select(New(tpt), _), args)
+          if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.durableStreams" =>
+        val selected = selector(args, "durableStreams")
+        val readers  = durableStreamIntArg(args, "maxConcurrentReadersPerStream", 5)
+        val appends  = durableStreamIntArg(args, "maxAppendRequestsPerSecondPerStream", 6)
+        if (readers.exists(value => value <= 0 || value > 16))
+          report.errorAndAbort("@durableStreams reader limit must be between 1 and 16")
+        if (appends.exists(_ <= 0)) report.errorAndAbort("@durableStreams append limit must be positive")
+        val writes = durableStreamBoolArg(args, "allowExternalWrites", 2)
+        if (writes.contains(false) && appends.nonEmpty)
+          report.errorAndAbort("@durableStreams append limit cannot be set when external writes are disabled")
+        StreamOptions(
+          selected,
+          writes,
+          durableStreamBoolArg(args, "allowStreamDelete", 3),
+          durableStreamBoolArg(args, "allowInvocationDelete", 4),
+          readers,
+          appends
+        )
+    }
+    routeOptions.groupBy(_.selector).collectFirst { case (key, values) if values.size > 1 => key }.foreach { key =>
+      report.errorAndAbort(s"duplicate @durableStreams for ${key.method} ${key.path} on method '${method.name}'")
+    }
 
     val headerVarsExpr = Expr.ofList(headerVars.map { hv =>
       '{ HeaderVariable(${ Expr(hv.headerName) }, ${ Expr(hv.variableName) }) }
@@ -872,6 +1077,7 @@ object AgentDefinitionMacro {
           case HttpMethod.Options   => '{ HttpMethod.Options }
           case HttpMethod.Connect   => '{ HttpMethod.Connect }
           case HttpMethod.Trace     => '{ HttpMethod.Trace }
+          case HttpMethod.Any       => '{ HttpMethod.Any }
           case HttpMethod.Custom(m) => '{ HttpMethod.Custom(${ Expr(m) }) }
         }
         val authExpr = authOverride match {
@@ -882,6 +1088,40 @@ object AgentDefinitionMacro {
           case None    => '{ None: Option[List[String]] }
           case Some(v) => '{ Some(${ Expr.ofList(v.map(Expr(_))) }): Option[List[String]] }
         }
+        val selected                                             = EndpointSelector(methodStr, pathStr)
+        val endpointSlots                                        = slots.filter(_.selector == selected)
+        val options                                              = routeOptions.find(_.selector == selected)
+        val durableExpr: Expr[Option[DurableStreamRouteOptions]] =
+          if (endpointSlots.isEmpty && options.isEmpty) '{ None }
+          else {
+            val slotExprs = endpointSlots.map { s =>
+              val sourceExpr: Expr[DurableStreamSlotSource] = if (s.source == "input") '{
+                DurableStreamSlotSource.Input(${ Expr(s.slot) })
+              }
+              else '{ DurableStreamSlotSource.Output(${ Expr(s.slot) }) }
+              '{ DurableStreamSlotOptions($sourceExpr, ${ Expr(s.name) }, ${ Expr(s.contentType) }) }
+            }
+            val writes                                                = options.flatMap(_.writes)
+            val streamDelete                                          = options.flatMap(_.streamDelete)
+            val invocationDelete                                      = options.flatMap(_.invocationDelete)
+            val loadExpr: Expr[Option[DurableStreamRouteLoadOptions]] = options match {
+              case Some(o) if o.readers.nonEmpty || o.appends.nonEmpty =>
+                '{ Some(DurableStreamRouteLoadOptions(${ Expr(o.readers) }, ${ Expr(o.appends) })) }
+              case None => '{ None }
+              case _    => '{ None }
+            }
+            '{
+              Some(
+                DurableStreamRouteOptions(
+                  ${ Expr.ofList(slotExprs) },
+                  ${ Expr(writes) },
+                  ${ Expr(streamDelete) },
+                  ${ Expr(invocationDelete) },
+                  $loadExpr
+                )
+              )
+            }
+          }
 
         '{
           HttpEndpointDetails(
@@ -890,7 +1130,8 @@ object AgentDefinitionMacro {
             headerVars = $headerVarsExpr,
             queryVars = $queryExpr,
             authOverride = $authExpr,
-            corsOverride = $corsExpr
+            corsOverride = $corsExpr,
+            durableStreams = $durableExpr
           )
         }
     }

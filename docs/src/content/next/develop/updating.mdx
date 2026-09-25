@@ -14,123 +14,143 @@ The **automatic update** mode works as it is described in the general [Agents](/
 Snapshots can also be used for fast recovery during normal operation, not just for updates. See [Snapshotting](/next/develop/snapshotting) for details on snapshot-based recovery, default snapshotting implementations, and configuring periodic snapshots.
 </Callout>
 
-It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working. Future versions of Golem may also use the same snapshotting functions for optimizing recovery time of agents.
+It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working.
 
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-        In TypeScript, all agents inherit the `BaseAgent` class. There are two methods in `BaseAgent` that can
-        be overridden to implement snapshot saving and loading for an agent.
+        Put `snapshot` inside `.implement({ ... })`. This fragment assumes the complete state is `{ value: number }`. `load` is a factory that returns fresh state; it does not mutate an instance created by `init`:
 
-        The following example implements these methods for the simple counter example used [on the Quickstart page](/next/quickstart):
         ```typescript
-            override async saveSnapshot(): Promise<Uint8Array> {
-                const snapshot = new Uint8Array(4);
-                const view = new DataView(snapshot.buffer);
-                view.setUint32(0, this.value);
-                return snapshot;
+        snapshot: {
+          save() {
+            const bytes = new Uint8Array(8)
+            new DataView(bytes.buffer).setFloat64(0, this.value)
+            return bytes
+          },
+          load(bytes, _context) {
+            return {
+              value: new DataView(
+                bytes.buffer,
+                bytes.byteOffset,
+                bytes.byteLength,
+              ).getFloat64(0),
             }
-
-            override async loadSnapshot(bytes: Uint8Array): Promise<void> {
-                let view = new DataView(bytes.buffer);
-                this.value = view.getUint32(0);
-            }
+          },
+        }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        In Rust, all agent traits (i.e., annotated with the `#[agent_definition]` macro) are generated with two extra methods along with the methods defined in the trait. These methods are `save_snapshot` and `load_snapshot`.
-        These methods can be overridden to implement snapshot saving and loading for an agent.
+        Select `Snapshot.custom(...)` in `defineAgent({ ... })`, then provide `save` and `restore` effects on the implementation. This fragment assumes `Ref.Ref<number>` state initialized with `Ref.make(0)`:
 
-        The following example implements these methods for the simple counter example used [on the Quickstart page](/next/quickstart):
+        ```typescript
+        import { Effect, Ref } from "effect"
+        import { Snapshot } from "@golemcloud/effect-golem"
+
+        snapshotting: Snapshot.custom({
+          policy: Snapshot.policy.manual,
+        })
+
+        // In .implement({ ... }):
+        snapshot: {
+          save: (state) =>
+            Ref.get(state).pipe(
+              Effect.map((value) => {
+                const bytes = new Uint8Array(8)
+                new DataView(bytes.buffer).setFloat64(0, value)
+                return bytes
+              }),
+            ),
+          restore: (bytes, _context) =>
+            Ref.make(
+              new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+                .getFloat64(0),
+            ),
+        }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Add both methods inside the existing `#[agent_implementation] impl CounterAgent for CounterImpl` block. This fragment assumes the complete state is `value: u32`; `load_snapshot` is an associated factory that returns `Self`:
+
         ```rust
-        impl CounterAgent for CounterImpl {
-            // ...
+        async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+            Ok(self.value.to_le_bytes().to_vec())
+        }
 
-            async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-                let arr: [u8; 4] = bytes
-                    .try_into()
-                    .map_err(|_| "Expected a 4-byte long snapshot")?;
-                self.count = u32::from_be_bytes(arr);
-                Ok(())
-            }
-
-            async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-                Ok(self.count.to_be_bytes().to_vec())
-            }
+        async fn load_snapshot(
+            bytes: Vec<u8>,
+            _context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            let arr: [u8; 4] = bytes
+                .try_into()
+                .map_err(|_| "Expected a 4-byte snapshot".to_string())?;
+            Ok(Self {
+                value: u32::from_le_bytes(arr),
+            })
         }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        In Scala, custom snapshot saving and loading can be implemented on the agent implementation class by defining `saveSnapshot` and `loadSnapshot` methods.
+        Define `saveSnapshot()` on the annotated implementation and the restoring factory on its companion object. Identity field `0` is the counter's `String` name; ordinary agent methods are omitted:
 
-        The following example implements these methods for the simple counter example used [on the Quickstart page](/next/quickstart):
         ```scala
+        import golem.runtime.SnapshotRestoreContext
+        import golem.runtime.annotations.agentImplementation
+
+        import scala.concurrent.Future
+
         @agentImplementation()
-        final class CounterAgentImpl(@unused private val name: String) extends CounterAgent {
-          private var count: Int = 0
+        final class CounterImpl(private val name: String) extends Counter {
+          private var value: Int = 0
 
-          def saveSnapshot(): Future[Array[Byte]] =
-            Future.successful {
-              Array(
-                ((count >>> 24) & 0xff).toByte,
-                ((count >>> 16) & 0xff).toByte,
-                ((count >>> 8) & 0xff).toByte,
-                (count & 0xff).toByte
-              )
-            }
+          // Counter methods ...
 
-          def loadSnapshot(bytes: Array[Byte]): Future[Unit] =
-            Future.successful {
-              count = ((bytes(0) & 0xff) << 24) |
-                ((bytes(1) & 0xff) << 16) |
-                ((bytes(2) & 0xff) << 8) |
-                (bytes(3) & 0xff)
-            }
+          def saveSnapshot(): Future[Array[Byte]] = Future.successful {
+            val buffer = java.nio.ByteBuffer.allocate(4)
+            buffer.putInt(value)
+            buffer.array()
+          }
+        }
 
-          override def increment(): Future[Int] =
-            Future.successful {
-              count += 1
-              count
-            }
+        object CounterImpl {
+          def loadSnapshot(
+            bytes: Array[Byte],
+            context: SnapshotRestoreContext
+          ): Future[CounterImpl] = Future.successful {
+            val instance = new CounterImpl(context.identity[String](0))
+            instance.value = java.nio.ByteBuffer.wrap(bytes).getInt()
+            instance
+          }
         }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        In MoonBit, custom snapshot saving and loading can be implemented by adding a `Snapshottable` implementation to the agent type.
+        For an existing `Counter` with `name: String`, `mut value: UInt64`, and its name at identity index `0`, implement saving with `@agents.Snapshottable` and define a separate static restoration factory:
 
-        The following example implements these methods for the simple counter example used [on the Quickstart page](/next/quickstart):
         ```moonbit
-        pub impl @agents.Snapshottable for CounterAgent with save_snapshot(self) -> Bytes {
-          Bytes::from_array([
-            ((self.value >> 56) & 0xff).to_byte(),
-            ((self.value >> 48) & 0xff).to_byte(),
-            ((self.value >> 40) & 0xff).to_byte(),
-            ((self.value >> 32) & 0xff).to_byte(),
-            ((self.value >> 24) & 0xff).to_byte(),
-            ((self.value >> 16) & 0xff).to_byte(),
-            ((self.value >> 8) & 0xff).to_byte(),
-            (self.value & 0xff).to_byte(),
-          ])
+        pub impl @agents.Snapshottable for Counter with save_snapshot(self) {
+          let arr: Array[Byte] = []
+          for i = 7; i >= 0; i = i - 1 {
+            arr.push(((self.value >> (i * 8)).to_int() & 0xff).to_byte())
+          }
+          Bytes::from_array(arr)
         }
 
-        pub impl @agents.Snapshottable for CounterAgent with load_snapshot(
-          self,
-          bytes,
-        ) -> Result[Unit, String] {
+        pub fn Counter::load_snapshot(
+          bytes: Bytes,
+          context: @agents.SnapshotRestoreContext,
+        ) -> Result[Counter, String] {
           if bytes.length() != 8 {
-            return Err("Expected an 8-byte long snapshot")
+            return Err("Expected an 8-byte snapshot")
           }
-
-          self.value =
-            (bytes[0].to_int().to_uint64() << 56) |
-            (bytes[1].to_int().to_uint64() << 48) |
-            (bytes[2].to_int().to_uint64() << 40) |
-            (bytes[3].to_int().to_uint64() << 32) |
-            (bytes[4].to_int().to_uint64() << 24) |
-            (bytes[5].to_int().to_uint64() << 16) |
-            (bytes[6].to_int().to_uint64() << 8) |
-            bytes[7].to_int().to_uint64()
-          Ok(())
+          let mut value: UInt64 = 0
+          for i = 0; i < 8; i = i + 1 {
+            value = value | (bytes[i].to_uint64() << ((7 - i) * 8))
+          }
+          let name: String = context.identity(0) catch {
+            error => return Err(error.to_string())
+          }
+          Ok({ name, value })
         }
         ```
     </Tabs.Tab>

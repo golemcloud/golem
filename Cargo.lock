@@ -1001,20 +1001,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-jrpc"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "971e8b8715d28ffcbe7146f45b9463b537878740f1046b0981e597a865d572a8"
-dependencies = [
- "axum",
- "cfg-if",
- "mime",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "backoff"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2446,6 +2432,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed17f5901b6630b993ca003def43f2f8ef4014fc13b047b57aad617ff32bc2ec"
+dependencies = [
+ "darling_core 0.24.1",
+ "darling_macro 0.24.1",
+]
+
+[[package]]
 name = "darling_core"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2487,6 +2483,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling_core"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6837e2cf7485aaae18f86181d2f0e9a7ed297a025e220aeabf63fdebd3a2ddff"
+dependencies = [
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "darling_macro"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2517,6 +2526,17 @@ dependencies = [
  "darling_core 0.23.0",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
+dependencies = [
+ "darling_core 0.24.1",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2811,16 +2831,6 @@ name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
-
-[[package]]
-name = "drop-stream"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf3ad5e2193e855cdd101d6d4ad09f0b3fa9aa5bd5169f483b4accd6eef96cfe"
-dependencies = [
- "futures-core",
- "pin-project",
-]
 
 [[package]]
 name = "dtor"
@@ -3759,6 +3769,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-client",
  "golem-common",
+ "golem-mcp-import",
  "golem-schema",
  "heck",
  "http 1.5.0",
@@ -3774,6 +3785,7 @@ dependencies = [
  "log",
  "minijinja",
  "phf 0.11.3",
+ "poem",
  "portable-pty",
  "pretty_assertions",
  "pretty_env_logger",
@@ -3792,6 +3804,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "shadow-rs",
  "shlex 1.3.0",
  "sqlx",
@@ -3928,6 +3941,7 @@ dependencies = [
  "shadow-rs",
  "similar",
  "sqlx",
+ "stacker",
  "strum",
  "strum_macros",
  "syn 2.0.119",
@@ -3984,46 +3998,38 @@ dependencies = [
 ]
 
 [[package]]
-name = "golem-debugging-service"
+name = "golem-mcp-import"
 version = "0.0.0"
 dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "axum-jrpc",
- "chrono",
+ "base64 0.22.1",
+ "blake3",
+ "bytes",
  "futures",
- "golem-api-grpc",
+ "glob-match",
  "golem-common",
  "golem-schema",
- "golem-service-base",
- "golem-test-framework",
- "golem-worker-executor",
- "golem-worker-executor-test-utils",
- "humansize",
- "log",
- "poem",
- "poem-openapi",
- "prometheus",
- "rustls 0.23.43",
+ "headers",
+ "http 1.5.0",
+ "http-auth",
+ "http-body 1.1.0",
+ "http-body-util",
+ "humantime-serde",
+ "hyper 1.11.0",
+ "hyper-util",
+ "jsonschema",
+ "mime",
+ "oauth2",
+ "reqwest 0.13.4",
+ "rmcp",
  "serde",
  "serde_json",
- "tempfile",
+ "sse-stream",
+ "stacker",
  "test-r",
  "thiserror 2.0.20",
  "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tokio-util",
- "tonic 0.14.6",
- "tonic-tracing-opentelemetry",
- "tracing",
- "tracing-subscriber",
  "url",
- "uuid",
- "wasmtime",
- "wasmtime-wasi",
- "wasmtime-wasi-http",
+ "urlencoding",
 ]
 
 [[package]]
@@ -4074,11 +4080,14 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-mcp-import",
  "golem-native-tool",
  "golem-schema",
  "golem-service-base",
+ "golem-worker-executor-test-utils",
  "heck",
  "http 1.5.0",
+ "http-body-util",
  "humantime-serde",
  "hyper 1.11.0",
  "include_dir",
@@ -4086,7 +4095,9 @@ dependencies = [
  "itertools 0.14.0",
  "jsonwebtoken",
  "lazy_static",
+ "mime",
  "num-traits",
+ "oauth2",
  "openidconnect",
  "opentelemetry 0.30.0",
  "opentelemetry-prometheus-text-exporter",
@@ -4134,11 +4145,13 @@ dependencies = [
 name = "golem-rust-macro"
 version = "0.0.0"
 dependencies = [
+ "golem-schema",
  "heck",
  "humantime",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
+ "serde_json",
  "syn 2.0.119",
  "test-r",
 ]
@@ -4225,6 +4238,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-mcp-import",
  "golem-schema",
  "h2 0.4.19",
  "headers",
@@ -4237,6 +4251,7 @@ dependencies = [
  "include_dir",
  "indexmap 2.14.0",
  "lazy_static",
+ "libsqlite3-sys",
  "metrics-prometheus",
  "openidconnect",
  "pin-project",
@@ -4254,6 +4269,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
+ "stacker",
  "strum",
  "strum_macros",
  "tempfile",
@@ -4409,7 +4425,6 @@ dependencies = [
  "criterion",
  "dashmap",
  "desert_rust",
- "drop-stream",
  "evicting_cache_map",
  "figment",
  "fred",
@@ -4419,6 +4434,7 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
+ "golem-mcp-import",
  "golem-native-tool",
  "golem-schema",
  "golem-service-base",
@@ -4559,6 +4575,7 @@ dependencies = [
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
+ "h2 0.4.19",
  "headers",
  "hmac 0.12.1",
  "http 1.5.0",
@@ -4568,6 +4585,7 @@ dependencies = [
  "hyper-util",
  "include_dir",
  "indexmap 2.14.0",
+ "jsonschema",
  "mime",
  "mime_guess",
  "openidconnect",
@@ -4875,6 +4893,15 @@ checksum = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
 dependencies = [
  "bytes",
  "itoa",
+]
+
+[[package]]
+name = "http-auth"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "150fa4a9462ef926824cf4519c84ed652ca8f4fbae34cb8af045b5cbcaf98822"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -5442,6 +5469,7 @@ dependencies = [
  "chrono",
  "clap",
  "convert_case 0.11.0",
+ "flate2",
  "futures",
  "futures-concurrency",
  "goldenfile",
@@ -5451,7 +5479,9 @@ dependencies = [
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
+ "h2 0.4.19",
  "headers",
+ "http 1.5.0",
  "indoc",
  "opentelemetry 0.30.0",
  "opentelemetry_sdk 0.30.0",
@@ -7444,6 +7474,7 @@ dependencies = [
  "quick-xml 0.36.2",
  "regex",
  "rfc7239",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -7455,6 +7486,7 @@ dependencies = [
  "thiserror 2.0.20",
  "time",
  "tokio",
+ "tokio-rustls 0.26.4",
  "tokio-stream",
  "tokio-tungstenite",
  "tokio-util",
@@ -8686,18 +8718,19 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.16.0"
+version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc4c9c94680f75470ee8083a0667988b5d7b5beb70b9f998a8e51de7c682ce60"
+checksum = "b23c62fe489ac1d401ab32688cfacac3737a8978dc3343e5361464c7724fd3cb"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "futures",
  "http 1.5.0",
  "http-body 1.1.0",
  "http-body-util",
+ "indexmap 2.14.0",
  "pastey",
  "pin-project-lite",
  "rand 0.10.2",
@@ -8717,15 +8750,15 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "0.16.0"
+version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90c23c8f26cae4da838fbc3eadfaecf2d549d97c04b558e7bd90526a9c28b42a"
+checksum = "cd740c45d66ceb87e5579082abc27bd771665e464e9660a17a048c721b2a6025"
 dependencies = [
- "darling 0.23.0",
+ "darling 0.24.1",
  "proc-macro2",
  "quote",
  "serde_json",
- "syn 2.0.119",
+ "syn 3.0.3",
 ]
 
 [[package]]

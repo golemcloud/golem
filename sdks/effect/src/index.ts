@@ -129,6 +129,9 @@ export * as Element from "./Element.js"
  */
 export * as Http from "./Http.js"
 
+/** Real Effect HTTP applications on Golem mounts. @since 1.6.0 @category modules */
+export * as HttpRouter from "./HttpRouter.js"
+
 /**
  * Canonical Effect Schema codecs for Golem identifiers such as `Uuid`,
  * `ComponentId`, `AgentId`, `AccountId`, `EnvironmentId`, and `PromiseId`.

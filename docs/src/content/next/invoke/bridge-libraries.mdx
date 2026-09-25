@@ -2,7 +2,7 @@ import { Callout, Tabs } from "nextra/components"
 
 # Bridge Libraries
 
-Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates, Node.js TypeScript npm packages, Scala sbt projects, MoonBit modules, and Go modules that implement a fully typed client for specific agents.
+Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates, Node.js TypeScript and Effect TypeScript npm packages, Scala sbt projects, MoonBit modules, and Go modules that implement a fully typed client for specific agents.
 
 Methods without streams use the existing REST invocation API and remain compatible with previously generated clients. A method whose input or output contains a stream instead opens the public streaming WebSocket endpoint described below.
 
@@ -17,6 +17,9 @@ bridge:
       agents:
         - InboxAgent
         - EscalationAgent
+  effect:
+    external:
+      agents: WorkflowAgent
   rust:
     external:
       agents: AuditAgent
@@ -31,13 +34,13 @@ bridge:
       agents: SyncAgent
 ```
 
-This will generate a TypeScript package for `InboxAgent` and `EscalationAgent`, a Rust crate for `AuditAgent`, a Scala sbt project for `BillingAgent`, a MoonBit module for `ReportAgent`, and a Go module for `SyncAgent`.
+This will generate TypeScript packages for `InboxAgent` and `EscalationAgent`, an Effect-native TypeScript package for `WorkflowAgent`, a Rust crate for `AuditAgent`, a Scala sbt project for `BillingAgent`, a MoonBit module for `ReportAgent`, and a Go module for `SyncAgent`.
 
 ## Using Bridge Libraries
 
 Once generated, you can use the bridge libraries like any other typed client. First configure the connection, then interact with agents:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-Rust|TypeScript">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { CounterAgent, configure } from 'counter-agent-client/counter-agent-client.js'
@@ -50,6 +53,25 @@ configure({
 
 const c1 = await CounterAgent.get('c1')
 const value = await c1.increment()
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Effect } from "effect"
+import { CounterAgent, configure } from "counter-agent-client/counter-agent-client.js"
+
+configure({
+  server: { type: "local" },
+  application: "bridgetest",
+  environment: "local",
+})
+
+const program = Effect.gen(function* () {
+  const c1 = yield* CounterAgent.get("c1")
+  return yield* c1.increment()
+})
+
+const value = await Effect.runPromise(program)
 ```
 </Tabs.Tab>
 <Tabs.Tab>
@@ -128,7 +150,7 @@ Generated clients preserve streams wherever they occur in a method's typed input
 Go clients do not generate stream-bearing methods yet: generating a Go client for an agent that has one fails with an error naming the agent.
 </Callout>
 
-<Tabs items={["Rust", "TypeScript", "Scala", "MoonBit"]} storageKey="bridge-streaming-languages">
+<Tabs items={["Rust", "TypeScript", "Effect TypeScript", "Scala", "MoonBit"]} storageKey="bridge-streaming-languages-effect">
 <Tabs.Tab>
 ```rust
 use futures_util::{stream, StreamExt};
@@ -191,6 +213,36 @@ for await (const item of output) {
 
 <Callout type="warning">
   Streaming TypeScript bridges run on **Node.js only**. Browser WebSocket streaming is not supported. Non-streaming generated TypeScript methods can still use `fetch` in their existing supported environments.
+</Callout>
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Effect, Stream } from "effect"
+import { MediaAgent, configure } from "media-agent-client/media-agent-client.js"
+
+configure({ server: { type: "local" }, application: "media-app", environment: "prod" })
+
+const program = Effect.scoped(
+  Effect.gen(function* () {
+    const agent = yield* MediaAgent.get("studio-a")
+
+    yield* agent.upload(Stream.make(1, 2))
+
+    const words = yield* agent.transcribe()
+    yield* Stream.runForEach(words, (word) => Effect.logInfo(word))
+
+    const output = yield* agent.transform(Stream.make(10))
+    return yield* Stream.runHead(output)
+  }),
+)
+
+const first = await Effect.runPromise(program)
+```
+
+Effect bridges expose nested streams as native `Stream.Stream` values. Streaming calls require a `Scope`; `Effect.scoped` closes it and propagates interruption to the underlying invocation.
+
+<Callout type="warning">
+  Effect external bridges use the same Node.js WebSocket transport as TypeScript bridges. Browser streaming is not supported.
 </Callout>
 </Tabs.Tab>
 <Tabs.Tab>
@@ -289,7 +341,7 @@ Sec-WebSocket-Protocol: golem.agent-invocation.v1
 Authorization: Bearer <token>
 ```
 
-The URL uses `ws:` for an HTTP server and `wss:` for HTTPS. `Local` and `Cloud` select the standard server and credentials; a custom server configuration supplies its own base URL and bearer token. For example, TypeScript uses `server: { type: "custom", url: "https://golem.example.com", token }`; the corresponding variants are `GolemServer::Custom { url: reqwest::Url, token }` in Rust, `GolemServer.Custom(url, token)` in Scala, and `@runtime.Custom(url, token)` in MoonBit. Authentication and authorization are checked both when starting and when reattaching to a session. The generated runtime negotiates the required `golem.agent-invocation.v1` subprotocol automatically; applications should not open this socket directly.
+The URL uses `ws:` for an HTTP server and `wss:` for HTTPS. `Local` and `Cloud` select the standard server and credentials; a custom server configuration supplies its own base URL and bearer token. TypeScript and Effect TypeScript use `server: { type: "custom", url: "https://golem.example.com", token }`; the corresponding variants are `GolemServer::Custom { url: reqwest::Url, token }` in Rust, `GolemServer.Custom(url, token)` in Scala, and `@runtime.Custom(url, token)` in MoonBit. Authentication and authorization are checked both when starting and when reattaching to a session. The generated runtime negotiates the required `golem.agent-invocation.v1` subprotocol automatically; applications should not open this socket directly.
 
 The [Stream Session Public Protocol v1](/next/invoke/stream-session-public-protocol-v1) reference specifies every JSON message, binary envelope, stable error code, limit, token, and resume rule.
 
@@ -353,7 +405,7 @@ This feature is the generated external bridge and CLI **invocation-session WebSo
 
 ## Configuration Options
 
-The TypeScript, Rust, Scala and MoonBit bridge libraries require three configuration parameters:
+The TypeScript, Effect TypeScript, Rust, Scala and MoonBit bridge libraries require three configuration parameters:
 
 | Parameter | Description |
 |-----------|-------------|

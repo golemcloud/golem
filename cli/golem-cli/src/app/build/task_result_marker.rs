@@ -347,6 +347,7 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
 }
 
 pub struct GenerateBridgeSdkMarkerHash<'a> {
+    pub output_dir: &'a Path,
     pub source: &'a BridgeSdkTargetSource,
     pub target_name: &'a str,
     pub kind: &'static str,
@@ -360,7 +361,11 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(
+            fs::absolute_lexical_path(self.output_dir)?
+                .display()
+                .to_string(),
+        ))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -572,6 +577,7 @@ mod tests {
     use super::*;
     use crate::bridge_gen::BridgeMode;
     use golem_common::model::diff::Hash;
+    use golem_common::model::environment::EnvironmentId;
     use golem_common::model::tool_release::ToolReleaseId;
     use test_r::test;
 
@@ -583,6 +589,7 @@ mod tests {
         let language = GuestLanguage::Rust;
 
         let external_source = GenerateBridgeSdkMarkerHash {
+            output_dir: Path::new("bridge/alpha"),
             source: &source,
             target_name: agent_type_name.as_str(),
             kind: "agent",
@@ -592,6 +599,7 @@ mod tests {
         .source()
         .unwrap();
         let guest_source = GenerateBridgeSdkMarkerHash {
+            output_dir: Path::new("bridge/alpha"),
             source: &source,
             target_name: agent_type_name.as_str(),
             kind: "agent",
@@ -627,6 +635,7 @@ mod tests {
         let left_marker = TaskResultMarker::new(
             marker_dir.path(),
             GenerateBridgeSdkMarkerHash {
+                output_dir: Path::new("bridge/left"),
                 source: &left_source,
                 target_name: "b",
                 kind: "agent",
@@ -638,6 +647,7 @@ mod tests {
         let right_marker = TaskResultMarker::new(
             marker_dir.path(),
             GenerateBridgeSdkMarkerHash {
+                output_dir: Path::new("bridge/right"),
                 source: &right_source,
                 target_name: "a-b",
                 kind: "agent",
@@ -649,6 +659,24 @@ mod tests {
 
         assert_ne!(left_marker.hash_hex, right_marker.hash_hex);
         assert_ne!(left_marker.marker_file_path, right_marker.marker_file_path);
+    }
+
+    #[test]
+    fn mcp_bridge_marker_covers_import_and_projection_identity() {
+        let source = |import_index, digest: &str| BridgeSdkTargetSource::McpImport {
+            import_index,
+            projection_digest: digest.into(),
+            manifest_source: PathBuf::from("golem.yaml"),
+        };
+        let original = bridge_marker_source(&source(2, "first-projection"));
+        assert_ne!(
+            original,
+            bridge_marker_source(&source(2, "changed-projection"))
+        );
+        assert_ne!(
+            original,
+            bridge_marker_source(&source(3, "first-projection"))
+        );
     }
 
     #[test]
@@ -677,9 +705,142 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ambient_bridge_marker_covers_environment_release_and_metadata_identity() {
+        let environment_id = EnvironmentId::new();
+        let release_id = ToolReleaseId::new();
+        let ambient_source = |environment_id,
+                              release_id,
+                              version: &str,
+                              metadata_version: &str,
+                              metadata: &[u8],
+                              source: &[u8]| {
+            BridgeSdkTargetSource::AmbientNative {
+                environment_id,
+                release_id,
+                version: version.to_string(),
+                metadata_version: metadata_version.to_string(),
+                metadata_digest: Hash::new(blake3::hash(metadata)),
+                source_digest: Hash::new(blake3::hash(source)),
+                manifest_source: PathBuf::from("golem.yaml"),
+            }
+        };
+        let base = ambient_source(
+            environment_id,
+            release_id,
+            "1.0.0",
+            "0.1.0",
+            b"metadata-a",
+            b"source-a",
+        );
+        let base_marker = bridge_marker_source(&base);
+
+        for changed in [
+            ambient_source(
+                EnvironmentId::new(),
+                release_id,
+                "1.0.0",
+                "0.1.0",
+                b"metadata-a",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                ToolReleaseId::new(),
+                "1.0.0",
+                "0.1.0",
+                b"metadata-a",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                release_id,
+                "2.0.0",
+                "0.1.0",
+                b"metadata-a",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                release_id,
+                "1.0.0",
+                "0.2.0",
+                b"metadata-a",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                release_id,
+                "1.0.0",
+                "0.1.0",
+                b"metadata-b",
+                b"source-a",
+            ),
+            ambient_source(
+                environment_id,
+                release_id,
+                "1.0.0",
+                "0.1.0",
+                b"metadata-a",
+                b"source-b",
+            ),
+        ] {
+            assert_ne!(base_marker, bridge_marker_source(&changed));
+        }
+    }
+
+    #[test]
+    fn bridge_marker_has_one_owner_per_output_across_source_switches() {
+        let marker_dir = tempfile::tempdir().unwrap();
+        let output_dir = marker_dir.path().join("generated/search");
+        let language = GuestLanguage::Rust;
+        let source_a = BridgeSdkTargetSource::McpImport {
+            import_index: 1,
+            projection_digest: "projection-a".into(),
+            manifest_source: PathBuf::from("golem.yaml"),
+        };
+        let source_b = BridgeSdkTargetSource::McpImport {
+            import_index: 2,
+            projection_digest: "projection-b".into(),
+            manifest_source: PathBuf::from("golem.yaml"),
+        };
+        let marker = |source| {
+            TaskResultMarker::new(
+                marker_dir.path(),
+                GenerateBridgeSdkMarkerHash {
+                    output_dir: &output_dir,
+                    source,
+                    target_name: "search",
+                    kind: "tool",
+                    language: &language,
+                    bridge_mode: BridgeMode::Guest,
+                },
+            )
+            .unwrap()
+        };
+
+        let first_a = marker(&source_a);
+        let marker_path = first_a.marker_file_path.clone();
+        assert!(!first_a.is_up_to_date());
+        first_a.success().unwrap();
+
+        let b = marker(&source_b);
+        assert_eq!(b.marker_file_path, marker_path);
+        assert!(!b.is_up_to_date());
+        b.success().unwrap();
+
+        let second_a = marker(&source_a);
+        assert_eq!(second_a.marker_file_path, marker_path);
+        assert!(!second_a.is_up_to_date());
+        second_a.success().unwrap();
+
+        assert!(marker(&source_a).is_up_to_date());
+    }
+
     fn bridge_marker_source(source: &BridgeSdkTargetSource) -> String {
         let language = GuestLanguage::Rust;
         let marker = GenerateBridgeSdkMarkerHash {
+            output_dir: Path::new("bridge/search"),
             source,
             target_name: "search",
             kind: "tool",

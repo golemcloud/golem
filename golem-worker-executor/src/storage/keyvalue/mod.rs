@@ -25,12 +25,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::SafeDisplay;
-use golem_common::model::AgentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Error returned by every [`KeyValueStorage`] operation.
 ///
@@ -148,6 +149,19 @@ pub trait KeyValueStorage: Debug {
         value: &[u8],
     ) -> Result<(), KeyValueStorageError>;
 
+    /// Unconditionally sets one value and establishes or refreshes the namespace expiry.
+    /// Backends without expiry support apply the set atomically and ignore `expiry`.
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> Result<(), KeyValueStorageError>;
+
     async fn set_many(
         &self,
         svc_name: &'static str,
@@ -171,6 +185,25 @@ pub trait KeyValueStorage: Debug {
         expected: Option<&[u8]>,
         deletes: &[&str],
         pairs: &[(&str, &[u8])],
+    ) -> Result<bool, KeyValueStorageError>;
+
+    /// On a matching field value, atomically applies all sets and deletions and refreshes expiry.
+    /// `None` matches only an absent field. Backends without expiry support ignore `expiry`.
+    ///
+    /// When accessed through the retry decorator, `false` reports that the final attempt did not
+    /// match. An earlier attempt may already have applied before its response was lost, so callers
+    /// must not interpret `false` as proof that no mutation occurred.
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
     ) -> Result<bool, KeyValueStorageError>;
 
     async fn set_if_not_exists(
@@ -464,6 +497,27 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .map_err(Into::into)
     }
 
+    pub async fn set_raw_with_expiry(
+        &self,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> Result<(), String> {
+        self.storage
+            .set_with_expiry(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                value,
+                expiry,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn set_if_not_exists<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
@@ -544,6 +598,31 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 expected,
                 deletes,
                 pairs,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn compare_and_mutate_many_raw(
+        &self,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
+    ) -> Result<bool, String> {
+        self.storage
+            .compare_and_mutate_many(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                expected,
+                sets,
+                deletions,
+                expiry,
             )
             .await
             .map_err(Into::into)
@@ -825,11 +904,13 @@ pub enum KeyValueStorageNamespace {
     /// `keys`/`del_many`).
     AgentStatus {
         agent_id: Arc<AgentId>,
+        fingerprint: AgentFingerprint,
     },
-    /// Per-agent invocation result index. Uses the same hash-style layout and cache routing as
-    /// [`Self::AgentStatus`], but has an independent physical namespace.
+    /// Per-incarnation invocation result index. Uses the same hash-style layout and cache routing
+    /// as [`Self::AgentStatus`], but has an independent fingerprint-scoped physical namespace.
     AgentInvocationResultIndex {
         agent_id: AgentId,
+        fingerprint: AgentFingerprint,
     },
     /// Per-agent *clean* cached status checkpoint. Same physical layout as [`Self::AgentStatus`]
     /// (one structure-per-agent split into `core` / `membership` / `regions` / `updates` and
@@ -840,10 +921,12 @@ pub enum KeyValueStorageNamespace {
     /// index 1.
     AgentStatusCheckpoint {
         agent_id: Arc<AgentId>,
+        fingerprint: AgentFingerprint,
     },
     /// Complete oplog-derived durable stream-session summaries and their coverage watermark.
     AgentDurableStreamSessionIndex {
         agent_id: AgentId,
+        fingerprint: AgentFingerprint,
     },
     /// Per-agent periodic snapshot rejection watermarks, with one hash field per agent
     /// incarnation fingerprint.

@@ -519,6 +519,9 @@ mod tests {
                 allowed_patterns: vec![],
             },
             webhook_suffix: vec![],
+            static_bindings: vec![],
+            filesystem_bindings: vec![],
+            openapi_provider_method: None,
         }
     }
 
@@ -729,6 +732,7 @@ mod tests {
             cors_options: CorsOptions {
                 allowed_patterns: cors.into_iter().map(|s| s.to_string()).collect(),
             },
+            durable_streams: None,
         }
     }
 

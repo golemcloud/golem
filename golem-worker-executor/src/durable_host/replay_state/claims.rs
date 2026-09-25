@@ -430,6 +430,11 @@ pub(crate) enum ReplayStartClaimOutcome {
     },
     ReplayEnded,
     DeletedRegion,
+    /// No matching `Start` remains, but the issuing Store already continued live locally (an
+    /// incomplete entity past a deleted region or a replay target that grew after it went live)
+    /// while the shared cursor still replays other owners' records. The call is a new live call of
+    /// that Store; its local live continuation is idempotent to re-enter.
+    StoreAlreadyLive,
 }
 
 impl ReplayState {
@@ -459,6 +464,9 @@ impl ReplayState {
                     "matching Start belongs to a deleted replay region".to_string(),
                 ))
             }
+            ReplayStartClaimOutcome::StoreAlreadyLive => {
+                unreachable!("strict claims are never issued on behalf of a live Store")
+            }
         }
     }
 
@@ -469,24 +477,45 @@ impl ReplayState {
         &self,
         claim: StartClaim,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        self.claim_start_for_store(claim, false).await
+    }
+
+    /// [`Self::claim_start_or_replay_end`] issued on behalf of a Store whose own liveness is
+    /// `store_live`. Replay admission of a Store that already continued live locally still claims
+    /// while unclaimed retained `Start`s exist, so that a late owner adopts its recorded `Start`
+    /// instead of appending a duplicate; when no `Start` matches before the replay target, the
+    /// call is reported as [`ReplayStartClaimOutcome::StoreAlreadyLive`] rather than divergence.
+    pub(crate) async fn claim_start_for_store(
+        &self,
+        claim: StartClaim,
+        store_live: bool,
+    ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        enum Missing {
+            ReplayEnded,
+            DeletedRegion,
+            StoreAlreadyLive,
+        }
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
 
             let owned_claim = claim.clone();
-            let (claimed, blocked_on_completion_delivery, replay_ended, deleted_region) = self
+            let (claimed, blocked_on_completion_delivery, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
                             Ok(StartClaimAttempt::Claimed(handle, entry)) => {
-                                Ok((Some((handle, entry)), false, false, false))
+                                Ok((Some((handle, entry)), false, None))
                             }
                             Ok(StartClaimAttempt::Blocked) => {
-                                Ok((None, tx.blocked_on_completion_delivery, false, false))
+                                Ok((None, tx.blocked_on_completion_delivery, None))
                             }
                             Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
-                                Ok((None, false, true, false))
+                                Ok((None, false, Some(Missing::ReplayEnded)))
+                            }
+                            Ok(StartClaimAttempt::Missing) if store_live => {
+                                Ok((None, false, Some(Missing::StoreAlreadyLive)))
                             }
                             Ok(StartClaimAttempt::Missing) => {
                                 match tx.deleted_region_contains_start(&owned_claim).await? {
@@ -494,9 +523,9 @@ impl ReplayState {
                                         // The entity's atomic mask is installed before its body
                                         // starts. A host subtask must not publish local liveness
                                         // before the guest consumes the retained atomic Begin.
-                                        Ok((None, true, false, false))
+                                        Ok((None, true, None))
                                     }
-                                    Some(_) => Ok((None, false, false, true)),
+                                    Some(_) => Ok((None, false, Some(Missing::DeletedRegion))),
                                     None => Err(WorkerExecutorError::unexpected_oplog_entry(
                                         owned_claim.expected_description(),
                                         "no matching Start between the replay cursor and the replay target"
@@ -518,11 +547,13 @@ impl ReplayState {
                     entry: claimed.1,
                 });
             }
-            if replay_ended {
-                return Ok(ReplayStartClaimOutcome::ReplayEnded);
-            }
-            if deleted_region {
-                return Ok(ReplayStartClaimOutcome::DeletedRegion);
+            match missing {
+                Some(Missing::ReplayEnded) => return Ok(ReplayStartClaimOutcome::ReplayEnded),
+                Some(Missing::DeletedRegion) => return Ok(ReplayStartClaimOutcome::DeletedRegion),
+                Some(Missing::StoreAlreadyLive) => {
+                    return Ok(ReplayStartClaimOutcome::StoreAlreadyLive);
+                }
+                None => {}
             }
             debug_assert!(blocked_on_completion_delivery);
             progress.await;
@@ -635,6 +666,7 @@ impl ReplayState {
     /// awaiter behind it could sleep on until `switch_to_live`. The only un-drained terminals the
     /// cursor may leave at its head are then the dedicated-positional-consumer pairs (manual
     /// durability, `GolemApiFork`).
+    #[cfg(test)]
     pub async fn claim_scope_start(
         &self,
         expected_function_name: &HostFunctionName,
@@ -839,14 +871,28 @@ impl ReplayState {
     /// Claims a custom durable invocation root and marks it as a logical subtree. Descendant
     /// custom invocations recorded under this owner are drained while the root resolution is
     /// awaited, because replay returns the root's persisted result without executing its body.
-    pub async fn claim_custom_start_matching_invocation_id(
+    ///
+    /// Reports [`CustomStartClaimOutcome::ReplayEnded`] when no `Start` carries the invocation id
+    /// and the cursor has already reached the replay target, and
+    /// [`CustomStartClaimOutcome::StoreAlreadyLive`] when no `Start` carries it and the claiming
+    /// Store's own liveness `store_live` already holds. A custom invocation admitted after the
+    /// live transition while unclaimed retained `Start`s exist (see
+    /// `WorkerState::durable_call_is_live`) uses this to adopt its retained `Start` or fall back
+    /// to recording a new one. A missing id while replay is still positioned before the target
+    /// and the Store is not live remains strict divergence.
+    pub(crate) async fn claim_custom_start_for_store(
         &self,
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         expected_parent_start_index: Option<OplogIndex>,
         expected_invocation_id: uuid::Uuid,
         expected_request: &HostRequest,
-    ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
+        store_live: bool,
+    ) -> Result<CustomStartClaimOutcome, WorkerExecutorError> {
+        enum Missing {
+            ReplayEnded,
+            StoreAlreadyLive,
+        }
         let (handle, entry) = loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
@@ -855,7 +901,7 @@ impl ReplayState {
             let expected_function_name = expected_function_name.clone();
             let expected_function_type = expected_function_type.clone();
             let expected_request = expected_request.clone();
-            let (claimed, blocked_on_completion_delivery) = self
+            let (claimed, blocked_on_completion_delivery, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| {
@@ -937,7 +983,8 @@ impl ReplayState {
                                         "custom durable invocation ID {expected_invocation_id} is reused by Starts {candidate_index} and {duplicate_index}"
                                     )));
                                 }
-                                if candidate_index <= tx.cursor.last_replayed_index()
+                                let retained = tx.st.retained_starts.contains_key(&candidate_index);
+                                if (candidate_index <= tx.cursor.last_replayed_index() && !retained)
                                     || tx.st.claimed_starts.contains(&candidate_index)
                                 {
                                     return Err(WorkerExecutorError::runtime(format!(
@@ -1024,6 +1071,12 @@ impl ReplayState {
                                     ),
                                 }
                             }
+                            OplogEntryLookupResult::NotFound { .. } if tx.cursor.is_live() => {
+                                return Ok((None, false, Some(Missing::ReplayEnded)));
+                            }
+                            OplogEntryLookupResult::NotFound { .. } if store_live => {
+                                return Ok((None, false, Some(Missing::StoreAlreadyLive)));
+                            }
                             OplogEntryLookupResult::NotFound { .. } => {
                                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                                     format!(
@@ -1041,13 +1094,20 @@ impl ReplayState {
                             let root = result.0.start_idx();
                             tx.register_custom_subtree_root(root);
                         }
-                        Ok((result, tx.blocked_on_completion_delivery))
+                        Ok((result, tx.blocked_on_completion_delivery, None))
                     })
                     .await
             })
             .await?;
             if let Some(claimed) = claimed {
                 break claimed;
+            }
+            match missing {
+                Some(Missing::ReplayEnded) => return Ok(CustomStartClaimOutcome::ReplayEnded),
+                Some(Missing::StoreAlreadyLive) => {
+                    return Ok(CustomStartClaimOutcome::StoreAlreadyLive);
+                }
+                None => {}
             }
             debug_assert!(blocked_on_completion_delivery);
             progress.await;
@@ -1061,13 +1121,24 @@ impl ReplayState {
         else {
             unreachable!("claim_start only claims Start entries");
         };
-        Ok(ClaimedConcurrentStart {
+        Ok(CustomStartClaimOutcome::Claimed(ClaimedConcurrentStart {
             handle,
             function_name,
             durable_function_type,
             timestamp,
-        })
+        }))
     }
+}
+
+/// Outcome of [`ReplayState::claim_custom_start_for_store`].
+pub(crate) enum CustomStartClaimOutcome {
+    Claimed(ClaimedConcurrentStart),
+    /// No `Start` carries the requested invocation id and the cursor is at the replay target: the
+    /// invocation is new and must be recorded live.
+    ReplayEnded,
+    /// No `Start` carries the requested invocation id before the replay target, but the claiming
+    /// Store already continued live locally, so the invocation is new for that Store.
+    StoreAlreadyLive,
 }
 
 /// The `parent_start_index` a durable call's `Start` entry is recorded with when the caller does
@@ -1240,6 +1311,7 @@ mod tests {
             ExecutableTarget::new(component_id, component_revision),
             deployment_revision,
             EntityActivationPolicy::Tool {
+                mcp_import: None,
                 provision: ToolProvisionConfig::default(),
                 binding: Box::new(CompiledToolBinding {
                     deployment_revision,

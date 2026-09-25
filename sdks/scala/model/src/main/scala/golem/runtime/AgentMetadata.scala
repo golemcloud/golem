@@ -19,6 +19,12 @@ package golem.runtime
 import golem.config.AgentConfigDeclaration
 import golem.runtime.http.{HttpEndpointDetails, HttpMountDetails}
 
+sealed trait AgentTypeKind extends Product with Serializable
+object AgentTypeKind {
+  case object Regular    extends AgentTypeKind
+  case object HttpRouter extends AgentTypeKind
+}
+
 /**
  * Describes a single method on an agent.
  *
@@ -71,6 +77,7 @@ final case class MethodMetadata(
  */
 final case class AgentMetadata(
   name: String,
+  kind: AgentTypeKind,
   description: Option[String],
   mode: Option[String],
   methods: List[MethodMetadata],

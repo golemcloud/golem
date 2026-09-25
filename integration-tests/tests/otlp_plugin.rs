@@ -100,6 +100,7 @@ async fn otlp_basic_trace_export(
     let domain = user.register_domain(&env.id).await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
             AgentTypeName("InvocationContextAgent".to_string()),
@@ -229,6 +230,7 @@ async fn otlp_all_signals_export(
     let domain = user.register_domain(&env.id).await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
             AgentTypeName("InvocationContextAgent".to_string()),

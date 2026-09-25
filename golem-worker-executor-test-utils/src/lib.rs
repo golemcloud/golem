@@ -99,9 +99,7 @@ use golem_worker_executor::durable_host::{
     DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
     SnapshotBoundaryBlocker,
 };
-use golem_worker_executor::model::{
-    AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
-};
+use golem_worker_executor::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use golem_worker_executor::native_tool::{
     NativeToolAdapter, NativeToolCatalog, NativeToolRegistration,
 };
@@ -165,6 +163,7 @@ use golem_worker_executor::services::{
 };
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
+pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
     FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
@@ -676,14 +675,25 @@ impl TestWorkerExecutor {
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        use golem_worker_executor::services::HasOplogService;
+
         let services = self
             .services
             .as_ref()
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let create = services
+            .oplog_service()
+            .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
+            .await
+            .remove(&OplogIndex::INITIAL)
+            .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
+        let OplogEntry::Create { parameters, .. } = create else {
+            return Err(anyhow!("first oplog entry is not create: {owned_agent_id}"));
+        };
         services
             .worker_service()
-            .remove_cached_status(&owned_agent_id)
+            .remove_cached_status(&owned_agent_id, AgentFingerprint(parameters.instance_id))
             .await?;
         Ok(())
     }
@@ -1061,6 +1071,22 @@ impl TestWorkerExecutor {
             .await
     }
 
+    pub async fn production_active_agent(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<
+        Arc<
+            golem_worker_executor::services::active_agents::ActiveAgent<
+                golem_worker_executor::workerctx::default::Context,
+            >,
+        >,
+    > {
+        self.production_active_agents
+            .as_ref()?
+            .try_get_active_agent(owned_agent_id)
+            .await
+    }
+
     pub async fn active_entity_metadata(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -1241,15 +1267,15 @@ impl TestWorkerExecutor {
             .await
     }
 
-    /// Pauses after committing the selected checkpoint of the next fire-and-forget RPC for
+    /// Pauses after committing the selected checkpoint of the next RPC for
     /// `agent_id`.
-    pub async fn gate_next_fire_and_forget_rpc_commit(
+    pub async fn gate_next_rpc_commit(
         &self,
         agent_id: &AgentId,
-        checkpoint: FireAndForgetRpcCheckpoint,
-    ) -> FireAndForgetRpcCommitGateHandle {
+        checkpoint: RpcCheckpoint,
+    ) -> RpcCommitGateHandle {
         self.additional_test_deps
-            .gate_next_fire_and_forget_rpc_commit(agent_id.clone(), checkpoint)
+            .gate_next_rpc_commit(agent_id.clone(), checkpoint)
             .await
     }
 
@@ -1377,6 +1403,33 @@ impl TestWorkerExecutor {
     ) -> EntityReconstructionClaimGateHandle {
         self.additional_test_deps
             .gate_next_entity_reconstruction_claim(agent_id.clone())
+    }
+
+    /// Pauses the given agent's next replayed accessor-call admission whose function name ends
+    /// with `function_suffix`, at the given stage, until the returned handle is released.
+    pub fn gate_next_replay_access_admission(
+        &self,
+        agent_id: &AgentId,
+        function_suffix: &str,
+        stage: ReplayAdmissionStage,
+    ) -> ReplayAdmissionGateHandle {
+        self.additional_test_deps.gate_next_replay_access_admission(
+            agent_id.clone(),
+            function_suffix.to_string(),
+            stage,
+        )
+    }
+
+    /// Fires once the given agent's next direct (Store-holding) replay wait — a durable call
+    /// waiting for its recorded terminal, or a positional read of an expected marker entry —
+    /// whose function or expected marker name ends with `name_suffix` is reached.
+    pub fn signal_next_direct_replay_wait(
+        &self,
+        agent_id: &AgentId,
+        name_suffix: &str,
+    ) -> DirectReplayWaitSignalHandle {
+        self.additional_test_deps
+            .signal_next_direct_replay_wait(agent_id.clone(), name_suffix.to_string())
     }
 
     /// Drains a claimed reconstruction's recorded terminal, clamps the owner's replay cursor to
@@ -1834,6 +1887,8 @@ pub struct TestExecutorOverrides {
     pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     pub environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
+    /// Replaces configured account limits for the `TestWorkerCtx` bootstrap.
+    pub resource_limits: Option<Arc<dyn ResourceLimits>>,
     pub native_tool_metadata: Option<golem_common::schema::tool::Tool>,
     /// Named retry policies that the executor's `EnvironmentStateService`
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
@@ -2193,7 +2248,7 @@ pub fn native_streaming_tool_metadata() -> golem_common::schema::tool::Tool {
         .metadata()
 }
 
-fn native_test_helper_definition(
+pub fn native_test_helper_definition(
     effects: Arc<AtomicUsize>,
 ) -> golem_native_tool::NativeToolDefinition {
     use golem_native_tool::NativeToolInvoker;
@@ -2264,11 +2319,11 @@ impl CallCountManagement for TestWorkerCtx {
     }
 
     fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
-        Ok(()) // test context: monthly limits are always unlimited
+        self.durable_ctx.record_monthly_http_call()
     }
 
     fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
-        Ok(()) // test context: monthly limits are always unlimited
+        self.durable_ctx.record_monthly_rpc_call()
     }
 }
 
@@ -2617,7 +2672,7 @@ impl WorkerCtx for TestWorkerCtx {
             card_service,
             card_interest_index,
             component_service,
-            account_resource_limits,
+            account_resource_limits.clone(),
             config,
             filesystem,
             linear_memory,
@@ -2633,13 +2688,14 @@ impl WorkerCtx for TestWorkerCtx {
             websocket_connection_pool,
             pending_update,
             original_phantom_id,
-            u64::MAX,
-            u64::MAX,
+            account_resource_limits.per_invocation_http_call_limit(),
+            account_resource_limits.per_invocation_rpc_call_limit(),
             runtime,
             entity_execution_mode,
             owner_execution,
             owner_resources,
             entity_reconstruction_claim_hook,
+            extra_deps.replay_admission_hook(worker_agent_id.clone()),
             filesystem_capability,
             executable,
             entity_activation,
@@ -2835,13 +2891,6 @@ impl FileSystemReading for TestWorkerCtx {
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        self.durable_ctx.read_file(path).await
     }
 }
 
@@ -3111,6 +3160,22 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         } else {
             Arc::new(DisabledEnvironmentStateService)
         }
+    }
+
+    fn create_resource_limits(
+        &self,
+        golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> Arc<dyn ResourceLimits> {
+        self.overrides.resource_limits.clone().unwrap_or_else(|| {
+            golem_worker_executor::services::resource_limits::configured(
+                &golem_config.resource_limits,
+                golem_config.resource_usage_metering,
+                registry_service,
+                shutdown_token,
+            )
+        })
     }
 
     fn create_component_service(
@@ -4062,7 +4127,7 @@ struct TestOplog {
     /// appended, so the scope `End` gate below can recognize their matching
     /// `End` appends (an `End` only carries its `start_index`).
     consume_body_scope_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
-    fire_and_forget_rpc_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
+    rpc_starts: Arc<std::sync::Mutex<HashSet<OplogIndex>>>,
 }
 
 impl TestOplog {
@@ -4129,51 +4194,40 @@ impl TestOplog {
             additional_test_deps,
             consume_body_chunk_starts: Arc::new(std::sync::Mutex::new(HashSet::new())),
             consume_body_scope_starts: Arc::new(std::sync::Mutex::new(HashSet::new())),
-            fire_and_forget_rpc_starts: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            rpc_starts: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
-    async fn pause_after_fire_and_forget_rpc_checkpoint(
-        &self,
-        index: OplogIndex,
-        entry: &OplogEntry,
-    ) {
+    async fn pause_after_rpc_checkpoint(&self, index: OplogIndex, entry: &OplogEntry) {
         let checkpoint = match entry {
             OplogEntry::Start {
-                function_name: HostFunctionName::GolemRpcWasmRpcInvoke,
+                function_name:
+                    HostFunctionName::GolemRpcWasmRpcInvoke
+                    | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult,
                 ..
             } => {
-                self.fire_and_forget_rpc_starts
-                    .lock()
-                    .unwrap()
-                    .insert(index);
-                Some(FireAndForgetRpcCheckpoint::Start)
+                self.rpc_starts.lock().unwrap().insert(index);
+                Some(RpcCheckpoint::Start)
             }
-            OplogEntry::StartSpan { .. }
-                if !self.fire_and_forget_rpc_starts.lock().unwrap().is_empty() =>
-            {
-                Some(FireAndForgetRpcCheckpoint::StartSpan)
+            OplogEntry::StartSpan { .. } if !self.rpc_starts.lock().unwrap().is_empty() => {
+                Some(RpcCheckpoint::StartSpan)
             }
             OplogEntry::End { start_index, .. }
-                if self
-                    .fire_and_forget_rpc_starts
-                    .lock()
-                    .unwrap()
-                    .contains(start_index) =>
+                if self.rpc_starts.lock().unwrap().contains(start_index) =>
             {
-                Some(FireAndForgetRpcCheckpoint::End)
+                Some(RpcCheckpoint::End)
             }
             _ => None,
         };
         if let Some(checkpoint) = checkpoint
             && self
                 .additional_test_deps
-                .has_fire_and_forget_rpc_commit_gate(&self.owned_agent_id.agent_id, checkpoint)
+                .has_rpc_commit_gate(&self.owned_agent_id.agent_id, checkpoint)
                 .await
         {
             self.oplog.commit(CommitLevel::Always).await;
             self.additional_test_deps
-                .pause_after_fire_and_forget_rpc_commit(&self.owned_agent_id.agent_id, checkpoint)
+                .pause_after_rpc_commit(&self.owned_agent_id.agent_id, checkpoint)
                 .await;
         }
     }
@@ -4419,8 +4473,7 @@ impl Oplog for TestOplog {
         if let Some(start_index) = delivered_start {
             self.observe_rpc_memory_delivery(start_index);
         }
-        self.pause_after_fire_and_forget_rpc_checkpoint(index, &entry)
-            .await;
+        self.pause_after_rpc_checkpoint(index, &entry).await;
         if track_scope_start
             && self
                 .additional_test_deps
@@ -4660,7 +4713,7 @@ impl Oplog for TestOplog {
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
             .await?;
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
-        self.pause_after_fire_and_forget_rpc_checkpoint(ordered.index, &ordered.entry)
+        self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
         if matches!(
             &ordered.entry,
@@ -4691,7 +4744,7 @@ impl Oplog for TestOplog {
             .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
-        self.pause_after_fire_and_forget_rpc_checkpoint(ordered.index, &ordered.entry)
+        self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
         if matches!(
             &ordered.entry,
@@ -4982,7 +5035,7 @@ pub struct AdditionalTestDeps {
         Arc<scc::HashMap<AgentId, Arc<AgentInitializationEnqueueGate>>>,
     consume_body_scope_start_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeStartGate>>>,
     consume_body_scope_end_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyScopeEndGate>>>,
-    fire_and_forget_rpc_commit_gates: Arc<scc::HashMap<AgentId, Arc<FireAndForgetRpcCommitGate>>>,
+    rpc_commit_gates: Arc<scc::HashMap<AgentId, Arc<RpcCommitGate>>>,
     consume_body_reply_defer_gates: Arc<scc::HashMap<AgentId, Arc<ConsumeBodyReplyDeferGate>>>,
     entity_reconstruction_body_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
@@ -4991,6 +5044,13 @@ pub struct AdditionalTestDeps {
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     entity_reconstruction_claim_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+    /// One-shot gates pausing an agent's next replayed accessor-call admission
+    /// for a matching function at a given stage, and one-shot signals fired when
+    /// a direct (Store-holding) durable call starts waiting for its replayed
+    /// resolution.
+    replay_admission_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
+    direct_replay_wait_signals:
+        Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
     agent_invocation_success_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<AgentInvocationSuccessGate>>>>,
     worker_deletion_hook: Arc<Mutex<Option<Arc<dyn WorkerDeletionHook>>>>,
@@ -5029,12 +5089,14 @@ impl AdditionalTestDeps {
             agent_initialization_enqueue_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_start_gates: Arc::new(scc::HashMap::new()),
             consume_body_scope_end_gates: Arc::new(scc::HashMap::new()),
-            fire_and_forget_rpc_commit_gates: Arc::new(scc::HashMap::new()),
+            rpc_commit_gates: Arc::new(scc::HashMap::new()),
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
             entity_reconstruction_body_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             entity_body_start_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            replay_admission_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            direct_replay_wait_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             worker_deletion_hook: Arc::new(Mutex::new(None)),
             active_agents: Arc::new(std::sync::OnceLock::new()),
@@ -5213,6 +5275,57 @@ impl AdditionalTestDeps {
             >)
     }
 
+    fn gate_next_replay_access_admission(
+        &self,
+        agent_id: AgentId,
+        function_suffix: String,
+        stage: ReplayAdmissionStage,
+    ) -> ReplayAdmissionGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ReplayAdmissionGate {
+            function_suffix,
+            stage,
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        self.replay_admission_gates
+            .lock()
+            .unwrap()
+            .insert(agent_id, gate.clone());
+        ReplayAdmissionGateHandle { entered_rx, gate }
+    }
+
+    fn signal_next_direct_replay_wait(
+        &self,
+        agent_id: AgentId,
+        name_suffix: String,
+    ) -> DirectReplayWaitSignalHandle {
+        let (fired_tx, fired_rx) = tokio::sync::oneshot::channel();
+        let signal = Arc::new(DirectReplayWaitSignal {
+            name_suffix,
+            fired_tx: std::sync::Mutex::new(Some(fired_tx)),
+        });
+        self.direct_replay_wait_signals
+            .lock()
+            .unwrap()
+            .insert(agent_id, signal);
+        DirectReplayWaitSignalHandle { fired_rx }
+    }
+
+    fn replay_admission_hook(
+        &self,
+        agent_id: AgentId,
+    ) -> Option<Arc<dyn golem_worker_executor::workerctx::ReplayAdmissionHook>> {
+        Some(Arc::new(TestReplayAdmissionHook {
+            agent_id,
+            gates: self.replay_admission_gates.clone(),
+            signals: self.direct_replay_wait_signals.clone(),
+        })
+            as Arc<
+                dyn golem_worker_executor::workerctx::ReplayAdmissionHook,
+            >)
+    }
+
     /// Arms a one-shot gate that pauses the given agent's next consume-body
     /// chunk `End` append after it is durable but before the wrapper's
     /// `Oplog::add` returns. Must be called before the invocation that
@@ -5330,34 +5443,30 @@ impl AdditionalTestDeps {
             .await
     }
 
-    async fn gate_next_fire_and_forget_rpc_commit(
+    async fn gate_next_rpc_commit(
         &self,
         agent_id: AgentId,
-        checkpoint: FireAndForgetRpcCheckpoint,
-    ) -> FireAndForgetRpcCommitGateHandle {
+        checkpoint: RpcCheckpoint,
+    ) -> RpcCommitGateHandle {
         let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
-        let gate = Arc::new(FireAndForgetRpcCommitGate {
+        let gate = Arc::new(RpcCommitGate {
             armed: AtomicBool::new(true),
             abort_return: AtomicBool::new(false),
             checkpoint,
             committed_tx: std::sync::Mutex::new(Some(committed_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
-        self.fire_and_forget_rpc_commit_gates
+        self.rpc_commit_gates
             .entry_async(agent_id)
             .await
             .and_modify(|existing| *existing = gate.clone())
             .or_insert_with(|| gate.clone());
-        FireAndForgetRpcCommitGateHandle { committed_rx, gate }
+        RpcCommitGateHandle { committed_rx, gate }
     }
 
-    async fn pause_after_fire_and_forget_rpc_commit(
-        &self,
-        agent_id: &AgentId,
-        checkpoint: FireAndForgetRpcCheckpoint,
-    ) {
+    async fn pause_after_rpc_commit(&self, agent_id: &AgentId, checkpoint: RpcCheckpoint) {
         let Some(gate) = self
-            .fire_and_forget_rpc_commit_gates
+            .rpc_commit_gates
             .read_async(agent_id, |_, gate| gate.clone())
             .await
         else {
@@ -5373,19 +5482,15 @@ impl AdditionalTestDeps {
             .release
             .acquire()
             .await
-            .expect("the fire-and-forget RPC Start commit gate semaphore was closed");
+            .expect("the RPC commit gate semaphore was closed");
         permit.forget();
         if gate.abort_return.load(Ordering::SeqCst) {
             std::future::pending().await
         }
     }
 
-    async fn has_fire_and_forget_rpc_commit_gate(
-        &self,
-        agent_id: &AgentId,
-        checkpoint: FireAndForgetRpcCheckpoint,
-    ) -> bool {
-        self.fire_and_forget_rpc_commit_gates
+    async fn has_rpc_commit_gate(&self, agent_id: &AgentId, checkpoint: RpcCheckpoint) -> bool {
+        self.rpc_commit_gates
             .read_async(agent_id, |_, gate| {
                 gate.checkpoint == checkpoint && gate.armed.load(Ordering::SeqCst)
             })
@@ -5714,6 +5819,114 @@ struct TestEntityInvocationBodyHook {
     divergences: Arc<std::sync::Mutex<HashSet<AgentId>>>,
 }
 
+struct ReplayAdmissionGate {
+    function_suffix: String,
+    stage: ReplayAdmissionStage,
+    entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
+
+pub struct ReplayAdmissionGateHandle {
+    entered_rx: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<ReplayAdmissionGate>,
+}
+
+impl ReplayAdmissionGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered_rx)
+            .await
+            .expect("the replay admission gate was dropped without firing");
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+impl Drop for ReplayAdmissionGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+struct DirectReplayWaitSignal {
+    name_suffix: String,
+    fired_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<(String, OplogIndex)>>>,
+}
+
+pub struct DirectReplayWaitSignalHandle {
+    fired_rx: tokio::sync::oneshot::Receiver<(String, OplogIndex)>,
+}
+
+impl DirectReplayWaitSignalHandle {
+    /// Waits until a matching direct replay wait of the armed agent is reached, returning the
+    /// function or expected marker name and, for a durable call, its `Start` index
+    /// (`OplogIndex::NONE` for a positional marker read).
+    pub async fn fired(&mut self) -> (String, OplogIndex) {
+        (&mut self.fired_rx)
+            .await
+            .expect("the direct replay wait signal was dropped without firing")
+    }
+}
+
+struct TestReplayAdmissionHook {
+    agent_id: AgentId,
+    gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
+    signals: Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
+}
+
+#[async_trait]
+impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissionHook {
+    async fn before_replay_access_start(
+        &self,
+        function: &'static str,
+        stage: ReplayAdmissionStage,
+    ) {
+        let gate = {
+            let mut gates = self.gates.lock().unwrap();
+            let matches = gates.get(&self.agent_id).is_some_and(|gate| {
+                gate.stage == stage && function.ends_with(gate.function_suffix.as_str())
+            });
+            matches.then(|| gates.remove(&self.agent_id)).flatten()
+        };
+        if let Some(gate) = gate {
+            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+                let _ = entered_tx.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("replay admission gate was closed")
+                .forget();
+        }
+    }
+
+    fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex) {
+        self.fire_direct_replay_wait(function, start_index);
+    }
+
+    fn before_positional_replay_read(&self, expected: &str) {
+        self.fire_direct_replay_wait(expected, OplogIndex::NONE);
+    }
+}
+
+impl TestReplayAdmissionHook {
+    fn fire_direct_replay_wait(&self, name: &str, start_index: OplogIndex) {
+        let signal = {
+            let mut signals = self.signals.lock().unwrap();
+            let matches = signals
+                .get(&self.agent_id)
+                .is_some_and(|signal| name.ends_with(signal.name_suffix.as_str()));
+            matches.then(|| signals.remove(&self.agent_id)).flatten()
+        };
+        if let Some(signal) = signal
+            && let Some(fired_tx) = signal.fired_tx.lock().unwrap().take()
+        {
+            let _ = fired_tx.send((name.to_string(), start_index));
+        }
+    }
+}
+
 struct TestEntityReconstructionClaimHook {
     agent_id: AgentId,
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
@@ -5871,30 +6084,30 @@ impl Drop for ConsumeBodyScopeEndGateHandle {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FireAndForgetRpcCheckpoint {
+pub enum RpcCheckpoint {
     Start,
     StartSpan,
     End,
 }
 
-struct FireAndForgetRpcCommitGate {
+struct RpcCommitGate {
     armed: AtomicBool,
     abort_return: AtomicBool,
-    checkpoint: FireAndForgetRpcCheckpoint,
+    checkpoint: RpcCheckpoint,
     committed_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
 }
 
-pub struct FireAndForgetRpcCommitGateHandle {
+pub struct RpcCommitGateHandle {
     committed_rx: tokio::sync::oneshot::Receiver<()>,
-    gate: Arc<FireAndForgetRpcCommitGate>,
+    gate: Arc<RpcCommitGate>,
 }
 
-impl FireAndForgetRpcCommitGateHandle {
+impl RpcCommitGateHandle {
     pub async fn committed(&mut self) {
         (&mut self.committed_rx)
             .await
-            .expect("the fire-and-forget RPC Start commit gate was dropped without firing");
+            .expect("the RPC commit gate was dropped without firing");
     }
 
     pub fn abort_return(&self) {
@@ -5903,7 +6116,7 @@ impl FireAndForgetRpcCommitGateHandle {
     }
 }
 
-impl Drop for FireAndForgetRpcCommitGateHandle {
+impl Drop for RpcCommitGateHandle {
     fn drop(&mut self) {
         self.gate.release.add_permits(1);
     }

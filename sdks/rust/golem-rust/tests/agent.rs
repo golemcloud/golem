@@ -23,16 +23,16 @@ mod tests {
         AgentStream, AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::agentic::{Principal, create_webhook};
+    use golem_rust::agentic::{HttpRequest, HttpResponse, HttpRouter, Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
-        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, CachePolicy, Snapshotting,
-        SnapshottingConfig,
+        AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, AgentTypeKind,
+        CachePolicy, DurableStreamSlotSource, Snapshotting, SnapshottingConfig,
     };
     use golem_rust::schema::VariantValuePayload;
     use golem_rust::{
         AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, IntoSchema, MultimodalSchema,
     };
-    use golem_rust::{ScheduledTime, SchemaType, SchemaValue};
+    use golem_rust::{ScheduledTime, SchemaType, SchemaValue, http_router};
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent};
     use golem_rust_macro::{description, endpoint, prompt, read_only};
     use std::fmt::Debug;
@@ -1045,7 +1045,22 @@ mod tests {
         )]
         fn path_and_header(&self, resource_id: String, request_id: String) -> String;
 
-        #[endpoint(get = "/greet?l={location}&n={name}")]
+        #[endpoint(
+            get = "/greet?l={location}&n={name}",
+            durable_streams(
+                input("location", name = "messages"),
+                output(
+                    "$result",
+                    name = "results",
+                    content_type = "application/vnd.golem.events"
+                ),
+                allow_external_writes = true,
+                allow_stream_delete = false,
+                allow_invocation_delete = false,
+                max_concurrent_readers_per_stream = 8,
+                max_append_requests_per_second_per_stream = 25,
+            )
+        )]
         fn greet1(&self, location: String, name: String) -> String;
 
         #[endpoint(get = "/greet?l={location}&n={name}")]
@@ -1118,7 +1133,46 @@ mod tests {
             "All methods should have HTTP endpoint details"
         );
 
-        assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),)
+        assert!(agent.methods.iter().all(|m| !m.http_endpoint.is_empty()),);
+
+        let greet1 = agent
+            .methods
+            .iter()
+            .find(|method| method.name == "greet1")
+            .unwrap();
+        let options = greet1.http_endpoint[0].durable_streams.as_ref().unwrap();
+        assert_eq!(options.slots.len(), 2);
+        assert!(
+            matches!(&options.slots[0].source, DurableStreamSlotSource::Input(slot) if slot == "location")
+        );
+        assert_eq!(options.slots[0].name.as_deref(), Some("messages"));
+        assert_eq!(options.slots[0].content_type, None);
+        assert!(
+            matches!(&options.slots[1].source, DurableStreamSlotSource::Output(slot) if slot == "$result")
+        );
+        assert_eq!(options.slots[1].name.as_deref(), Some("results"));
+        assert_eq!(
+            options.slots[1].content_type.as_deref(),
+            Some("application/vnd.golem.events")
+        );
+        assert_eq!(options.allow_external_writes, Some(true));
+        assert_eq!(options.allow_stream_delete, Some(false));
+        assert_eq!(options.allow_invocation_delete, Some(false));
+        let load = options.load.as_ref().unwrap();
+        assert_eq!(load.max_concurrent_readers_per_stream, Some(8));
+        assert_eq!(load.max_append_requests_per_second_per_stream, Some(25));
+
+        let greet2 = agent
+            .methods
+            .iter()
+            .find(|method| method.name == "greet2")
+            .unwrap();
+        assert!(
+            greet2
+                .http_endpoint
+                .iter()
+                .all(|endpoint| endpoint.durable_streams.is_none())
+        );
     }
 
     #[agent_definition(mount = "/chats/{agent-type}")]
@@ -2237,6 +2291,30 @@ mod tests {
         }
     }
 
+    struct HttpRouterAgent;
+
+    #[http_router(
+        name = "HttpRouterAgent",
+        mount = "/raw",
+        auth = false,
+        cors = ["https://allowed.test"],
+    )]
+    impl HttpRouter for HttpRouterAgent {
+        type Config = ();
+
+        fn new(_: golem_rust::agentic::Config<Self::Config>) -> Self {
+            Self
+        }
+
+        async fn handle(&self, request: HttpRequest) -> HttpResponse {
+            HttpResponse {
+                status: 200,
+                headers: request.headers,
+                body: request.body,
+            }
+        }
+    }
+
     #[test]
     fn test_all_http_methods_supported() {
         use golem_rust::agentic::get_all_agent_types;
@@ -2247,6 +2325,8 @@ mod tests {
             .iter()
             .find(|a| a.type_name == "AllHttpMethodsAgent")
             .expect("AllHttpMethodsAgent not found");
+
+        assert!(matches!(agent.kind, AgentTypeKind::Regular));
 
         let expected_methods = vec![
             ("get_method", "HttpMethod::Get"),
@@ -2279,5 +2359,35 @@ mod tests {
                 method_name
             );
         }
+
+        let router = agent_types
+            .iter()
+            .find(|agent| agent.type_name == "HttpRouterAgent")
+            .expect("HttpRouterAgent not found");
+        assert!(matches!(router.kind, AgentTypeKind::HttpRouter));
+        assert!(matches!(router.mode, AgentMode::Ephemeral));
+        assert!(matches!(router.snapshotting, Snapshotting::Disabled));
+
+        let mount = router.http_mount.as_ref().expect("HTTP mount not found");
+        assert_eq!(
+            mount.auth_details.as_ref().map(|auth| auth.required),
+            Some(false)
+        );
+        assert_eq!(
+            mount.cors_options.allowed_patterns,
+            vec!["https://allowed.test"]
+        );
+
+        let route = router
+            .methods
+            .iter()
+            .find(|method| method.name == "handle")
+            .expect("handle method not found");
+        assert_eq!(route.http_endpoint.len(), 1);
+        assert!(matches!(
+            route.http_endpoint[0].http_method,
+            golem_rust::golem_agentic::golem::agent::common::HttpMethod::Any
+        ));
+        assert!(route.http_endpoint[0].path_suffix.is_empty());
     }
 }

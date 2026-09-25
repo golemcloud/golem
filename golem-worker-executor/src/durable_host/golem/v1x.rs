@@ -23,6 +23,7 @@ use crate::durable_host::suspendable_wait::{
 };
 use crate::durable_host::{
     ActiveAtomicRegion, BeginReplayToLive, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
+    commit_replay_jumps,
 };
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
@@ -273,13 +274,14 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &GetOplogEntry,
 ) -> Result<crate::model::public_oplog::PublicOplogChunk, String> {
-    let agent_mode = ctx
+    let identity = ctx
         .state
         .worker_service
-        .get_agent_mode(&entry.owned_agent_id)
+        .resolve_agent_identity(&entry.owned_agent_id)
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+    let agent_mode = identity.agent_mode;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
@@ -311,13 +313,14 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &SearchOplogEntry,
 ) -> Result<crate::model::public_oplog::PublicOplogSearchResult, String> {
-    let agent_mode = ctx
+    let identity = ctx
         .state
         .worker_service
-        .get_agent_mode(&entry.owned_agent_id)
+        .resolve_agent_identity(&entry.owned_agent_id)
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+    let agent_mode = identity.agent_mode;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
@@ -659,9 +662,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // Use the index returned by `add` — a concurrently running host task (a durable
             // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
             // between this `add` and a subsequent `current_oplog_index` read, so re-reading the
-            // tip would nondeterministically point past the `NoOp` entry. Debugging sessions
-            // discard writes and return `NONE` from `add`; fall back to the session's replay
-            // target there so the guest never observes an invalid index.
+            // tip would nondeterministically point past the `NoOp` entry. Fall back to the current
+            // oplog index if the write returns `NONE` so the guest never observes an invalid index.
             let marker = match self
                 .state
                 .oplog
@@ -843,14 +845,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             start: begin_index.next(), // need to keep the BeginAtomicRegion entry
                             end: pending.replay_target().next(), // skipping the Jump entry too
                         };
-
-                        self.public_state
-                            .worker()
-                            .add_and_commit_oplog(OplogEntry::jump(None, deleted_region))
-                            .await;
-
-                        // TODO: this recomputation should not be necessary.
-                        self.public_state.worker().reattach_worker_status().await;
+                        commit_replay_jumps(
+                            &self.public_state.worker(),
+                            &self.state.replay_state,
+                            None,
+                            vec![deleted_region],
+                        )
+                        .await?;
 
                         self.finish_switch_to_live(pending).await?.require_live()?;
                     }
@@ -870,9 +871,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // between this `add` and a subsequent `current_oplog_index` read. Reading the tip
             // afterwards would record a begin index past the `BeginAtomicRegion` entry, making
             // `Error.retry_from` diverge from the persisted region marker and breaking the
-            // retry-budget grouping keyed on it. Debugging sessions discard writes and return
-            // `NONE` from `add`; fall back to the session's replay target there, matching the
-            // index the guest observed before.
+            // retry-budget grouping keyed on it. Fall back to the current oplog index if the write
+            // returns `NONE`, matching the index the guest observed before.
             let begin_index = match self
                 .state
                 .oplog
@@ -946,7 +946,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 ))
                 .await;
         } else {
-            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
+            let (_, _) = get_oplog_entry!(self, OplogEntry::EndAtomicRegion)?;
         }
 
         // Same transition on live and replay: transfer surviving members to the parent region (or
@@ -1185,6 +1185,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     if let Some(status) = calculate_last_known_status_with_checkpoint(
                         &ctx.state,
                         &owned_agent_id,
+                        metadata.fingerprint,
                         agent_mode,
                         result.last_known_status,
                     )
@@ -2411,13 +2412,14 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                 let agent_type =
                     ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
                 let mut current_revision = ComponentRevision::try_from(component_revision)?;
-                let agent_mode = self
+                let identity = self
                     .state
                     .worker_service
-                    .get_agent_mode(&owned_agent_id)
+                    .resolve_agent_identity(&owned_agent_id)
                     .await
                     .map_err(|err| err.to_string())?
                     .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
+                let agent_mode = identity.agent_mode;
 
                 let mut result = Vec::with_capacity(entries.len());
                 for (index, entry) in entries {

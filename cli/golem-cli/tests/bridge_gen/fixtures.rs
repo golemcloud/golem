@@ -88,6 +88,7 @@ pub fn agent(
     mode: AgentMode,
 ) -> AgentTypeSchema {
     AgentTypeSchema {
+        kind: golem_common::schema::agent::AgentTypeKind::Regular,
         type_name: AgentTypeName(type_name.into()),
         description: "An example agent".to_string(),
         source_language: source_language.into(),

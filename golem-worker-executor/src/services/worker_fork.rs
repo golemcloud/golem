@@ -23,7 +23,10 @@ use super::agent_webhooks::AgentWebhooksService;
 use super::environment_state::EnvironmentStateService;
 use super::external_durable_stream::ExternalDurableStreamService;
 use super::file_loader::FileLoader;
-use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasExternalDurableStreamService};
+use super::{
+    HasAgentWebhooksService, HasEnvironmentStateService, HasExternalDurableStreamService,
+    HasMcpTransport,
+};
 use crate::durable_host::durable_stream::{DurableStreamStore, StreamStoreError};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::metrics::workers::record_worker_call;
@@ -133,6 +136,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub shutdown_token: tokio_util::sync::CancellationToken,
     pub http_connection_pool: Option<HttpConnectionPool>,
     pub websocket_connection_pool: WebSocketConnectionPool,
+    pub mcp_transport: Arc<super::mcp::McpTransport>,
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
     pub native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     pub extra_deps: Ctx::ExtraDeps,
@@ -347,6 +351,12 @@ impl<Ctx: WorkerCtx> HasWebSocketConnectionPool for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasMcpTransport for DefaultWorkerFork<Ctx> {
+    fn mcp_transport(&self) -> Arc<super::mcp::McpTransport> {
+        self.mcp_transport.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasEnvironmentStateService for DefaultWorkerFork<Ctx> {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.environment_state_service.clone()
@@ -396,6 +406,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             websocket_connection_pool: self.websocket_connection_pool.clone(),
             environment_state_service: self.environment_state_service.clone(),
             native_tool_catalog: self.native_tool_catalog.clone(),
+            mcp_transport: self.mcp_transport.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -441,6 +452,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
+        mcp_transport: Arc<super::mcp::McpTransport>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -477,6 +489,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             shutdown_token,
             http_connection_pool,
             websocket_connection_pool,
+            mcp_transport,
             environment_state_service,
             native_tool_catalog,
             extra_deps,
@@ -598,6 +611,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let source_status = calculate_last_known_status_with_checkpoint(
             self,
             &owned_source_agent_id,
+            initial_source_worker_metadata.fingerprint,
             agent_mode,
             source.last_known_status,
         )

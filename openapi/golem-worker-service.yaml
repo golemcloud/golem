@@ -18,7 +18,6 @@ tags:
 - name: Application
 - name: Card
 - name: Component
-- name: Debugging
 - name: Deployment
 - name: Environment
 - name: EnvironmentPluginGrants

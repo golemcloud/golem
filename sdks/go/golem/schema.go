@@ -204,6 +204,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 
 	at := common.AgentType{
 		TypeName:       e.name,
+		Kind:           common.AgentTypeKindRegular,
 		Description:    e.desc,
 		SourceLanguage: "go",
 		Schema:         g.build(),

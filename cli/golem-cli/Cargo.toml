@@ -32,6 +32,7 @@ harness = false
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-mcp-import = { workspace = true }
 golem-schema = { workspace = true }
 
 # External deps
@@ -137,10 +138,12 @@ expectrl = { workspace = true }
 goldenfile = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
 log = { workspace = true }
+poem = { workspace = true, features = ["rustls"] }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
+sha2 = { workspace = true }
 sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
 test-r = { workspace = true }

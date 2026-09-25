@@ -24,6 +24,150 @@ export const Counter = counter.implement({
 });
 ```
 
+## HTTP routers and files
+
+`defineHttpRouter` registers a parameterless, ephemeral, snapshot-disabled HTTP router alongside
+`defineAgent`. Routers have no ordinary agent client or `dependencies` option. The mount is a
+literal public path; authentication and CORS use the ordinary host policies.
+
+```ts
+import { defineHttpRouter, withRawHeaders } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+
+export const Web = defineHttpRouter('Web', { config: { greeting: z.string() } })
+  .mount('/web', { cors: ['https://example.com'] })
+  .static('/assets/*', '/assets/$1')
+  .openApi(
+    ({ config }) => ({
+      openapi: '3.1.0',
+      info: { title: config.greeting, version: '1' },
+      paths: { '/echo': { post: { responses: { '200': { description: 'Echo' } } } } },
+    }),
+    { methodName: 'describe' },
+  )
+  .implement(
+    (request, context) => {
+      // request.body is an incremental ReadableStream<Uint8Array>, not a buffered payload.
+      // context.rawRequest preserves original method, target, query, and byte-valued headers.
+      return withRawHeaders(new Response(request.body), [
+        { name: 'set-cookie', value: new TextEncoder().encode('a=first') },
+        { name: 'set-cookie', value: new TextEncoder().encode('a=second') },
+      ]);
+    },
+    { methodName: 'serve' },
+  );
+
+export const Assets = defineHttpRouter('Assets')
+  .mount('/assets')
+  .static('/*', '/assets/$1')
+  .implement();
+export const Docs = defineHttpRouter('Docs')
+  .mount('/docs')
+  .openApi(() => ({
+    openapi: '3.1.0',
+    info: { title: 'Docs', version: '1' },
+    paths: {},
+  }))
+  .implement();
+```
+
+The two method names are arbitrary and must differ. Omitting the handler registers a static-only,
+provider-only, or empty router without a dummy method. OpenAPI providers run lazily, not during
+registration. Supply files and configuration through the normal application manifest and list
+the router in the HTTP API deployment's `agents` map. Static mappings read immutable deployed
+files; they do not expose files written by an invocation.
+
+Web `Headers` normalizes names and combines repeated values; `Request` normalizes URLs and some
+standard methods and forbids bodies on GET/HEAD. `context.rawRequest` exposes the original head
+without a second body reader. `withRawHeaders` replaces the entire canonical response header
+sequence, including independent cookies and non-UTF-8 bytes. Use lowercase field names and
+`Uint8Array` values. For methods, targets, statuses or bodies that Web APIs cannot represent, use
+the canonical API instead:
+
+```ts
+import { AgentStream, defineHttpRouter } from '@golemcloud/golem-ts-sdk';
+
+export const Raw = defineHttpRouter('Raw')
+  .mount('/raw')
+  .implementRaw((request) => ({
+    status: 200,
+    headers: [{ name: 'x-byte', value: new Uint8Array([255]) }],
+    body: request.body, // AgentStream<Uint8Array>; extension method spelling is unchanged.
+  }));
+```
+
+The adapter owns input/output disposal. It retains input while the response may consume it and
+releases both on response EOF, error, or local disposal. HEAD and 204/205/304 responses dispose
+their producers before the native stream pump can poll them. Use `highWaterMark: 0` if a Web
+producer must not prefetch. Do not detach work that outlives the returned stream. The host owns
+framing, head commitment and session completion; body EOF alone is not session completion.
+
+**Cancellation limitation:** local stream disposal is tested, but host cancellation currently
+traps Wasm rather than providing a cooperative JavaScript invocation signal. The pinned native
+stream pump can also wait in `next()` before observing a remote reader drop. JavaScript `finally`
+execution and prompt disposal during an indefinitely pending pull are not guaranteed on those
+paths. `Request.signal` does not represent host invocation cancellation.
+
+Ordinary durable, non-phantom agents expose live files with `exposeFiles`. Every constructor
+parameter must be a path-compatible scalar bound exactly once in the mount; the constructor can
+create the file before the host reads it. Ordinary methods and clients remain available.
+
+```ts
+import { defineAgent, http } from '@golemcloud/golem-ts-sdk';
+import { z } from 'zod';
+import * as fs from 'node:fs';
+
+export const Files = defineAgent({
+  name: 'Files',
+  id: { name: z.string() },
+  methods: {},
+  http: http.mount('/files/{name}', {
+    exposeFiles: [{ route: '/report', path: '/report.txt' }],
+  }),
+}).implement({
+  init({ id }) {
+    fs.writeFileSync('/report.txt', `Report for ${id.name}`);
+    return {};
+  },
+  methods: {},
+});
+```
+
+Mappings preserve declaration order. Exact routes target absolute files; a terminal `/*` maps
+to a target ending in `/$1`. Public segments are decoded once; filesystem targets are not URI
+decoded. Identical compiled pairs are rejected, while the same route with distinct targets is
+allowed. The host applies static/live-file selection and path-security rules.
+
+### Host-free helpers for framework adapters
+
+Import `@golemcloud/golem-ts-sdk/http-router` without loading the agent registry or runtime:
+
+- `HttpRequest<Body>` / `HttpResponse<Body>` impose no constraint on `Body`. `HttpHeader.value`
+  is `Uint8Array`; header arrays are readonly ordered occurrences. Request `query` is
+  `string | undefined`: `undefined` means absent; `''` means a present empty query.
+- `compileFileMappings(readonly { route: string; path: string }[])` returns WIT-shaped mappings.
+- `compileRouterMount({ mount, auth?, cors?, staticBindings?, handlerMethod?, openapiProviderMethod? })`
+  accepts already compiled mappings and returns `{ mount, handlerBinding }`. An absent handler
+  produces no binding. The helper never rebuilds an adapter's schemas or configuration.
+- `copyHttpHeaders` validates/copies the canonical sequence without normalizing occurrences.
+- `serializeOpenApi(document: unknown): string` synchronously emits bounded, canonical JSON
+  (sorted Unicode keys, preserved array order). It rejects non-JSON values, cycles, unsupported
+  root sections, non-3.1.0 documents, depth over 64 and UTF-8 output over 1 MiB. It does not fetch,
+  register, evaluate providers, strip fields, rebase paths, or merge domains. The host performs
+  full OpenAPI semantic validation, reference handling, rebasing and merging.
+- `HttpRouterError.category` provides a safe diagnostic category without document contents.
+
+The TypeScript and Effect SDKs build these primitives from the private `sdks/http-contract`
+source package independently. Both bundle its code and declarations; npm consumers need no
+private package or sibling SDK checkout. After building the SDK and its template, run
+`pnpm --filter @golemcloud/golem-ts-sdk run check:package` from `sdks/ts` to verify a packed
+installation, host-free HTTP imports, and consumer declarations.
+
+The SDK tests execute shared corpus metadata/mapping cases and targeted stream/codec cases;
+corpus integrity alone does not prove runtime conformance. The CLI deployed fixture
+`typescript_http_router` exercises static files, live files and ordinary invocation, OpenAPI,
+extension methods, empty queries, HEAD, early responses, cookie order, and delayed duplex input.
+
 ## Streaming methods
 
 Use `s.stream(itemSchema)` in a method schema and `AgentStream<T>` in its implementation. Streams

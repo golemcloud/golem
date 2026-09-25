@@ -12,23 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::call_coordinator::{
     DurableCallAdmission, DurableCallBoundary, DurableCallCoordinator,
 };
-use crate::durable_host::concurrent::{self, DropEvent, Resolution, ResolutionOutcome};
-use crate::durable_host::replay_state::{ReplayToLiveOutcome, ReplayToLiveRole};
+use crate::durable_host::concurrent::{
+    self, DropEvent, Resolution, ResolutionOutcome, finish_prepared_access_to_live,
+};
+use crate::durable_host::replay_state::{CustomStartClaimOutcome, ReplayState, ReplayToLiveRole};
+use crate::durable_host::{BeginReplayToLive, DurableWorkerCtx, PublicDurableWorkerState};
 use crate::metrics::wasm::{
     record_custom_invocation_scope_open, record_host_function_call, record_in_function_retry,
 };
 use crate::model::ExecutionStatus;
 use crate::preview2::golem::durability::durability;
 use crate::services::environment_state::EnvironmentStateService;
+use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::OplogOps;
 use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::entity::{AgentEntity, InvocationExecutionMode, OwnerRuntime};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
@@ -59,6 +63,89 @@ pub(crate) struct ActiveCustomInvocation {
     pub invocation_id: uuid::Uuid,
     pub parent_start_index: Option<OplogIndex>,
     initiating_children: Arc<AtomicUsize>,
+}
+
+/// How a custom durable invocation that found no claimable recorded `Start` continues live.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CustomLiveContinuation {
+    /// The shared cursor reached the replay target: the primary agent settles the replay-to-live
+    /// transition, an incomplete entity continues live locally.
+    ReplayTail,
+    /// The claiming Store already continued live locally while the shared cursor may still replay
+    /// other owners' records; only the Store's own resources switch.
+    LocalTail,
+}
+
+/// The Store identity a custom durable invocation was admitted from, captured synchronously with
+/// worker state before the claim. Mirrors `PreparedAccessStart` for the accessor path so both
+/// paths take the same replay-to-live transition for the same Store.
+struct CustomStoreAdmission<Ctx: WorkerCtx> {
+    primary_runtime: bool,
+    replaying_incomplete_entity: bool,
+    store_continued_live: bool,
+    tool_entity: bool,
+    tool_operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
+    local_live_tail: Arc<AtomicBool>,
+    public_state: PublicDurableWorkerState<Ctx>,
+}
+
+impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
+    fn role(&self) -> ReplayToLiveRole {
+        if self.primary_runtime {
+            ReplayToLiveRole::PrimaryAgent
+        } else {
+            ReplayToLiveRole::NonPrimary
+        }
+    }
+
+    async fn continue_to_live<U: Send + 'static>(
+        &self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+        replay_state: &ReplayState,
+        linear_memory: &LinearMemoryTracker,
+        continuation: CustomLiveContinuation,
+        settling_what: &str,
+    ) -> Result<(), WorkerExecutorError> {
+        let pending = match continuation {
+            CustomLiveContinuation::ReplayTail => {
+                match crate::durable_host::begin_replay_to_live(
+                    self.replaying_incomplete_entity,
+                    self.tool_entity,
+                    self.tool_operation.clone(),
+                    &self.public_state,
+                    linear_memory,
+                    replay_state,
+                    self.role(),
+                    self.local_live_tail.clone(),
+                )
+                .await?
+                {
+                    BeginReplayToLive::ReplayResumed => {
+                        return Err(WorkerExecutorError::runtime(format!(
+                            "replay target grew while {settling_what} was settling"
+                        )));
+                    }
+                    BeginReplayToLive::Pending(pending) => pending,
+                }
+            }
+            CustomLiveContinuation::LocalTail => {
+                crate::durable_host::begin_local_live_continuation(
+                    self.replaying_incomplete_entity,
+                    self.tool_entity,
+                    self.tool_operation.clone(),
+                    &self.public_state,
+                    linear_memory,
+                    self.role(),
+                    self.local_live_tail.clone(),
+                    replay_state.replay_target(),
+                )
+                .await?
+            }
+        };
+        finish_prepared_access_to_live(pending, self.primary_runtime, accessor, accessor.getter())
+            .await?
+            .require_live()
+    }
 }
 
 fn next_custom_invocation_id(
@@ -382,6 +469,20 @@ pub struct SemanticTrapRetryOverrideMarker {
     pub inner: anyhow::Error,
 }
 
+pub fn semantic_trap_retry_override_error(
+    payload: SemanticTrapRetryOverride,
+    kind: HostFailureKind,
+    message: impl Into<String>,
+) -> anyhow::Error {
+    anyhow::Error::new(SemanticTrapRetryOverrideMarker {
+        payload,
+        inner: anyhow::Error::new(ClassifiedHostError {
+            kind,
+            message: message.into(),
+        }),
+    })
+}
+
 impl std::fmt::Display for SemanticTrapRetryOverrideMarker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.payload.verdict {
@@ -604,14 +705,15 @@ pub enum InternalRetryResult {
 }
 
 /// Result of `InFunctionRetryState::decide_async_retry`: tells the async RPC caller what to do.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum AsyncRetryDecision {
     /// The caller should wait for the given duration, then retry the operation.
     RetryAfterDelay(Duration),
     /// Max retry attempts exhausted — persist the failure permanently.
     Exhausted,
-    /// The computed delay exceeds the threshold — fall back to trap+replay.
-    FallBackToTrap,
+    /// Fall back to trap+replay. When policy evaluation already happened, carries the exact
+    /// post-step decision so the trap path does not step the policy a second time.
+    FallBackToTrap(Option<SemanticTrapRetryOverride>),
 }
 
 #[derive(Debug)]
@@ -747,15 +849,58 @@ pub(crate) fn evaluate_named_policy_step(
     properties: &RetryProperties,
     current_state: Option<&RetryPolicyState>,
 ) -> Result<(RetryPolicyState, RetryVerdict), RetryEvaluationError> {
+    evaluate_named_policy_step_at(
+        named_policy,
+        properties,
+        current_state,
+        Timestamp::now_utc().to_millis(),
+    )
+}
+
+fn evaluate_named_policy_step_at(
+    named_policy: &NamedRetryPolicy,
+    properties: &RetryProperties,
+    current_state: Option<&RetryPolicyState>,
+    now_millis: u64,
+) -> Result<(RetryPolicyState, RetryVerdict), RetryEvaluationError> {
     let mut rng = ThreadRng;
     let state = current_state
         .cloned()
         .unwrap_or_else(|| named_policy.policy.initial_state());
+    let (state, time_box_state) = if named_policy.policy.contains_time_box() {
+        match state {
+            RetryPolicyState::TimeBox {
+                started_at_millis,
+                elapsed_millis,
+                inner,
+            } => {
+                let elapsed_millis =
+                    elapsed_millis.max(now_millis.saturating_sub(started_at_millis));
+                (*inner, Some((started_at_millis, elapsed_millis)))
+            }
+            state => (state, Some((now_millis, 0))),
+        }
+    } else {
+        (state, None)
+    };
+    let elapsed = Duration::from_millis(
+        time_box_state
+            .map(|(_, elapsed_millis)| elapsed_millis)
+            .unwrap_or_default(),
+    );
 
-    let (new_state, verdict) =
-        named_policy
-            .policy
-            .step(&state, Duration::ZERO, properties, &mut rng);
+    let (new_state, verdict) = named_policy
+        .policy
+        .step(&state, elapsed, properties, &mut rng);
+
+    let new_state = match time_box_state {
+        Some((started_at_millis, elapsed_millis)) => RetryPolicyState::TimeBox {
+            started_at_millis,
+            elapsed_millis,
+            inner: Box::new(new_state),
+        },
+        None => new_state,
+    };
 
     Ok((new_state, verdict))
 }
@@ -839,7 +984,7 @@ impl InFunctionRetryState {
         named_policy: &NamedRetryPolicy,
     ) -> AsyncRetryDecision {
         if ctx.in_atomic_region() {
-            return AsyncRetryDecision::FallBackToTrap;
+            return AsyncRetryDecision::FallBackToTrap(None);
         }
 
         let retry_point = ctx.current_retry_point();
@@ -871,7 +1016,7 @@ impl InFunctionRetryState {
         properties: &RetryProperties,
     ) -> AsyncRetryDecision {
         if ctx.in_atomic_region() {
-            return AsyncRetryDecision::FallBackToTrap;
+            return AsyncRetryDecision::FallBackToTrap(None);
         }
 
         let retry_point = ctx.current_retry_point();
@@ -956,7 +1101,18 @@ impl InFunctionRetryState {
 
         let state = ctx.durable_execution_state();
         if delay > state.max_in_function_retry_delay {
-            return AsyncRetryDecision::FallBackToTrap;
+            let semantic_override =
+                named_policy
+                    .policy
+                    .contains_time_box()
+                    .then(|| SemanticTrapRetryOverride {
+                        retry_from: retry_point,
+                        policy_name: named_policy.name.clone(),
+                        verdict: SemanticTrapRetryVerdict::Retry(delay),
+                        retry_policy_state: retry_policy_state
+                            .expect("retry verdict must produce retry policy state"),
+                    });
+            return AsyncRetryDecision::FallBackToTrap(semantic_override);
         }
 
         let inside_atomic_region = ctx.retry_context_atomic_region_had_side_effects();
@@ -1527,6 +1683,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             function_type,
             parent_start_index,
             is_live,
+            admission,
             oplog,
             worker,
             replay_state,
@@ -1624,7 +1781,21 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 invocation_id,
                 function_type,
                 parent_start_index,
-                ctx.state.is_live(),
+                ctx.state.durable_call_is_live(),
+                CustomStoreAdmission {
+                    primary_runtime: *ctx.runtime() == OwnerRuntime::Agent,
+                    replaying_incomplete_entity: ctx.entity_invocation_scope().is_some_and(
+                        |scope| scope.mode() == InvocationExecutionMode::ReplayingIncomplete,
+                    ),
+                    store_continued_live: ctx.state.store_continued_live(),
+                    tool_entity: matches!(
+                        ctx.runtime(),
+                        OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+                    ),
+                    tool_operation: ctx.entity_tool_operation(),
+                    local_live_tail: ctx.state.local_live_tail(),
+                    public_state: ctx.public_state.clone(),
+                },
                 ctx.state.oplog.clone(),
                 ctx.public_state.worker(),
                 ctx.state.replay_state.clone(),
@@ -1640,7 +1811,61 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             .await
             .map_err(|err| err.source)?;
 
-        if is_live {
+        // A call admitted after the live transition may still own a recorded `Start` the cursor
+        // retained (see `WorkerState::durable_call_is_live`), so it claims first and records a new
+        // `Start` only once replay reports that no `Start` carries its invocation id. The
+        // continuation to live mirrors the accessor path (`claim_replay_access_with_options`):
+        // only the primary agent may reach the shared replay tail, an incomplete entity continues
+        // live locally, and a completed entity body without its recorded `Start` has diverged.
+        let claimed = if is_live {
+            None
+        } else {
+            match replay_state
+                .claim_custom_start_for_store(
+                    &function_name,
+                    &function_type,
+                    parent_start_index,
+                    invocation_id,
+                    &request,
+                    admission.store_continued_live,
+                )
+                .await?
+            {
+                CustomStartClaimOutcome::Claimed(claimed) => Some(claimed),
+                outcome @ (CustomStartClaimOutcome::ReplayEnded
+                | CustomStartClaimOutcome::StoreAlreadyLive) => {
+                    let replay_ended = matches!(outcome, CustomStartClaimOutcome::ReplayEnded);
+                    if !admission.replaying_incomplete_entity
+                        && !(admission.primary_runtime && replay_ended)
+                    {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            format!("custom durable Start {{ invocation_id: {invocation_id} }}"),
+                            format!(
+                                "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
+                                replay_state.last_replayed_index()
+                            ),
+                        )
+                        .into());
+                    }
+                    admission
+                        .continue_to_live(
+                            accessor,
+                            &replay_state,
+                            &linear_memory,
+                            if replay_ended {
+                                CustomLiveContinuation::ReplayTail
+                            } else {
+                                CustomLiveContinuation::LocalTail
+                            },
+                            "a new custom invocation",
+                        )
+                        .await?;
+                    None
+                }
+            }
+        };
+
+        let Some(claimed) = claimed else {
             let (verdict_tx, verdict_rx) = oneshot::channel();
             let lifecycle = CustomBeginLifecycle::new(verdict_tx, child_initiation, cleanup_sink);
             let coordinator_lifecycle = lifecycle.clone();
@@ -1719,32 +1944,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             return Ok(durability::CustomDurableInvocation::Live(
                 open_live_custom_durable_invocation(accessor, start_index)?,
             ));
-        }
+        };
 
-        let claimed = replay_state
-            .claim_custom_start_matching_invocation_id(
-                &function_name,
-                &function_type,
-                parent_start_index,
-                invocation_id,
-                &request,
-            )
-            .await?;
         let start_index = claimed.handle.start_idx();
         match replay_state
             .await_resolution_outcome(claimed.handle)
             .await?
         {
             ResolutionOutcome::Incomplete => {
-                let outcome = replay_state
-                    .switch_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
-                    .await?;
-                if matches!(outcome, ReplayToLiveOutcome::ReplayResumed) {
-                    return Err(WorkerExecutorError::runtime(
-                        "replay target grew while an incomplete custom invocation was settling",
+                admission
+                    .continue_to_live(
+                        accessor,
+                        &replay_state,
+                        &linear_memory,
+                        CustomLiveContinuation::ReplayTail,
+                        "an incomplete custom invocation",
                     )
-                    .into());
-                }
+                    .await?;
                 accessor.with(|mut access| {
                     access.get().state.active_custom_invocations.insert(
                         start_index,
@@ -1834,7 +2050,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
 
     fn durable_execution_state(&self) -> DurableExecutionState {
         DurableExecutionState {
-            is_live: self.state.is_live() || self.state.durability_is_suppressed(),
+            is_live: self.state.durable_call_is_live() || self.state.durability_is_suppressed(),
             snapshotting_mode: self.state.snapshotting_mode,
             assume_idempotence: self.state.assume_idempotence,
             max_in_function_retry_delay: self.state.config.max_in_function_retry_delay,
@@ -2239,9 +2455,15 @@ impl InFunctionRetryController {
                 }
             }
             AsyncRetryDecision::Exhausted => Ok(InternalRetryResult::Persist),
-            AsyncRetryDecision::FallBackToTrap => {
+            AsyncRetryDecision::FallBackToTrap(semantic_override) => {
                 let message = err.to_string();
                 let failure = Error::new(ClassifiedHostError { kind, message });
+                if let Some(payload) = semantic_override {
+                    return Err(anyhow::Error::new(SemanticTrapRetryOverrideMarker {
+                        payload,
+                        inner: failure,
+                    }));
+                }
                 ctx.try_trigger_retry(failure, properties.clone()).await?;
                 // If try_trigger_retry returned Ok, retries are exhausted — persist the failure
                 Ok(InternalRetryResult::Persist)
@@ -2456,7 +2678,7 @@ where
                             }
                         }
                     }
-                    AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap => {
+                    AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap(_) => {
                         return Err(err);
                     }
                 }
@@ -3141,6 +3363,53 @@ mod tests {
         );
     }
 
+    #[test]
+    async fn time_box_fallback_carries_the_evaluated_state_to_trap_recovery() {
+        let mut ctx = MockDurabilityHost::new();
+        ctx.named_retry_policies = vec![NamedRetryPolicy {
+            name: "time-box".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::TimeBox {
+                limit: Duration::from_secs(60),
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(30))),
+            },
+        }];
+        ctx.max_in_function_retry_delay = Duration::from_secs(20);
+        let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
+
+        let result: Result<String, String> = Err("timeout".to_string());
+        let error = controller
+            .try_trigger_retry_or_loop_with_properties(
+                &mut ctx,
+                &result,
+                |_| HostFailureKind::Transient,
+                RetryProperties::new(),
+            )
+            .await
+            .expect_err("TimeBox fallback must carry the first decision into trap recovery");
+        let semantic_override = find_semantic_trap_retry_override(&error)
+            .expect("fallback must carry a semantic trap retry override");
+
+        assert_eq!(
+            semantic_override.verdict,
+            SemanticTrapRetryVerdict::Retry(Duration::from_secs(30))
+        );
+        assert!(matches!(
+            semantic_override.retry_policy_state,
+            RetryPolicyState::TimeBox {
+                elapsed_millis: 0,
+                inner,
+                ..
+            } if *inner == RetryPolicyState::Wrapper(Box::new(RetryPolicyState::Counter(1)))
+        ));
+        assert_eq!(
+            ctx.trap_triggered_count, 0,
+            "policy must not be stepped twice"
+        );
+        assert_eq!(ctx.retry_entries_appended, 0);
+    }
+
     // Test 3: Atomic regions disable in-function retry
     #[test]
     async fn atomic_region_disables_in_function_retry() {
@@ -3427,7 +3696,7 @@ mod tests {
             .decide_retry_for_named_policy(&mut ctx, "test-fn", &RetryProperties::new(), &explicit)
             .await;
 
-        assert!(matches!(decision, AsyncRetryDecision::FallBackToTrap));
+        assert!(matches!(decision, AsyncRetryDecision::FallBackToTrap(None)));
         assert_eq!(ctx.retry_entries_appended, 0);
     }
 
@@ -3614,6 +3883,84 @@ mod tests {
             format!("{:?}", direct.0),
             format!("{:?}", via_guard.0),
             "guard must not perturb state when shape matches"
+        );
+    }
+
+    #[test]
+    fn host_managed_time_box_uses_inclusive_monotonic_elapsed_time() {
+        let policy = NamedRetryPolicy {
+            name: "nested-time-box".to_string(),
+            priority: 1,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 10,
+                inner: Box::new(RetryPolicy::AddDelay {
+                    delay: Duration::from_millis(1),
+                    inner: Box::new(RetryPolicy::TimeBox {
+                        limit: Duration::from_millis(500),
+                        inner: Box::new(RetryPolicy::Immediate),
+                    }),
+                }),
+            },
+        };
+        let properties = RetryProperties::new();
+
+        let (state_1, verdict_1) =
+            evaluate_named_policy_step_at(&policy, &properties, None, 1_000).unwrap();
+        assert_eq!(verdict_1, RetryVerdict::Retry(Duration::from_millis(1)));
+
+        let (state_2, verdict_2) =
+            evaluate_named_policy_step_at(&policy, &properties, Some(&state_1), 1_499).unwrap();
+        assert_eq!(verdict_2, RetryVerdict::Retry(Duration::from_millis(1)));
+        assert_eq!(state_2.retry_count(), 2);
+
+        let (state_after_clock_regression, verdict_after_clock_regression) =
+            evaluate_named_policy_step_at(&policy, &properties, Some(&state_2), 1_200).unwrap();
+        assert_eq!(
+            verdict_after_clock_regression,
+            RetryVerdict::Retry(Duration::from_millis(1))
+        );
+        assert!(matches!(
+            state_after_clock_regression,
+            RetryPolicyState::TimeBox {
+                started_at_millis: 1_000,
+                elapsed_millis: 499,
+                ..
+            }
+        ));
+
+        let (_, verdict_at_limit) = evaluate_named_policy_step_at(
+            &policy,
+            &properties,
+            Some(&state_after_clock_regression),
+            1_500,
+        )
+        .unwrap();
+        assert_eq!(verdict_at_limit, RetryVerdict::GiveUp);
+    }
+
+    #[test]
+    fn host_managed_policy_without_time_box_keeps_existing_state_shape() {
+        let policy = NamedRetryPolicy {
+            name: "count-only".to_string(),
+            priority: 1,
+            predicate: Predicate::True,
+            policy: RetryPolicy::CountBox {
+                max_retries: 2,
+                inner: Box::new(RetryPolicy::Immediate),
+            },
+        };
+
+        let (state, verdict) =
+            evaluate_named_policy_step_at(&policy, &RetryProperties::new(), None, 10_000).unwrap();
+
+        assert_eq!(verdict, RetryVerdict::Retry(Duration::ZERO));
+        assert_eq!(
+            state,
+            RetryPolicyState::CountBox {
+                attempts: 1,
+                inner: Box::new(RetryPolicyState::Counter(1)),
+            }
         );
     }
 

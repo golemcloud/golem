@@ -291,6 +291,13 @@ pub enum AppBuildStep {
 pub enum SubjectSource {
     Local { component_name: ComponentName },
     RemoteRelease,
+    EnvironmentTool,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct EnvironmentToolBridgeRequests {
+    pub wildcard: bool,
+    pub names: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -311,7 +318,7 @@ impl ComponentDependency {
             ComponentDependency::Agent { component_name, .. } => Some(component_name),
             ComponentDependency::Tool { source, .. } => match source {
                 SubjectSource::Local { component_name } => Some(component_name),
-                SubjectSource::RemoteRelease => None,
+                SubjectSource::RemoteRelease | SubjectSource::EnvironmentTool => None,
             },
         }
     }
@@ -322,6 +329,22 @@ impl ComponentDependency {
 pub enum BridgeSdkTargetSource {
     Local {
         component_name: ComponentName,
+    },
+    McpImport {
+        import_index: u32,
+        projection_digest: String,
+        #[serde(skip)]
+        manifest_source: PathBuf,
+    },
+    AmbientNative {
+        environment_id: golem_common::model::environment::EnvironmentId,
+        release_id: golem_common::model::tool_release::ToolReleaseId,
+        version: String,
+        metadata_version: String,
+        metadata_digest: golem_common::model::diff::Hash,
+        source_digest: golem_common::model::diff::Hash,
+        #[serde(skip)]
+        manifest_source: PathBuf,
     },
     RemoteRelease {
         release_id: golem_common::model::tool_release::ToolReleaseId,
@@ -342,7 +365,9 @@ impl BridgeSdkTargetSource {
     pub fn component_name(&self) -> Option<&ComponentName> {
         match self {
             Self::Local { component_name } => Some(component_name),
-            Self::RemoteRelease { .. } => None,
+            Self::RemoteRelease { .. } | Self::McpImport { .. } | Self::AmbientNative { .. } => {
+                None
+            }
         }
     }
 }
@@ -603,6 +628,10 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
+    mcp_imports: BTreeMap<
+        EnvironmentName,
+        WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
+    >,
     agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
     retry_policy_defaults:
         BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
@@ -901,6 +930,83 @@ impl Application {
                     )
                 })
             })
+    }
+
+    pub fn requires_environment_tool_bridge_metadata(
+        &self,
+        selected: &BTreeSet<ComponentName>,
+        include_manifest_bridge_requests: bool,
+    ) -> bool {
+        let requests =
+            self.environment_tool_bridge_requests(selected, include_manifest_bridge_requests);
+        requests.wildcard || !requests.names.is_empty()
+    }
+
+    pub fn environment_tool_bridge_requests(
+        &self,
+        selected: &BTreeSet<ComponentName>,
+        include_manifest_bridge_requests: bool,
+    ) -> EnvironmentToolBridgeRequests {
+        let mut requests = EnvironmentToolBridgeRequests::default();
+        let application_tool_names = self.known_application_tool_names();
+        if include_manifest_bridge_requests {
+            for (_, _, targets) in self.bridge_sdks().for_all_used_modes() {
+                for matcher in targets
+                    .tools
+                    .map(|tools| tools.clone().into_set())
+                    .unwrap_or_default()
+                {
+                    if matcher == "*" {
+                        requests.wildcard = true;
+                    } else if !application_tool_names.contains(&matcher)
+                        && !self.components.keys().any(|name| name.as_str() == matcher)
+                    {
+                        requests.names.insert(matcher);
+                    }
+                }
+            }
+        }
+        let mut visited = BTreeSet::new();
+        let mut pending = selected.iter().cloned().collect::<Vec<_>>();
+        while let Some(name) = pending.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            for dependency in &self.component(&name).properties().dependencies {
+                if let ComponentDependency::Tool {
+                    source: SubjectSource::EnvironmentTool,
+                    tool_name,
+                } = dependency
+                {
+                    requests.names.insert(tool_name.to_string());
+                }
+                if let Some(provider) = dependency.component_name() {
+                    pending.push(provider.clone());
+                }
+            }
+        }
+        requests
+    }
+
+    pub fn known_application_tool_names(&self) -> BTreeSet<String> {
+        self.tool_declarations
+            .keys()
+            .map(ToString::to_string)
+            .chain(self.components.values().flat_map(|component| {
+                component
+                    .value
+                    .0
+                    .dependencies
+                    .iter()
+                    .filter_map(|dependency| match dependency {
+                        ComponentDependency::Tool {
+                            source: SubjectSource::Local { .. },
+                            tool_name,
+                        } => Some(tool_name.to_string()),
+                        _ => None,
+                    })
+            }))
+            .collect()
     }
 
     pub fn selected_environment_source(&self) -> Option<&Path> {
@@ -1532,6 +1638,21 @@ impl Application {
         environment: &EnvironmentName,
     ) -> Option<&BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>> {
         self.mcp_deployments.get(environment)
+    }
+
+    pub fn mcp_imports(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Option<&Vec<golem_common::model::mcp_import::McpImportDeployment>> {
+        self.mcp_imports
+            .get(environment)
+            .map(|imports| &imports.value)
+    }
+
+    pub fn mcp_imports_source(&self, environment: &EnvironmentName) -> Option<&Path> {
+        self.mcp_imports
+            .get(environment)
+            .map(|imports| imports.source.as_path())
     }
 }
 
@@ -3512,7 +3633,7 @@ mod app_builder {
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
         HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation,
-        SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
+        HttpApiDeploymentScheme, SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
     };
     use golem_common::model::tool_middleware::ToolMiddlewareName;
     use indexmap::IndexMap;
@@ -3563,6 +3684,7 @@ mod app_builder {
         SecretDefaults(EnvironmentName),
         RetryPolicyDefaults(EnvironmentName),
         ResourceDefaults(EnvironmentName),
+        McpImports(EnvironmentName),
         Bridge,
         LocalServer,
         Version,
@@ -3586,6 +3708,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
+                UniqueSourceCheckedEntityKey::McpImports(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
                 UniqueSourceCheckedEntityKey::LocalServer => property,
                 UniqueSourceCheckedEntityKey::Version => property,
@@ -3652,6 +3775,11 @@ mod app_builder {
                         environment_name.0.log_color_highlight()
                     )
                 }
+                UniqueSourceCheckedEntityKey::McpImports(environment_name) => {
+                    format!("mcp.imports.{}", environment_name.0)
+                        .log_color_highlight()
+                        .to_string()
+                }
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
                 UniqueSourceCheckedEntityKey::LocalServer => {
                     "localServer".log_color_highlight().to_string()
@@ -3684,6 +3812,36 @@ mod app_builder {
             "HTTP API",
             source,
         )
+    }
+
+    fn resolve_http_api_scheme(
+        validation: &mut ValidationBuilder,
+        scheme: Option<HttpApiDeploymentScheme>,
+        environment_name: &EnvironmentName,
+        environment: Option<&app_raw::Environment>,
+        source: &Path,
+    ) -> Option<HttpApiDeploymentScheme> {
+        if let Some(scheme) = scheme {
+            return Some(scheme);
+        }
+
+        match environment.and_then(|environment| environment.server.as_ref()) {
+            Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Cloud)) => {
+                Some(HttpApiDeploymentScheme::Https)
+            }
+            Some(app_raw::Server::Custom(_)) => {
+                validation.add_error(format!(
+                    "HTTP API deployment in {} for custom server environment {} must define an explicit {}. The scheme is not inferred from the custom server management URL.",
+                    source.display().to_string().log_color_highlight(),
+                    environment_name.0.log_color_highlight(),
+                    "scheme".log_color_highlight(),
+                ));
+                None
+            }
+            Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Local)) | None => {
+                Some(HttpApiDeploymentScheme::Http)
+            }
+        }
     }
 
     fn resolve_mcp_domain(
@@ -3868,6 +4026,10 @@ mod app_builder {
 
         mcp_deployments:
             BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
+        mcp_imports: BTreeMap<
+            EnvironmentName,
+            WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
+        >,
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
@@ -3938,6 +4100,7 @@ mod app_builder {
             builder.validate_unique_sources(&mut validation);
             builder.validate_tool_release_configuration(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
+            builder.validate_mcp_imports(&mut validation, &environments);
 
             validation.build(Application {
                 app_root_dir,
@@ -3960,6 +4123,7 @@ mod app_builder {
                 clean: builder.clean,
                 http_api_deployments: builder.http_api_deployments,
                 mcp_deployments: builder.mcp_deployments,
+                mcp_imports: builder.mcp_imports,
                 agent_secrets_defaults: builder.agent_secret_defaults,
                 retry_policy_defaults: builder.retry_policy_defaults,
                 resource_definition_defaults: builder.resource_definition_defaults,
@@ -4219,6 +4383,15 @@ mod app_builder {
                                 ) else {
                                     continue;
                                 };
+                                let Some(scheme) = resolve_http_api_scheme(
+                                    validation,
+                                    api_deployment.scheme,
+                                    &environment,
+                                    self.environments.get(&environment),
+                                    &app.source,
+                                ) else {
+                                    continue;
+                                };
 
                                 let deployments =
                                     self.http_api_deployments.entry(environment.clone()).or_default();
@@ -4238,6 +4411,7 @@ mod app_builder {
                                 deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
+                                        scheme,
                                         webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
                                             api_deployment
                                                 .webhook_url
@@ -4252,6 +4426,14 @@ mod app_builder {
                     }
 
                     if let Some(mcp) = app.application.mcp {
+                        for (environment, imports) in mcp.imports {
+                            if self.add_entity_source(
+                                UniqueSourceCheckedEntityKey::McpImports(environment.clone()),
+                                &app.source,
+                            ) {
+                                self.mcp_imports.insert(environment, WithSource::new(app.source.clone(), imports));
+                            }
+                        }
                         for (environment, deployments) in mcp.deployments {
                             for mcp_deployment in deployments {
                                 let Some(domain) = resolve_mcp_domain(
@@ -4910,13 +5092,7 @@ mod app_builder {
                     }
 
                     match self.tool_declarations.get(tool_name) {
-                        None => issues.push(ToolValidationIssue::error(
-                            ToolValidationPhase::BindingReferences,
-                            ToolValidationCode::MissingDeclaration,
-                            ToolEntityPath::tool(tool_name, "components.dependencies.tools"),
-                            Some(component.source.clone()),
-                            format!("Component {component_name} depends on undeclared tool"),
-                        )),
+                        None => *source = SubjectSource::EnvironmentTool,
                         Some(declaration) if declaration.value.release.is_none() => {
                             if let Some(dependency_component) = &declaration.value.component {
                                 if dependency_component == component_name {
@@ -5261,6 +5437,25 @@ mod app_builder {
             }
         }
 
+        fn validate_mcp_imports(
+            &self,
+            validation: &mut ValidationBuilder,
+            environments: &BTreeMap<EnvironmentName, app_raw::Environment>,
+        ) {
+            for environment in self.mcp_imports.keys() {
+                if !environments.contains_key(environment) {
+                    validation.add_warn(format!(
+                        "Unknown environment in manifest: {}\n\n{}",
+                        environment.0.log_color_highlight(),
+                        self.available_profiles(
+                            environments.keys().map(|p| p.0.as_str()),
+                            &environment.0
+                        )
+                    ));
+                }
+            }
+        }
+
         fn available_profiles<'a, I: IntoIterator<Item = &'a str>>(
             &self,
             available_profiles: I,
@@ -5407,7 +5602,8 @@ mod test {
     use crate::fs;
     use crate::model::app::{
         Application, ApplicationPreload, ComponentDependency, ComponentLayerApplyContext,
-        ComponentPresetSelector, SubjectSource, ToolName, includes_from_yaml_file,
+        ComponentPresetSelector, EnvironmentToolBridgeRequests, SubjectSource, ToolName,
+        includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use crate::model::cascade::property::Property;
@@ -5415,10 +5611,11 @@ mod test {
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use serde_json::json;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
     use tempfile::TempDir;
     use test_r::test;
@@ -5956,6 +6153,61 @@ mod test {
     }
 
     #[test]
+    fn mcp_imports_keep_order_and_reject_duplicate_environment_sources() {
+        let source = indoc! {r#"
+            app: hello-app
+            environments:
+              local:
+                server: local
+            components:
+              app:main:
+                componentWasm: main.wasm
+            mcp:
+              imports:
+                local:
+                  - url: https://z.example/mcp
+                  - url: https://a.example/mcp
+        "#};
+        let (app, _dir) = load_app(source, &selector("local", &[]));
+        assert_eq!(
+            app.mcp_imports(&EnvironmentName("local".into()))
+                .unwrap()
+                .iter()
+                .map(|import| import.url.as_str())
+                .collect::<Vec<_>>(),
+            ["https://z.example/mcp", "https://a.example/mcp"]
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_string(dir.path().join("golem.yaml"), source)
+                .unwrap(),
+            app_raw::ApplicationWithSource::from_yaml_string(
+                dir.path().join("included.yaml"),
+                "mcp:\n  imports:\n    local: []\n",
+            )
+            .unwrap(),
+        ];
+        let preload = Application::preload_from_raw_apps(&apps)
+            .into_product()
+            .0
+            .unwrap();
+        let (_, _, errors) = Application::from_raw_apps(
+            dir.path().to_path_buf(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("local", &[]),
+            apps,
+        )
+        .into_product();
+        assert!(
+            errors.iter().any(|error| error.contains("mcp.imports")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn test_component_custom_template_single_is_applied() {
         let source = indoc! { r#"
             app: hello-app
@@ -6473,6 +6725,146 @@ mod test {
     }
 
     #[test]
+    fn environment_tool_dependencies_keep_declared_sources_and_resolve_only_for_selected_builds() {
+        let source = indoc! {r#"
+            app: imported-tools
+            environments:
+              local:
+                server: local
+            components:
+              app:provider:
+                componentWasm: provider.wasm
+              app:consumer:
+                componentWasm: consumer.wasm
+                dependencies:
+                  tools: [native-tool, released-tool, imported-tool]
+            tools:
+              native-tool:
+                component: app:provider
+              released-tool:
+                release:
+                  account: publisher@example.com
+                  name: released-tool
+                  version: 1.0.0
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        let consumer = parse_component_name("app:consumer");
+        let provider = parse_component_name("app:provider");
+        let component = app.component(&consumer);
+        let dependencies = &component.properties().dependencies;
+        assert!(matches!(
+            &dependencies[0],
+            ComponentDependency::Tool {
+                source: SubjectSource::Local { .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            &dependencies[1],
+            ComponentDependency::Tool {
+                source: SubjectSource::RemoteRelease,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&dependencies[2], ComponentDependency::Tool { source: SubjectSource::EnvironmentTool, tool_name } if tool_name.as_str() == "imported-tool")
+        );
+        assert!(app.requires_environment_tool_bridge_metadata(&BTreeSet::from([consumer]), true));
+        assert!(
+            !app.requires_environment_tool_bridge_metadata(
+                &BTreeSet::from([provider.clone()]),
+                true
+            )
+        );
+        let (wildcard, _dir) = load_app_for_env(
+            &format!("{source}\nbridge:\n  rust:\n    internal:\n      tools: ['*']\n"),
+            "local",
+            &[],
+        );
+        assert!(
+            wildcard.requires_environment_tool_bridge_metadata(
+                &BTreeSet::from([provider.clone()]),
+                true
+            )
+        );
+        assert!(
+            !wildcard.requires_environment_tool_bridge_metadata(&BTreeSet::from([provider]), false)
+        );
+    }
+
+    #[test]
+    fn environment_tool_metadata_demand_follows_transitive_local_dependencies() {
+        let (app, _dir) = load_app_for_env(
+            indoc! {r#"
+                app: transitive-environment-tool
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:provider:
+                    componentWasm: provider.wasm
+                    dependencies:
+                      tools:
+                        - ambient-tool
+                  app:consumer:
+                    componentWasm: consumer.wasm
+                    dependencies:
+                      tools:
+                        - local-tool
+                tools:
+                  local-tool:
+                    component: app:provider
+            "#},
+            "local",
+            &[],
+        );
+
+        assert!(app.requires_environment_tool_bridge_metadata(
+            &BTreeSet::from([ComponentName("app:consumer".to_string())]),
+            false
+        ));
+    }
+
+    #[test]
+    fn explicit_local_tool_names_are_not_environment_requests() {
+        let (app, _dir) = load_app_for_env(
+            indoc! {r#"
+                app: local-tool-request
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:provider:
+                    componentWasm: provider.wasm
+                  app:consumer:
+                    componentWasm: consumer.wasm
+                    dependencies:
+                      tools:
+                        - component: app:provider
+                          name: grep
+                bridge:
+                  rust:
+                    internal:
+                      tools: [grep]
+            "#},
+            "local",
+            &[],
+        );
+
+        assert_eq!(
+            app.known_application_tool_names(),
+            BTreeSet::from(["grep".to_string()])
+        );
+        assert_eq!(
+            app.environment_tool_bridge_requests(
+                &BTreeSet::from([ComponentName("app:consumer".to_string())]),
+                true,
+            ),
+            EnvironmentToolBridgeRequests::default()
+        );
+    }
+
+    #[test]
     fn remote_release_manifest_validation_reports_invalid_references() {
         let errors = load_app_errors(indoc! { r#"
             app: hello-app
@@ -6504,7 +6896,6 @@ mod test {
             "declaration key must match",
             "cannot publish remote tool",
             "publishes undeclared tool",
-            "depends on undeclared tool",
             "name-only dependency",
         ] {
             assert!(
@@ -7616,6 +8007,77 @@ mod test {
     }
 
     #[test]
+    fn http_api_schemes_resolve_from_environment_and_allow_overrides() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+              implicit: {}
+              cloud:
+                server: cloud
+              custom:
+                server:
+                  url: https://management.example.com
+                  workerUrl: https://workers.example.com
+                  auth:
+                    staticToken: token
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: local.example.com
+                  - domain: secure-local.example.com
+                    scheme: https
+                implicit:
+                  - domain: implicit.example.com
+                cloud:
+                  - domain: cloud.example.com
+                  - domain: insecure-cloud.example.com
+                    scheme: http
+                custom:
+                  - domain: custom.example.com
+                    scheme: http
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let scheme = |environment: &str, domain: &str| {
+            app.http_api_deployments(&EnvironmentName(environment.to_string()))
+                .unwrap()
+                .get(&Domain(domain.to_string()))
+                .unwrap()
+                .value
+                .scheme
+        };
+
+        assert_eq!(
+            scheme("local", "local.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+        assert_eq!(
+            scheme("implicit", "implicit.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+        assert_eq!(
+            scheme("cloud", "cloud.example.com"),
+            HttpApiDeploymentScheme::Https
+        );
+        assert_eq!(
+            scheme("local", "secure-local.example.com"),
+            HttpApiDeploymentScheme::Https
+        );
+        assert_eq!(
+            scheme("cloud", "insecure-cloud.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+        assert_eq!(
+            scheme("custom", "custom.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+    }
+
+    #[test]
     fn deployment_domains_keep_full_domains_unchanged() {
         let source = indoc! { r#"
             app: hello-app
@@ -7921,6 +8383,53 @@ mod test {
             "\n{}",
             errors.join("\n\n")
         );
+    }
+
+    #[test]
+    fn http_api_deployment_requires_explicit_scheme_for_custom_server() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              custom:
+                server:
+                  url: https://management.example.com
+                  workerUrl: https://workers.example.com
+                  auth:
+                    staticToken: token
+
+            httpApi:
+              deployments:
+                custom:
+                  - domain: api.example.com
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let preload = preload.expect("manifest should preload");
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("custom", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(errors[0].contains("must define an explicit"));
+        assert!(errors[0].contains("not inferred from the custom server management URL"));
     }
 
     #[test]

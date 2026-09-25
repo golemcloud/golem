@@ -356,6 +356,8 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		PhantomAgent:  e.mount.PhantomAgent,
 		CorsOptions:   common.CorsOptions{AllowedPatterns: e.mount.CORS},
 		WebhookSuffix: webhook,
+
+		OpenapiProviderMethod: witTypes.None[string](),
 	}
 
 	endpoints := map[string][]common.HttpEndpointDetails{}
@@ -464,6 +466,8 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 		QueryVars:   queryVars,
 		AuthDetails: auth,
 		CorsOptions: common.CorsOptions{AllowedPatterns: ep.cors},
+
+		DurableStreams: witTypes.None[common.DurableStreamRouteOptions](),
 	}
 	return det, errs
 }

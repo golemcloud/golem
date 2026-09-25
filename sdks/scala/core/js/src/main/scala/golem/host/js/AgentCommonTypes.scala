@@ -144,9 +144,29 @@ object JsHttpMethod {
   def options: JsHttpMethod = JsShape.tagOnly[JsHttpMethod]("options")
   def trace: JsHttpMethod   = JsShape.tagOnly[JsHttpMethod]("trace")
   def patch: JsHttpMethod   = JsShape.tagOnly[JsHttpMethod]("patch")
+  def any: JsHttpMethod     = JsShape.tagOnly[JsHttpMethod]("any")
 
   def custom(method: String): JsHttpMethod =
     JsShape.tagged[JsHttpMethod]("custom", method.asInstanceOf[js.Any])
+}
+
+@js.native
+sealed trait JsFileMapping extends js.Object {
+  def tag: String = js.native
+}
+
+object JsFileMapping {
+  def exact(publicPath: js.Array[String], filePath: String): JsFileMapping =
+    JsShape.tagged[JsFileMapping](
+      "exact",
+      js.Dynamic.literal("publicPath" -> publicPath, "filePath" -> filePath)
+    )
+
+  def subtree(publicPrefix: js.Array[String], filesystemRoot: String): JsFileMapping =
+    JsShape.tagged[JsFileMapping](
+      "subtree",
+      js.Dynamic.literal("publicPrefix" -> publicPrefix, "filesystemRoot" -> filesystemRoot)
+    )
 }
 
 @js.native
@@ -242,11 +262,14 @@ object JsCorsOptions {
 
 @js.native
 sealed trait JsHttpMountDetails extends js.Object {
-  def pathPrefix: js.Array[JsPathSegment]    = js.native
-  def authDetails: js.UndefOr[JsAuthDetails] = js.native
-  def phantomAgent: Boolean                  = js.native
-  def corsOptions: JsCorsOptions             = js.native
-  def webhookSuffix: js.Array[JsPathSegment] = js.native
+  def pathPrefix: js.Array[JsPathSegment]         = js.native
+  def authDetails: js.UndefOr[JsAuthDetails]      = js.native
+  def phantomAgent: Boolean                       = js.native
+  def corsOptions: JsCorsOptions                  = js.native
+  def webhookSuffix: js.Array[JsPathSegment]      = js.native
+  def staticBindings: js.Array[JsFileMapping]     = js.native
+  def filesystemBindings: js.Array[JsFileMapping] = js.native
+  def openapiProviderMethod: js.UndefOr[String]   = js.native
 }
 
 object JsHttpMountDetails {
@@ -255,27 +278,81 @@ object JsHttpMountDetails {
     phantomAgent: Boolean,
     corsOptions: JsCorsOptions,
     webhookSuffix: js.Array[JsPathSegment],
+    staticBindings: js.Array[JsFileMapping],
+    filesystemBindings: js.Array[JsFileMapping],
+    openapiProviderMethod: js.UndefOr[String],
     authDetails: js.UndefOr[JsAuthDetails] = js.undefined
   ): JsHttpMountDetails = {
     val obj = js.Dynamic.literal(
-      "pathPrefix"    -> pathPrefix,
-      "phantomAgent"  -> phantomAgent,
-      "corsOptions"   -> corsOptions,
-      "webhookSuffix" -> webhookSuffix
+      "pathPrefix"         -> pathPrefix,
+      "phantomAgent"       -> phantomAgent,
+      "corsOptions"        -> corsOptions,
+      "webhookSuffix"      -> webhookSuffix,
+      "staticBindings"     -> staticBindings,
+      "filesystemBindings" -> filesystemBindings
     )
     authDetails.foreach(a => obj.updateDynamic("authDetails")(a))
+    openapiProviderMethod.foreach(p => obj.updateDynamic("openapiProviderMethod")(p))
     obj.asInstanceOf[JsHttpMountDetails]
   }
 }
 
 @js.native
 sealed trait JsHttpEndpointDetails extends js.Object {
-  def httpMethod: JsHttpMethod               = js.native
-  def pathSuffix: js.Array[JsPathSegment]    = js.native
-  def headerVars: js.Array[JsHeaderVariable] = js.native
-  def queryVars: js.Array[JsQueryVariable]   = js.native
-  def authDetails: js.UndefOr[JsAuthDetails] = js.native
-  def corsOptions: JsCorsOptions             = js.native
+  def httpMethod: JsHttpMethod                                = js.native
+  def pathSuffix: js.Array[JsPathSegment]                     = js.native
+  def headerVars: js.Array[JsHeaderVariable]                  = js.native
+  def queryVars: js.Array[JsQueryVariable]                    = js.native
+  def authDetails: js.UndefOr[JsAuthDetails]                  = js.native
+  def corsOptions: JsCorsOptions                              = js.native
+  def durableStreams: js.UndefOr[JsDurableStreamRouteOptions] = js.native
+}
+
+@js.native
+sealed trait JsDurableStreamSlotSource extends js.Object
+object JsDurableStreamSlotSource {
+  def input(slot: String): JsDurableStreamSlotSource  = JsShape.tagged("input", slot.asInstanceOf[js.Any])
+  def output(slot: String): JsDurableStreamSlotSource = JsShape.tagged("output", slot.asInstanceOf[js.Any])
+}
+@js.native
+sealed trait JsDurableStreamSlotOptions extends js.Object
+object JsDurableStreamSlotOptions {
+  def apply(
+    source: JsDurableStreamSlotSource,
+    name: js.UndefOr[String],
+    contentType: js.UndefOr[String]
+  ): JsDurableStreamSlotOptions = {
+    val obj = js.Dynamic.literal("source" -> source)
+    name.foreach(v => obj.updateDynamic("name")(v)); contentType.foreach(v => obj.updateDynamic("contentType")(v))
+    obj.asInstanceOf[JsDurableStreamSlotOptions]
+  }
+}
+@js.native
+sealed trait JsDurableStreamRouteLoadOptions extends js.Object
+object JsDurableStreamRouteLoadOptions {
+  def apply(readers: js.UndefOr[Int], appends: js.UndefOr[Int]): JsDurableStreamRouteLoadOptions = {
+    val obj = js.Dynamic.literal(); readers.foreach(v => obj.updateDynamic("maxConcurrentReadersPerStream")(v))
+    appends.foreach(v => obj.updateDynamic("maxAppendRequestsPerSecondPerStream")(v));
+    obj.asInstanceOf[JsDurableStreamRouteLoadOptions]
+  }
+}
+@js.native
+sealed trait JsDurableStreamRouteOptions extends js.Object
+object JsDurableStreamRouteOptions {
+  def apply(
+    slots: js.Array[JsDurableStreamSlotOptions],
+    writes: js.UndefOr[Boolean],
+    streamDelete: js.UndefOr[Boolean],
+    invocationDelete: js.UndefOr[Boolean],
+    load: js.UndefOr[JsDurableStreamRouteLoadOptions]
+  ): JsDurableStreamRouteOptions = {
+    val obj = js.Dynamic.literal("slots" -> slots)
+    writes.foreach(v => obj.updateDynamic("allowExternalWrites")(v));
+    streamDelete.foreach(v => obj.updateDynamic("allowStreamDelete")(v))
+    invocationDelete.foreach(v => obj.updateDynamic("allowInvocationDelete")(v));
+    load.foreach(v => obj.updateDynamic("load")(v))
+    obj.asInstanceOf[JsDurableStreamRouteOptions]
+  }
 }
 
 object JsHttpEndpointDetails {
@@ -285,7 +362,8 @@ object JsHttpEndpointDetails {
     headerVars: js.Array[JsHeaderVariable],
     queryVars: js.Array[JsQueryVariable],
     corsOptions: JsCorsOptions,
-    authDetails: js.UndefOr[JsAuthDetails] = js.undefined
+    authDetails: js.UndefOr[JsAuthDetails] = js.undefined,
+    durableStreams: js.UndefOr[JsDurableStreamRouteOptions] = js.undefined
   ): JsHttpEndpointDetails = {
     val obj = js.Dynamic.literal(
       "httpMethod"  -> httpMethod,
@@ -295,6 +373,7 @@ object JsHttpEndpointDetails {
       "corsOptions" -> corsOptions
     )
     authDetails.foreach(a => obj.updateDynamic("authDetails")(a))
+    durableStreams.foreach(a => obj.updateDynamic("durableStreams")(a))
     obj.asInstanceOf[JsHttpEndpointDetails]
   }
 }

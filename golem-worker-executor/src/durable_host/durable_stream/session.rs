@@ -97,8 +97,17 @@ impl DurableStreamStore {
     }
 
     /// Installs the runtime service used to project durable session control metadata.
-    pub fn set_control_metadata_provider(&self, service: Arc<dyn WorkerService>, mode: AgentMode) {
-        assert!(self.control_metadata_provider.set((service, mode)).is_ok());
+    pub fn set_control_metadata_provider(
+        &self,
+        service: Arc<dyn WorkerService>,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+    ) {
+        assert!(
+            self.control_metadata_provider
+                .set((service, mode, fingerprint))
+                .is_ok()
+        );
     }
 
     /// Loads control metadata reconstructed from committed session records.
@@ -107,7 +116,7 @@ impl DurableStreamStore {
         key: &StreamSessionKey,
     ) -> Result<Option<SessionControlMetadata>, String> {
         self.ensure_healthy()?;
-        let Some((service, mode)) = self.control_metadata_provider.get() else {
+        let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(None);
         };
         let activity = self
@@ -116,7 +125,7 @@ impl DurableStreamStore {
             .ok_or(StreamStoreError::RecoveryRequired)?;
         let owner = OwnedAgentId::new(self.environment_id, &self.producer);
         activity
-            .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, key))
+            .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, *fingerprint, key))
             .await
             .map(Some)
     }
@@ -193,7 +202,7 @@ impl DurableStreamStore {
         reader: LocalStreamReaderId,
     ) -> Result<Option<(OplogIndex, Vec<OplogIndex>)>, String> {
         self.ensure_healthy()?;
-        let Some((service, mode)) = self.control_metadata_provider.get() else {
+        let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(None);
         };
         let activity = self
@@ -204,7 +213,7 @@ impl DurableStreamStore {
             .scope(async {
                 let owner = OwnedAgentId::new(self.environment_id, &self.producer);
                 let metadata = service
-                    .lookup_durable_stream_control_metadata(&owner, *mode, key)
+                    .lookup_durable_stream_control_metadata(&owner, *mode, *fingerprint, key)
                     .await?;
                 let count = metadata.consumer_record_count(reader);
                 let page_size =
@@ -212,7 +221,7 @@ impl DurableStreamStore {
                 let mut positions = Vec::new();
                 for page in 0..count.div_ceil(page_size) {
                     let records = service
-                        .read_durable_stream_consumer_page(&owner, key, reader, page)
+                        .read_durable_stream_consumer_page(&owner, *fingerprint, key, reader, page)
                         .await?;
                     let needed = (count - page * page_size).min(page_size) as usize;
                     if records.len() < needed {
@@ -264,19 +273,26 @@ impl DurableStreamStore {
     ) -> Result<(), StreamStoreError> {
         self.append_session_records_owned(context, entity_parent_start_index, vec![record])
             .await
+            .map(|_| ())
     }
 
-    /// Serializes and commits an ordered batch of session mutations.
+    /// Serializes and commits an ordered batch of session mutations, returning assigned indices.
     pub(crate) async fn append_session_records_owned(
         &self,
         context: &StreamWriteContext,
         entity_parent_start_index: Option<OplogIndex>,
         records: Vec<StreamSessionRecord>,
-    ) -> Result<(), StreamStoreError> {
+    ) -> Result<Vec<OplogIndex>, StreamStoreError> {
         if records.iter().any(|record| !record.has_supported_format()) {
             return Err(StreamStoreError::CorruptHistory(
                 "unsupported or malformed durable Stream Session record".to_string(),
             ));
+        }
+        if records
+            .iter()
+            .any(|record| matches!(record, StreamSessionRecord::ReaderForwardIntent(_)))
+        {
+            context.begin_lifecycle_publication().await?;
         }
         let mut index = self
             .index_for(records.iter().flat_map(|record| {
@@ -360,7 +376,7 @@ impl DurableStreamStore {
         *index = staged;
         drop(index);
         self.notify_session_records_changed(Some(context));
-        Ok(())
+        Ok(entries.into_iter().map(|(index, _)| index).collect())
     }
 
     /// Returns the process-local serialization lock for a durable session identity.
