@@ -1157,7 +1157,7 @@ async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_cal
         .save(&from, &name("p-1"), tree.path(), None)
         .await
         .unwrap();
-    let copying = tokio::spawn({
+    let mut copying = tokio::spawn({
         let store = store.clone();
         let (from, to) = (from.clone(), to.clone());
         async move { store.copy_scope(&from, &to).await }
@@ -1170,17 +1170,19 @@ async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_cal
     })
     .await;
 
+    // The gate stays closed until the end, so only the cancel can end the held call.
     let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
     let calls_at_stop = storage.calls().len();
+    let copied = tokio::time::timeout(LIMIT, &mut copying).await;
+    let calls_after_copy = storage.calls().len();
     storage.open_gate();
-    let copied = tokio::time::timeout(LIMIT, copying).await;
 
     assert!(
         matches!(&copied, Ok(Ok(Err(error))) if is_storage(error, true)),
         "{copied:?}"
     );
     assert_eq!(
-        (held, stopped, storage.calls().len()),
+        (held, stopped, calls_after_copy),
         (true, true, calls_at_stop)
     );
 }
