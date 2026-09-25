@@ -25,7 +25,7 @@ use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use test_r::test;
+use test_r::{test, timeout};
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
@@ -137,6 +137,7 @@ async fn a_publish_whose_answer_is_lost_deletes_the_file_and_gives_the_error() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_publish_that_reaches_the_deadline_deletes_the_file_that_the_storage_wrote() {
     let (files, _, inner) = files(
         Script::NeverAnswer,
@@ -158,6 +159,7 @@ async fn a_publish_that_reaches_the_deadline_deletes_the_file_that_the_storage_w
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_publish_that_the_caller_drops_deletes_the_file_in_a_task_of_the_tracker() {
     // The delete waits for the gate, so the test reads the file that the dropped write left
     // before the task of the tracker deletes it.

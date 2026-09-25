@@ -124,9 +124,17 @@ fn bytes(text: &str) -> BytesList {
 /// Runs the calls on a new thread, which is not a thread of a runtime, and gives their result.
 /// `None` means that the calls did not end within the limit.
 fn within_limit<T: Send + 'static>(calls: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    on_own_thread(calls).recv_timeout(LIMIT).ok()
+}
+
+/// Starts the calls on a new thread, which is not a thread of a runtime. The receiver gets their
+/// result, so a test can wait for it with a limit.
+fn on_own_thread<T: Send + 'static>(
+    calls: impl FnOnce() -> T + Send + 'static,
+) -> std::sync::mpsc::Receiver<T> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || sender.send(calls()));
-    receiver.recv_timeout(LIMIT).ok()
+    receiver
 }
 
 #[test]
@@ -464,18 +472,17 @@ fn a_thread_that_is_not_a_thread_of_the_runtime_can_call_the_backend() {
     let fixture = Fixture::new();
     let backend = Arc::new(fixture.backend);
 
-    let read = std::thread::spawn({
+    let read = within_limit({
         let backend = backend.clone();
         move || {
             backend
                 .write_bytes(FileType::Index, &id("ab"), false, bytes("index"))
                 .and_then(|()| backend.read_full(FileType::Index, &id("ab")))
+                .ok()
         }
-    })
-    .join()
-    .map(|read| read.ok());
+    });
 
-    assert_eq!(read.ok().flatten(), Some(Bytes::from_static(b"index")));
+    assert_eq!(read.flatten(), Some(Bytes::from_static(b"index")));
 }
 
 /// The content of the pack of the tests of the kept packs: 100 bytes, each its own offset.
@@ -598,7 +605,7 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
             Script::Pass
         }
     });
-    let first = std::thread::spawn({
+    let first = on_own_thread({
         let backend = fixture.backend.clone();
         move || tree_range(&backend, 0, 10).ok()
     });
@@ -606,7 +613,7 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
         std::thread::sleep(Duration::from_millis(10));
         !fixture.pack_calls().is_empty()
     });
-    let second = std::thread::spawn({
+    let second = on_own_thread({
         let backend = fixture.backend.clone();
         move || tree_range(&backend, 50, 10).ok()
     });
@@ -616,8 +623,8 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
     assert_eq!(
         (
             first_read_started,
-            first.join().ok().flatten(),
-            second.join().ok().flatten(),
+            first.recv_timeout(LIMIT).ok().flatten(),
+            second.recv_timeout(LIMIT).ok().flatten(),
             fixture.pack_calls()
         ),
         (

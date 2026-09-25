@@ -47,7 +47,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::core::DynamicTestRegistration;
-use test_r::{test, test_gen};
+use test_r::{test, test_gen, timeout};
 
 /// The longest time that a test waits for an operation or for the work of a store to end.
 const LIMIT: Duration = Duration::from_secs(10);
@@ -365,6 +365,7 @@ async fn a_save_whose_index_write_fails_publishes_nothing_and_leaves_the_name_fr
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_publish_that_reaches_the_deadline_and_lands_late_publishes_nothing() {
     let hang = Arc::new(AtomicBool::new(true));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
@@ -452,6 +453,7 @@ async fn a_second_save_of_an_unchanged_tree_writes_no_pack() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
@@ -514,6 +516,7 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     // The first index write after the arm waits at the gate. That is the index write of the
     // second save, so its packs are in no index while the delete prunes.
@@ -1059,6 +1062,7 @@ async fn a_deleted_scope_holds_no_blob() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_name_free() {
     // The first save counts the calls of a save. Each later round holds one of these calls: the
     // call reaches the storage and never answers, as a write that S3 received and completes after
@@ -1162,6 +1166,7 @@ async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_call() {
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
         if op_label == "copy_list" {
@@ -1211,6 +1216,7 @@ async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_cal
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_ends() {
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
         if op_label == "publish" {
@@ -1255,6 +1261,7 @@ async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_end
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {
     // The gate holds the save after its blocking work, so the tracker is empty and `shut_down`
     // returns before the publish starts.
@@ -1327,6 +1334,7 @@ async fn delete_scope_and_copy_scope_after_shut_down_give_storage() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn shut_down_ends_running_operations_before_it_returns() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
@@ -1382,6 +1390,7 @@ enum Dropped {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_dropped_operation_stops_its_blocking_work() {
     let outcomes = futures::stream::iter([
         Dropped::Restore,
@@ -2191,6 +2200,7 @@ async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
     // All tasks wait for each other, so each runs on its own thread of the blocking pool, and the
     // idle threads that ran the saves and the prune are among them.

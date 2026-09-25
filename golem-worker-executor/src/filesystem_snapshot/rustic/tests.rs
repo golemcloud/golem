@@ -49,7 +49,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use test_r::test;
+use test_r::{test, timeout};
 use tokio::runtime::Handle;
 use tokio::sync::{Notify, oneshot, watch};
 use tokio::time::error::Elapsed;
@@ -477,6 +477,7 @@ async fn each_scope_is_its_own_repository() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_restore_reads_data_on_at_most_its_reader_threads() {
     // Each save adds one pack with the data of its new file. The restore of the second snapshot
     // reads the data of both packs, one read for each pack.
@@ -749,6 +750,7 @@ impl BlobStorage for OverlapCountingStorage {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_threads_stop() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -774,6 +776,7 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restores() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -815,6 +818,7 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -872,6 +876,7 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
