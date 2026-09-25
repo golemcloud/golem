@@ -372,7 +372,7 @@ impl OplogFenceObserver for ShardServiceDefault {
 /// count and silently forget the staleness.
 fn record_delivery(delivery: ShardDelivery, outcome: &ShardDeliveryOutcome, assigned: usize) {
     record_assigned_shard_count(assigned);
-    if !matches!(outcome, ShardDeliveryOutcome::Applied { .. }) {
+    if matches!(outcome, ShardDeliveryOutcome::Stale { .. }) {
         record_stale_shard_delivery(delivery);
     }
 }

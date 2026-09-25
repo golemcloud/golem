@@ -1279,8 +1279,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             if scope.bind(&worker.tasks).is_err() {
                 continue;
             }
-            // A refusal has already given the agent up; the other agents are still notified.
-            let _ = scope
+            scope
                 .run(worker.queue_card_revocations(&affected_card_ids))
                 .await;
         }

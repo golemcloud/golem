@@ -37,7 +37,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
 use tokio::sync::{Notify, oneshot};
-use tracing::{debug, warn};
+use tracing::warn;
 use wasmtime::AsContextMut;
 use wasmtime::component::{Accessor, AccessorTask, Resource};
 use wasmtime_wasi_http::p3::WasiHttp;
@@ -556,16 +556,6 @@ async fn record_frame_or_warn(
 ) -> bool {
     match record_frame_entry(oplog.clone(), send_start_index, frame).await {
         Ok(_) => true,
-        // Not a recording fault: the storage turned the write away because the shard has a new
-        // owner, and the latch gives the agent up on its next durable write.
-        Err(error) if oplog.fence().is_some() => {
-            debug!(
-                send_start_index = %send_start_index,
-                error = %error,
-                "Request-body frame not recorded: the shard moved; the next durable write gives the agent up"
-            );
-            false
-        }
         Err(error) => {
             warn!(
                 send_start_index = %send_start_index,
