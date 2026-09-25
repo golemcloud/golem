@@ -161,6 +161,7 @@ async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScop
         namespace: scope.0.clone(),
         deadline: Duration::from_secs(2),
         cancel: tokio_util::sync::CancellationToken::new(),
+        tracker: tokio_util::task::TaskTracker::new(),
     })
     .await
     .unwrap()
@@ -1670,6 +1671,7 @@ async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
         namespace: new_scope().0,
         deadline: LONG_DEADLINE,
         cancel,
+        tracker: tokio_util::task::TaskTracker::new(),
     };
 
     let read = files
@@ -1678,6 +1680,48 @@ async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
 
     assert!(read.is_err(), "{read:?}");
     assert_eq!(storage.calls(), Vec::new());
+}
+
+#[test]
+#[timeout("60s")]
+async fn shut_down_waits_for_a_blob_call_of_the_store_that_is_not_polled() {
+    // The test polls the scope delete one time, so its first blob call waits at the gate, and
+    // then the test does not poll it again. Only the tracker makes the shut down wait for it.
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+        if op_label == "delete_scope" {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let deleting = store.delete_scope(&scope);
+    tokio::pin!(deleting);
+    let pending = futures::poll!(&mut deleting).is_pending();
+
+    let shutting = store.shut_down();
+    tokio::pin!(shutting);
+    let waited = tokio::time::timeout(Duration::from_millis(200), &mut shutting)
+        .await
+        .is_err();
+    let deleted = tokio::time::timeout(LIMIT, &mut deleting).await;
+    // A finished future must not be polled again, so the second wait runs only after a first wait
+    // that timed out.
+    let stopped = !waited || tokio::time::timeout(LIMIT, &mut shutting).await.is_ok();
+    storage.open_gate();
+
+    assert!(
+        matches!(&deleted, Ok(Err(error)) if is_storage(error, true)),
+        "{deleted:?}"
+    );
+    assert_eq!(
+        (pending, waited, stopped, store.work_in_flight()),
+        (true, true, true, 0)
+    );
 }
 
 #[test]

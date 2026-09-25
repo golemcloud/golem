@@ -155,7 +155,8 @@ pub(crate) struct RusticSnapshotStore {
     policy: StorePolicy,
     /// The parent of the token of each operation.
     root: CancellationToken,
-    /// Counts the blocking tasks, the backends, the publishes and the deletes of dropped publishes.
+    /// Counts the blocking tasks, the backends, the blob calls of the store, the publishes and the
+    /// deletes of dropped publishes.
     tracker: TaskTracker,
     /// Runs saves and prunes at a low priority.
     low_priority: LowPriority,
@@ -218,9 +219,10 @@ impl RusticSnapshotStore {
     /// Cancels each operation, so each running storage call ends and no new call starts, and later
     /// operations give `Storage`. A publish that starts before the cancel runs to its end. A save
     /// that reaches its publish after the cancel publishes nothing and gives `Storage`. The call
-    /// waits until no blocking task, backend, publish or delete of a dropped publish remains. The
-    /// runtime must not drop before it returns, because a storage call after its time driver stops
-    /// aborts the process.
+    /// waits until no blocking task, backend, blob call of the store, publish or delete of a
+    /// dropped publish remains. A blob call that is not polled holds the wait until it is polled
+    /// again, and then it ends at once. The runtime must not drop before it returns, because a
+    /// storage call after its time driver stops aborts the process.
     pub(crate) async fn shut_down(&self) {
         self.root.cancel();
         self.tracker.close();
@@ -286,6 +288,7 @@ impl RusticSnapshotStore {
             namespace: scope.0.clone(),
             deadline: self.policy.deadline,
             cancel: token.clone(),
+            tracker: self.tracker.clone(),
         }
     }
 

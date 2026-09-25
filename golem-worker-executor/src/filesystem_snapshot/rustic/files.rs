@@ -24,28 +24,33 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 /// The target label of each blob storage call of the rustic store.
 pub(super) const TARGET_LABEL: &str = "filesystem_snapshot";
 
-/// The blobs of one scope: the storage, the namespace of the scope, the deadline of each call, and
-/// the token of the operation.
+/// The blobs of one scope: the storage, the namespace of the scope, the deadline of each call, the
+/// token of the operation, and the tracker of the store, which counts each call.
 #[derive(Clone, Debug)]
 pub(super) struct SnapshotFiles {
     pub(super) storage: Arc<dyn BlobStorage>,
     pub(super) namespace: BlobStorageNamespace,
     pub(super) deadline: Duration,
     pub(super) cancel: CancellationToken,
+    pub(super) tracker: TaskTracker,
 }
 
 impl SnapshotFiles {
     /// Waits for one call within the deadline. A call of a cancelled operation does not start, and
-    /// a cancel ends a running call. Both give an error.
+    /// a cancel ends a running call. Both give an error. The tracker counts the call before the
+    /// check of the cancel, so a shut down either stops the call or waits for it.
     async fn answer<T>(
         &self,
         future: impl Future<Output = anyhow::Result<T>>,
     ) -> anyhow::Result<T> {
-        answer_or_cancel(self.deadline, &self.cancel, future).await
+        self.tracker
+            .track_future(answer_or_cancel(self.deadline, &self.cancel, future))
+            .await
     }
 
     /// Gives the content of the blob at the path, or `None` when the path has no blob.
