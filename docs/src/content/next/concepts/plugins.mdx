@@ -16,14 +16,14 @@ The built-in `golem-otlp-exporter` plugin is an example of a production oplog pr
 
 ## Plugin configuration
 
-Plugins can have **configuration** in the form of key-value pairs, which are customizable for each **plugin installation**. Golem sends these configuration values to the plugins when they are invoked.
+Plugins can have **configuration** in the form of key-value pairs, which are customizable for each **plugin installation**. Golem sends these configuration values to the plugin when it is invoked.
 
 ## Plugin lifecycle
 
-Plugins are first **defined** using Golem's Plugin API (using the REST API, CLI or the Console). Each defined plugin is identified by a _name_ and a _version_. In _Golem Cloud_ plugins are defined per account.
+Plugins are first **registered** through the REST API, CLI, or Console. Each registered plugin has a globally unique ID and an account-scoped _name_ and _version_.
 
-Defining a plugin does not immediately make that plugin used by Golem. To make use of a plugin, it must be **installed** to a **component**. This can be done either when a component is created, or later using the Component API. In _Golem Cloud_ plugins can also be installed to _projects_, in which case each new component created in the given project will have those plugins installed.
+Registering a plugin does not make it active. Before installation, the plugin must be granted to the target environment, even when the plugin and environment belong to the same account. Declare plugin installations on components or agent types in `golem.yaml`; `golem deploy` reconciles those installations.
 
-Installing a plugin to a component creates a new **component version**, similarly how updating a component's WASM file does. This guarantees that already running agents are not affected by the plugin installation process. To make an existing agent use of an installed plugin, the agent must be **updated** to the new component version.
+Changing a component's plugin installations creates a new component revision, just like updating its Wasm. Existing agents are not changed automatically; update them to the new revision when they should use the new installation set.
 
 Oplog processor plugins can also be **activated** and **deactivated** on a running agent dynamically using the Agent API. This is an advanced feature which allows the user to temporarily pause an effect of a plugin for a given agent.

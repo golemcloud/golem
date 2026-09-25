@@ -26,6 +26,7 @@ use crate::durable_host::concurrent::{
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableCallTrapContext, HostFailureKind,
     InFunctionRetryState, TaskRetryContext, mark_durable_call_trap_context,
+    semantic_trap_retry_override_error,
 };
 use crate::durable_host::http::policy::{
     ResumeResponseAction, classify_resume_response, has_guest_range_header,
@@ -1052,6 +1053,7 @@ where
         // In-function retry budget of the response-body resume path, shared across all resume
         // attempts of this consume-body scope.
         let mut resume_retry_state = InFunctionRetryState::new();
+        let mut resume_semantic_override = None;
         let mut resume_retry_ctx: Option<TaskRetryContext<Ctx>> = None;
         // Bytes delivered to the guest-facing stream so far (replayed chunks +
         // live frames): the resume offset for `Range` requests.
@@ -1345,7 +1347,11 @@ where
                             AsyncRetryDecision::RetryAfterDelay(delay) => {
                                 tokio::time::sleep(delay).await;
                             }
-                            AsyncRetryDecision::FallBackToTrap | AsyncRetryDecision::Exhausted => {
+                            AsyncRetryDecision::FallBackToTrap(semantic_override) => {
+                                resume_semantic_override = semantic_override;
+                                break;
+                            }
+                            AsyncRetryDecision::Exhausted => {
                                 break;
                             }
                         }
@@ -1469,24 +1475,34 @@ where
                     {
                         let for_retry: Result<(), &ErrorCode> = Err(error_code);
                         let trap_context = stream.trap_context();
-                        if let Err(error) = stream
-                            .parent_mut()
-                            .try_trigger_retry_access(
-                                accessor,
-                                durable_worker_ctx::<Ctx, U>,
-                                &for_retry,
-                                |code| {
-                                    classify_serializable_http_error_code(&serialize_error_code(
-                                        code,
-                                    ))
-                                },
-                                retry_properties,
-                            )
-                            .await
+                        let trap = if let Some(semantic_override) = resume_semantic_override.take()
                         {
-                            // The retry trap tears the invocation down;
-                            // `try_trigger_retry_access` already abandoned the
-                            // parent handle. The child `Start` is persisted but the
+                            let failure = semantic_trap_retry_override_error(
+                                semantic_override,
+                                HostFailureKind::Transient,
+                                error_code.to_string(),
+                            );
+                            Some(stream.parent_mut().trap(failure))
+                        } else {
+                            stream
+                                .parent_mut()
+                                .try_trigger_retry_access(
+                                    accessor,
+                                    durable_worker_ctx::<Ctx, U>,
+                                    &for_retry,
+                                    |code| {
+                                        classify_serializable_http_error_code(
+                                            &serialize_error_code(code),
+                                        )
+                                    },
+                                    retry_properties,
+                                )
+                                .await
+                                .err()
+                        };
+                        if let Some(error) = trap {
+                            // The retry trap tears the invocation down after the
+                            // parent handle has been abandoned. The child `Start` is persisted but the
                             // jumped scope discards it on replay; abandon the handle
                             // so its drop does not record a `Cancelled`. The span is
                             // deliberately not finished (no `FinishSpan` after an

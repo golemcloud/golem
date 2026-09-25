@@ -1,0 +1,95 @@
+import { Callout } from "nextra/components"
+
+# Account usage and limits
+
+<Callout type="info">
+  These commands operate against the selected server. Results depend on its metering configuration,
+  your account plan, and your permission to view or change the selected account.
+</Callout>
+
+Golem reports account usage by UTC calendar month. Usage reporting is separate from enforcement: usage answers what was measured, while per-agent storage and linear-memory limits constrain allocations. The monthly included-memory setting is an allowance for accounting; it does not stop agents when consumption reaches that value.
+
+## Current and monthly usage
+
+Show the current UTC month:
+
+```shell copy
+golem account usage show
+```
+
+Show a particular month in `YYYY-MM` form:
+
+```shell copy
+golem account usage show --period 2026-09
+```
+
+The response includes an `as-of` timestamp and four dimensions:
+
+| Dimension | Unit | Meaning |
+| --- | --- | --- |
+| Compute | GCU | Wasmtime fuel divided by 1,000,000 |
+| Memory | GB-seconds | Allocated WebAssembly linear memory over time |
+| Durable storage | GB-month | Durable filesystem allocated-byte-time |
+| Ephemeral storage | GB-month | Ephemeral filesystem allocated-byte-time |
+
+Storage uses byte-seconds divided by `1024³ × 730 × 3600`. Both storage fields come from the shared filesystem meter, separated by durable and ephemeral agent usage. Memory measures allocated linear memory, not process RSS or host memory.
+
+Each dimension also reports whether metering was `enabled`, `disabled`, or `unknown`. A zero with metering enabled means no usage was measured. `unknown` means no usage producer has reported that meter's state for the period.
+
+### Closed-period history
+
+```shell copy
+golem account usage history
+golem account usage history --last 12
+```
+
+History returns closed UTC months newest first and defaults to six periods. It is **sparse**: months without a stored usage record are omitted. Historical rows use the same units and metering states, but do not snapshot historical plan or limit metadata.
+
+Use `--account <email>` or `--account-id <uuid>` on usage commands when authorized to inspect another account.
+
+## Effective limits and overrides
+
+Show the effective resource limits, their plan defaults, optional overrides, ceilings, and whether the account may configure them:
+
+```shell copy
+golem account limits show
+```
+
+The three override dimensions are:
+
+- maximum filesystem storage per agent, in bytes
+- maximum WebAssembly linear memory per agent, in bytes
+- monthly included linear-memory allowance, in GB-seconds; this is not a runtime cap
+
+Set one override per command:
+
+```shell copy
+golem account limits set 10737418240
+golem account limits set --max-memory-per-agent 536870912
+golem account limits set --monthly-memory-gb-seconds 1000000
+```
+
+The storage value is positional. Choose values after inspecting `limits show`: memory and monthly-memory overrides must be between the plan default and ceiling, inclusive, while storage overrides must not exceed their ceiling. The effective value is the override or plan default capped by that ceiling. The service rejects setting an override when its dimension is not user-configurable.
+
+Clear one override per command:
+
+```shell copy
+golem account limits unset --storage
+golem account limits unset --max-memory-per-agent
+golem account limits unset --monthly-memory-gb-seconds
+```
+
+For storage, `golem account limits unset` without a flag is also accepted, but the explicit `--storage` form is clearer.
+
+The CLI creates non-expiring overrides. The REST API also accepts an expiry timestamp, but setting an expiry requires an administrator token. Once an override expires, it no longer participates in the effective limit; the plan default and ceiling apply again.
+
+## Usage, quotas, and operator metering
+
+These concepts are independent:
+
+- **Account usage** is the monthly, user-facing billing measurement shown by `golem account usage`.
+- **Resource limits** include the enforced per-agent storage and linear-memory caps shown by `golem account limits`; the same command also shows the monthly included-memory allowance.
+- **Application quotas** are capability-style concurrency or resource controls used by agents. See [Quotas](/next/develop/quotas).
+- **Operator metering switches** configure which worker-executor dimensions a deployment measures and exports. They do not enable enforcement. See [Resource metering](/next/operate/resource_metering).
+
+Self-hosted operators can enforce filesystem and memory controls while usage metering is disabled. Conversely, an enabled meter reports consumption; it does not by itself establish a quota or resource limit.

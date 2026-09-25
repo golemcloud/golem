@@ -11,6 +11,8 @@ export default {
     type: "separator",
     title: "Golem SDK",
   },
+  "tool-authoring": "Tool Authoring and Lifecycle",
+  "durable-streams": "External Durable Streams",
   http: "HTTP client",
   websocket: "WebSocket client",
   durability: "Durability",

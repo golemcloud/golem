@@ -35,6 +35,7 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentEntityKind, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex,
 };
 use golem_common::model::tool::{
     CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
@@ -69,9 +70,9 @@ use golem_worker_executor::services::environment_state::{
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, native_streaming_tool_metadata, native_test_tool_metadata,
-    start_with_overrides,
+    LastUniqueId, PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
+    native_test_tool_metadata, start_with_overrides,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -114,6 +115,592 @@ inherit_test_dep!(
     #[tagged_as("large_dynamic_memory")]
     PrecompiledComponent
 );
+
+/// One-line structural description of a public oplog entry for test diagnostics.
+fn describe_public_entry(entry: &PublicOplogEntry) -> String {
+    match entry {
+        PublicOplogEntry::Start(params) => format!(
+            "Start {} parent={:?} owner={:?} type={:?}",
+            params.function_name,
+            params.parent_start_index,
+            params.observational_owner,
+            params.durable_function_type
+        ),
+        PublicOplogEntry::End(params) => format!(
+            "End start={} response={}",
+            params.start_index,
+            if params.response.is_some() {
+                "some"
+            } else {
+                "none"
+            }
+        ),
+        PublicOplogEntry::Cancelled(params) => format!("Cancelled start={}", params.start_index),
+        other => {
+            let debug = format!("{other:?}");
+            debug
+                .split_once(['(', '{'])
+                .map(|(name, _)| name.trim().to_string())
+                .unwrap_or(debug)
+        }
+    }
+}
+
+/// Indices of the recorded `Start` entries before `boundary` whose terminal was recorded at or
+/// after `boundary` (or not at all).
+fn incomplete_starts_before(
+    recorded: &[PublicOplogEntryWithIndex],
+    boundary: OplogIndex,
+) -> Vec<OplogIndex> {
+    let mut open = BTreeMap::new();
+    for entry in recorded.iter().filter(|entry| entry.oplog_index < boundary) {
+        match &entry.entry {
+            PublicOplogEntry::Start(_) => {
+                open.insert(entry.oplog_index, ());
+            }
+            PublicOplogEntry::End(params) => {
+                open.remove(&params.start_index);
+            }
+            PublicOplogEntry::Cancelled(params) => {
+                open.remove(&params.start_index);
+            }
+            _ => {}
+        }
+    }
+    open.into_keys().collect()
+}
+
+/// Which oplog prefix of the recorded single-Store probe history is retained before replay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SingleStoreProbePrefix {
+    /// The complete recorded history.
+    Complete,
+    /// The prefix ending with the first direct idempotency-key `Start` (its `End` is discarded).
+    FirstDirectStart,
+    /// The prefix ending with the first direct idempotency-key `End`; the following direct atomic
+    /// region and all later guest calls are discarded.
+    FirstDirectEnd,
+}
+
+/// Where the replayed consume-body admission is paused while the guest's direct calls proceed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SingleStoreProbeGate {
+    None,
+    Admission(ReplayAdmissionStage),
+}
+
+/// Records a single-Store history in which a host-side response body read (an accessor durable
+/// call whose scope, `Start` and `End` are appended by a host task) interleaves with direct,
+/// Store-holding guest durable calls (an idempotency key, then nested atomic regions with keys
+/// and oplog index reads), reverts the worker to the requested prefix, and replays it on a fresh
+/// executor while the replayed body admission is optionally paused at `gate` until the direct
+/// call has started waiting for its recorded resolution.
+///
+/// A correct replay must neither consume the body scope or body `Start` for a positional direct
+/// read, nor let the Store-holding direct call wait for progress that only the paused body task
+/// can make.
+async fn run_single_store_http_atomic_probe(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+    agent_name: &str,
+    atomic_first: bool,
+    prefix: SingleStoreProbePrefix,
+    gate: SingleStoreProbeGate,
+) -> anyhow::Result<()> {
+    use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let (port, gate_port, server, mut checkpoints) = start_crash_checkpoint_server().await;
+    let mut env = HashMap::from([
+        ("CALLER_CRASH_CHECKPOINT_PORT".to_string(), port.to_string()),
+        (
+            "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+            gate_port.to_string(),
+        ),
+    ]);
+    if atomic_first {
+        env.insert("GOL581_ATOMIC_FIRST".to_string(), "1".to_string());
+    }
+    // The shape under test has the host-side body scope complete before the guest's first
+    // direct call, so that the gates below (not the recording) decide how the two interleave on
+    // replay. The fixture only yields between dropping the body and the first direct call; a
+    // body task that is still waiting on an oplog commit when the yields run out records its
+    // remaining entries after the direct `Start`. The guest cannot wait for the scope itself
+    // (awaiting the trailers replays identically and would park behind the paused body
+    // admission), so the recording is checked against the precondition and repeated on a fresh
+    // agent when it did not produce the shape. This re-records before any replay; it never
+    // retries a replay.
+    const RECORDING_ATTEMPTS: usize = 3;
+    let mut attempt = 0;
+    let (agent, worker_id, recorded, key_start, key_end) = loop {
+        attempt += 1;
+        let agent_name = if attempt == 1 {
+            agent_name.to_string()
+        } else {
+            format!("{agent_name}-recording-{attempt}")
+        };
+        let agent = agent_id!("ToolStreamingCaller", agent_name);
+        let worker_id = executor
+            .start_agent_with(&component.id, agent.clone(), env.clone(), Vec::new())
+            .await?;
+        let invocation = executor.invoke_and_await_agent(
+            &component,
+            &agent,
+            "single_store_http_atomic_probe",
+            data_value!(),
+        );
+        let release = async {
+            for _ in 0..8 {
+                let checkpoint =
+                    next_crash_checkpoint(&mut checkpoints, "single-store-http-atomic").await?;
+                checkpoint
+                    .release
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("checkpoint gate was dropped"))?;
+            }
+            anyhow::Ok(())
+        };
+        let (result, released) = tokio::join!(invocation, release);
+        result?;
+        released?;
+        let recorded = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        for entry in &recorded {
+            eprintln!(
+                "SINGLE_STORE_PROBE_RECORDED {} {}",
+                entry.oplog_index,
+                describe_public_entry(&entry.entry)
+            );
+        }
+        assert!(
+            !recorded.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke"
+            )),
+            "the probe must not involve entity Stores"
+        );
+        let key_start = recorded
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::api::generate_idempotency-key" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("recorded direct idempotency-key Start was not found")
+            })?;
+        let key_end = recorded
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) if params.start_index == key_start => {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("recorded direct idempotency-key End was not found"))?;
+        let body_read_before_key = recorded.iter().any(|entry| {
+            entry.oplog_index < key_start
+                && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                    if params.function_name == "http::types::response::consume-body")
+        });
+        let incomplete_before_key = incomplete_starts_before(&recorded, key_start);
+        if body_read_before_key && incomplete_before_key.is_empty() {
+            break (agent, worker_id, recorded, key_start, key_end);
+        }
+        eprintln!(
+            "SINGLE_STORE_PROBE_RECORDING attempt {attempt}: the body scope was not complete before the first direct idempotency-key Start {key_start} (body read recorded before it: {body_read_before_key}, incomplete Starts {incomplete_before_key:?}); recording again on a fresh agent"
+        );
+        if attempt == RECORDING_ATTEMPTS {
+            return Err(anyhow::anyhow!(
+                "the single-Store probe recording did not complete the body scope before the first direct call in {RECORDING_ATTEMPTS} attempts"
+            ));
+        }
+    };
+    let retained = match prefix {
+        SingleStoreProbePrefix::Complete => None,
+        SingleStoreProbePrefix::FirstDirectStart => Some(key_start),
+        SingleStoreProbePrefix::FirstDirectEnd => Some(key_end),
+    };
+    if let Some(retained) = retained {
+        executor
+            .revert(
+                &worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: retained,
+                }),
+            )
+            .await?;
+    }
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let mut admission_gate = match gate {
+        SingleStoreProbeGate::None => None,
+        SingleStoreProbeGate::Admission(stage) => {
+            Some(executor.gate_next_replay_access_admission(&worker_id, "consume-body", stage))
+        }
+    };
+    // The first direct call after the body read is either a strictly matched idempotency key or
+    // the positional atomic-region marker; the signal proves that it waits for replay progress
+    // while the body admission is paused.
+    let first_direct_call = if atomic_first {
+        "BeginAtomicRegion"
+    } else {
+        "generate_idempotency-key"
+    };
+    let mut direct_wait = executor.signal_next_direct_replay_wait(&worker_id, first_direct_call);
+    let replay = async {
+        let invoke = executor.invoke_and_await_agent(
+            &component,
+            &agent,
+            "record_native_order",
+            data_value!("R"),
+        );
+        let coordinate = async {
+            if let Some(admission_gate) = admission_gate.as_mut() {
+                tokio::time::timeout(std::time::Duration::from_secs(30), admission_gate.entered())
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("replayed consume-body admission was not reached")
+                    })?;
+                let (function, start_index) =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), direct_wait.fired())
+                        .await
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "the guest's first direct call `{first_direct_call}` did not reach its replay wait while consume-body admission was paused"
+                            )
+                        })?;
+                eprintln!(
+                    "direct replay wait entered for `{function}` at {start_index} while consume-body admission is paused"
+                );
+                // The direct call holds the Store while waiting; the body task can only be
+                // admitted once the direct call finished, so releasing the gate here does not
+                // change the interleaving under test.
+                admission_gate.release();
+            }
+            if retained.is_some() {
+                // The retained prefix cuts the probe invocation, so its remainder re-executes
+                // live and reaches the crash checkpoint gate for every remaining checkpoint.
+                for _ in 0..8 {
+                    next_crash_checkpoint(&mut checkpoints, "single-store-http-atomic")
+                        .await?
+                        .release
+                        .send(())
+                        .map_err(|_| anyhow::anyhow!("checkpoint gate was dropped"))?;
+                }
+            }
+            anyhow::Ok(())
+        };
+        let (result, coordinated) = tokio::join!(invoke, coordinate);
+        coordinated?;
+        result
+    };
+    let replay = tokio::time::timeout(std::time::Duration::from_secs(60), replay).await;
+    server.abort();
+    let replay = match replay {
+        Ok(replay) => replay,
+        Err(_) => {
+            for entry in executor.get_oplog(&worker_id, OplogIndex::INITIAL).await? {
+                eprintln!(
+                    "SINGLE_STORE_PROBE_TIMEOUT_OPLOG {} {}",
+                    entry.oplog_index,
+                    describe_public_entry(&entry.entry)
+                );
+            }
+            return Err(anyhow::anyhow!(
+                "replay of the single-Store probe history did not make progress"
+            ));
+        }
+    };
+    let output: String = replay?.into_typed()?;
+    assert_eq!(output, "R");
+    assert!(
+        checkpoints.try_recv().is_err(),
+        "replay must not repeat a recorded checkpoint"
+    );
+    let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let last_recorded = recorded
+        .last()
+        .map(|entry| entry.oplog_index)
+        .ok_or_else(|| anyhow::anyhow!("the recorded history is empty"))?;
+    let is_key_start = |entry: &PublicOplogEntry| {
+        matches!(
+            entry,
+            PublicOplogEntry::Start(params)
+                if params.function_name == "golem::api::generate_idempotency-key"
+        )
+    };
+    let recorded_keys = recorded
+        .iter()
+        .filter(|entry| is_key_start(&entry.entry))
+        .count();
+    let re_executed_keys = replayed
+        .iter()
+        .filter(|entry| entry.oplog_index > last_recorded && is_key_start(&entry.entry))
+        .count();
+    let expected_re_executed = match prefix {
+        SingleStoreProbePrefix::Complete => 0,
+        // The retained first key keeps its recorded `Start` (reused when incomplete, replayed
+        // when complete); every discarded key re-executes with a fresh `Start`.
+        SingleStoreProbePrefix::FirstDirectStart | SingleStoreProbePrefix::FirstDirectEnd => {
+            recorded_keys - 1
+        }
+    };
+    assert_eq!(
+        re_executed_keys, expected_re_executed,
+        "exactly the discarded direct calls re-execute after replaying the retained prefix"
+    );
+    let is_body_read = |entry: &PublicOplogEntry| {
+        matches!(
+            entry,
+            PublicOplogEntry::Start(params)
+                if params.function_name == "http::types::response::consume-body"
+        )
+    };
+    let recorded_body_starts = recorded
+        .iter()
+        .filter(|entry| is_body_read(&entry.entry))
+        .count();
+    let re_executed_body_starts = replayed
+        .iter()
+        .filter(|entry| entry.oplog_index > last_recorded && is_body_read(&entry.entry))
+        .count();
+    let (retained_body_starts, discarded_checkpoints) = match retained {
+        None => (recorded_body_starts, 0),
+        Some(retained) => {
+            let retained_body_starts = recorded
+                .iter()
+                .filter(|entry| entry.oplog_index <= retained && is_body_read(&entry.entry))
+                .count();
+            let retained_checkpoints = recorded
+                .iter()
+                .filter(|entry| {
+                    entry.oplog_index <= retained
+                        && matches!(&entry.entry, PublicOplogEntry::Start(params)
+                            if params.function_name == "http::client::send")
+                })
+                .count();
+            let recorded_checkpoints = recorded
+                .iter()
+                .filter(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::Start(params)
+                        if params.function_name == "http::client::send")
+                })
+                .count();
+            (
+                retained_body_starts,
+                recorded_checkpoints - retained_checkpoints,
+            )
+        }
+    };
+    // Every retained body read keeps its recorded `Start` (completed reads replay, incomplete
+    // ones complete the existing `Start` live); only the checkpoints discarded by the cut open
+    // new body reads.
+    let discarded_body_starts = recorded_body_starts - retained_body_starts;
+    assert_eq!(
+        re_executed_body_starts, discarded_body_starts,
+        "no retained body read may repeat its completed effect with a fresh Start (retained {retained_body_starts} of {recorded_body_starts} body Starts, {discarded_checkpoints} discarded checkpoints)"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn single_store_body_read_and_direct_calls_replay_complete_history(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_single_store_http_atomic_probe(
+        last_unique_id,
+        deps,
+        caller,
+        "single-store-complete-control",
+        false,
+        SingleStoreProbePrefix::Complete,
+        SingleStoreProbeGate::None,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn direct_call_waits_without_blocking_body_admission_paused_before_scope(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_single_store_http_atomic_probe(
+        last_unique_id,
+        deps,
+        caller,
+        "single-store-direct-before-scope",
+        false,
+        SingleStoreProbePrefix::Complete,
+        SingleStoreProbeGate::Admission(ReplayAdmissionStage::BeforeScope),
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn direct_call_waits_without_blocking_body_admission_paused_after_scope(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_single_store_http_atomic_probe(
+        last_unique_id,
+        deps,
+        caller,
+        "single-store-direct-after-scope",
+        false,
+        SingleStoreProbePrefix::Complete,
+        SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn positional_atomic_marker_does_not_consume_unclaimed_body_scope_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_single_store_http_atomic_probe(
+        last_unique_id,
+        deps,
+        caller,
+        "single-store-atomic-before-scope",
+        true,
+        SingleStoreProbePrefix::Complete,
+        SingleStoreProbeGate::Admission(ReplayAdmissionStage::BeforeScope),
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn positional_atomic_marker_does_not_consume_unclaimed_body_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_single_store_http_atomic_probe(
+        last_unique_id,
+        deps,
+        caller,
+        "single-store-atomic-after-scope",
+        true,
+        SingleStoreProbePrefix::Complete,
+        SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn retained_prefix_ending_at_direct_start_replays_with_paused_body_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_single_store_http_atomic_probe(
+        last_unique_id,
+        deps,
+        caller,
+        "single-store-prefix-direct-start",
+        false,
+        SingleStoreProbePrefix::FirstDirectStart,
+        SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn retained_prefix_ending_at_direct_end_replays_with_paused_body_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_single_store_http_atomic_probe(
+        last_unique_id,
+        deps,
+        caller,
+        "single-store-prefix-direct-end",
+        false,
+        SingleStoreProbePrefix::FirstDirectEnd,
+        SingleStoreProbeGate::Admission(ReplayAdmissionStage::AfterScope),
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn retained_prefix_ending_at_direct_start_replays_under_natural_scheduling(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_single_store_http_atomic_probe(
+        last_unique_id,
+        deps,
+        caller,
+        "single-store-prefix-direct-start-control",
+        false,
+        SingleStoreProbePrefix::FirstDirectStart,
+        SingleStoreProbeGate::None,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn retained_prefix_ending_at_direct_end_replays_under_natural_scheduling(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_single_store_http_atomic_probe(
+        last_unique_id,
+        deps,
+        caller,
+        "single-store-prefix-direct-end-control",
+        false,
+        SingleStoreProbePrefix::FirstDirectEnd,
+        SingleStoreProbeGate::None,
+    )
+    .await
+}
 
 #[derive(Debug, FromSchema)]
 struct StreamEvidence {
@@ -6554,6 +7141,230 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         b"C".as_slice(),
         "the repaired custom effect must commit exactly once after body validation"
     );
+    caller_checkpoint_server.abort();
+    Ok(())
+}
+
+/// Like [`incomplete_custom_durability_waits_for_completed_reconstruction`], but the completed
+/// entity body and the caller Store record interleaved positional entries: the provider body is
+/// held at its own crash checkpoint (inside the entity Store) while the caller Store performs a
+/// checkpoint HTTP request and an atomic TCP gate before its incomplete custom durability. On
+/// recovery, the entity's historical reconstruction runs in its own Store and the caller's
+/// positional replay must not consume the entity-owned entries — nor may the entity
+/// reconstruction consume the caller's — before the custom call reaches the reconstruction
+/// barrier.
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn incomplete_custom_durability_waits_for_overlapping_completed_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let (
+        provider_checkpoint_port,
+        provider_checkpoint_gate_port,
+        provider_checkpoint_server,
+        mut provider_checkpoints,
+    ) = start_crash_checkpoint_server().await;
+    let (
+        caller_checkpoint_port,
+        caller_checkpoint_gate_port,
+        caller_checkpoint_server,
+        mut caller_checkpoints,
+    ) = start_crash_checkpoint_server().await;
+    let agent_id = agent_id!(
+        "ToolStreamingCaller",
+        "incomplete-custom-reconstruction-overlap"
+    );
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
+                    provider_checkpoint_port.to_string(),
+                ),
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    provider_checkpoint_gate_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
+                    caller_checkpoint_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    caller_checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "hold_completed_reconstruction_overlapping_custom",
+        data_value!(),
+    );
+    let crash_and_validate = async {
+        // Both Stores reach their checkpoints while the other is still open, so the entity body's
+        // remaining entries and the caller's checkpoint entries interleave in the shared oplog.
+        let original_body =
+            next_crash_checkpoint(&mut provider_checkpoints, "historical-reconstruction-body")
+                .await?;
+        let original_before_custom = next_crash_checkpoint(
+            &mut caller_checkpoints,
+            "before-reconstruction-custom-effect",
+        )
+        .await?;
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 1).await?;
+        original_body
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original reconstruction body gate was dropped"))?;
+        wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
+        original_before_custom
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original custom-start gate was dropped"))?;
+        let original_custom =
+            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
+        let entity_start = wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let custom_start = original_oplog
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem-it::reconstruction-barrier-custom-effect" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("recorded custom durability Start was not found"))?;
+        assert!(!original_oplog.iter().any(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == custom_start)
+                || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == custom_start)
+        }));
+        let mut reconstruction_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
+        let mut reconstruction_body =
+            executor.gate_next_completed_entity_reconstruction(&worker_id);
+        executor.simulated_crash(&worker_id).await?;
+        let reconstruction_start = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reconstruction_claim.entered(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("historical reconstruction claim was not reached"))?;
+        assert_eq!(reconstruction_start, entity_start);
+        executor
+            .drain_reconstruction_terminal(&owned_agent_id, reconstruction_start)
+            .await?;
+        reconstruction_claim.release();
+        if tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reconstruction_body.entered(),
+        )
+        .await
+        .is_err()
+        {
+            for entry in executor.get_oplog(&worker_id, OplogIndex::INITIAL).await? {
+                eprintln!("RECONSTRUCTION_FAILURE_OPLOG {entry:?}");
+            }
+            return Err(anyhow::anyhow!(
+                "completed reconstruction body did not settle"
+            ));
+        }
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            executor.clamp_after_claim(&owned_agent_id, custom_start),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("custom durability did not reach replay-to-live"))??;
+        wait_for_owner_replay_settling(&executor, &owned_agent_id).await?;
+        assert!(!executor.owner_replay_is_live(&owned_agent_id).await?);
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                caller_checkpoints.recv()
+            )
+            .await
+            .is_err(),
+            "the incomplete custom invocation bypassed the primary reconstruction barrier"
+        );
+        reconstruction_body.release();
+        let replayed_custom = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            caller_checkpoints.recv(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("replayed custom effect remained blocked"))?
+        .ok_or_else(|| anyhow::anyhow!("caller checkpoint server stopped"))?;
+        assert_eq!(replayed_custom.name, original_custom.name);
+        replayed_custom
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("replayed custom-effect gate was dropped"))?;
+        drop(original_custom.release);
+        Ok::<_, anyhow::Error>(())
+    };
+    let _ = tokio::try_join!(invocation, crash_and_validate)?;
+
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/reconstruction-custom-order.log")
+            .await?,
+        b"C".as_slice(),
+        "the repaired custom effect must commit exactly once after body validation"
+    );
+    assert!(
+        provider_checkpoints.try_recv().is_err(),
+        "the completed entity body must not re-execute during historical reconstruction"
+    );
+    provider_checkpoint_server.abort();
     caller_checkpoint_server.abort();
     Ok(())
 }

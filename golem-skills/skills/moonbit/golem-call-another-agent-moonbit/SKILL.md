@@ -11,10 +11,12 @@ The `#derive.agent` code generation tool auto-generates a `<AgentName>Client` st
 
 ## Getting a Client (Scoped)
 
-Use `<AgentName>Client::scoped(...)` with the target agent's constructor parameters and a callback. The client is automatically dropped when the callback returns:
+Use `<AgentName>Client::scoped(...)` with the target agent's constructor parameters and an async
+callback. Call it from an `async fn`; MoonBit has no `await` keyword. The client is automatically
+dropped when the callback returns:
 
 ```moonbit
-CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
+CounterClient::scoped("my-counter", async fn(counter) {
   counter.increment()
   counter.increment()
   let value = counter.get_value()
@@ -44,7 +46,7 @@ This does **not** create the agent — the agent is created implicitly on its fi
 Call a method and block until the result returns:
 
 ```moonbit
-CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
+CounterClient::scoped("my-counter", async fn(counter) {
   counter.increment()
   let count = counter.get_value()
   count
@@ -58,7 +60,7 @@ The calling agent **blocks** until the target agent processes the request and re
 Agent methods accept custom types defined in your agent code:
 
 ```moonbit
-TaskManagerClient::scoped(fn(tm) raise @common.AgentError {
+TaskManagerClient::scoped(async fn(tm) {
   let count = tm.add_task({
     title: "Build RPC support",
     priority: High,
@@ -93,22 +95,19 @@ components:
         - example:weather/WeatherAgent
 ```
 
-`golem build` generates `golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client`. Add it as a local module dependency in the application's `moon.mod.json`:
+`golem build` generates `golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client`. The
+generated module intentionally still contains `moon.mod.json`; do not rename or edit it.
 
-```json
-{
-  "name": "example/weather-app",
-  "preferred-target": "wasm",
-  "deps": {
-    "golemcloud/golem_sdk": "0.5.1",
-    "weather-agent-guest-client": {
-      "path": "golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client"
-    }
-  }
-}
-```
+An application using current `moon.mod` would normally put that generated module and the
+application in `moon.work`, import `weather-agent-guest-client@0.0.1` from `moon.mod`, and import its
+client package from `moon.pkg`. This is **not currently a drop-in Golem build setup**: multiple
+workspace members add the module name to Moon's output path, while Golem's stock MoonBit build
+template embeds the single-module path. Use this bridge only after providing workspace-aware debug
+and release build/embed overrides in `golem.yaml`; otherwise the build will not find the component
+WASM. Do not revert the application to legacy `moon.mod.json` merely to add a path dependency.
 
-Import its client package from the caller's `moon.pkg`:
+With that custom build integration in place, import the generated client package from the caller's
+`moon.pkg`:
 
 ```moonbit
 import {

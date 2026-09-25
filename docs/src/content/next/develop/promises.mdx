@@ -10,7 +10,7 @@ When a promise is completed, an arbitrary byte array can be attached to it as a 
 
 ### Creating a promise
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         To create a promise simply call the `createPromise` function:
 
@@ -21,6 +21,18 @@ When a promise is completed, an arbitrary byte array can be attached to it as a 
             const promiseId: PromiseId = createPromise()
             return promiseId
         }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        `Agents.Promises.create` is an Effect that creates a promise:
+
+        ```typescript
+        import { Effect } from "effect"
+        import { Agents } from "@golemcloud/effect-golem"
+
+        const createPromiseId = Effect.gen(function* () {
+          return yield* Agents.Promises.create
+        })
         ```
     </Tabs.Tab>
    <Tabs.Tab>
@@ -61,7 +73,7 @@ When a promise is completed, an arbitrary byte array can be attached to it as a 
 
 The returned value has the type `PromiseId`, and defined as the following (including the nested types):
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         ```typescript
         export type OplogIndex = bigint
@@ -88,6 +100,16 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
             agentId: AgentId
             oplogIdx: OplogIndex
         }
+        ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        Effect TypeScript re-exports the host `PromiseId` type as `Agents.PromiseId`. Its wire shape is the same Golem agent ID and oplog index structure shown in the TypeScript tab. Prefer the exported type rather than duplicating that structure:
+
+        ```typescript
+        import type { Agents } from "@golemcloud/effect-golem"
+
+        type PromiseId = Agents.PromiseId
         ```
     </Tabs.Tab>
 
@@ -187,7 +209,7 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
 
 ### Awaiting a promise
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     To await a promise, use the async `awaitPromise` function, which returns the promise result as a byte array payload.
    Here's an example that awaits a promise, then decodes the payload from JSON format:
@@ -203,6 +225,24 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
       const byteArrayPayload: Uint8Array = await awaitPromise(promiseId)
       return JSON.parse(new TextDecoder().decode(byteArrayPayload)) as MyPayload
     }
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    `Agents.Promises.await` returns an Effect containing the raw byte payload:
+
+    ```typescript
+    import { Effect, Schema } from "effect"
+    import { Agents } from "@golemcloud/effect-golem"
+
+    const MyPayload = Schema.Struct({ id: Schema.String })
+
+    const waitForPayload = (promiseId: Agents.PromiseId) =>
+      Agents.Promises.await(promiseId).pipe(
+        Effect.map((bytes) => new TextDecoder().decode(bytes)),
+        Effect.flatMap(
+          Schema.decodeUnknownEffect(Schema.fromJsonString(MyPayload)),
+        ),
+      )
     ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -255,7 +295,7 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
       String::from_array(chars)
     }
 
-    fn wait_for_payload(promise_id : @api.PromiseId) -> MyPayload {
+    async fn wait_for_payload(promise_id : @api.PromiseId) -> MyPayload {
       let payload = @api.await_promise(promise_id)
       let json = @json.parse(bytes_to_string(payload)) catch {
         _ => panic()
@@ -273,7 +313,7 @@ Note that if an agent is only **awaiting** Golem promises (one or more), the age
 
 ### Completing a promise from within an agent
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     To complete a promise from within an agent, use the `completePromise` function.
     The following example completes a promise with a value encoded as JSON:
@@ -288,6 +328,20 @@ Note that if an agent is only **awaiting** Golem promises (one or more), the age
       }
       const byteArrayPayload: Uint8Array = new TextEncoder().encode(JSON.stringify(payload))
       return completePromise(promiseId, byteArrayPayload)
+    }
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    `Agents.Promises.complete` returns an Effect. It succeeds with `true`, or fails with `PromiseAlreadyCompletedError` if the promise was already completed.
+
+    ```typescript
+    import { Agents } from "@golemcloud/effect-golem"
+
+    const completeFromAgent = (promiseId: Agents.PromiseId) => {
+      const payload = new TextEncoder().encode(
+        JSON.stringify({ id: "value", meta: "data" }),
+      )
+      return Agents.Promises.complete(promiseId, payload)
     }
     ```
     </Tabs.Tab>
