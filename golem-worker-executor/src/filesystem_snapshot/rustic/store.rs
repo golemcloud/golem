@@ -292,8 +292,9 @@ impl RusticSnapshotStore {
     /// Adds the freed bytes to the ledger of the scope, and prunes the repository when a prune is
     /// due. The ledger keeps the freed bytes before the prune starts, so a delete that runs again
     /// after a failed prune prunes again. It lists the packs only when their size can make a prune due.
-    /// A due prune runs only after the delete takes a claim of its ledger. A failed prune deletes
-    /// the claim, and a prune that succeeds deletes each claim of its ledger.
+    /// A due prune runs only after the delete takes a claim of its ledger, and only when the ledger
+    /// did not change after the claim. A failed prune deletes the claim, and a prune that succeeds
+    /// deletes each claim of its ledger.
     async fn prune_when_due(
         &self,
         scope: &SnapshotScope,
@@ -332,6 +333,19 @@ impl RusticSnapshotStore {
             .map_err(storage_failure)?
         {
             return Ok(());
+        }
+        // A prune writes its ledger before it deletes the claims, so a delete that claims in a
+        // directory that such a prune removed sees the new ledger here.
+        match read_ledger(&files).await {
+            Ok(again) if claims_directory(&again) == claims => {}
+            Ok(_) => {
+                release_claim(&files, &claims, number).await;
+                return Ok(());
+            }
+            Err(error) => {
+                release_claim(&files, &claims, number).await;
+                return Err(storage_failure(error));
+            }
         }
         let backend = Arc::new(self.backend(scope, token)?);
         let key = self.key.clone();

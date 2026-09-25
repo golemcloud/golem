@@ -984,6 +984,51 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
 
 #[test]
 #[timeout("60s")]
+async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_prune() {
+    // The gate holds the first delete after its ledger read and before its listing of the claims.
+    // The second delete prunes to its end, so the first delete claims in a removed directory.
+    let held = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let held = held.clone();
+        move |op_label, _| {
+            if op_label == "list_claims" && !held.swap(true, Ordering::SeqCst) {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let late = tokio::spawn({
+        let store = store.clone();
+        let scope = scope.clone();
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let late_held = eventually(|| held.load(Ordering::SeqCst)).await;
+
+    let pruned = store.delete(&scope, &name("p-2")).await;
+    storage.open_gate();
+    let late = tokio::time::timeout(LIMIT, late).await;
+
+    assert!(pruned.is_ok(), "{pruned:?}");
+    assert!(matches!(late, Ok(Ok(Ok(())))), "{late:?}");
+    assert_eq!(
+        (
+            late_held,
+            prunes(&storage.calls()),
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, 1, Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_prune_that_fails_deletes_its_claim_and_a_retry_of_the_delete_prunes() {
     // The first call after the first claim is the start of the first prune, and it fails before
     // the prune lists the packs. So only the retry counts as a prune.
