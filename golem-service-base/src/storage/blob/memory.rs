@@ -92,10 +92,10 @@ impl InMemoryBlobStorage {
         })
     }
 
-    /// Visits every key in the directory, or below it at any depth.
+    /// Gives every key in the directory, or below it at any depth.
     ///
-    /// The directory is not at the root of the namespace. A blob at the path of the directory is
-    /// not in it, because the directory of that blob is the one above.
+    /// An empty `dir` is the root of the namespace and gives every key of the namespace. A blob at
+    /// the path of the directory is not in it, because the directory of that blob is the one above.
     fn entries_in_dir<'a>(
         data: &'a BTreeMap<Key, Entry>,
         namespace: &BlobStorageNamespace,
