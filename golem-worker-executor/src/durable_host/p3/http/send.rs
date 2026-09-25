@@ -46,7 +46,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpScheme,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestP3HttpClientSend,
+    DurableFunctionType, HostRequest, HostRequestP3HttpClientSend,
     HostResponseP3HttpClientSendResult, OplogIndex,
 };
 use golem_common::model::{
@@ -176,9 +176,9 @@ where
         store.with(|mut access| {
             let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
             ctx.state
-                .check_and_increment_http_call_count(&P3HttpClientSend::HOST_FUNCTION_NAME)
+                .check_and_increment_http_call_count()
                 .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
-            ctx.record_monthly_http_call(&P3HttpClientSend::HOST_FUNCTION_NAME)
+            ctx.record_monthly_http_call()
                 .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))
         })?;
     }

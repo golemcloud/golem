@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::QuotaClass;
 use crate::durable_host::concurrent::{
     ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
 };
@@ -39,7 +40,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::hash::Hasher;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use tokio::sync::oneshot;
 use tokio::sync::{Mutex, MutexGuard, Notify};
 use tracing::{debug, warn};
@@ -229,14 +230,13 @@ struct ReplayCursor {
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
-    /// Function names of the entries in [`CursorState::retained_starts`]: unclaimed `Start`s the
-    /// cursor has already committed past, in oplog order. Published outside the cursor lock
-    /// (written only through a held [`CursorTx`], behind an uncontended synchronous mutex) so
-    /// durable-call admission and quota charging can tell "the cursor is exhausted" apart from
-    /// "every recorded call has been claimed" — and whether a recorded call of a given kind is
-    /// still waiting for its owner — without queueing on the cursor lock from a Store-holding
-    /// host call.
-    unclaimed_retained_starts: std::sync::Mutex<Vec<HostFunctionName>>,
+    /// Counts of the entries in [`CursorState::retained_starts`]: unclaimed `Start`s the cursor
+    /// has already committed past, in total and per quota class. Published outside the cursor
+    /// lock (written only through a held [`CursorTx`]) so durable-call admission and quota
+    /// charging can tell "the cursor is exhausted" apart from "every recorded call has been
+    /// claimed" — and whether a recorded call charged to a given quota is still waiting for its
+    /// owner — without queueing on the cursor lock from a Store-holding host call.
+    unclaimed_retained_starts: RetainedStartCounts,
     /// Resolver-owned reconstruction population registered atomically with entity `Start` claims.
     /// This shared view is used only for waiting and active-body subscriptions outside the cursor
     /// lock; resolver registration, incomplete release, and guard settlement own all mutations.
@@ -448,6 +448,53 @@ struct RetainedStart {
     /// (a `CardDerived` audit hint is looked up by the call that replays the terminal it
     /// follows), so they are published when the `Start` leaves the retained map.
     deferred_events: Vec<(OplogIndex, ReplayEvent)>,
+}
+
+/// Lock-free publication of how many `Start`s [`CursorState::retained_starts`] holds, in total
+/// and per [`QuotaClass`]. Rewritten from the retained map whenever it changes (only under a held
+/// [`CursorTx`]); each counter is read independently, so readers see a consistent value per
+/// counter but need no snapshot across them.
+#[derive(Debug, Default)]
+struct RetainedStartCounts {
+    total: AtomicUsize,
+    http: AtomicUsize,
+    rpc: AtomicUsize,
+}
+
+impl RetainedStartCounts {
+    fn publish<'a>(&self, retained: impl Iterator<Item = &'a OplogEntry>) {
+        let (mut total, mut http, mut rpc) = (0usize, 0usize, 0usize);
+        for entry in retained {
+            let OplogEntry::Start { function_name, .. } = entry else {
+                unreachable!("only Start entries are retained");
+            };
+            total += 1;
+            match QuotaClass::of_recorded_call(function_name) {
+                Some(QuotaClass::Http) => http += 1,
+                Some(QuotaClass::Rpc) => rpc += 1,
+                None => {}
+            }
+        }
+        self.total.store(total, Ordering::Release);
+        self.http.store(http, Ordering::Release);
+        self.rpc.store(rpc, Ordering::Release);
+    }
+
+    fn clear(&self) {
+        self.publish(std::iter::empty());
+    }
+
+    fn any(&self) -> bool {
+        self.total.load(Ordering::Acquire) > 0
+    }
+
+    fn any_charged_to(&self, quota: QuotaClass) -> bool {
+        let counter = match quota {
+            QuotaClass::Http => &self.http,
+            QuotaClass::Rpc => &self.rpc,
+        };
+        counter.load(Ordering::Acquire) > 0
+    }
 }
 
 #[allow(dead_code)]

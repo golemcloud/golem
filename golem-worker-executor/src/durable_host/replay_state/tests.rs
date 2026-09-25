@@ -265,11 +265,17 @@ fn start_now_with_request_payload(payload: OplogPayload<HostRequest>) -> OplogEn
 }
 
 fn start_resolution() -> OplogEntry {
+    start_named(HostFunctionName::MonotonicClockResolution)
+}
+
+/// A `ReadLocal` `Start` of `name` with a no-input request; the recorded kind is what matters
+/// to the tests using it, not the durable function type the real host call would record.
+fn start_named(name: HostFunctionName) -> OplogEntry {
     let mut entry = start_now();
     let OplogEntry::Start { function_name, .. } = &mut entry else {
         unreachable!();
     };
-    *function_name = HostFunctionName::MonotonicClockResolution;
+    *function_name = name;
     entry
 }
 
@@ -4237,19 +4243,27 @@ async fn retained_start_claim_rejects_mismatched_identity() {
 }
 
 #[test]
-async fn retained_start_names_are_published_per_call_kind() {
-    // [NoOp, Start(A=2 now), Start(B=3 now), End(A=2→4), End(B=3→5)] — while B is retained, only
-    // a call of B's recorded kind may still be B's late owner; a call of any other kind is fresh.
-    // Adopting B clears the published name again.
+async fn retained_start_counts_are_published_per_quota_class() {
+    // [NoOp, Start(A=2 now), Start(B=3 p3 http send), Start(C=4 rpc invoke),
+    //  Start(D=5 resolution), End(A=2→6), End(B=3→7), End(C=4→8), End(D=5→9)] — resolving A
+    // commits past B, C and D, retaining all three. Only a call charged to the same quota as a
+    // retained Start may still be its late owner: B keeps HTTP-charged calls unfresh, C keeps
+    // RPC-charged calls unfresh, and D (charged to no quota) suppresses neither. Adopting a
+    // retained Start clears its class again while the others stay published.
     let rs = replay_state_over(vec![
         noop(),
         start_now(),
-        start_now(),
+        start_named(HostFunctionName::P3HttpClientSend),
+        start_named(HostFunctionName::GolemRpcWasmRpcInvoke),
+        start_resolution(),
         end_for(2, 42),
         end_for(3, 43),
+        end_for(4, 44),
+        end_for(5, 45),
     ])
     .await;
-    assert!(!rs.retains_unclaimed_start_named(&HostFunctionName::MonotonicClockNow));
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc));
 
     let handle_a = rs
         .claim_concurrent_start(
@@ -4259,29 +4273,61 @@ async fn retained_start_names_are_published_per_call_kind() {
         .await
         .unwrap();
     match rs.await_resolution(handle_a).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
         other => panic!("expected Completed, got {other:?}"),
     }
     assert!(rs.has_unclaimed_retained_starts());
-    assert!(rs.retains_unclaimed_start_named(&HostFunctionName::MonotonicClockNow));
-    assert!(
-        !rs.retains_unclaimed_start_named(&HostFunctionName::MonotonicClockResolution),
-        "a retained Start of another kind must not suppress the charge for this kind"
-    );
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc));
 
     let handle_b = rs
         .claim_concurrent_start(
-            &HostFunctionName::MonotonicClockNow,
+            &HostFunctionName::P3HttpClientSend,
             &DurableFunctionType::ReadLocal,
         )
         .await
         .unwrap();
     assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
-    assert!(!rs.retains_unclaimed_start_named(&HostFunctionName::MonotonicClockNow));
+    assert!(
+        !rs.retains_unclaimed_start_charged_to(QuotaClass::Http),
+        "adopting the only HTTP-charged retained Start makes HTTP calls fresh again"
+    );
+    assert!(
+        rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc),
+        "a retained RPC-charged Start is unaffected by an HTTP adoption"
+    );
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let handle_c = rs
+        .claim_concurrent_start(
+            &HostFunctionName::GolemRpcWasmRpcInvoke,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_c.start_idx(), OplogIndex::from_u64(4));
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc));
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "the retained Start charged to no quota still keeps admission on the claim path"
+    );
+
+    let handle_d = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_d.start_idx(), OplogIndex::from_u64(5));
     assert!(!rs.has_unclaimed_retained_starts());
-    match rs.await_resolution(handle_b).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
-        other => panic!("expected Completed, got {other:?}"),
+    for (handle, end) in [(handle_b, 7), (handle_c, 8), (handle_d, 9)] {
+        match rs.await_resolution(handle).await.unwrap() {
+            Resolution::Completed { end_idx, .. } => {
+                assert_eq!(end_idx, OplogIndex::from_u64(end))
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
     }
 }
 

@@ -63,7 +63,43 @@ pub(crate) fn batched_write_scope_name(discriminator: Option<&str>) -> HostFunct
         Some(discriminator) => {
             HostFunctionName::Custom(format!("<scope:batched-write:{discriminator}>"))
         }
-        None => HostFunctionName::Custom("<scope:batched-write>".to_string()),
+        None => HostFunctionName::Custom(PLAIN_BATCHED_WRITE_SCOPE_NAME.to_string()),
+    }
+}
+
+const PLAIN_BATCHED_WRITE_SCOPE_NAME: &str = "<scope:batched-write>";
+
+/// The per-call quota an outbound durable call is charged against: the per-invocation call
+/// limits and the monthly account budgets exist for outgoing HTTP and for agent RPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaClass {
+    Http,
+    Rpc,
+}
+
+impl QuotaClass {
+    /// The quota class a recorded durable call is charged against, or `None` when calls of this
+    /// kind are not quota-charged. This is the single mapping from recorded call kind to quota:
+    /// the charging sites name their class directly, and the replay cursor uses this to report
+    /// which classes still have an unclaimed retained `Start` waiting for its owner (see
+    /// `WorkerState::durable_call_is_fresh`), so the two must agree on the recorded kinds.
+    ///
+    /// P2 HTTP (`wasi:http/outgoing-handler.handle`) is recorded as a plain batched-write scope,
+    /// a name it shares with rdbms transactions; a retained scope of that name therefore counts as
+    /// a possibly-HTTP one.
+    pub(crate) fn of_recorded_call(function_name: &HostFunctionName) -> Option<Self> {
+        match function_name {
+            HostFunctionName::P3HttpClientSend
+            | HostFunctionName::McpToolCall
+            | HostFunctionName::GolemAgentDurableStreamReaderRead
+            | HostFunctionName::GolemAgentDurableStreamWriterAppend => Some(Self::Http),
+            HostFunctionName::GolemRpcWasmRpcInvoke
+            | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult => Some(Self::Rpc),
+            HostFunctionName::Custom(name) if name == PLAIN_BATCHED_WRITE_SCOPE_NAME => {
+                Some(Self::Http)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -1295,17 +1331,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.reset_invocation_call_counts();
     }
 
-    /// Records one outgoing HTTP call, recorded under `function_name`, against the monthly
-    /// account quota when it is fresh live work (see `WorkerState::durable_call_is_fresh`).
+    /// Records one outgoing HTTP call against the monthly account quota when it is fresh live
+    /// work (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
     /// is exhausted. This trap maps to `RetryDecision::TryStop`; the worker is
     /// suspended and resumed when the registry replenishes the budget.
-    pub fn record_monthly_http_call(
-        &mut self,
-        function_name: &HostFunctionName,
-    ) -> anyhow::Result<()> {
-        if self.state.durable_call_is_fresh(function_name)
+    pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        if self.state.durable_call_is_fresh(QuotaClass::Http)
             && !self.state.resource_limit_entry.record_http_call()
         {
             Err(anyhow!(
@@ -1316,16 +1349,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Records one outgoing RPC call, recorded under `function_name`, against the monthly account
-    /// quota when it is fresh live work (see `WorkerState::durable_call_is_fresh`).
+    /// Records one outgoing RPC call against the monthly account quota when it is fresh live work
+    /// (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyRpcCallBudgetExhausted)` if the monthly budget
     /// is exhausted.
-    pub fn record_monthly_rpc_call(
-        &mut self,
-        function_name: &HostFunctionName,
-    ) -> anyhow::Result<()> {
-        if self.state.durable_call_is_fresh(function_name)
+    pub fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        if self.state.durable_call_is_fresh(QuotaClass::Rpc)
             && !self.state.resource_limit_entry.record_rpc_call()
         {
             Err(anyhow!(
@@ -11225,8 +11255,8 @@ impl PrivateDurableWorkerState {
         }
     }
 
-    /// Increments the HTTP call counter for the current invocation if the call recorded under
-    /// `function_name` is fresh live work.
+    /// Increments the HTTP call counter for the current invocation if the call is fresh live
+    /// work.
     ///
     /// Returns `Err` if the per-invocation HTTP call limit would be exceeded.
     /// The check and increment are performed only during live execution; replay
@@ -11234,12 +11264,9 @@ impl PrivateDurableWorkerState {
     /// already made in a prior execution. Call quotas are charged before the
     /// call's `Start` is claimed or written, so they use
     /// [`Self::durable_call_is_fresh`]: a call that may still adopt a retained
-    /// recorded `Start` of its own kind is not charged again.
-    pub fn check_and_increment_http_call_count(
-        &mut self,
-        function_name: &HostFunctionName,
-    ) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.durable_call_is_fresh(function_name) {
+    /// recorded `Start` charged to the same quota is not charged again.
+    pub fn check_and_increment_http_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
+        if !self.durable_call_is_fresh(QuotaClass::Http) {
             return Ok(());
         }
         if self.per_invocation_http_call_limit != u64::MAX
@@ -11251,17 +11278,13 @@ impl PrivateDurableWorkerState {
         Ok(())
     }
 
-    /// Increments the RPC call counter for the current invocation if the call recorded under
-    /// `function_name` is fresh live work.
+    /// Increments the RPC call counter for the current invocation if the call is fresh live work.
     ///
     /// Returns `Err` if the per-invocation RPC call limit would be exceeded. Uses
     /// [`Self::durable_call_is_fresh`] for the same reason as
     /// [`Self::check_and_increment_http_call_count`].
-    pub fn check_and_increment_rpc_call_count(
-        &mut self,
-        function_name: &HostFunctionName,
-    ) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.durable_call_is_fresh(function_name) {
+    pub fn check_and_increment_rpc_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
+        if !self.durable_call_is_fresh(QuotaClass::Rpc) {
             return Ok(());
         }
         if self.per_invocation_rpc_call_limit != u64::MAX
@@ -11309,27 +11332,26 @@ impl PrivateDurableWorkerState {
     /// Positional readers, authorization and snapshot decisions keep using [`Self::is_live`],
     /// which describes the Store's position, not a call's admission. Per-call quotas use
     /// [`Self::durable_call_is_fresh`], which narrows the retained-`Start` exception to the
-    /// call's own kind.
+    /// call's own quota class.
     pub fn durable_call_is_live(&self) -> bool {
         self.is_live()
             && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
                 || !self.replay_state.has_unclaimed_retained_starts())
     }
 
-    /// Whether a durable call recorded under `function_name` that this Store is about to issue is
-    /// known to create fresh work: the Store is live and no unclaimed retained `Start` of that kind
-    /// remains for a late owner to adopt. Per-call quotas are charged before a call is admitted
-    /// (so that a refused call leaves no oplog entry), and use this predicate: a call that may
-    /// still adopt a retained recorded `Start` is not charged again, while calls of every other
-    /// kind are charged even when unrelated retained `Start`s exist. Retained `Start`s of the same
-    /// kind but a different owner (another Store of this agent) also suppress the charge; that
-    /// residual under-charge is bounded by the recorded prefix of one recovered invocation.
-    pub fn durable_call_is_fresh(&self, function_name: &HostFunctionName) -> bool {
+    /// Whether a durable call charged to `quota` that this Store is about to issue is known to
+    /// create fresh work: the Store is live and no unclaimed retained `Start` charged to the same
+    /// quota remains for a late owner to adopt. Per-call quotas are charged before a call is
+    /// admitted (so that a refused call leaves no oplog entry), and use this predicate: a call
+    /// that may still adopt a retained recorded `Start` is not charged again, while retained
+    /// `Start`s charged to other quotas (or to none) never suppress a charge. Retained `Start`s
+    /// of the same quota class but a different owner (another Store of this agent, or a different
+    /// call kind sharing the quota) also suppress the charge; that residual under-charge is
+    /// bounded by the recorded prefix of one recovered invocation.
+    pub fn durable_call_is_fresh(&self, quota: QuotaClass) -> bool {
         self.is_live()
             && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
-                || !self
-                    .replay_state
-                    .retains_unclaimed_start_named(function_name))
+                || !self.replay_state.retains_unclaimed_start_charged_to(quota))
     }
 
     /// Whether this Store is an incomplete entity that already continued live locally while the

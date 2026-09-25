@@ -464,12 +464,15 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   authorization and snapshot decisions keep using `is_live()`.
 - Per-call quotas (`check_and_increment_{http,rpc}_call_count`, `record_monthly_{http,rpc}_call`)
   are charged before the call's `Start` is claimed or appended, so a refused call leaves no oplog
-  entry. They use `durable_call_is_fresh(&HostFunctionName)`: the cursor publishes the kinds of
-  its unclaimed retained `Start`s (`retains_unclaimed_start_named`), and only a call of the same
-  recorded kind — which may still be a retained `Start`'s late owner — is exempt; unrelated
-  retained `Start`s do not suppress the charge. Each site passes its recorded kind (p2 HTTP and
-  rdbms share the `<scope:batched-write>` scope name, RPC its `golem:rpc` function, MCP dispatch
-  the owning `McpToolCall`).
+  entry. They use `durable_call_is_fresh(QuotaClass)`: `QuotaClass::of_recorded_call` is the
+  single mapping from a recorded `HostFunctionName` to the HTTP or RPC quota it is charged
+  against, the cursor publishes per-class counts of its unclaimed retained `Start`s
+  (`retains_unclaimed_start_charged_to`), and only a call charged to a class that still has a
+  retained `Start` — which may be that `Start`'s late owner — is exempt; retained `Start`s of
+  other classes (or of none) do not suppress the charge. The charging sites name their class
+  (HTTP for p2/p3 HTTP, MCP dispatch and external durable streams; RPC for `golem:rpc` invokes);
+  the plain `<scope:batched-write>` scope name is classified as HTTP because p2 HTTP records it
+  (rdbms transactions share it).
 
 Tests: `replay_state/tests.rs` (`positional_reader_waits_for_a_retained_entity_start_to_be_claimed`,
 `interleaved_positional_markers_are_consumed_only_by_the_recording_store`,

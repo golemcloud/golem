@@ -6,8 +6,6 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::authorization::targets::http_target;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::oplog::HostPayloadPair;
-use golem_common::model::oplog::host_functions::McpToolCall;
 use golem_mcp_import::transport::TransportError;
 use golem_mcp_import::transport::sender::HttpPolicy;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -26,11 +24,10 @@ impl<Ctx: WorkerCtx> HttpPolicy for &mut DurableWorkerCtx<Ctx> {
             .authorize_live_permission(&target.permission)
             .await?
             .map_err(|_| TransportError::Denied)?;
-        // The sender is constructed only inside the live arm of an `McpToolCall`, so the HTTP
-        // dispatch is charged under that owning call's recorded kind.
-        self.state
-            .check_and_increment_http_call_count(&McpToolCall::HOST_FUNCTION_NAME)?;
-        self.record_monthly_http_call(&McpToolCall::HOST_FUNCTION_NAME)?;
+        // The sender is constructed only inside the live arm of an `McpToolCall`, whose recorded
+        // `Start` is what the HTTP quota charge is reconciled against on replay.
+        self.state.check_and_increment_http_call_count()?;
+        self.record_monthly_http_call()?;
         Ok(())
     }
 }

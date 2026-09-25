@@ -2318,12 +2318,12 @@ impl CallCountManagement for TestWorkerCtx {
         self.durable_ctx.reset_invocation_call_counts();
     }
 
-    fn record_monthly_http_call(&mut self, function_name: &HostFunctionName) -> anyhow::Result<()> {
-        self.durable_ctx.record_monthly_http_call(function_name)
+    fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_http_call()
     }
 
-    fn record_monthly_rpc_call(&mut self, function_name: &HostFunctionName) -> anyhow::Result<()> {
-        self.durable_ctx.record_monthly_rpc_call(function_name)
+    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_rpc_call()
     }
 }
 

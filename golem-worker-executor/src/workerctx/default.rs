@@ -70,7 +70,6 @@ use golem_common::model::entity::{
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
     TimestampedUpdateDescription,
@@ -409,12 +408,12 @@ impl CallCountManagement for Context {
         self.durable_ctx.reset_invocation_call_counts();
     }
 
-    fn record_monthly_http_call(&mut self, function_name: &HostFunctionName) -> anyhow::Result<()> {
-        self.durable_ctx.record_monthly_http_call(function_name)
+    fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_http_call()
     }
 
-    fn record_monthly_rpc_call(&mut self, function_name: &HostFunctionName) -> anyhow::Result<()> {
-        self.durable_ctx.record_monthly_rpc_call(function_name)
+    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_rpc_call()
     }
 }
 
