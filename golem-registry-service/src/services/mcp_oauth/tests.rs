@@ -1114,6 +1114,21 @@ async fn declared_consent_and_refresh_work_before_first_deployment_and_grant_is_
     ))
     .await
     .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_tool_bindings"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_registered_tools"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_component_revisions"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployments"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployment_revisions"))
+        .await
+        .unwrap();
     db.execute(sqlx::query("DELETE FROM deployment_revisions"))
         .await
         .unwrap();

@@ -7043,12 +7043,11 @@ async fn rust_rpc_missing_target(
         )
         .await;
 
+    let error = call_result.unwrap_err();
+    let error = format!("{error:?}");
     assert!(
-        call_result
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("AgentError::InvalidType(\"SimpleChildAgent\")")
+        error.contains("AgentError::InvalidType") && error.contains("SimpleChildAgent"),
+        "unexpected missing-target error: {error}"
     );
 
     let oplog = executor

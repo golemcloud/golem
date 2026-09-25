@@ -138,15 +138,18 @@ async fn tool_middleware_cross_crate_components_and_compile_failures() {
         for symbol in ["ambient_tool_rpc", "tool_client"] {
             assert!(!symbols.contains(symbol), "{name} retained unused {symbol}");
         }
-        for (capability, symbol) in [
-            ("agent", "agent_impl"),
-            ("agent", "agent_registry"),
-            ("agent", "principal_serde"),
-            ("tool", "tool_registry"),
-            ("middleware", "tool_middleware_impl"),
-            ("middleware", "tool_middleware_registry"),
+        for (capabilities, symbol) in [
+            (&["agent"][..], "agent_impl"),
+            (&["agent"][..], "agent_registry"),
+            (&["agent"][..], "principal_serde"),
+            (&["agent", "tool"][..], "tool_registry"),
+            (&["middleware"][..], "tool_middleware_impl"),
+            (&["middleware"][..], "tool_middleware_registry"),
         ] {
-            if !features.split(',').any(|feature| feature == capability) {
+            if !features
+                .split(',')
+                .any(|feature| capabilities.contains(&feature))
+            {
                 assert!(!symbols.contains(symbol), "{name} retained {symbol}");
             }
         }

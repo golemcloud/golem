@@ -595,6 +595,21 @@ async fn deployment_without_oauth_consent_succeeds_with_discovery_warning() {
     ))
     .await
     .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_tool_bindings"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_registered_tools"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_component_revisions"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployments"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployment_revisions"))
+        .await
+        .unwrap();
     db.execute(sqlx::query("DELETE FROM deployment_revisions"))
         .await
         .unwrap();
@@ -700,6 +715,21 @@ async fn preview_before_deployment_paginates_merges_and_does_not_cache() {
     ))
     .await
     .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_tool_bindings"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_registered_tools"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_component_revisions"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployments"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployment_revisions"))
+        .await
+        .unwrap();
     db.execute(sqlx::query("DELETE FROM deployment_revisions"))
         .await
         .unwrap();
