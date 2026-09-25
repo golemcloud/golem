@@ -149,7 +149,7 @@ object AgentDefinitionMacro {
           report.errorAndAbort(s"Agent '$name' is ephemeral but method '${method.name}' is marked with @readOnly.")
         val out         = unwrapAsyncType(method.tree.asInstanceOf[DefDef].returnTpt.tpe)
         val methodInput = if (handler) {
-          arguments match {
+          arguments.filterNot { case (_, tpe) => isPrincipal(tpe) } match {
             case List(("request", request)) if request.dealias =:= TypeRepr.of[HttpRequest] =>
               InputMetadata(
                 List(ParameterMetadata("request", FieldSource.UserSupplied, HttpExchangeCodec.requestGraph))

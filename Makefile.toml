@@ -1607,10 +1607,11 @@ cd ../..
 
 ## BUILT-IN TOOLS
 [tasks.build-builtin-tools]
-dependencies = ["build"]
+dependencies = ["wit"]
 description = "Builds the Rust and MoonBit built-in filesystem tool components"
 script_runner = "@duckscript"
 script = '''
+exec --fail-on-error cargo build -p golem --bin golem
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd plugins/filesystem-tools-rust
 exec --fail-on-error ${golem} build -P release --force-build --yes

@@ -15,6 +15,7 @@ const expected = {
   empty: { agents: false, tools: false, middleware: false },
   'tool-only': { agents: false, tools: true, middleware: false },
   'agent-only': { agents: true, tools: false, middleware: false },
+  'exported-agent': { agents: true, tools: false, middleware: false },
   'agent-tool': { agents: true, tools: true, middleware: false },
   'agent-reflection': { agents: true, tools: false, middleware: false },
   'middleware-only': { agents: false, tools: false, middleware: true },
@@ -55,9 +56,11 @@ async function build(name) {
       nodeResolve({ extensions: ['.ts', '.mjs', '.js'] }),
       {
         name: 'fixture-typescript',
-        load(id) {
+        transform(_code, id) {
           if (id.endsWith('.ts'))
             return {
+              // Like @rollup/plugin-typescript, emit from its TypeScript program
+              // rather than preserving an earlier plugin's transformed source.
               code: ts.transpileModule(fs.readFileSync(id, 'utf8'), {
                 compilerOptions: config.options,
               }).outputText,

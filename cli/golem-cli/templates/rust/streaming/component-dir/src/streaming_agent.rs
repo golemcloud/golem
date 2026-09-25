@@ -22,7 +22,7 @@ struct StreamingAgentImpl;
 
 fn stream<T>(values: Vec<T>) -> AgentStream<T>
 where
-    T: golem_rust::IntoSchema + golem_rust::FromSchema + 'static,
+    T: golem_rust::IntoWire + golem_rust::FromWire + 'static,
 {
     let (mut writer, stream) = AgentStream::new();
     spawn_local(async move {

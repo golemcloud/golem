@@ -7048,7 +7048,7 @@ async fn rust_rpc_missing_target(
             .err()
             .unwrap()
             .to_string()
-            .contains("Agent type not registered")
+            .contains("AgentError::InvalidType(\"SimpleChildAgent\")")
     );
 
     let oplog = executor

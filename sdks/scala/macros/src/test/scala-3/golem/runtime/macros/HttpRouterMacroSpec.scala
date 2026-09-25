@@ -18,7 +18,7 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
     cors = Array("https://example.com")
   )
   trait Website {
-    @httpHandler def arbitraryName(request: HttpRequest): Future[HttpResponse]
+    @httpHandler def arbitraryName(request: HttpRequest, principal: golem.Principal): Future[HttpResponse]
     @openApiProvider def description(): Future[String]
   }
   @httpRouter("files", "/", staticBindings = Array(("/", "/index.html")))

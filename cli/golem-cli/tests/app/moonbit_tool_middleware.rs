@@ -116,16 +116,13 @@ fn modified_at(path: &PathBuf) -> std::time::SystemTime {
 fn assert_component_contracts(ctx: &TestContext, profile: &str) {
     let expected_imports = [
         "interface:golem:agent/common@2.0.0",
-        "interface:golem:agent/host@2.0.0",
         "interface:golem:api/host@1.5.0",
         "interface:golem:core/types@2.0.0",
         "interface:golem:tool/common@0.1.0",
         "interface:golem:tool/host@0.1.0",
         "interface:golem:tool/streams@0.1.0",
         "interface:golem:tool/underlying@0.1.0",
-        "interface:wasi:cli/environment@0.3.0",
         "interface:wasi:clocks/types@0.3.0",
-        "interface:wasi:logging/logging",
     ];
     let expected_exports = [
         "interface:golem:agent/guest@2.0.0",

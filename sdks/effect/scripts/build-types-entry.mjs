@@ -160,15 +160,15 @@ const facades = index.statements
   )
   .map((node) => [
     node.moduleSpecifier.text.slice(2, -3),
-    "@golemcloud/effect-golem",
+    resolve(distDir, "index.mjs"),
     node.exportClause.name.text,
   ])
 facades.push(
-  ["ToolReflection", "@golemcloud/effect-golem", "Reflection"],
-  ["Sqlite/SqliteClient", "@golemcloud/effect-golem/sqlite"],
-  ["Postgres/PgClient", "@golemcloud/effect-golem/postgres"],
-  ["Mysql/MySqlClient", "@golemcloud/effect-golem/mysql"],
-  ["Ignite/IgniteClient", "@golemcloud/effect-golem/ignite2"],
+  ["ToolReflection", resolve(distDir, "index.mjs"), "Reflection"],
+  ["Sqlite/SqliteClient", resolve(distDir, "sqlite.mjs")],
+  ["Postgres/PgClient", resolve(distDir, "postgres.mjs")],
+  ["Mysql/MySqlClient", resolve(distDir, "mysql.mjs")],
+  ["Ignite/IgniteClient", resolve(distDir, "ignite.mjs")],
 )
 for (const [modulePath, owner, namespace] of facades) {
   const source = program.getSourceFile(resolve(root, "src", `${modulePath}.ts`))
@@ -193,11 +193,13 @@ for (const [modulePath, owner, namespace] of facades) {
       }
     }
   }
+  const output = resolve(distDir, "src", `${modulePath}.js`)
+  const ownerImport = relativeImport(output, owner)
   const imports = namespace
-    ? `import { ${namespace} as shared } from ${JSON.stringify(owner)};`
-    : `import * as shared from ${JSON.stringify(owner)};`
+    ? `import { ${namespace} as shared } from ${JSON.stringify(ownerImport)};`
+    : `import * as shared from ${JSON.stringify(ownerImport)};`
   writeFileSync(
-    resolve(distDir, "src", `${modulePath}.js`),
+    output,
     [
       imports,
       ...[...names].map(

@@ -348,7 +348,7 @@ fn assert_component_contract(wit: &str, invokes_tool_host: bool) {
     assert!(exports.iter().any(|export| export == LOAD_SNAPSHOT));
     assert!(exports.iter().any(|export| export == SAVE_SNAPSHOT));
     let relevant = [AGENT_GUEST, TOOL_GUEST, TOOL_MIDDLEWARE_GUEST, TOOL_HOST];
-    let mut actual_imports = imports
+    let actual_imports = imports
         .into_iter()
         .filter(|interface| relevant.contains(&interface.as_str()))
         .collect::<Vec<_>>();
@@ -356,32 +356,30 @@ fn assert_component_contract(wit: &str, invokes_tool_host: bool) {
         .into_iter()
         .filter(|interface| relevant.contains(&interface.as_str()))
         .collect::<Vec<_>>();
-    let mut expected_imports = [TOOL_HOST]
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    assert!(
+        actual_imports.is_empty() || actual_imports == [TOOL_HOST],
+        "unexpected relevant root-world imports in component contract:\n{wit}"
+    );
+    if invokes_tool_host {
+        assert_eq!(actual_imports, [TOOL_HOST]);
+    }
     let mut expected_exports = [AGENT_GUEST, TOOL_GUEST, TOOL_MIDDLEWARE_GUEST]
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
 
-    actual_imports.sort();
     actual_exports.sort();
-    expected_imports.sort();
     expected_exports.sort();
 
-    assert_eq!(
-        actual_imports, expected_imports,
-        "unexpected relevant root-world imports in component contract:\n{wit}"
-    );
     assert_eq!(
         actual_exports, expected_exports,
         "unexpected relevant root-world exports in component contract:\n{wit}"
     );
 
     if !invokes_tool_host {
-        // The mandatory stream signatures share a binding vtable whose type
-        // alias lives in tool/host; retaining that alias is not an RPC client.
+        // Some linker/toolchain combinations retain the host interface because
+        // the mandatory stream signatures share its binding vtable and type aliases.
+        // The RPC resource itself must still be absent.
         assert!(
             !wit.contains("resource tool-rpc"),
             "component contract unexpectedly retains ambient tool RPC:\n{wit}"

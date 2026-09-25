@@ -212,22 +212,46 @@ export function componentPlugin(parsedConfig, main) {
     load(id) {
       if (id === entry) return componentEntry(main, capabilities);
     },
-    transform(code, id) {
-      const compiled = tools.transform(code, id);
-      if (compiled) return compiled;
-      if (id === path.join(runtime, 'index.mjs')) {
-        if (capabilities.tools)
-          code = code
-            .replaceAll('./internal/registry/toolRegistry.mjs', './internal/tool/compiled.mjs')
-            .replaceAll('./internal/tool/invocationResult.mjs', './internal/tool/compiled.mjs');
-        if (!dynamicModels)
-          code = code.replace(
-            /^import ['"]\.\/schema\/(zod|valibot|arktype|effect)\.mjs['"];?\s*$/gm,
-            '',
+    transform: {
+      order: 'post',
+      handler(code, id) {
+        const compiled = tools.transform(code, id);
+        if (compiled) return compiled;
+        if (id === path.join(runtime, 'index.mjs')) {
+          if (capabilities.tools)
+            code = code
+              .replaceAll('./internal/registry/toolRegistry.mjs', './internal/tool/compiled.mjs')
+              .replaceAll('./internal/tool/invocationResult.mjs', './internal/tool/compiled.mjs');
+          if (!dynamicModels)
+            code = code.replace(
+              /^import ['"]\.\/schema\/(zod|valibot|arktype|effect)\.mjs['"];?\s*$/gm,
+              '',
+            );
+          return { code, map: null };
+        }
+        if (id === path.join(runtime, 'agentId.mjs') && !dynamicModels) {
+          const source = ts.createSourceFile(
+            id,
+            code,
+            ts.ScriptTarget.Latest,
+            true,
+            ts.ScriptKind.JS,
           );
-        return { code, map: null };
-      }
-      if (id === path.join(runtime, 'agentId.mjs') && !dynamicModels) {
+          const edits = [];
+          for (const statement of source.statements) {
+            if (!ts.isClassDeclaration(statement) || statement.name?.text !== 'ParsedAgentId')
+              continue;
+            for (const member of statement.members)
+              if (['create', 'parsed', 'parts', 'dynamicClient'].includes(member.name?.text))
+                edits.push([member.getStart(source), member.end]);
+          }
+          for (const [start, end] of edits.reverse()) code = code.slice(0, start) + code.slice(end);
+          return { code, map: null };
+        }
+        // Rollup does not eliminate unused class methods. Specialize only the two
+        // registration methods of the SDK's builder, before Rollup links imports.
+        // There are no capability tests or alternate implementations at runtime.
+        if (id !== path.join(runtime, 'tool.mjs')) return;
         const source = ts.createSourceFile(
           id,
           code,
@@ -237,35 +261,20 @@ export function componentPlugin(parsedConfig, main) {
         );
         const edits = [];
         for (const statement of source.statements) {
-          if (!ts.isClassDeclaration(statement) || statement.name?.text !== 'ParsedAgentId')
+          if (!ts.isClassDeclaration(statement) || statement.name?.text !== 'CommandBuilder')
             continue;
-          for (const member of statement.members)
-            if (['create', 'parsed', 'parts', 'dynamicClient'].includes(member.name?.text))
+          for (const member of statement.members) {
+            if (
+              (member.name?.text === 'middleware' && !capabilities.middleware) ||
+              (member.name?.text === 'implement' && !capabilities.tools)
+            ) {
               edits.push([member.getStart(source), member.end]);
+            }
+          }
         }
         for (const [start, end] of edits.reverse()) code = code.slice(0, start) + code.slice(end);
         return { code, map: null };
-      }
-      // Rollup does not eliminate unused class methods. Specialize only the two
-      // registration methods of the SDK's builder, before Rollup links imports.
-      // There are no capability tests or alternate implementations at runtime.
-      if (id !== path.join(runtime, 'tool.mjs')) return;
-      const source = ts.createSourceFile(id, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-      const edits = [];
-      for (const statement of source.statements) {
-        if (!ts.isClassDeclaration(statement) || statement.name?.text !== 'CommandBuilder')
-          continue;
-        for (const member of statement.members) {
-          if (
-            (member.name?.text === 'middleware' && !capabilities.middleware) ||
-            (member.name?.text === 'implement' && !capabilities.tools)
-          ) {
-            edits.push([member.getStart(source), member.end]);
-          }
-        }
-      }
-      for (const [start, end] of edits.reverse()) code = code.slice(0, start) + code.slice(end);
-      return { code, map: null };
+      },
     },
     async renderChunk(code, _chunk, options) {
       const result = await minify(code, {
