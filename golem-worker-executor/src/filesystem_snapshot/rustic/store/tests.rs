@@ -18,7 +18,9 @@
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
 use super::super::files::SnapshotFiles;
-use super::super::prune::{LEDGERS_PATH, Percent, PruneLedger, count_freed, read_ledger};
+use super::super::prune::{
+    CLOCK_SKEW_MARGIN, LEDGERS_PATH, Percent, PruneLedger, count_freed, read_ledger,
+};
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
@@ -799,6 +801,8 @@ async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_per
     store.delete(&scope, &name("p-deleted")).await.unwrap();
     let after_first = ledger(&storage, &scope).await;
     let after_first_freed = freed(&storage, &scope).await;
+    // The margin for clock skew keeps the next prune back, so the ledger moves back by it.
+    age_ledger(&storage, &scope, &after_first).await;
     store.delete(&scope, &name("p-none")).await.unwrap();
     let packs_after = blobs(&*storage, &scope.0, "data/").await;
 
@@ -848,6 +852,29 @@ async fn set_last_prune<S: BlobStorage + 'static>(
         storage,
         scope,
         &format!("{}-0-test", last_prune.to_millis()),
+    )
+    .await;
+}
+
+/// Makes the ledger one entry with the marked packs of `ledger` and a time before it by the margin
+/// for clock skew.
+async fn age_ledger<S: BlobStorage + 'static>(
+    storage: &Arc<S>,
+    scope: &SnapshotScope,
+    ledger: &PruneLedger,
+) {
+    let margin = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap();
+    let aged = ledger
+        .last_prune
+        .map_or(0, |last| last.to_millis().saturating_sub(margin + 1));
+    storage
+        .delete_dir("test", "test", scope.0.clone(), Path::new(LEDGERS_PATH))
+        .await
+        .unwrap();
+    put_ledger_entry(
+        storage,
+        scope,
+        &format!("{aged}-{}-aged", u8::from(ledger.awaiting_removal)),
     )
     .await;
 }

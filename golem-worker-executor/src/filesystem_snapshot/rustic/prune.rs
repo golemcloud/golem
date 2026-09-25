@@ -68,11 +68,13 @@ impl Percent {
     }
 }
 
-/// Tells whether the grace period passed at `now` since the last prune.
+/// Tells whether the grace period and the margin for clock skew passed at `now` since the last
+/// prune. A time more than the margin after `now` counts as missing.
 fn grace_passed(ledger: &PruneLedger, now: Timestamp, grace: Duration) -> bool {
     ledger
         .last_prune
-        .is_none_or(|last| passed_since(last, now, grace))
+        .filter(|last| !beyond_margin(*last, now))
+        .is_none_or(|last| passed_since(last, now, grace.saturating_add(CLOCK_SKEW_MARGIN)))
 }
 
 /// Tells whether the grace period passed at `now` since the time.
@@ -315,14 +317,17 @@ pub(super) enum ClaimChoice {
 }
 
 /// Chooses the claim of a delete from the claims of its ledger. The newest claim holds the ledger
-/// until the grace period passed since its time. A claim whose content does not parse is old.
+/// until the grace period and the margin for clock skew passed since its time. A claim whose
+/// content does not parse, or whose time is more than the margin after `now`, is old.
 pub(super) fn next_claim(claims: &[ListedClaim], now: Timestamp, grace: Duration) -> ClaimChoice {
+    let held_until = grace.saturating_add(CLOCK_SKEW_MARGIN);
     match claims.iter().max_by_key(|claim| claim.number) {
         None => ClaimChoice::Claim(0),
         Some(newest)
             if newest
                 .claimed_at
-                .is_some_and(|at| !passed_since(at, now, grace)) =>
+                .filter(|at| !beyond_margin(*at, now))
+                .is_some_and(|at| !passed_since(at, now, held_until)) =>
         {
             ClaimChoice::Held
         }
@@ -441,7 +446,8 @@ mod tests {
 
     const TEN_PERCENT: Percent = Percent(10);
     const GRACE: Duration = Duration::from_secs(15 * 60);
-    const GRACE_MILLIS: u64 = 15 * 60 * 1000;
+    /// The grace period and the margin for clock skew, in milliseconds.
+    const HELD_MILLIS: u64 = 15 * 60 * 1000 + 2 * 60 * 1000;
     const DEADLINE: Duration = Duration::from_secs(2);
 
     fn at(millis: u64) -> Timestamp {
@@ -510,9 +516,9 @@ mod tests {
         assert_eq!(
             [
                 full(last),
-                full(last + GRACE_MILLIS - 1),
-                full(last + GRACE_MILLIS),
-                full(last + GRACE_MILLIS + 1),
+                full(last + HELD_MILLIS - 1),
+                full(last + HELD_MILLIS),
+                full(last + HELD_MILLIS + 1),
             ],
             [false, false, true, true]
         );
@@ -521,7 +527,7 @@ mod tests {
     #[test]
     fn marked_packs_make_a_prune_due_after_the_grace_period_without_freed_bytes() {
         let last = 1_000_000;
-        let after_grace = at(last + GRACE_MILLIS);
+        let after_grace = at(last + HELD_MILLIS);
         let due = |awaiting_removal| {
             prune_due(
                 &ledger(Some(last), awaiting_removal),
@@ -545,7 +551,7 @@ mod tests {
             [
                 due(ledger(None, false), 0),
                 due(ledger(None, false), 1),
-                due(ledger(Some(10_000_000), false), 1),
+                due(ledger(Some(10_000_000 - 120_000), false), 1),
             ],
             [false, true, true]
         );
@@ -560,12 +566,37 @@ mod tests {
 
         assert_eq!(
             [
-                needs(1, false, last + GRACE_MILLIS),
-                needs(1, false, last + GRACE_MILLIS - 1),
-                needs(0, false, last + GRACE_MILLIS),
-                needs(1, true, last + GRACE_MILLIS),
+                needs(1, false, last + HELD_MILLIS),
+                needs(1, false, last + HELD_MILLIS - 1),
+                needs(0, false, last + HELD_MILLIS),
+                needs(1, true, last + HELD_MILLIS),
             ],
             [true, false, false, false]
+        );
+    }
+
+    #[test]
+    fn a_time_more_than_the_margin_ahead_counts_as_missing() {
+        let now = 10_000_000;
+        let margin = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap();
+        let due = |last| prune_due(&ledger(Some(last), false), 1, at(now), 0, Percent(0), GRACE);
+        let claim = |claimed_at| {
+            next_claim(
+                &[ListedClaim {
+                    number: 0,
+                    claimed_at: Some(at(claimed_at)),
+                }],
+                at(now),
+                GRACE,
+            )
+        };
+
+        assert_eq!(
+            (
+                [due(now + margin), due(now + margin + 1)],
+                [claim(now + margin), claim(now + margin + 1)]
+            ),
+            ([false, true], [ClaimChoice::Held, ClaimChoice::Claim(1)])
         );
     }
 
@@ -581,8 +612,8 @@ mod tests {
         assert_eq!(
             [
                 choose(&[]),
-                choose(&[claim(0, Some(now - GRACE_MILLIS)), claim(1, Some(now - 1))]),
-                choose(&[claim(1, Some(now)), claim(2, Some(now - GRACE_MILLIS))]),
+                choose(&[claim(0, Some(now - HELD_MILLIS)), claim(1, Some(now - 1))]),
+                choose(&[claim(1, Some(now)), claim(2, Some(now - HELD_MILLIS))]),
                 choose(&[claim(4, None)]),
                 choose(&[claim(0, Some(now - 1)), claim(3, None)]),
             ],
