@@ -58,7 +58,6 @@ external_batch_max_size = "8388608 B"
 lease_ttl = "1m"
 reconciliation_batch_size = 256
 reconciliation_interval = "30s"
-renewal_interval = "20s"
 
 [engine]
 enable_fs_cache = false
@@ -506,7 +505,6 @@ without_time = false
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
-# renewal_interval = "20s"
 #
 # [engine]
 # enable_fs_cache = false
@@ -927,7 +925,6 @@ without_time = false
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
-# renewal_interval = "20s"
 #
 # [engine]
 # enable_fs_cache = false

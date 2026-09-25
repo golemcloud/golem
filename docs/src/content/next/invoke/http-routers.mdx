@@ -1,0 +1,972 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Using HTTP routers and files
+
+Use an HTTP router to handle streaming requests, serve static assets, or integrate
+an HTTP framework. To publish files created by a durable agent, add live file
+mappings to that agent instead. The [HTTP router concepts](/next/concepts/http-routers)
+page explains how these features interact with code-first endpoints, authentication,
+and durable execution.
+
+The examples below belong in an existing [Golem application](/next/quickstart).
+Use a CLI and SDK from the same Golem version. Commands assume a local server on
+your machine, with the application gateway on port 9006.
+
+## Handling streaming requests
+
+Define a router with a unique type name and a literal mount path. This `EchoRouter`
+streams an upload back to the caller at `/echo`.
+It does not collect the upload into memory or calculate its length first.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+import { defineHttpRouter } from '@golemcloud/golem-ts-sdk';
+
+export const EchoRouter = defineHttpRouter('EchoRouter')
+  .mount('/echo')
+  .implement((request) => new Response(request.body));
+```
+
+The Web adapter accepts standard `Request` and `Response` objects, so a framework
+with a Fetch-compatible handler can supply the function passed to `.implement`.
+Keep its body streaming. For the original, unnormalized HTTP envelope, use
+`.implementRaw` instead; see [Working with headers](#working-with-headers).
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Effect } from "effect"
+import {
+  HttpRouter as Routes,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http"
+import { Http, HttpRouter } from "@golemcloud/effect-golem"
+
+const routes = Routes.add("POST", "/", Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest
+  return HttpServerResponse.stream(request.stream)
+}))
+
+HttpRouter.define("EchoRouter", {
+  mount: Http.mount("/echo"),
+}).implement(Routes.toHttpEffect(routes))
+```
+
+Use Effect's `HttpRouter` (aliased here as `Routes`) to compose routes. It sees
+mount-relative URLs: `POST /` above handles public `POST /echo`. Inside the handler,
+`yield* HttpRouter.request` gives the original full path, query, byte-valued headers,
+and the same single-consumer body. Do not consume both body views.
+
+Acquire request resources with `Effect.acquireRelease` or `Effect.addFinalizer`.
+The request scope stays open through response consumption; do not rely solely on
+finalizers inside a body stream that might never start. See the
+[Effect adapter lifecycle](/next/concepts/http-routers#effect-adapter-lifecycle-and-limitations)
+for cancellation limits.
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+use golem_rust::agentic::{Config, HttpRequest, HttpResponse, HttpRouter};
+use golem_rust::http_router;
+
+struct EchoRouter;
+
+#[http_router(name = "EchoRouter", mount = "/echo")]
+impl HttpRouter for EchoRouter {
+    type Config = ();
+
+    fn new(_: Config<()>) -> Self {
+        Self
+    }
+
+    async fn handle(&self, request: HttpRequest) -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            headers: vec![],
+            body: request.body,
+        }
+    }
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+import golem.{BaseAgent, UShort}
+import golem.runtime.annotations.*
+import golem.runtime.http.*
+import scala.concurrent.Future
+
+@httpRouter(typeName = "EchoRouter", mount = "/echo")
+trait EchoRouter extends BaseAgent {
+  @httpHandler def serve(request: HttpRequest): Future[HttpResponse]
+}
+
+@agentImplementation()
+final class EchoRouterImpl extends EchoRouter {
+  def serve(request: HttpRequest): Future[HttpResponse] =
+    Future.successful(HttpResponse(UShort(200), Nil, request.body))
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+///|
+#derive.http_router
+#derive.mount("/echo")
+struct EchoRouter {}
+
+///|
+fn EchoRouter::new() -> EchoRouter { EchoRouter::{ } }
+
+///|
+#derive.http_handler
+pub fn EchoRouter::serve(
+  _self : Self,
+  request : @http.HttpRequest,
+) -> @http.HttpResponse {
+  let input = request.body
+  {
+    status: 200,
+    headers: [],
+    body: @schema.AgentStream::produce(
+      async fn(writer) {
+        defer input.drop()
+        for ;; {
+          match input.read() {
+            None => return
+            Some(chunk) =>
+              if writer.write_one(chunk) is @schema.PeerDropped { return }
+          }
+        }
+      },
+      on_unstarted_drop=() => input.drop(),
+    ),
+  }
+}
+```
+
+Import `golemcloud/golem_sdk/http` and `golemcloud/golem_sdk/schema` in the
+component's `moon.pkg`. Build through `golem build` so it generates registration
+and schema code before compiling.
+</Tabs.Tab>
+</Tabs>
+
+Merge this deployment into your application's manifest:
+
+```yaml filename="golem.yaml"
+httpApi:
+  deployments:
+    local:
+      - domain: localhost:9006
+        scheme: http
+        agents:
+          EchoRouter: {}
+```
+
+Build, deploy, and send an upload:
+
+```shell
+golem build -L
+golem deploy -L -Y
+printf 'stream me' | curl --data-binary @- http://localhost:9006/echo
+```
+
+The response is `stream me`. For a router with several routes, dispatch on the
+request's method and path, and return 404 for unknown routes. The canonical request
+uses the **full public path**; framework adapters may present mount-relative paths
+as noted in their tabs. [Routing precedence](/next/concepts/http-routers#request-routing-precedence)
+explains when a code-first endpoint or file mapping takes priority over the handler.
+
+### Working with headers
+
+Keep repeated headers separate, especially `Set-Cookie`. The raw APIs use lowercase
+names and byte-valued fields. For example, add two cookies to a streaming response:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+The Web adapter already preserves separate `Set-Cookie` fields. For byte-valued
+or strictly ordered fields, import `withRawHeaders` from `@golemcloud/golem-ts-sdk`
+and replace the handler with:
+
+```typescript
+.implement((request) => withRawHeaders(new Response(request.body), [
+  { name: 'set-cookie', value: new TextEncoder().encode('first=one') },
+  { name: 'set-cookie', value: new TextEncoder().encode('second=two') },
+]));
+```
+
+`withRawHeaders` replaces **all** response headers with this list, rather than
+adding to `Response.headers`. Include every header you want emitted.
+
+For canonical methods, paths, queries, and headers without Web API normalization,
+replace `.implement(...)` with a raw handler:
+
+```typescript
+.implementRaw((request) => ({
+  status: 200,
+  headers: [
+    { name: 'set-cookie', value: new TextEncoder().encode('first=one') },
+    { name: 'set-cookie', value: new TextEncoder().encode('second=two') },
+  ],
+  body: request.body,
+}));
+```
+
+A Web handler can also read `context.rawRequest` from its second argument to inspect
+the original head. The body still has only one reader.
+</Tabs.Tab>
+<Tabs.Tab>
+Replace the response returned by the handler with:
+
+```typescript
+return HttpRouter.withRawHeaders(HttpServerResponse.stream(request.stream), [
+  { name: "set-cookie", value: new TextEncoder().encode("first=one") },
+  { name: "set-cookie", value: new TextEncoder().encode("second=two") },
+])
+```
+
+Effect's `withRawHeaders` replaces normalized fields with the **same names** and
+preserves unrelated response headers. Apply it after ordinary response combinators:
+subsequent cloning can lose the metadata. Use `HttpRouter.request` for original
+request field occurrences that normalized Effect headers cannot represent.
+</Tabs.Tab>
+<Tabs.Tab>
+Import `Header` from `golem_rust::agentic`, then replace the response's `headers`:
+
+```rust
+headers: vec![
+    Header { name: "set-cookie".into(), value: b"first=one".to_vec() },
+    Header { name: "set-cookie".into(), value: b"second=two".to_vec() },
+],
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Replace `Nil` in the response with:
+
+```scala
+List(
+  HttpHeader.ascii("set-cookie", "first=one"),
+  HttpHeader.ascii("set-cookie", "second=two")
+)
+```
+
+Use `HttpHeader(name, bytes)` for non-ASCII field values.
+</Tabs.Tab>
+<Tabs.Tab>
+Import `moonbitlang/core/encoding/utf8`, then replace the response's `headers`:
+
+```moonbit
+headers: [
+  { name: "set-cookie", value: @utf8.encode("first=one").to_array() },
+  { name: "set-cookie", value: @utf8.encode("second=two").to_array() },
+],
+```
+</Tabs.Tab>
+</Tabs>
+
+Let Golem handle transfer framing. Omit `Content-Length` unless you know the exact
+emitted byte count. Release unused input and stop producing when the output consumer
+closes. Do not turn stream errors into normal EOF. See the
+[streaming contract](/next/concepts/http-routers#streaming-handler-reference) for
+bodyless responses and the distinction between EOF and invocation success.
+
+## Serving static files
+
+Create a router with file mappings and no handler. This `StaticRouter` serves an
+explicit index at `/static` and assets below `/static/assets/`:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+import { defineHttpRouter } from '@golemcloud/golem-ts-sdk';
+
+export const StaticRouter = defineHttpRouter('StaticRouter')
+  .mount('/static')
+  .static('/', '/public/index.html')
+  .static('/assets/*', '/public/assets/$1')
+  .implement();
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Http, HttpRouter } from "@golemcloud/effect-golem"
+
+HttpRouter.define("StaticRouter", {
+  mount: Http.mount("/static"),
+  static: [
+    { route: "/", path: "/public/index.html" },
+    { route: "/assets/*", path: "/public/assets/$1" },
+  ],
+}).register()
+```
+
+Use `.register()` for a static-only or provider-only router; `.implement(...)`
+adds a handler. Static mappings are served by Golem, not an Effect filesystem layer.
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+use golem_rust::agentic::{Config, HttpRouter};
+use golem_rust::http_router;
+
+struct StaticRouter;
+
+#[http_router(name = "StaticRouter", mount = "/static", static_files = [
+    ("/", "/public/index.html"),
+    ("/assets/*", "/public/assets/$1"),
+])]
+impl HttpRouter for StaticRouter {
+    type Config = ();
+    fn new(_: Config<()>) -> Self { Self }
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+import golem.BaseAgent
+import golem.runtime.annotations.*
+
+@httpRouter(
+  typeName = "StaticRouter",
+  mount = "/static",
+  staticBindings = Array(
+    ("/", "/public/index.html"),
+    ("/assets/*", "/public/assets/$1")
+  )
+)
+trait StaticRouter extends BaseAgent
+
+@agentImplementation()
+final class StaticRouterImpl extends StaticRouter
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+///|
+#derive.http_router
+#derive.mount("/static")
+#derive.static_file("/", "/public/index.html")
+#derive.static_file("/assets/*", "/public/assets/$1")
+struct StaticRouter {}
+
+///|
+fn StaticRouter::new() -> StaticRouter { StaticRouter::{ } }
+```
+</Tabs.Tab>
+</Tabs>
+
+Create `index.html` and `message.txt` beside `golem.yaml`. Provision them as
+**read-only** files under the router's type name, and add it to the HTTP deployment:
+
+```yaml filename="golem.yaml"
+agents:
+  StaticRouter:
+    files:
+      - sourcePath: ./index.html
+        targetPath: /public/index.html
+        permissions: read-only
+      - sourcePath: ./message.txt
+        targetPath: /public/assets/message.txt
+        permissions: read-only
+
+httpApi:
+  deployments:
+    local:
+      - domain: localhost:9006
+        scheme: http
+        agents:
+          EchoRouter: {}
+          StaticRouter: {}
+```
+
+Redeploy and check the index, metadata, and a byte range:
+
+```shell
+golem deploy -L -Y
+curl http://localhost:9006/static
+curl -I http://localhost:9006/static/assets/message.txt
+curl -i -H 'Range: bytes=0-3' http://localhost:9006/static/assets/message.txt
+```
+
+Use a nonempty `message.txt` for the range example. Static responses include a
+strong ETag and `Cache-Control: no-cache`. Send the returned ETag in `If-None-Match`
+to revalidate; an unchanged asset returns 304. See the
+[file HTTP reference](/next/concepts/http-routers#file-http-reference) for HEAD,
+preconditions, and range edge cases.
+
+You can add the same mappings to a router with a handler: matching GET/HEAD files
+are served first, and an absent file falls through to the handler. For an override
+directory, declare two `/assets/*` mappings, first to `/overrides/$1`, then to
+`/public/assets/$1`. Order matters; see
+[ordered mappings](/next/concepts/http-routers#ordered-file-mappings).
+
+<Callout type="warning">
+  Expose only directories intended for HTTP access. There is no implicit index
+  lookup, directory listing, or symlink support. Keep secrets outside exposed
+  roots and protect private mounts with authentication.
+</Callout>
+
+## Serving live agent files
+
+Use a normal durable agent when files are created or modified at runtime. Bind its
+constructor parameters in the mount and expose only the desired files. This
+`FileOwner` creates `/value.txt` during initialization and overwrites it on `update`:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+import { defineAgent, http, method } from '@golemcloud/golem-ts-sdk';
+import * as fs from 'node:fs';
+import { z } from 'zod';
+
+export const FileOwner = defineAgent({
+  name: 'FileOwner',
+  id: { name: z.string() },
+  http: http.mount('/files/{name}', {
+    exposeFiles: [{ route: '/value', path: '/value.txt' }],
+  }),
+  methods: { update: method({ input: {}, returns: z.string() }) },
+});
+
+export const FileOwnerImpl = FileOwner.implement({
+  init({ id }) {
+    fs.writeFileSync('/value.txt', `initial:${id.name}`);
+    return {};
+  },
+  methods: {
+    update() {
+      fs.writeFileSync('/value.txt', 'updated');
+      return 'updated';
+    },
+  },
+});
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Effect, Schema } from "effect"
+import { defineAgent, Http, method } from "@golemcloud/effect-golem"
+import * as fs from "node:fs"
+
+export const FileOwner = defineAgent({
+  name: "FileOwner",
+  id: { name: Schema.String },
+  http: Http.mount("/files/{name}", {
+    exposeFiles: [{ route: "/value", path: "/value.txt" }],
+  }),
+  methods: { update: method({ input: {}, success: Schema.String }) },
+})
+
+FileOwner.implement({
+  init: ({ name }) => Effect.sync(() => {
+    fs.writeFileSync("/value.txt", `initial:${name}`)
+  }),
+  methods: () => ({
+    update: () => Effect.sync(() => {
+      fs.writeFileSync("/value.txt", "updated")
+      return "updated"
+    }),
+  }),
+})
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+use golem_rust::{agent_definition, agent_implementation};
+
+#[agent_definition(mount = "/files/{name}", filesystem_bindings = [
+    ("/value", "/value.txt"),
+])]
+pub trait FileOwner {
+    fn new(name: String) -> Self;
+    fn update(&self) -> String;
+}
+
+struct FileOwnerImpl;
+
+#[agent_implementation]
+impl FileOwner for FileOwnerImpl {
+    fn new(name: String) -> Self {
+        std::fs::write("/value.txt", format!("initial:{name}")).unwrap();
+        Self
+    }
+
+    fn update(&self) -> String {
+        std::fs::write("/value.txt", "updated").unwrap();
+        "updated".into()
+    }
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+import golem.BaseAgent
+import golem.runtime.annotations.*
+import scala.concurrent.Future
+import scala.scalajs.js
+import scala.scalajs.js.annotation.JSImport
+
+@agentDefinition(
+  mount = "/files/{name}",
+  exposeFiles = Array(("/value", "/value.txt"))
+)
+trait FileOwner extends BaseAgent {
+  class Id(val name: String)
+  def update(): Future[String]
+}
+
+@agentImplementation()
+final class FileOwnerImpl(name: String) extends FileOwner {
+  FileOwnerFs.writeFileSync("/value.txt", s"initial:$name")
+
+  def update(): Future[String] = {
+    FileOwnerFs.writeFileSync("/value.txt", "updated")
+    Future.successful("updated")
+  }
+}
+
+@js.native
+@JSImport("node:fs", JSImport.Namespace)
+private object FileOwnerFs extends js.Object {
+  def writeFileSync(path: String, text: String): Unit = js.native
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+///|
+#derive.agent
+#derive.mount("/files/{name}")
+#derive.expose_files("/value", "/value.txt")
+struct FileOwner {}
+
+///|
+async fn FileOwner::new(name : String) -> FileOwner {
+  @fs.write_string(@fs.get_root_dir().unwrap(), "value.txt", "initial:" + name).unwrap()
+  FileOwner::{ }
+}
+
+///|
+pub async fn FileOwner::update(_self : Self) -> String {
+  @fs.write_string(@fs.get_root_dir().unwrap(), "value.txt", "updated").unwrap()
+  "updated"
+}
+```
+
+Import `golemcloud/golem_sdk/filesystem` as `@fs` in `moon.pkg`.
+</Tabs.Tab>
+</Tabs>
+
+Add `FileOwner: {}` beside the routers in the deployment's `agents` map, then:
+
+```shell
+golem deploy -L -Y
+curl http://localhost:9006/files/alice/value
+golem agent invoke -L 'FileOwner("alice")' update
+curl http://localhost:9006/files/alice/value
+```
+
+The first read returns `initial:alice`; the second returns `updated`. Reads use
+`Cache-Control: no-store` with no ETag. No exported method is called to serve the
+file, but the first read can initialize the agent. A slow download can delay other
+work on that agent; see [live-file lifecycle](/next/concepts/http-routers#live-durable-agent-files).
+
+### Calling an agent from a router
+
+Call ordinary agents through the same clients used for
+[agent-to-agent communication](/next/develop/rpc). For example, inside an async
+handler, update the file owner before constructing the response:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+await FileOwner.client.get({ name: 'from-router' }).update();
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Inside the handler's `Effect.gen` block:
+
+```typescript
+const owner = yield* FileOwner.client.get({ name: "from-router" })
+yield* owner.update({})
+```
+
+Keep the call in the request's Effect scope; do not launch a detached `runPromise`.
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+FileOwnerClient::get("from-router".to_string()).update().await;
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Chain the response with `map` after the update, using the Scala.js execution context:
+
+```scala
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+
+FileOwnerClient.get("from-router").update().map { _ =>
+  HttpResponse(UShort(200), Nil, request.body)
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Make the handler `pub async fn` before awaiting the generated client:
+
+```moonbit
+let owner = FileOwnerClient::get("from-router")
+defer owner.drop()
+owner.update() |> ignore
+```
+</Tabs.Tab>
+</Tabs>
+
+For cross-component calls, declare the dependency and generate its client as described
+in [Calling an agent in another component](/next/develop/rpc#calling-an-agent-in-another-component).
+A router's cancellation does not roll back completed agent calls. Client retries are
+new requests and can repeat effects; see
+[cancellation and recovery](/next/concepts/http-routers#cancellation-and-ephemeral-recovery).
+
+## Publishing OpenAPI
+
+Add an OpenAPI provider to describe your router's operations. For `EchoRouter`,
+describe `POST /` relative to its mount; Golem publishes it as `POST /echo`.
+The provider must return OpenAPI 3.1.0, not an OpenAPI 3.0 or YAML document.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+Insert this before `.implement(...)`; the SDK serializes the returned object:
+
+```typescript
+.openApi(() => ({
+  openapi: '3.1.0',
+  info: { title: 'Echo API', version: '1' },
+  paths: {
+    '/': {
+      post: {
+        operationId: 'echo',
+        responses: { '200': { description: 'Streamed request bytes' } },
+      },
+    },
+  },
+}))
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Add an `openApi` effect beside `mount` in the `EchoRouter` options:
+
+```typescript
+openApi: Effect.succeed({
+  openapi: "3.1.0",
+  info: { title: "Echo API", version: "1" },
+  paths: {
+    "/": {
+      post: {
+        operationId: "echo",
+        responses: { "200": { description: "Streamed request bytes" } },
+      },
+    },
+  },
+}),
+```
+
+For a schema-defined Effect `HttpApi`, generate the description from the same API
+that builds the handler. This separate `CatalogRouter` serves `GET /catalog/items/{id}`:
+
+```typescript
+import { Effect, FileSystem, Layer, Path, Schema } from "effect"
+import { Etag, HttpPlatform, HttpRouter as Routes } from "effect/unstable/http"
+import {
+  HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup, OpenApi,
+} from "effect/unstable/httpapi"
+import { Http, HttpRouter } from "@golemcloud/effect-golem"
+
+const Api = HttpApi.make("Catalog").add(
+  HttpApiGroup.make("items").add(
+    HttpApiEndpoint.get("getItem", "/items/:id", {
+      params: Schema.Struct({ id: Schema.String }),
+      success: Schema.Struct({ id: Schema.String, count: Schema.Int }),
+    }),
+  ),
+)
+const Handlers = HttpApiBuilder.group(Api, "items", (handlers) =>
+  handlers.handle("getItem", ({ params }) =>
+    Effect.succeed({ id: params.id, count: 7 }),
+  ),
+)
+const Platform = Layer.mergeAll(
+  Path.layer,
+  Etag.layerWeak,
+  FileSystem.layerNoop({}),
+  HttpPlatform.layer.pipe(Layer.provide(FileSystem.layerNoop({}))),
+)
+
+HttpRouter.define("CatalogRouter", {
+  mount: Http.mount("/catalog"),
+  openApi: Effect.sync(() => OpenApi.fromApi(Api)),
+}).implement(Routes.toHttpEffect(
+  HttpApiBuilder.layer(Api).pipe(
+    Layer.provide(Handlers),
+    Layer.provide(Platform),
+  ),
+))
+```
+
+Add `CatalogRouter: {}` to the deployment's `agents` map. The example supplies the
+platform services required by `HttpApiBuilder`; its no-op filesystem deliberately
+does not support filesystem operations. Golem's static mappings do not use it.
+Keep generated paths mount-relative. `Effect.sync` builds the document when the
+provider effect runs rather than at module load. Golem invokes providers lazily,
+separately from ordinary requests.
+</Tabs.Tab>
+<Tabs.Tab>
+Add this method to the `HttpRouter` implementation:
+
+```rust
+async fn openapi(&self) -> String {
+    r#"{
+        "openapi": "3.1.0",
+        "info": {"title": "Echo API", "version": "1"},
+        "paths": {"/": {"post": {
+            "operationId": "echo",
+            "responses": {"200": {"description": "Streamed request bytes"}}
+        }}}
+    }"#.into()
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Add a declaration to `EchoRouter`:
+
+```scala
+@openApiProvider def describe(): Future[String]
+```
+
+Implement it in `EchoRouterImpl`:
+
+```scala
+def describe(): Future[String] = Future.successful(
+  """{
+    "openapi": "3.1.0",
+    "info": {"title": "Echo API", "version": "1"},
+    "paths": {"/": {"post": {
+      "operationId": "echo",
+      "responses": {"200": {"description": "Streamed request bytes"}}
+    }}}
+  }"""
+)
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+///|
+#derive.openapi_provider
+pub fn EchoRouter::describe(
+  _self : Self,
+) -> String raise @http.OpenApiJsonError {
+  @http.openapi_json({
+    "openapi": "3.1.0",
+    "info": { "title": "Echo API", "version": "1" },
+    "paths": {
+      "/": {
+        "post": {
+          "operationId": "echo",
+          "responses": { "200": { "description": "Streamed request bytes" } },
+        },
+      },
+    },
+  })
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+Keep providers finite and deterministic. Use unique component names and operation
+IDs across the domain, and local references that resolve within the provider's own
+document. See [OpenAPI generation](/next/concepts/http-routers#openapi-generation)
+for the supported subset, security merging, conflicts, caching, and size limits.
+
+After redeployment, retrieve both formats:
+
+```shell
+golem deploy -L -Y
+curl http://localhost:9006/openapi.json
+curl http://localhost:9006/openapi.yaml
+```
+
+To place them under `/docs`, add `openapiEndpoint: /docs` beside `domain` and `scheme`
+in the HTTP deployment. The URLs become `/docs/openapi.json` and `/docs/openapi.yaml`.
+Set `scheme` to match the public origin. Built-in local environments default to
+`http`, cloud environments to `https`; custom-server environments must set it explicitly.
+
+<Callout type="warning">
+  OpenAPI endpoints are public even when a router requires authentication. Do not
+  include secret values, private examples, or requester-specific information. Apply
+  a separate ingress policy if the description must be private.
+</Callout>
+
+## Protecting mounts
+
+Configure authentication and CORS on the **router mount**, not its handler method.
+Use the same [security scheme configuration](/next/invoke/making-custom-apis/authentication)
+as code-first endpoints. The router declarations accept these options:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+.mount('/echo', { auth: true, cors: ['https://app.example.com'] })
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Replace the router's `mount` option with:
+
+```typescript
+mount: Http.mount("/echo", {
+  auth: true,
+  cors: ["https://app.example.com"],
+}),
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[http_router(name = "EchoRouter", mount = "/echo",
+    auth = true, cors = ["https://app.example.com"])]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@httpRouter(typeName = "EchoRouter", mount = "/echo",
+  auth = true, cors = Array("https://app.example.com"))
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Add these annotations to the router struct:
+
+```moonbit
+#derive.mount_auth(true)
+#derive.mount_cors("https://app.example.com")
+```
+</Tabs.Tab>
+</Tabs>
+
+Protect each child mount explicitly: it does not inherit authentication from a
+parent. Test denial before checking file existence, and test browser preflight
+separately from plain OPTIONS. See
+[authentication and failures](/next/concepts/http-routers#authentication-cors-and-failures)
+for host behavior and status codes.
+
+## Configuring self-hosted deployments
+
+These settings are for platform operators. Applications use worker-service's
+**apps gateway** (`custom_request_port`, default 9006), not its management REST or
+gRPC port.
+
+### Configuring shared storage
+
+Static files are read directly by worker-service. Configure registry, executors,
+and every serving worker-service to share the initial-file blob store and namespace.
+For a local/shared-volume topology:
+
+```toml
+[blob_storage]
+type = "LocalFileSystem"
+
+[blob_storage.config]
+root = "/blob_storage"
+```
+
+Mount the **same volume** into all services; identical paths in isolated containers
+are not shared storage. The equivalent environment variables are
+`GOLEM__BLOB_STORAGE__TYPE=LocalFileSystem` and
+`GOLEM__BLOB_STORAGE__CONFIG__ROOT=/blob_storage`. The
+[PostgreSQL compose example](https://github.com/golemcloud/golem/blob/main/docker-examples/published-postgres/compose.yaml)
+shows the shared volume wiring.
+
+For S3, configure worker-service with the same `initial_agent_files_bucket`,
+`object_prefix`, region, endpoint, and path-style settings as the other services.
+Use the complete service configuration for the other required buckets. Grant
+worker-service read access, including ranged reads, and supply credentials through
+your deployment's secret mechanism. InMemory storage is not shared across processes;
+worker-service does not support `KVStoreSqlite`.
+
+### Configuring ingress
+
+Use an ingress with an HTTP/2 cleartext upstream (**h2c prior knowledge**), preserve
+per-stream resets, and disable request/response buffering for streaming routes.
+The gateway also accepts HTTP/1, but does not support `Upgrade: h2c`.
+
+To accept public-origin headers from a TLS-terminating proxy, list its direct peer
+IP in worker-service configuration:
+
+```toml
+[route_resolver]
+trusted_ingress_addresses = ["10.0.0.10"]
+```
+
+The default list is empty. Configure that proxy to remove client forwarding fields
+and write exactly one valid `X-Forwarded-Proto` and one `X-Forwarded-Host`. Both are
+required; comma-separated proxy chains and `Forwarded` are not alternative origin
+sources. Keep the listener private to the intended ingress.
+
+Test disconnect/reset through the actual proxy, including while waiting for a
+response head. A client timeout alone does not prove upstream cancellation. Keep
+HTTP/2 enabled: some pending live-file requests over HTTP/1 detect disconnect only
+at the exchange deadline.
+
+### Setting timeouts and resource budgets
+
+Tune worker-service's session settings to your workload. The defaults are:
+
+```toml
+[http_session]
+exchange_timeout = "5m"
+retry_deadline = "10s"
+retry_delay = "100ms"
+max_resume_attempts = 4
+cleanup_timeout = "2s"
+retained_input_bytes = 4194304
+retained_input_frames = 32
+event_queue_frames = 2
+command_queue_frames = 16
+max_event_bytes = 17825792
+```
+
+Use `exchange_timeout` to bound the whole handler or live-file exchange, including
+initialization, queueing, and streaming. There is no separate executor file-read
+deadline. Expiry returns 504 before commitment or aborts an already-started response.
+Recovery uses the same surviving invocation, with four reattachments allowed over
+the exchange's lifetime; it cannot replace a lost executor invocation.
+
+Use ingress concurrency limits to control live-file load: there is no dedicated
+per-agent read queue cap or executor-wide outstanding-read limit. Slow readers can
+delay an agent's other work. `durable_streams.load` does not configure these reads.
+
+The byte/frame values bound encoded session buffering, **not total upload size**.
+Input encoding includes schema and frame overhead. Queued output is bounded by
+`event_queue_frames × max_event_bytes`, not all per-request allocations.
+
+OpenAPI generation uses [separate limits](/next/concepts/http-routers#caching-and-limits)
+and is not bounded by `exchange_timeout`. Route lookup caching
+(`route_resolver.router_cache_ttl = "10m"`, capacity 1024, eviction period 1 minute)
+is also separate from the OpenAPI document cache.
+
+## Troubleshooting
+
+- **Unexpected handler or 404:** check concrete code-first routes, the selected
+  mount, and declaration order. Only absent files fall through; permission,
+  initialization, and storage failures do not.
+- **Static file returns 500:** confirm it is provisioned read-only and that
+  worker-service can read the indexed blob from shared storage.
+- **Live read stalls:** check agent initialization and preceding work, then test
+  cancellation through the ingress and review the exchange deadline.
+- **OpenAPI returns 502:** check provider JSON, size limits, local references, and
+  conflicting paths/components/operation IDs. A provider failure does not disable
+  ordinary router traffic.
+
+Use status codes, safe error categories, and router/deployment identities in
+diagnostics. Do not log HTTP bodies, provider documents, secrets, or internal paths.
+
+Complete examples are available in the repository for
+[TypeScript](https://github.com/golemcloud/golem/blob/main/cli/golem-cli/tests/app/typescript_http_router.ts),
+[Rust](https://github.com/golemcloud/golem/blob/main/test-components/agent-rpc/golem-it-agent-rpc-rust/src/http_router.rs),
+[Scala](https://github.com/golemcloud/golem/blob/main/sdks/scala/test-agents/src/main/scala/example/integrationtests/HttpRouterExample.scala),
+[MoonBit](https://github.com/golemcloud/golem/blob/main/sdks/moonbit/golem_sdk_example1/golem_moonbit_examples/http_router.mbt),
+and [Effect](https://github.com/golemcloud/golem/blob/main/cli/golem-cli/tests/app/effect_http_router.ts).

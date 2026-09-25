@@ -209,7 +209,10 @@ Golem maps method return types to HTTP status codes and response bodies accordin
 | `T?` (`Option[T]`) | 200 OK if `Some`, 404 Not Found if `None` | JSON `T` or empty |
 | `Result[T, E]` | 200 OK if `Ok`, 500 Internal Server Error if `Err` | JSON `T` or JSON `E` |
 | `Result[Unit, E]` | 204 No Content if `Ok`, 500 if `Err` | empty or JSON `E` |
-| `UnstructuredBinary` | 200 OK | Raw binary with Content-Type |
+
+The current MoonBit SDK has no high-level `UnstructuredText` or `UnstructuredBinary` endpoint
+types. Endpoint values use the supported schema types and JSON mapping described by
+`golem-http-params-moonbit`; do not add the removed wrappers or their old derive attributes.
 
 ## Complete Example
 
@@ -230,7 +233,7 @@ pub(all) struct Task {
   id : String
   title : String
   priority : Priority
-  done : Bool
+  mut done : Bool
 } derive(ToJson, @json.FromJson)
 
 ///|

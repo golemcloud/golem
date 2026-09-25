@@ -219,7 +219,7 @@ impl StreamAttachmentControl for RoutedStreamAttachmentControl {
             value: StreamAttachmentView {
                 key,
                 state: StreamAttachmentState::Active,
-                lease_expires_at_millis: Some(attachment_lease_expiry(now_millis)?),
+                lease_expires_at_millis: None,
             },
             replayed,
         })
@@ -235,27 +235,6 @@ impl StreamAttachmentControl for RoutedStreamAttachmentControl {
             key: key.clone(),
             state: StreamAttachmentState::Active,
             lease_expires_at_millis: None,
-        })
-    }
-
-    async fn renew_attachment(
-        &self,
-        key: StreamAttachmentKey,
-        now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
-        let replayed = self
-            .execute(StreamAttachmentControlOperation::Renew {
-                key: key.clone(),
-                now_millis,
-            })
-            .await?;
-        Ok(ProducerWriteOutcome {
-            value: StreamAttachmentView {
-                key,
-                state: StreamAttachmentState::Active,
-                lease_expires_at_millis: Some(attachment_lease_expiry(now_millis)?),
-            },
-            replayed,
         })
     }
 

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::QuotaClass;
 use crate::durable_host::concurrent::{
     ConcurrentReplayResolver, ReplayCallHandle, Resolution, ResolutionOutcome,
 };
@@ -24,8 +25,9 @@ use golem_common::model::entity::{
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, DurableFunctionType, HostRequest, HostResponse, HostResponseGolemApiFork,
-    LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection, ScopeScanState,
+    AtomicOplogIndex, DurableFunctionType, EntityAttribution, HostRequest, HostResponse,
+    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogPayload, OplogScopeProjection,
+    ScopeScanState,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
@@ -38,7 +40,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::hash::Hasher;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use tokio::sync::oneshot;
 use tokio::sync::{Mutex, MutexGuard, Notify};
 use tracing::{debug, warn};
@@ -148,7 +150,7 @@ mod cursor;
 mod resolution;
 
 use abandoned::AbandonedStarts;
-pub(crate) use claims::{ReplayStartClaimOutcome, StartClaim};
+pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
@@ -228,6 +230,13 @@ struct ReplayCursor {
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
+    /// Counts of the entries in [`CursorState::retained_starts`]: unclaimed `Start`s the cursor
+    /// has already committed past, in total and per quota class. Published outside the cursor
+    /// lock (written only through a held [`CursorTx`]) so durable-call admission and quota
+    /// charging can tell "the cursor is exhausted" apart from "every recorded call has been
+    /// claimed" — and whether a recorded call charged to a given quota is still waiting for its
+    /// owner — without queueing on the cursor lock from a Store-holding host call.
+    unclaimed_retained_starts: RetainedStartCounts,
     /// Resolver-owned reconstruction population registered atomically with entity `Start` claims.
     /// This shared view is used only for waiting and active-body subscriptions outside the cursor
     /// lock; resolver registration, incomplete release, and guard settlement own all mutations.
@@ -359,7 +368,11 @@ impl CompletionMarker {
 struct PublishedPosition {
     /// The oplog index of the last replayed entry.
     last_replayed_index: AtomicOplogIndex,
-    /// The oplog index of the last non-hint entry read.
+    /// The oplog index of the last non-hint entry the replaying guest has logically consumed. A
+    /// retained, still-unclaimed `Start` (and the terminal attached to it) is physically behind
+    /// the cursor but not published here until its owner claims it: a durable call that derives
+    /// its position from this index (`begin_function` without a scope) must observe the same value
+    /// the live run observed as the oplog tip before its own `Start` was appended.
     last_replayed_non_hint_index: AtomicOplogIndex,
     /// Fast-path flag for [`ReplayState::seen_log`]: whether any log hint was recorded since the
     /// last non-hint entry, so the common "no logs" case avoids locking.
@@ -405,6 +418,83 @@ struct CursorState {
     /// operation and are drained with their terminals while resolving the root. The map stores
     /// every known member index for each root so nested descendants can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
+    /// Durable-call `Start`s the cursor committed past before their owner claimed them, keyed by
+    /// the `Start`'s index and kept in oplog order, together with the `End`/`Cancelled` that
+    /// closed them if the cursor has reached it.
+    ///
+    /// Concurrent host tasks append their `Start`s in scheduling order, so a reader driving the
+    /// cursor (a positional marker read, a direct call awaiting its own `End`, a sibling's
+    /// terminal drain) may reach a `Start` that belongs to a call the guest has issued but whose
+    /// host task has not been admitted yet. Such a reader is not entitled to that entry: it must
+    /// neither consume it as its own (kind/ownership validation happens at claim time) nor park
+    /// on it, because the owner may need the same Store the parked reader holds. The cursor
+    /// therefore commits past it and retains it here, where the owner's later claim finds it in
+    /// oplog order ([`CursorTx::claim_retained_start`]). Entries leave this map when claimed, when
+    /// the invocation-boundary reader folds them into the abandoned-record tolerance, or when a
+    /// target shrink / rollback deletes their region.
+    retained_starts: std::collections::BTreeMap<OplogIndex, RetainedStart>,
+}
+
+/// One entry of [`CursorState::retained_starts`].
+#[derive(Debug)]
+struct RetainedStart {
+    entry: OplogEntry,
+    /// The committed `End`/`Cancelled` closing this `Start`, once the cursor has reached it.
+    terminal: Option<(OplogIndex, OplogEntry)>,
+    /// Replay events of the entries the cursor committed past on this `Start`'s behalf: the
+    /// `Start` itself, its attached terminal, and the hint entries trailing each of them, keyed
+    /// by the index they were recorded at. A reader that is not this call's owner must not make
+    /// these effects visible: the owner observes them only once it consumes the `Start`
+    /// (a `CardDerived` audit hint is looked up by the call that replays the terminal it
+    /// follows), so they are published when the `Start` leaves the retained map.
+    deferred_events: Vec<(OplogIndex, ReplayEvent)>,
+}
+
+/// Lock-free publication of how many `Start`s [`CursorState::retained_starts`] holds, in total
+/// and per [`QuotaClass`]. Rewritten from the retained map whenever it changes (only under a held
+/// [`CursorTx`]); each counter is read independently, so readers see a consistent value per
+/// counter but need no snapshot across them.
+#[derive(Debug, Default)]
+struct RetainedStartCounts {
+    total: AtomicUsize,
+    http: AtomicUsize,
+    rpc: AtomicUsize,
+}
+
+impl RetainedStartCounts {
+    fn publish<'a>(&self, retained: impl Iterator<Item = &'a OplogEntry>) {
+        let (mut total, mut http, mut rpc) = (0usize, 0usize, 0usize);
+        for entry in retained {
+            let OplogEntry::Start { function_name, .. } = entry else {
+                unreachable!("only Start entries are retained");
+            };
+            total += 1;
+            match QuotaClass::of_recorded_call(function_name) {
+                Some(QuotaClass::Http) => http += 1,
+                Some(QuotaClass::Rpc) => rpc += 1,
+                None => {}
+            }
+        }
+        self.total.store(total, Ordering::Release);
+        self.http.store(http, Ordering::Release);
+        self.rpc.store(rpc, Ordering::Release);
+    }
+
+    fn clear(&self) {
+        self.publish(std::iter::empty());
+    }
+
+    fn any(&self) -> bool {
+        self.total.load(Ordering::Acquire) > 0
+    }
+
+    fn any_charged_to(&self, quota: QuotaClass) -> bool {
+        let counter = match quota {
+            QuotaClass::Http => &self.http,
+            QuotaClass::Rpc => &self.rpc,
+        };
+        counter.load(Ordering::Acquire) > 0
+    }
 }
 
 #[allow(dead_code)]
