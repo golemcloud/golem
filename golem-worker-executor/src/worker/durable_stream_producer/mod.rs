@@ -28,7 +28,7 @@ pub(super) type EphemeralArchival = watch::Sender<Option<Result<(), StreamStoreE
 #[derive(Default)]
 pub(super) struct DurableStreamProducerSlot {
     state: Mutex<SlotState>,
-    responses_changed: tokio::sync::Notify,
+    state_changed: tokio::sync::Notify,
 }
 
 #[derive(Default)]
@@ -51,11 +51,15 @@ pub struct EphemeralResponseLease {
 impl Drop for EphemeralResponseLease {
     fn drop(&mut self) {
         self.slot.state.lock().unwrap().responses -= 1;
-        self.slot.responses_changed.notify_waiters();
+        self.slot.state_changed.notify_waiters();
     }
 }
 
 impl DurableStreamProducerSlot {
+    pub(super) fn changed(&self) -> &tokio::sync::Notify {
+        &self.state_changed
+    }
+
     pub(super) fn retain_response(
         self: &Arc<Self>,
     ) -> Result<Arc<EphemeralResponseLease>, StreamStoreError> {
@@ -90,7 +94,7 @@ impl DurableStreamProducerSlot {
 
     pub(super) async fn wait_for_responses_and_fence(&self) -> Option<EphemeralArchival> {
         loop {
-            let changed = self.responses_changed.notified();
+            let changed = self.state_changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
             {
@@ -103,6 +107,7 @@ impl DurableStreamProducerSlot {
                     let (reply, archival) = watch::channel(None);
                     state.archival = Some(archival);
                     state.retired = true;
+                    self.state_changed.notify_waiters();
                     if let Some(producer) = &state.producer {
                         producer.poison();
                     }
@@ -123,7 +128,7 @@ impl DurableStreamProducerSlot {
         if let Some(producer) = &state.producer {
             producer.poison();
         }
-        self.responses_changed.notify_waiters();
+        self.state_changed.notify_waiters();
     }
 
     pub(super) fn retire(
@@ -148,7 +153,7 @@ impl DurableStreamProducerSlot {
         let retirement = {
             let mut state = self.state.lock().unwrap();
             state.retired = true;
-            self.responses_changed.notify_waiters();
+            self.state_changed.notify_waiters();
             if let Some(producer) = &state.producer {
                 producer.poison();
             }
@@ -212,6 +217,7 @@ impl DurableStreamProducerSlot {
             return false;
         }
         state.retired = true;
+        self.state_changed.notify_waiters();
         true
     }
 
@@ -254,6 +260,7 @@ impl DurableStreamProducerSlot {
                 let slot = self.clone();
                 let (reply, loading) = watch::channel(None);
                 state.loading = Some(loading.clone());
+                self.state_changed.notify_waiters();
                 tokio::spawn(async move {
                     let activity = ActivityGate::new();
                     let guard = activity.try_enter().unwrap();

@@ -1209,7 +1209,7 @@ impl StreamSessionIndexService {
                             entry.insert(old.unwrap_or(*idx));
                         }
                     }
-                    if let Some(key) = crate::worker::stream_session_record_key(
+                    for key in crate::worker::stream_session_record_keys(
                         record,
                         id.environment_id,
                         &id.agent_id,

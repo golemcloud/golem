@@ -111,7 +111,6 @@ impl ProducerMetadataKey {
         let attachment = match record {
             StreamSessionRecord::AttachmentPrepared(record) => Some(&record.key),
             StreamSessionRecord::AttachmentActivated(record) => Some(&record.key),
-            StreamSessionRecord::AttachmentRenewed(record) => Some(&record.key),
             StreamSessionRecord::AttachmentFinalized(record) => Some(&record.key),
             StreamSessionRecord::CascadeOutbox(record) => {
                 keys.push(Self::Cascade(Box::new(record.key.clone())));
@@ -882,7 +881,6 @@ impl Projection<'_> {
         let attachment = match record {
             StreamSessionRecord::AttachmentPrepared(record) => Some(&record.key),
             StreamSessionRecord::AttachmentActivated(record) => Some(&record.key),
-            StreamSessionRecord::AttachmentRenewed(record) => Some(&record.key),
             StreamSessionRecord::AttachmentFinalized(record) => Some(&record.key),
             StreamSessionRecord::CascadeOutbox(record) => {
                 self.load(ProducerMetadataKey::Cascade(Box::new(record.key.clone())))
