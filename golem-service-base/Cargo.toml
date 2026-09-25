@@ -96,6 +96,7 @@ wasmtime-wasi = { workspace = true, optional = true }
 assert2.workspace = true
 aws-runtime = { workspace = true }
 aws-smithy-runtime-api = { workspace = true }
+criterion = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
@@ -107,4 +108,8 @@ uuid = { workspace = true }
 [[test]]
 name = "integration"
 path = "tests/lib.rs"
+harness = false
+
+[[bench]]
+name = "blob_storage_exists"
 harness = false

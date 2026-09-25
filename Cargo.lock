@@ -4418,6 +4418,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "criterion",
  "derive_more",
  "desert_rust",
  "figment",

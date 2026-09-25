@@ -521,7 +521,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BlobStorageNamespace {
     CompilationCache {
         environment_id: EnvironmentId,
