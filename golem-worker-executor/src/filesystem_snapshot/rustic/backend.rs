@@ -39,7 +39,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
 /// The path of the config file of a repository.
-const CONFIG_PATH: &str = "config";
+pub(super) const CONFIG_PATH: &str = "config";
 
 /// The largest number of bytes of tree packs that one backend keeps in memory.
 const KEPT_PACKS_LIMIT: usize = 32 * 1024 * 1024;

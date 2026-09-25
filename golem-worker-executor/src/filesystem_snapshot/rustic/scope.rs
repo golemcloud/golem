@@ -17,14 +17,12 @@
 //! These operations do not read the repository format. They only know the directories of the
 //! repository, its config file, and the ledger directory of the store.
 
+use super::backend::CONFIG_PATH;
 use super::files::SnapshotFiles;
 use super::prune::LEDGER_PATH;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_service_base::storage::blob::PutIfAbsent;
 use std::path::Path;
-
-/// The path of the config file of a repository.
-const CONFIG_PATH: &str = "config";
 
 /// The directories of a repository in the order of a listing. A save writes them in the reverse
 /// order, and so does a copy, so a snapshot file always has its data.
