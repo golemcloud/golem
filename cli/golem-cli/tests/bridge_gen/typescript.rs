@@ -1127,17 +1127,24 @@ fn external_streaming_generation_compiles_recursive_streams() {
             method(
                 "document",
                 vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
-                Some(unstructured_text_schema_type(TextRestrictions::default())),
+                Some(ref_to("Document")),
             ),
             method(
                 "attachment",
                 vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
-                Some(unstructured_binary_schema_type(
-                    BinaryRestrictions::default(),
-                )),
+                Some(ref_to("Attachment")),
             ),
         ],
-        vec![],
+        vec![
+            def(
+                "Document",
+                unstructured_text_schema_type(TextRestrictions::default()),
+            ),
+            def(
+                "Attachment",
+                unstructured_binary_schema_type(BinaryRestrictions::default()),
+            ),
+        ],
         AgentMode::Durable,
     );
     agent_type.config = vec![local_config(

@@ -24,6 +24,14 @@ fn effect_external_all_schema_streaming_consumer_compiles() {
         "MappedInput",
         SchemaType::record(vec![named_field("item_stream", SchemaType::string())]),
     ));
+    schema.schema.defs.push(def(
+        "Document",
+        unstructured_text_schema_type(TextRestrictions::default()),
+    ));
+    schema.schema.defs.push(def(
+        "Attachment",
+        unstructured_binary_schema_type(BinaryRestrictions::default()),
+    ));
     schema.methods.push(method(
         "rename",
         vec![field("payload", ref_to("MappedInput"))],
@@ -32,14 +40,12 @@ fn effect_external_all_schema_streaming_consumer_compiles() {
     schema.methods.push(method(
         "document",
         vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
-        Some(unstructured_text_schema_type(TextRestrictions::default())),
+        Some(ref_to("Document")),
     ));
     schema.methods.push(method(
         "attachment",
         vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
-        Some(unstructured_binary_schema_type(
-            BinaryRestrictions::default(),
-        )),
+        Some(ref_to("Attachment")),
     ));
     schema
         .methods

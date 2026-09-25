@@ -4116,6 +4116,13 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn streaming_type_definition(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(self.unstructured_text_type(restrictions));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            return Ok(self.unstructured_binary_type(restrictions));
+        }
         Ok(match self.resolve_ref(typ) {
             SchemaType::Variant { cases, .. } => cases
                 .iter()
@@ -4402,6 +4409,13 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn type_definition(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(self.unstructured_text_type(restrictions));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            return Ok(self.unstructured_binary_type(restrictions));
+        }
         // Resolve through `Ref` so the body shape drives the type definition.
         let resolved = self.resolve_ref(typ);
         match resolved {
