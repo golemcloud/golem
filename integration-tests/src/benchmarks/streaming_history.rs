@@ -33,6 +33,7 @@ use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use indoc::indoc;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use tracing::Level;
@@ -473,7 +474,18 @@ impl Benchmark for StreamingRpcHistory {
     }
 
     fn description() -> &'static str {
-        "Warm ordinary streaming RPC with one caller/producer pair and exactly size completed one-chunk prior sessions. length is measured 4 KiB chunks; guest first chunk and completion exclude seeding."
+        indoc! {
+            "Measures a warm streaming RPC after creating completed session history on the same
+            caller and producer agents. The `size` parameter is the number of completed one-chunk
+            sessions created before the measurement. The `length` parameter is the number of 4 KiB
+            chunks in the measured stream.
+
+            The benchmark records end-to-end latency of the outer caller invocation and
+            guest-observed times from issuing the producer RPC to the first chunk and to stream
+            completion. It also records seeded-session, stream-item and terminal counts, plus
+            coarse executor-wide logical storage-operation counts around the measured invocation.
+            History creation is excluded from the invocation and guest timings."
+        }
     }
 
     async fn create_benchmark_context(
@@ -647,7 +659,7 @@ impl Benchmark for StreamingRpcHistory {
 }
 
 macro_rules! cold_benchmark {
-    ($type:ty, $rebuild:literal, $name:literal, $description:literal) => {
+    ($type:ty, $rebuild:literal, $name:literal, $description:expr) => {
         #[async_trait]
         impl Benchmark for $type {
             type BenchmarkContext = StreamingColdContext;
@@ -744,14 +756,40 @@ cold_benchmark!(
     StreamingRpcColdIndexed,
     false,
     "streaming-rpc-cold-indexed",
-    "First direct trusted streaming demand reconstructs one cold target with a valid persisted session index. size is completed target-owned history; length is deterministic output items. Acceptance is routing/admission, not by itself proof that guest replay completed."
+    indoc! {
+        "Measures the first new client-to-producer streaming invocation, without a guest caller,
+        after restarting all executors while retaining the target agent's persisted stream-session
+        index. The `size` parameter is the number of completed sessions created on the target before
+        the restart. The `length` parameter is the number of deterministic u32 items produced by the
+        measured stream.
+
+        The benchmark separately times executor shutdown, restart to gRPC readiness, and the
+        subsequent wait for routing-table readiness. It records client-observed request-to-acceptance,
+        acceptance-to-result, request-to-first-item and request-to-completion latencies, plus coarse
+        executor-wide logical storage-operation counts. These are protocol milestones, not isolated
+        reconstruction or replay timings; acceptance alone does not establish that replay has completed."
+    }
 );
 
 cold_benchmark!(
     StreamingRpcColdRebuild,
     true,
     "streaming-rpc-cold-rebuild",
-    "First direct trusted streaming demand reconstructs one cold target after deleting only its PostgreSQL derived session index. size is completed target-owned history; length is deterministic output items. Acceptance is routing/admission, not by itself proof that guest replay completed."
+    indoc! {
+        "Measures the first new client-to-producer streaming invocation, without a guest caller,
+        after deleting the target agent's derived stream-session index while all executors are
+        stopped, then restarting them. The target's authoritative oplog and payload data remain
+        intact, so the executor must rebuild the missing index. The `size` parameter is the number
+        of completed target sessions to reconstruct. The `length` parameter is the number of
+        deterministic u32 items in the measured stream.
+
+        The benchmark separately times executor shutdown, restart to gRPC readiness, and the
+        subsequent wait for routing-table readiness. It records client-observed request-to-acceptance,
+        acceptance-to-result, request-to-first-item and request-to-completion latencies, plus coarse
+        executor-wide logical storage-operation counts. These are protocol milestones, not isolated
+        reconstruction or replay timings; acceptance alone does not establish that replay has completed.
+        It also verifies that the rebuilt index serves a subsequent bounded lookup."
+    }
 );
 
 impl<const REBUILD: bool> StreamingRpcCold<REBUILD> {

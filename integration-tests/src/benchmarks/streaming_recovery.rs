@@ -42,6 +42,7 @@ use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use indoc::indoc;
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::time::{Duration, Instant};
@@ -348,18 +349,75 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
 
     fn description() -> &'static str {
         match CASE {
-            0 => {
-                "Resume an older completed direct producer session after min(8,max(1,length/4)) items; size is later one-item sessions, >=129 proves recent-status eviction. Exact cursors, suffix and one logical start; no executor restart."
-            }
-            1 => {
-                "Hard-crash two direct producers with size completed sessions each; asymmetric length and length+8 outputs, checkpoints min(8,max(1,n/4)). Explicit Takeover before gates; 5s pre-demand/35s post-completion windows. Acceptance includes admission, not proof of replay completion; counters are coarse API-labelled windows, retirement checks are public lifecycle evidence, not zero-read proof."
-            }
-            2 => {
-                "Hard-crash one direct producer session with two sibling outputs (length,length+3), independent checkpoints min(8,max(1,n/4)); size completed sessions. Takeover accepted before gates; 5s/35s observation windows. Acceptance and result mapping bracket admission/replay; public retirement evidence is not zero-read proof."
-            }
-            _ => {
-                "Hard-crash one direct producer session with two terminal roots and labelled unfinished children (length,length+3), independent checkpoints min(8,max(1,n/4)); size completed sessions. Terminal-cursor Takeover accepted before gates; 5s/35s windows. Producer index, not consumer journal; public retirement evidence is not zero-read proof."
-            }
+            0 => indoc! {
+                "Measures a direct client reconnect to an older completed producer streaming session,
+                without a guest caller or an executor restart. The client disconnects after
+                `min(8, max(1, floor(length / 4)))` items, waits for producer completion, and creates
+                `size` newer one-item sessions on the same producer before resuming the original
+                invocation from its saved cursor. The `length` parameter is the original stream's
+                item count.
+
+                The benchmark records client-observed resume-request-to-acceptance, acceptance-to-result,
+                request-to-first-resumed-item and request-to-completion latencies, plus resumed-item
+                counts and coarse executor-wide logical storage-operation counts. It verifies the exact
+                unread suffix without duplicate logical execution. A `size` of at least 129 additionally
+                verifies that reconnect works after the session leaves recent status."
+            },
+            1 => indoc! {
+                "Measures recovery of two active streaming invocations on separate producer agents,
+                using direct client sessions rather than guest callers, after the single executor
+                process is killed. Each producer has `size` completed historical sessions. Their
+                measured streams contain `length` and `length + 8` items; each pauses after
+                `min(8, max(1, floor(n / 4)))` items of its `n`-item stream until both takeover requests
+                have been accepted after restart.
+
+                The benchmark separately times executor shutdown, gRPC readiness and routing-table
+                readiness. It records client-observed takeover-request-to-acceptance,
+                acceptance-to-result, request-to-first-resumed-item (overall and per leaf), and
+                request-to-completion latencies. First-item and completion timings include acceptance
+                and gate-release delays, but exclude executor restart and the five-second pre-demand
+                wait. Coarse executor-wide logical storage-operation counts cover startup, the
+                five-second pre-demand window, resumption, completion and a 35-second post-completion
+                window. It verifies exact unread suffixes, one logical execution of each measured
+                invocation, and unchanged finalized session records after the observation window and
+                a subsequent ordinary invocation."
+            },
+            2 => indoc! {
+                "Measures recovery of one direct client-to-producer invocation with two active sibling
+                output streams after the single executor process is killed. The producer has `size`
+                completed historical sessions. The sibling streams contain `length` and `length + 3`
+                items; each independently pauses after `min(8, max(1, floor(n / 4)))` items of its
+                `n`-item stream until takeover has been accepted after restart.
+
+                The benchmark separately times executor shutdown, gRPC readiness and routing-table
+                readiness. It records client-observed takeover-request-to-acceptance,
+                acceptance-to-result, request-to-first-resumed-item (overall and per leaf), and
+                request-to-completion latencies. First-item and completion timings include acceptance
+                and gate-release delays, but exclude executor restart and the five-second pre-demand
+                wait. Coarse executor-wide logical storage-operation counts cover startup, the
+                five-second pre-demand window, resumption, completion and a 35-second post-completion
+                window. It verifies exact unread suffixes, one logical execution, and unchanged
+                finalized session records after the observation window and a subsequent ordinary
+                invocation."
+            },
+            _ => indoc! {
+                "Measures recovery of a direct client-to-producer invocation with nested output streams
+                after the single executor process is killed. The invocation returns two root streams
+                that have already ended and introduced two unfinished child streams containing `length`
+                and `length + 3` items. The producer has `size` completed historical sessions, and each
+                child pauses after `min(8, max(1, floor(n / 4)))` items of its `n`-item stream until
+                takeover has been accepted after restart.
+
+                The benchmark separately times executor shutdown, gRPC readiness and routing-table
+                readiness. It records client-observed takeover-request-to-acceptance,
+                acceptance-to-result, request-to-first-resumed-item (overall and per leaf), and
+                request-to-completion latencies. First-item and completion timings include acceptance
+                and gate-release delays, but exclude executor restart and the five-second pre-demand
+                wait. Coarse executor-wide logical storage-operation counts cover startup, the
+                five-second pre-demand window, resumption, completion and a 35-second post-completion
+                window. It verifies that terminal roots remain terminal, both child suffixes are exact,
+                and the logical invocation is not executed again."
+            },
         }
     }
 
