@@ -1664,11 +1664,9 @@ mod tests {
 
     fn create_shard_service_mock() -> Arc<dyn ShardService> {
         let result = Arc::new(ShardServiceDefault::new());
-        result.register(
+        result.install_unexpiring(
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch::default())]),
-            None,
-            golem_common::model::ShardLeaseRevision::default(),
         );
         result
     }

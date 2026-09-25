@@ -979,6 +979,16 @@ mod tests {
 
     const EPHEMERAL_L1: RouteId = RouteId { source_level: 1 };
 
+    /// The manager process behind every shard delivery in these tests.
+    const MANAGER: Uuid = Uuid::from_u128(0x5eed);
+
+    fn revision_of(incarnation: Uuid, number: u64) -> ShardLeaseRevision {
+        ShardLeaseRevision {
+            incarnation,
+            number,
+        }
+    }
+
     fn agent(name: &str, component_id: ComponentId) -> AgentId {
         AgentId {
             component_id,
@@ -1968,7 +1978,7 @@ mod tests {
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             None,
-            ShardLeaseRevision::of(0),
+            revision_of(MANAGER, 0),
         );
         shard_service
     }
@@ -3250,7 +3260,7 @@ mod tests {
         stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
         let shards = Arc::new(ShardServiceDefault::new());
-        shards.register(4, &HashMap::new(), None, ShardLeaseRevision::of(0));
+        shards.register(4, &HashMap::new(), None, revision_of(MANAGER, 0));
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
         sweeper.sweep_once(&CancellationToken::new()).await;
@@ -3281,7 +3291,7 @@ mod tests {
 
         // The shard moves to another executor before the agent ever went quiet for us.
         shards
-            .assign_shards(4, &HashMap::new(), ShardLeaseRevision::of(1))
+            .assign_shards(4, &HashMap::new(), revision_of(MANAGER, 1))
             .expect("assignment");
         sweeper.sweep_once(&CancellationToken::new()).await;
 
@@ -3916,7 +3926,7 @@ mod tests {
             0,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             None,
-            ShardLeaseRevision::of(0),
+            revision_of(MANAGER, 0),
         );
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
@@ -3941,7 +3951,7 @@ mod tests {
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             Some(Instant::now()),
-            ShardLeaseRevision::of(0),
+            revision_of(MANAGER, 0),
         );
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 

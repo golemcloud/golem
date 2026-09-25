@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanResume, WriterId,
+    ScanResume,
 };
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
@@ -49,9 +49,6 @@ pub struct MultiSqliteIndexedStorage {
     root_dir: PathBuf,
     max_connections: u32,
     foreign_keys: bool,
-    /// Handed to every per-namespace SQLite storage this opens, so the whole fan-out writes as one
-    /// process. See [`WriterId`].
-    writer_id: WriterId,
 }
 
 struct HashCache {
@@ -88,32 +85,20 @@ impl MultiSqliteIndexedStorage {
             root_dir: root_dir.to_path_buf(),
             max_connections,
             foreign_keys,
-            writer_id: WriterId::process(),
         }
-    }
-
-    /// Writes as `writer_id` rather than as this process's own. The fan-out backend uses it to
-    /// give every storage it opens one identity, and a test uses it to play two processes racing
-    /// over one key inside a single process.
-    pub fn for_writer(mut self, writer_id: WriterId) -> Self {
-        self.writer_id = writer_id;
-        self
     }
 
     async fn init_storage(
         max_connections: u32,
         foreign_keys: bool,
         database: String,
-        writer_id: WriterId,
     ) -> Result<SqliteIndexedStorage, IndexedStorageError> {
         let config = DbSqliteConfig {
             database,
             max_connections,
             foreign_keys,
         };
-        Ok(SqliteIndexedStorage::configured(&config)
-            .await?
-            .for_writer(writer_id))
+        SqliteIndexedStorage::configured(&config).await
     }
 
     async fn storage_by_namespace(
@@ -202,7 +187,6 @@ impl MultiSqliteIndexedStorage {
     ) -> Result<SqliteIndexedStorage, IndexedStorageError> {
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
-        let writer_id = self.writer_id;
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
         // Set when this call creates the file, which makes cached listings stale. Checked only on a
         // cache miss, since a hit means the file is already open.
@@ -213,7 +197,7 @@ impl MultiSqliteIndexedStorage {
             .cache
             .get_or_insert_simple(&db, async move || {
                 flag.store(!Path::new(&existing).exists(), Ordering::SeqCst);
-                Self::init_storage(max_connections, foreign_keys, db_path, writer_id).await
+                Self::init_storage(max_connections, foreign_keys, db_path).await
             })
             .await?;
         if created.load(Ordering::SeqCst) {

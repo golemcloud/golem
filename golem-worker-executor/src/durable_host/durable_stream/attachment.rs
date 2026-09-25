@@ -57,7 +57,7 @@ impl DurableStreamStore {
         let mut metadata = SessionControlMetadata::default();
         self.refresh_control_metadata(&key.session_key, &mut metadata)
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         if !metadata.readers_for_attachment(&key).contains(&reader_id) {
             return Err(StreamStoreError::InvalidAttachmentState);
         }

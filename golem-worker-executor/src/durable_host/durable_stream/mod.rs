@@ -87,6 +87,7 @@ use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
 use golem_common::model::OwnedAgentId;
+use golem_common::model::ShardEpoch;
 use golem_common::model::agent::{AgentError, AgentMode};
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_schema::schema::{
@@ -436,7 +437,7 @@ impl From<OplogError> for StreamStoreError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ OplogError::Storage(_) => Self::Oplog(error.to_string()),
+            error @ OplogError::Payload(_) => Self::Oplog(error.to_string()),
         }
     }
 }
@@ -449,11 +450,116 @@ impl std::fmt::Display for StreamStoreError {
 
 impl std::error::Error for StreamStoreError {}
 
-impl From<StreamStoreError> for String {
-    fn from(error: StreamStoreError) -> Self {
-        error.to_string()
+/// Why a durable stream session operation failed. A refused oplog write keeps its type as
+/// `Fenced`, so whoever acts on it reroutes to the shard's new owner; every other failure is the
+/// text the session has always reported.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionError {
+    Fenced(OplogFence),
+    Failed(String),
+}
+
+impl SessionError {
+    /// Whether this is an ordinary failure whose text starts with `prefix`.
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        matches!(self, Self::Failed(text) if text.starts_with(prefix))
+    }
+
+    /// Whether this is an ordinary failure whose text contains `needle`.
+    pub fn contains(&self, needle: &str) -> bool {
+        matches!(self, Self::Failed(text) if text.contains(needle))
+    }
+
+    /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
+    /// other failure is rendered through `otherwise`, which says how that boundary classifies it.
+    pub(crate) fn into_worker_executor_error(
+        self,
+        otherwise: impl FnOnce(String) -> WorkerExecutorError,
+    ) -> WorkerExecutorError {
+        match self {
+            Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+            Self::Failed(text) => otherwise(text),
+        }
+    }
+
+    /// Converts for a host function: a fence traps as the lost shard it is, and every other
+    /// failure traps with its text.
+    pub(crate) fn into_trap(self) -> anyhow::Error {
+        match self {
+            Self::Fenced(fence) => {
+                anyhow::Error::from(WorkerExecutorError::from(OplogError::Fenced(fence)))
+            }
+            Self::Failed(text) => anyhow::Error::msg(text),
+        }
     }
 }
+
+impl From<SessionError> for StreamStoreError {
+    fn from(error: SessionError) -> Self {
+        match error {
+            SessionError::Fenced(fence) => Self::Fenced(fence),
+            SessionError::Failed(text) => Self::Oplog(text),
+        }
+    }
+}
+
+impl From<StreamStoreError> for SessionError {
+    fn from(error: StreamStoreError) -> Self {
+        match error {
+            StreamStoreError::Fenced(fence) => Self::Fenced(fence),
+            error => Self::Failed(error.to_string()),
+        }
+    }
+}
+
+impl From<OplogError> for SessionError {
+    fn from(error: OplogError) -> Self {
+        match error {
+            OplogError::Fenced(fence) => Self::Fenced(fence),
+            error @ OplogError::Payload(_) => Self::Failed(error.to_string()),
+        }
+    }
+}
+
+impl From<WorkerExecutorError> for SessionError {
+    fn from(error: WorkerExecutorError) -> Self {
+        match error {
+            WorkerExecutorError::OplogFenced {
+                agent_id,
+                expected_epoch,
+                actual_epoch,
+            } => Self::Fenced(OplogFence {
+                agent_id,
+                expected_epoch: ShardEpoch(expected_epoch),
+                actual_epoch: actual_epoch.map(ShardEpoch),
+            }),
+            error => Self::Failed(error.to_string()),
+        }
+    }
+}
+
+impl From<String> for SessionError {
+    fn from(text: String) -> Self {
+        Self::Failed(text)
+    }
+}
+
+impl From<&str> for SessionError {
+    fn from(text: &str) -> Self {
+        Self::Failed(text.to_string())
+    }
+}
+
+impl std::fmt::Display for SessionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fenced(fence) => write!(formatter, "{}", OplogError::Fenced(fence.clone())),
+            Self::Failed(text) => formatter.write_str(text),
+        }
+    }
+}
+
+impl std::error::Error for SessionError {}
 
 impl StreamStoreError {
     /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
@@ -641,8 +747,14 @@ pub struct IndexedExternalProducer {
 }
 
 /// Commits appended stream records and optionally acknowledges durable completion.
+/// Commits the agent's oplog. The receipt, when given, is answered as soon as the commit lands or is
+/// refused, ahead of whatever the commit does after that.
 pub(crate) type DurableStreamCommit = Arc<
-    dyn Fn(Option<oneshot::Sender<()>>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
+    dyn Fn(
+            Option<oneshot::Sender<Result<(), OplogFence>>>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync,
 >;
 
 /// Owns one agent's persisted stream journal, indexes, and disposable live publication state.
@@ -662,6 +774,9 @@ pub struct DurableStreamStore {
     producer_generation: OplogIndex,
     index: Mutex<ProducerStreamIndex>,
     poisoned: AtomicBool,
+    /// The refusal that poisoned the store, when a refusal did: later work reports it rather than
+    /// asking for a recovery this executor can no longer perform.
+    refused_by: std::sync::OnceLock<OplogFence>,
     retirement: CancellationToken,
     durable_activity: Arc<ActivityGate>,
     mutations: mutation::MutationQueue,
@@ -735,12 +850,13 @@ impl DurableStreamStore {
         let commit: DurableStreamCommit = Arc::new(move |committed| {
             let oplog = commit_oplog.clone();
             Box::pin(async move {
-                oplog
-                    .commit(CommitLevel::Always)
-                    .await
-                    .expect("oplog write");
+                let result = match oplog.commit(CommitLevel::Always).await {
+                    Ok(_) => Ok(()),
+                    Err(OplogError::Fenced(fence)) => Err(fence),
+                    Err(error) => panic!("oplog write: {error}"),
+                };
                 if let Some(committed) = committed {
-                    let _ = committed.send(());
+                    let _ = committed.send(result);
                 }
             })
         });
@@ -1072,6 +1188,7 @@ impl DurableStreamStore {
             producer_generation,
             index: Mutex::new(index),
             poisoned: AtomicBool::new(false),
+            refused_by: std::sync::OnceLock::new(),
             retirement: CancellationToken::new(),
             durable_activity: ActivityGate::new(),
             mutations: mutation::MutationQueue::new(),

@@ -14,7 +14,7 @@
 
 use super::{
     FencedTxError, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanResume, WriterId,
+    IndexedStorageNamespace, ScanResume,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -44,9 +44,6 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 #[derive(Debug, Clone)]
 pub struct SqliteIndexedStorage {
     pool: SqlitePool,
-    /// Recorded beside the epoch on every key this process claims, so an equal epoch from
-    /// another process is refused rather than shared. One per process; see [`WriterId`].
-    writer_id: WriterId,
 }
 
 impl SqliteIndexedStorage {
@@ -60,18 +57,7 @@ impl SqliteIndexedStorage {
             )
         })?;
 
-        Ok(Self {
-            pool,
-            writer_id: WriterId::process(),
-        })
-    }
-
-    /// Writes as `writer_id` rather than as this process's own. The fan-out backend uses it to
-    /// give every storage it opens one identity, and a test uses it to play two processes racing
-    /// over one key inside a single process.
-    pub fn for_writer(mut self, writer_id: WriterId) -> Self {
-        self.writer_id = writer_id;
-        self
+        Ok(Self { pool })
     }
 
     /// Apply the indexed storage migrations on the given sqlite config without
@@ -89,10 +75,7 @@ impl SqliteIndexedStorage {
     }
 
     pub fn new(pool: SqlitePool) -> Self {
-        Self {
-            pool,
-            writer_id: WriterId::process(),
-        }
+        Self { pool }
     }
 
     fn namespace(namespace: IndexedStorageNamespace) -> String {
@@ -315,7 +298,6 @@ impl IndexedStorage for SqliteIndexedStorage {
             record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         }
 
-        let writer_id = self.writer_id.to_string();
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
@@ -330,10 +312,10 @@ impl IndexedStorage for SqliteIndexedStorage {
                     // storage error, not a fence - so a SQLite file shared between executors is
                     // not supported; give each its own file, or use PostgreSQL.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64, String)> = tx
+                        let stored: Option<(i64,)> = tx
                             .fetch_optional_as(
                                 sqlx::query_as(
-                                    "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
                                 )
                                 .bind(namespace.clone())
                                 .bind(key.clone()),
@@ -342,8 +324,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                         FencedTxError::check_record(
                             &key,
                             expected,
-                            stored,
-                            &writer_id,
+                            stored.map(|(epoch,)| epoch),
                             Self::negative_epoch_message,
                         )?;
                     }
@@ -375,8 +356,8 @@ impl IndexedStorage for SqliteIndexedStorage {
     }
 
     /// SQLite's half of [`IndexedStorage::set_key_epoch`], which states the rule this
-    /// enforces. The unqualified `epoch`/`writer` in the `WHERE` are the existing row's, and
-    /// `excluded` is the row being written.
+    /// enforces. The unqualified `epoch` in the `WHERE` is the existing row's, and `excluded` is
+    /// the row being written.
     async fn set_key_epoch(
         &self,
         svc_name: &'static str,
@@ -392,50 +373,43 @@ impl IndexedStorage for SqliteIndexedStorage {
         // rather than `as i64`, which would silently wrap an out-of-range epoch to negative.
         let epoch = Self::to_i64(new_epoch.0, "epoch")?;
 
-        let writer_id = self.writer_id.to_string();
-
         let mut api = self.pool.with_rw(svc_name, api_name);
         let result = api
             .execute(
                 sqlx::query(
-                    r#"INSERT INTO indexed_key_epoch (namespace, key, epoch, writer) VALUES (?, ?, ?, ?)
-                       ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch, writer = excluded.writer
-                       WHERE epoch < excluded.epoch
-                          OR (epoch = excluded.epoch AND writer = excluded.writer);"#,
+                    r#"INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?)
+                       ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch
+                       WHERE epoch <= excluded.epoch;"#,
                 )
                 .bind(namespace.clone())
                 .bind(key)
-                .bind(epoch)
-                .bind(writer_id.clone()),
+                .bind(epoch),
             )
             .await
             .map_err(Self::classify_repo_error)?;
 
         if result.rows_affected() == 0 {
-            let stored: Option<(i64, String)> = api
+            let stored: Option<(i64,)> = api
                 .fetch_optional_as(
                     sqlx::query_as(
-                        "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                        "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
                     )
                     .bind(namespace)
                     .bind(key),
                 )
                 .await
                 .map_err(Self::classify_repo_error)?;
-            let mut actual = None;
-            let mut writer_matches = false;
-            if let Some((epoch, writer)) = stored {
-                let epoch = u64::try_from(epoch).map_err(|_| {
-                    IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
-                })?;
-                actual = Some(ShardEpoch(epoch));
-                writer_matches = writer == writer_id;
-            }
+            let actual = stored
+                .map(|(epoch,)| {
+                    u64::try_from(epoch).map(ShardEpoch).map_err(|_| {
+                        IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
+                    })
+                })
+                .transpose()?;
             return Err(IndexedStorageError::Fenced {
                 key: key.to_string(),
                 expected: new_epoch,
                 actual,
-                writer_conflict: actual == Some(new_epoch) && !writer_matches,
             });
         }
 
@@ -452,17 +426,16 @@ impl IndexedStorage for SqliteIndexedStorage {
     ) -> Result<(), IndexedStorageError> {
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
-        let writer_id = self.writer_id.to_string();
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
                     // The single-connection write pool makes the check and the deletes one
                     // step, as it does for an append (see `append_many`).
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64, String)> = tx
+                        let stored: Option<(i64,)> = tx
                             .fetch_optional_as(
                                 sqlx::query_as(
-                                    "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
                                 )
                                 .bind(namespace.clone())
                                 .bind(key.clone()),
@@ -490,8 +463,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                         FencedTxError::check_record(
                             &key,
                             expected,
-                            stored,
-                            &writer_id,
+                            stored.map(|(epoch,)| epoch),
                             Self::negative_epoch_message,
                         )?;
                     }

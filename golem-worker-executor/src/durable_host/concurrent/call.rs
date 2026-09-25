@@ -1930,9 +1930,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .await
                     .map_err(|err| {
                         (
-                            WorkerExecutorError::runtime(format!(
-                                "failed to serialize and store durable call request: {err}"
-                            )),
+                            start_write_error(err),
                             AccessStartCleanup {
                                 atomic_lease: prepared.atomic_lease.clone(),
                             },
@@ -5210,11 +5208,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
                     },
                 )
                 .await
-                .map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "failed to serialize and store durable call request: {err}"
-                    ))
-                })?;
+                .map_err(start_write_error)?;
             (idx, true, request_upload)
         };
         let atomic_lease = if persisted {
@@ -5457,5 +5451,16 @@ mod tests {
         close_atomic_region(&mut regions, later_sibling);
         close_atomic_region(&mut regions, outer);
         assert_eq!(repaired.owner(), None);
+    }
+}
+
+/// A durable call's `Start` that could not be written: a refusal keeps its type, so the call traps
+/// as the lost shard it is; anything else is the payload that could not be built.
+fn start_write_error(err: crate::services::oplog::OplogError) -> WorkerExecutorError {
+    match err {
+        fence @ crate::services::oplog::OplogError::Fenced(_) => fence.into(),
+        err => WorkerExecutorError::runtime(format!(
+            "failed to serialize and store durable call request: {err}"
+        )),
     }
 }

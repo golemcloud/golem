@@ -63,7 +63,7 @@ use crate::worker::instance::{
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId, OwnerInvocationTicket};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
-    EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, GiveUpReason, UnloadRequest,
+    EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
 use crate::worker::{Worker, WorkerCreationMode};
 use crate::workerctx::WorkerCtx;
@@ -1298,25 +1298,21 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .collect()
     }
 
-    /// Gives up every agent the predicate selects: stops each one here and drops it from this
-    /// executor, so the shard's new owner recovers it.
+    /// Retires every agent the predicate selects for its lost shard: stops each one here and drops
+    /// it from this executor, so the shard's new owner recovers it.
     ///
     /// Concurrent rather than sequential, unlike [`Self::unload_environment`]: a revoke can name
     /// many agents and each stop waits for that agent's invocation loop to exit. No acknowledgement
-    /// channel is awaited either - [`Worker::give_up`] never subscribes to one - so an agent
-    /// that is already stopping cannot panic the sweep, which is what the old
-    /// `set_interrupting(..).recv().await.unwrap()` shape risked.
+    /// channel is awaited either - [`Worker::interrupt_and_retire`] never subscribes to one for a
+    /// lost shard - so an agent that is already stopping cannot panic the sweep, which is what the
+    /// old `set_interrupting(..).recv().await.unwrap()` shape risked.
     ///
     /// The snapshot includes suspended, loading and already-stopping agents; the stop state
     /// machine has an arm for each, so none is skipped. An agent still being resolved is not in
     /// it: one that read the assignment before the shard left opens its oplog at the epoch it
     /// was granted, and checks the assignment again once it is published - see
     /// `Worker::give_up_if_shard_left_during_construction`.
-    pub(crate) async fn give_up_matching(
-        &self,
-        reason: GiveUpReason,
-        select: impl Fn(&AgentId) -> bool,
-    ) {
+    pub(crate) async fn give_up_matching(&self, select: impl Fn(&AgentId) -> bool) {
         let selected: Vec<Arc<Worker<Ctx>>> = self
             .snapshot()
             .await
@@ -1327,15 +1323,15 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
 
         if !selected.is_empty() {
             info!(
-                ?reason,
                 agents = selected.len(),
-                "Giving up agents whose shard has moved"
+                "Retiring agents whose shard has moved"
             );
         }
 
-        futures::future::join_all(selected.into_iter().map(|worker| {
-            let reason = reason.clone();
-            async move { worker.give_up(reason).await }
+        // Concurrent, and a failed retirement never stops the sweep: each agent's own answer is
+        // the routing miss that sends its callers to the new owner.
+        futures::future::join_all(selected.into_iter().map(|worker| async move {
+            let _ = worker.interrupt_and_retire(InterruptKind::ShardLost).await;
         }))
         .await;
     }

@@ -456,7 +456,11 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+        async fn wait_for_replicas(
+            &self,
+            _replicas: u8,
+            _timeout: Duration,
+        ) -> Result<bool, crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by this test")
         }
 
@@ -714,7 +718,11 @@ mod tests {
             unreachable!("oplog is unused by this test")
         }
 
-        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+        async fn wait_for_replicas(
+            &self,
+            _replicas: u8,
+            _timeout: Duration,
+        ) -> Result<bool, crate::services::oplog::OplogError> {
             unreachable!("oplog is unused by this test")
         }
 

@@ -14,7 +14,7 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanResume, WriterId,
+    ScanResume,
 };
 use async_trait::async_trait;
 use golem_common::model::AgentId;
@@ -27,15 +27,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// The maps are shared, so [`Self::for_writer`] can hand out a second handle onto the same store
-/// that writes as somebody else.
 #[derive(Debug)]
 pub struct InMemoryIndexedStorage {
     data: Arc<scc::HashMap<String, BTreeMap<u64, Vec<u8>>>>,
     /// The writer generation recorded per key. An append that asserts an epoch holds this entry
     /// while it writes `data`, which is what makes the check and the insert one step.
-    key_epochs: Arc<scc::HashMap<String, (ShardEpoch, WriterId)>>,
-    writer_id: WriterId,
+    key_epochs: Arc<scc::HashMap<String, ShardEpoch>>,
     #[cfg(test)]
     read_count: Arc<AtomicU64>,
 }
@@ -51,44 +48,29 @@ impl InMemoryIndexedStorage {
         Self {
             data: Arc::new(scc::HashMap::new()),
             key_epochs: Arc::new(scc::HashMap::new()),
-            writer_id: WriterId::process(),
             #[cfg(test)]
             read_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// A second handle onto this same store that writes as `writer_id`: how two processes racing
-    /// over one key are played out inside a single one.
-    pub fn for_writer(&self, writer_id: WriterId) -> Self {
-        Self {
-            data: self.data.clone(),
-            key_epochs: self.key_epochs.clone(),
-            writer_id,
-            #[cfg(test)]
-            read_count: self.read_count.clone(),
-        }
-    }
-
-    /// Refuses unless `record` holds exactly `expected`, recorded by this writer; an absent record
-    /// refuses too. The same terms as the SQL backends' check.
+    /// Refuses unless `record` holds exactly `expected`; an absent record refuses too. The same
+    /// terms as the SQL backends' check.
     fn check_record(
         &self,
         key: &str,
         expected: ShardEpoch,
-        record: &scc::hash_map::Entry<'_, String, (ShardEpoch, WriterId)>,
+        record: &scc::hash_map::Entry<'_, String, ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let stored = match record {
             scc::hash_map::Entry::Occupied(occupied) => Some(*occupied.get()),
             scc::hash_map::Entry::Vacant(_) => None,
         };
         match stored {
-            Some((epoch, writer)) if epoch == expected && writer == self.writer_id => Ok(()),
-            other => Err(IndexedStorageError::Fenced {
+            Some(epoch) if epoch == expected => Ok(()),
+            actual => Err(IndexedStorageError::Fenced {
                 key: key.to_string(),
                 expected,
-                actual: other.map(|(epoch, _)| epoch),
-                writer_conflict: other
-                    .is_some_and(|(epoch, writer)| epoch == expected && writer != self.writer_id),
+                actual,
             }),
         }
     }
@@ -350,20 +332,19 @@ impl IndexedStorage for InMemoryIndexedStorage {
         let composite_key = Self::composite_key(namespace, key);
         match self.key_epochs.entry_async(composite_key).await {
             scc::hash_map::Entry::Vacant(vacant) => {
-                vacant.insert_entry((epoch, self.writer_id));
+                vacant.insert_entry(epoch);
                 Ok(())
             }
             scc::hash_map::Entry::Occupied(mut occupied) => {
-                let (stored, writer) = *occupied.get();
-                if epoch > stored || (epoch == stored && writer == self.writer_id) {
-                    *occupied.get_mut() = (epoch, self.writer_id);
+                let stored = *occupied.get();
+                if epoch >= stored {
+                    *occupied.get_mut() = epoch;
                     Ok(())
                 } else {
                     Err(IndexedStorageError::Fenced {
                         key: key.to_string(),
                         expected: epoch,
                         actual: Some(stored),
-                        writer_conflict: epoch == stored && writer != self.writer_id,
                     })
                 }
             }

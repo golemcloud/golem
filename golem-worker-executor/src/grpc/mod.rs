@@ -38,7 +38,7 @@ use crate::services::{
     HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::{
-    ExportStreamControlResult as DomainExportResult, GiveUpReason, Worker, WorkerUpdateMode,
+    ExportStreamControlResult as DomainExportResult, Worker, WorkerUpdateMode,
     given_up_by_assignment,
 };
 pub use crate::worker::{
@@ -204,12 +204,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!(assignment = %shard_assignment, "Received initial shard assignment");
 
-        worker_executor.shard_service().register(
-            shard_assignment.number_of_shards,
-            &shard_assignment.shard_epochs,
-            shard_assignment.expires_at,
-            shard_assignment.revision,
-        );
+        match shard_assignment.revision {
+            Some(revision) => worker_executor.shard_service().register(
+                shard_assignment.number_of_shards,
+                &shard_assignment.shard_epochs,
+                shard_assignment.expires_at,
+                revision,
+            ),
+            // The single-shard executor: no shard manager delivered this assignment, so there is
+            // nothing to order it against.
+            None => worker_executor.shard_service().install_unexpiring(
+                shard_assignment.number_of_shards,
+                &shard_assignment.shard_epochs,
+            ),
+        };
 
         // Deliberately fatal to startup, unlike the same failure on a running executor.
         //
@@ -1236,7 +1244,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
-        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision);
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("RevokeShardsRequest.{error}"))
+            })?;
 
         match self.shard_service().revoke_shards(&shard_ids, revision)? {
             ShardDeliveryOutcome::Applied { .. } => {}
@@ -1261,9 +1272,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // shards' new owners.
         let shard_service = self.shard_service();
         self.active_agents()
-            .give_up_matching(GiveUpReason::ShardRevoked, |agent_id| {
-                shard_service.check_worker(agent_id).is_err()
-            })
+            .give_up_matching(|agent_id| shard_service.check_worker(agent_id).is_err())
             .await;
 
         Ok(())
@@ -1292,7 +1301,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision);
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("AssignShardsRequest.{error}"))
+            })?;
         match self
             .shard_service()
             .assign_shards(number_of_shards, &shard_epochs, revision)?
@@ -1385,7 +1397,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .collect();
         let assignment = this.shard_service().try_get_current_assignment();
         this.active_agents()
-            .give_up_matching(GiveUpReason::ShardNotAssigned, |agent_id| {
+            .give_up_matching(|agent_id| {
                 given_up_by_assignment(
                     assignment.as_ref(),
                     agent_id,

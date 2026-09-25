@@ -217,13 +217,25 @@ pub trait OplogService: Debug + Send + Sync {
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
     /// own handle asserts - only while that is still the epoch recorded for the oplog and this
     /// executor recorded it: otherwise nothing is deleted and the delete is refused with
-    /// [`OplogError::Fenced`], as a write at that epoch would be. `None` deletes unconditionally.
+    /// [`OplogError::Fenced`], as a write at that epoch would be. `None` is an ephemeral oplog,
+    /// deleted unconditionally: nothing fences it or the archive layers behind it.
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError>;
+
+    /// Confirms `expected_epoch` still owns the agent's oplog without writing anything else: the
+    /// compare-and-set an open makes, at the epoch the caller already holds. Refused with
+    /// [`OplogError::Fenced`] once another executor's epoch is recorded, so state the oplog does not
+    /// carry is removed only while the oplog is still this executor's.
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
     ) -> Result<(), OplogError>;
 
     /// Reads exactly `n` contiguous entries starting at `idx`.
@@ -616,39 +628,25 @@ pub struct OplogFence {
     pub agent_id: AgentId,
     pub expected_epoch: ShardEpoch,
     pub actual_epoch: Option<ShardEpoch>,
-    /// The stored epoch is the one this executor asserted, but another process recorded it. The
-    /// epoch alone therefore says nothing about who may write, and the shard manager has to mint
-    /// past it rather than leave two holders on one generation.
-    pub writer_conflict: bool,
 }
 
-/// Told of every refusal the storage returns, carrying the epoch recorded on the oplog.
-///
-/// That epoch is evidence of a generation somebody held for the agent's shard, which a shard
-/// manager whose state lost history no longer knows about. The same refusal can be reported more
-/// than once - a refused create, and then the refused open behind it - so an observer merges what
-/// it is told rather than counting it.
-pub trait OplogFenceObserver: Send + Sync {
-    fn fenced(&self, fence: &OplogFence);
-}
-
-/// The one way an oplog write can fail without taking the executor down.
+/// Why an oplog write failed without taking the executor down.
 ///
 /// A `Fenced` write is not a storage failure - the storage is healthy and refused the write on
 /// purpose - so it is returned rather than retried or panicked on, and the worker that hit it is
-/// stopped and left to the shard's new owner. Every other storage failure keeps its fail-stop
-/// semantics inside the oplog implementation; `Storage` exists so that test doubles and payload
-/// helpers that already return a `String` can flow through the same `Result` without a second
-/// error type at every call site.
+/// stopped and left to the shard's new owner. A storage failure never reaches this type: it keeps
+/// its fail-stop semantics inside the oplog implementation. `Payload` is an entry whose payload the
+/// caller-supplied builder could not produce - it failed to serialize, or was too large - and the
+/// add failures tests inject.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogError {
     Fenced(OplogFence),
-    Storage(String),
+    Payload(String),
 }
 
 impl From<String> for OplogError {
     fn from(details: String) -> Self {
-        OplogError::Storage(details)
+        OplogError::Payload(details)
     }
 }
 
@@ -660,7 +658,7 @@ impl From<OplogError> for WorkerExecutorError {
                 fence.expected_epoch.0,
                 fence.actual_epoch.map(|epoch| epoch.0),
             ),
-            OplogError::Storage(details) => WorkerExecutorError::runtime(details),
+            OplogError::Payload(details) => WorkerExecutorError::runtime(details),
         }
     }
 }
@@ -678,7 +676,7 @@ impl Display for OplogError {
                     .map(|epoch| epoch.to_string())
                     .unwrap_or_else(|| "none".to_string())
             ),
-            OplogError::Storage(details) => write!(f, "oplog storage error: {details}"),
+            OplogError::Payload(details) => write!(f, "oplog payload error: {details}"),
         }
     }
 }
@@ -818,7 +816,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// available).
     /// Returns true if the maximum possible number of replicas is reached within the timeout,
     /// otherwise false.
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool;
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError>;
 
     /// Reads exactly `n` contiguous entries starting at `oplog_index`.
     async fn read_exact(&self, oplog_index: OplogIndex, n: u64)
@@ -933,8 +931,8 @@ pub trait Oplog: Any + Debug + Send + Sync {
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> Result<(OplogIndex, OplogIndex), OplogError>;
 
-    /// The shard epoch this oplog's writes assert, or `None` for an oplog nothing fences - one
-    /// opened without an ownership claim, or an ephemeral one.
+    /// The shard epoch this oplog's writes assert, or `None` for an ephemeral oplog, which nothing
+    /// fences - nor the archive layers behind it.
     ///
     /// Only the primary oplog knows it, so a wrapper answers from the oplog it wraps.
     fn shard_epoch(&self) -> Option<ShardEpoch> {
@@ -1491,8 +1489,8 @@ pub trait OplogConstructor: Send {
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Arc<dyn Oplog>;
 
-    /// The epoch the oplog this constructor builds is asked to assert, or `None` for one opened
-    /// without an ownership claim. The open-oplog cache compares it with the epoch a cached
+    /// The epoch the oplog this constructor builds is asked to assert, or `None` for an ephemeral
+    /// one. The open-oplog cache compares it with the epoch a cached
     /// handle was opened with, so it has no default: a layer that left it out would hand an
     /// older generation's handle to every newer opener.
     fn shard_epoch(&self) -> Option<ShardEpoch>;

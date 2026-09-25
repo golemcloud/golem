@@ -14,23 +14,19 @@
 
 use crate::metrics::sharding::*;
 use crate::model::ShardAssignmentCheck;
-use crate::services::oplog::{OplogFence, OplogFenceObserver};
 use golem_common::model::{
     AgentId, ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::convert::identity;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tracing::debug;
 
 /// Service for assigning shards to worker executors.
-///
-/// Also the oplog fence's observer: the epoch a refused write found belongs to the agent's shard,
-/// and this is where the shard an agent routes to is known.
-pub trait ShardService: OplogFenceObserver + Send + Sync {
+pub trait ShardService: Send + Sync {
     /// True once an assignment exists **and** its lease is still live. Gates
     /// the scheduler's poll loop, which admits work without going through
     /// `check_admission`.
@@ -55,14 +51,21 @@ pub trait ShardService: OplogFenceObserver + Send + Sync {
     fn check_admission(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError>;
     /// Installs the first assignment, from a registration's grant. Creates the
     /// assignment if none exists yet. The set gates on `revision` like every
-    /// delivery; the lease clock always moves. `None` never expires, which the
-    /// single-shard executor declares.
+    /// delivery; the lease clock always moves. `None` never expires.
     fn register(
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<Instant>,
         revision: ShardLeaseRevision,
+    ) -> ShardDeliveryOutcome;
+    /// Installs the single-shard executor's assignment, which no shard manager
+    /// delivers: it never expires, names no revision, and replaces whatever is
+    /// held.
+    fn install_unexpiring(
+        &self,
+        number_of_shards: usize,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
     ) -> ShardDeliveryOutcome;
     /// A revoke: the shards named are dropped, everything else stays. The one
     /// delta among the deliveries, gated on `revision` like the rest; the
@@ -91,25 +94,10 @@ pub trait ShardService: OplogFenceObserver + Send + Sync {
     fn clear_assignment(&self);
     fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError>;
     fn try_get_current_assignment(&self) -> Option<ShardAssignment>;
-    /// The epochs refused oplog writes found on the rows, per shard, that no granted renewal has
-    /// reported yet. A snapshot: learning more afterwards does not change it.
-    fn fence_learned_epochs(&self) -> BTreeMap<ShardId, ShardEpoch>;
-    /// Retires what a granted renewal reported. An entry goes only while its epoch is still at or
-    /// below the reported one, so an epoch learned after the snapshot was taken is reported again.
-    fn retire_fence_learned_epochs(&self, reported: &BTreeMap<ShardId, ShardEpoch>);
 }
 
 pub struct ShardServiceDefault {
     shard_assignment: Arc<RwLock<Option<ShardAssignment>>>,
-    /// The highest epoch a refused oplog write found on the rows, per shard, until a granted
-    /// renewal has reported it.
-    ///
-    /// Evidence, not ownership: somebody wrote at that epoch, and a shard manager whose state lost
-    /// history has to mint above it. So it is kept apart from the assignment and survives a lost
-    /// lease, and it is not filtered by ownership - a fence on a shard this executor no longer
-    /// holds is still what the manager forgot, and the manager re-mints that shard's owner. At
-    /// most one entry per shard. Never held across an await.
-    fence_learned: Mutex<BTreeMap<ShardId, ShardEpoch>>,
 }
 
 impl Default for ShardServiceDefault {
@@ -122,7 +110,6 @@ impl ShardServiceDefault {
     pub fn new() -> Self {
         Self {
             shard_assignment: Arc::new(RwLock::new(None)),
-            fence_learned: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -242,6 +229,32 @@ impl ShardService for ShardServiceDefault {
         })
     }
 
+    fn install_unexpiring(
+        &self,
+        number_of_shards: usize,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+    ) -> ShardDeliveryOutcome {
+        self.with_write_shard_assignment(|shard_assignment| {
+            debug!(
+                number_of_shards,
+                shard_ids_to_assign = shard_epochs.keys().join(", "),
+                "ShardService.install_unexpiring"
+            );
+            let set_changed = shard_assignment
+                .as_ref()
+                .is_none_or(|current| current.shard_epochs != *shard_epochs);
+            *shard_assignment = Some(ShardAssignment {
+                number_of_shards,
+                shard_epochs: shard_epochs.clone(),
+                expires_at: None,
+                revision: None,
+            });
+            let outcome = ShardDeliveryOutcome::Applied { set_changed };
+            record_delivery(ShardDelivery::Register, &outcome, shard_epochs.len());
+            outcome
+        })
+    }
+
     fn revoke_shards(
         &self,
         shard_ids: &HashSet<ShardId>,
@@ -304,64 +317,6 @@ impl ShardService for ShardServiceDefault {
     fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
         self.shard_assignment.read().unwrap().clone()
     }
-
-    fn fence_learned_epochs(&self) -> BTreeMap<ShardId, ShardEpoch> {
-        self.fence_learned.lock().unwrap().clone()
-    }
-
-    fn retire_fence_learned_epochs(&self, reported: &BTreeMap<ShardId, ShardEpoch>) {
-        let mut learned = self.fence_learned.lock().unwrap();
-        for (shard_id, reported_epoch) in reported {
-            if learned
-                .get(shard_id)
-                .is_some_and(|learned_epoch| learned_epoch <= reported_epoch)
-            {
-                learned.remove(shard_id);
-            }
-        }
-    }
-}
-
-impl OplogFenceObserver for ShardServiceDefault {
-    fn fenced(&self, fence: &OplogFence) {
-        // Only a record ahead of the epoch this executor asserted says anything the shard manager
-        // may have lost. An absent record carries no epoch, and one at or below the assertion is
-        // not a generation above it.
-        //
-        // The exception is a record at the assertion held by another writer: that one says the
-        // manager handed the same generation to two executors, which only a manager that lost its
-        // state does, and it has to mint past the epoch rather than leave it shared.
-        let Some(stored) = fence.actual_epoch.filter(|stored| {
-            *stored > fence.expected_epoch
-                || (fence.writer_conflict && *stored == fence.expected_epoch)
-        }) else {
-            return;
-        };
-        let shard_id = {
-            let guard = self.shard_assignment.read().unwrap();
-            match guard.as_ref() {
-                // `ShardId::from_agent_id` divides by the count, and the placeholder a
-                // registration starts from holds zero.
-                Some(assignment) if assignment.number_of_shards > 0 => {
-                    ShardId::from_agent_id(&fence.agent_id, assignment.number_of_shards)
-                }
-                _ => return,
-            }
-        };
-        debug!(
-            agent_id = %fence.agent_id,
-            %shard_id,
-            expected_epoch = %fence.expected_epoch,
-            stored_epoch = %stored,
-            "Learned a shard epoch from a fenced oplog write"
-        );
-        self.fence_learned
-            .lock()
-            .unwrap()
-            .entry(shard_id)
-            .and_modify(|learned| *learned = (*learned).max(stored))
-            .or_insert(stored);
-    }
 }
 
 /// Records what every delivery updates: the resulting shard count, and, when the delivery was
@@ -415,6 +370,16 @@ mod tests {
             .collect()
     }
 
+    /// The manager process behind every delivery in the tests that do not care which one sent it.
+    const MANAGER: Uuid = Uuid::from_u128(0x5eed);
+
+    fn revision_of(incarnation: Uuid, number: u64) -> ShardLeaseRevision {
+        ShardLeaseRevision {
+            incarnation,
+            number,
+        }
+    }
+
     /// An agent id that routes to `shard`, found by search because
     /// `ShardId::from_agent_id` is a hash.
     fn agent_on_shard(shard: i64) -> AgentId {
@@ -436,12 +401,7 @@ mod tests {
         expires_at: Option<Instant>,
     ) -> ShardServiceDefault {
         let service = ShardServiceDefault::new();
-        service.register(
-            SHARDS,
-            shard_epochs,
-            expires_at,
-            ShardLeaseRevision::default(),
-        );
+        service.register(SHARDS, shard_epochs, expires_at, revision_of(MANAGER, 0));
         service
     }
 
@@ -452,97 +412,6 @@ mod tests {
 
     fn live() -> Instant {
         Instant::now() + Duration::from_secs(60)
-    }
-
-    fn fence(agent_id: &AgentId, expected: u64, actual: Option<u64>) -> OplogFence {
-        OplogFence {
-            agent_id: agent_id.clone(),
-            expected_epoch: ShardEpoch(expected),
-            actual_epoch: actual.map(ShardEpoch),
-            writer_conflict: false,
-        }
-    }
-
-    fn learned(entries: impl IntoIterator<Item = (i64, u64)>) -> BTreeMap<ShardId, ShardEpoch> {
-        entries
-            .into_iter()
-            .map(|(shard_id, epoch)| (ShardId::new(shard_id), ShardEpoch(epoch)))
-            .collect()
-    }
-
-    /// A refused write's stored epoch is learned under the shard its agent routes to, merged by
-    /// maximum so a repeated or older report never lowers it. It is evidence rather than
-    /// ownership: learned whether or not this executor holds the shard, and kept when the lease
-    /// is lost, because that is exactly when a shard manager that lost history needs it.
-    #[test]
-    fn a_fence_learns_the_stored_epoch_keyed_by_the_agents_shard() {
-        let service = service_holding(&epochs([(3, 0)]), Some(live()));
-        let on_held = agent_on_shard(3);
-
-        service.fenced(&fence(&on_held, 0, Some(4)));
-        assert_eq!(service.fence_learned_epochs(), learned([(3, 4)]));
-
-        service.fenced(&fence(&on_held, 0, Some(2)));
-        assert_eq!(
-            service.fence_learned_epochs(),
-            learned([(3, 4)]),
-            "an older report lowered what was learned"
-        );
-        service.fenced(&fence(&on_held, 0, Some(4)));
-        assert_eq!(
-            service.fence_learned_epochs(),
-            learned([(3, 4)]),
-            "a repeated report changed what was learned"
-        );
-
-        // An absent record carries no epoch, and one at or below the assertion is no generation
-        // above it.
-        let on_other = agent_on_shard(1);
-        service.fenced(&fence(&on_other, 0, None));
-        service.fenced(&fence(&on_other, 2, Some(2)));
-        service.fenced(&fence(&on_other, 3, Some(2)));
-        assert_eq!(service.fence_learned_epochs(), learned([(3, 4)]));
-
-        let on_unowned = agent_on_shard(5);
-        service.fenced(&fence(&on_unowned, 0, Some(1)));
-        assert_eq!(service.fence_learned_epochs(), learned([(3, 4), (5, 1)]));
-
-        service.clear_assignment();
-        assert_eq!(
-            service.fence_learned_epochs(),
-            learned([(3, 4), (5, 1)]),
-            "a lost lease dropped the epochs the re-registered executor has to report"
-        );
-
-        // With no shard count to route by, a fence is ignored rather than divided by zero.
-        let unregistered = ShardServiceDefault::new();
-        unregistered.fenced(&fence(&on_held, 0, Some(4)));
-        assert!(unregistered.fence_learned_epochs().is_empty());
-        unregistered.with_write_shard_assignment(|shard_assignment| {
-            *shard_assignment = Some(ShardAssignment::default())
-        });
-        unregistered.fenced(&fence(&on_held, 0, Some(4)));
-        assert!(unregistered.fence_learned_epochs().is_empty());
-    }
-
-    /// A granted renewal retires the snapshot it reported, and nothing learned since: a higher
-    /// epoch on a reported shard, or a new shard, still goes with the next renewal.
-    #[test]
-    fn retiring_reported_epochs_keeps_ones_learned_since() {
-        let service = service_holding(&epochs([(3, 0)]), Some(live()));
-        service.fenced(&fence(&agent_on_shard(3), 0, Some(4)));
-        let reported = service.fence_learned_epochs();
-
-        service.fenced(&fence(&agent_on_shard(3), 0, Some(6)));
-        service.fenced(&fence(&agent_on_shard(5), 0, Some(1)));
-        service.retire_fence_learned_epochs(&reported);
-        assert_eq!(service.fence_learned_epochs(), learned([(3, 6), (5, 1)]));
-
-        service.retire_fence_learned_epochs(&learned([(3, 6), (5, 1)]));
-        assert!(service.fence_learned_epochs().is_empty());
-
-        service.retire_fence_learned_epochs(&learned([(3, 9)]));
-        assert!(service.fence_learned_epochs().is_empty());
     }
 
     /// Nothing is installed until a registration: a push, a renewal or a
@@ -556,9 +425,9 @@ mod tests {
         // `ShardingNotReady` by refreshing its routing table and retrying, and answers an opaque
         // error by failing the call.
         for refused in [
-            service.assign_shards(SHARDS, &epochs([(0, 1)]), ShardLeaseRevision::of(1)),
-            service.update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision::of(1)),
-            service.revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision::of(1)),
+            service.assign_shards(SHARDS, &epochs([(0, 1)]), revision_of(MANAGER, 1)),
+            service.update_lease(&epochs([(0, 1)]), live(), revision_of(MANAGER, 1)),
+            service.revoke_shards(&HashSet::from([ShardId::new(0)]), revision_of(MANAGER, 1)),
         ] {
             assert!(
                 matches!(refused, Err(WorkerExecutorError::ShardingNotReady)),
@@ -579,12 +448,12 @@ mod tests {
             SHARDS,
             &epochs([(0, 1), (1, 1)]),
             Some(live()),
-            ShardLeaseRevision::of(5),
+            revision_of(MANAGER, 5),
         );
 
         let before = stale_shard_delivery_count(ShardDelivery::Renewal);
         let outcome = service
-            .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision::of(3))
+            .update_lease(&epochs([(0, 1)]), live(), revision_of(MANAGER, 3))
             .expect("a registered executor can be renewed");
 
         assert!(
@@ -608,18 +477,18 @@ mod tests {
             SHARDS,
             &epochs([(0, 1), (1, 1)]),
             Some(live()),
-            ShardLeaseRevision::of(5),
+            revision_of(MANAGER, 5),
         );
 
         let outcome = service
-            .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision::of(3))
+            .revoke_shards(&HashSet::from([ShardId::new(0)]), revision_of(MANAGER, 3))
             .expect("a registered executor can be revoked from");
 
         assert_eq!(
             outcome,
             ShardDeliveryOutcome::Stale {
-                delivered: ShardLeaseRevision::of(3),
-                applied: ShardLeaseRevision::of(5),
+                delivered: revision_of(MANAGER, 3),
+                applied: revision_of(MANAGER, 5),
             }
         );
         assert_eq!(
@@ -634,7 +503,7 @@ mod tests {
 
         // ...while one at or above the applied revision does take the shard.
         let outcome = service
-            .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision::of(5))
+            .revoke_shards(&HashSet::from([ShardId::new(0)]), revision_of(MANAGER, 5))
             .expect("a registered executor can be revoked from");
         assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
         assert_eq!(
@@ -655,7 +524,7 @@ mod tests {
         assert!(service.check_worker(&on_kept).is_ok());
 
         service
-            .assign_shards(SHARDS, &epochs([(1, 1)]), ShardLeaseRevision::of(1))
+            .assign_shards(SHARDS, &epochs([(1, 1)]), revision_of(MANAGER, 1))
             .unwrap();
 
         assert_eq!(
@@ -680,7 +549,7 @@ mod tests {
         assert!(service.check_admission(&agent).is_ok());
 
         service
-            .update_lease(&epochs([(0, 3)]), lapsed(), ShardLeaseRevision::of(1))
+            .update_lease(&epochs([(0, 3)]), lapsed(), revision_of(MANAGER, 1))
             .unwrap();
 
         assert!(
@@ -754,19 +623,19 @@ mod tests {
             SHARDS,
             &epochs([(0, 1), (1, 1)]),
             Some(lapsed()),
-            ShardLeaseRevision::of(5),
+            revision_of(MANAGER, 5),
         );
         assert!(!service.is_ready());
 
         let outcome = service
-            .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision::of(3))
+            .update_lease(&epochs([(0, 1)]), live(), revision_of(MANAGER, 3))
             .expect("a registered executor can be renewed");
 
         assert_eq!(
             outcome,
             ShardDeliveryOutcome::Stale {
-                delivered: ShardLeaseRevision::of(3),
-                applied: ShardLeaseRevision::of(5),
+                delivered: revision_of(MANAGER, 3),
+                applied: revision_of(MANAGER, 5),
             }
         );
         assert_eq!(

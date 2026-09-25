@@ -224,10 +224,10 @@ impl DurableStreamStore {
     /// Rejects work after the resident producer has been poisoned or retired.
     pub(crate) fn ensure_healthy(&self) -> Result<(), StreamStoreError> {
         if self.poisoned.load(Ordering::Acquire) {
-            // A fenced write poisons the store, and every later write would be refused by the
-            // same latch: report the fence so a caller reroutes instead of recovering locally.
-            match self.oplog.fence() {
-                Some(fence) => Err(StreamStoreError::Fenced(fence)),
+            // A refused write poisons the store and every later write would be refused too:
+            // report the fence so a caller reroutes instead of recovering locally.
+            match self.refused_by.get() {
+                Some(fence) => Err(StreamStoreError::Fenced(fence.clone())),
                 None => Err(StreamStoreError::RecoveryRequired),
             }
         } else {
@@ -279,6 +279,12 @@ impl DurableStreamStore {
     }
 
     /// Prevents new work and cancels resident forwarded operations after failure or retirement.
+    /// Poisons the store because the storage refused one of its writes.
+    pub(crate) fn poison_refused(&self, fence: &OplogFence) {
+        let _ = self.refused_by.set(fence.clone());
+        self.poison();
+    }
+
     pub(crate) fn poison(&self) {
         self.poisoned.store(true, Ordering::Release);
         self.retirement.cancel();
@@ -445,7 +451,10 @@ impl DurableStreamStore {
                         .await
                         .unwrap_or(Err(StreamStoreError::RecoveryRequired))
                     {
-                        producer.poison();
+                        match &error {
+                            StreamStoreError::Fenced(fence) => producer.poison_refused(fence),
+                            _ => producer.poison(),
+                        }
                         outcome = Err(error.into());
                     }
                 }
@@ -593,12 +602,13 @@ impl DurableStreamStore {
             .lock()
             .expect("commit tail list lock poisoned")
             .push(task);
-        let received = receipt.await;
-        // A fenced commit drops the receipt rather than signalling it, so the latch is read
-        // before a missing receipt is treated as a failed callback.
-        self.committed_unless_fenced()?;
-        received.expect("durable stream commit failed before durability receipt");
-        Ok(())
+        receipt
+            .await
+            .expect("durable stream commit failed before durability receipt")
+            .map_err(|fence| {
+                self.poison_refused(&fence);
+                StreamStoreError::Fenced(fence)
+            })
     }
 
     pub(super) async fn commit_notifying(
@@ -609,16 +619,5 @@ impl DurableStreamStore {
         self.commit(context).await?;
         let _ = committed.send(());
         Ok(())
-    }
-
-    /// The worker's commit swallows a refusal: it only spawns the give-up. The refused append
-    /// has latched the fence before the commit resolves, so the latch is what tells a persisted
-    /// write from one that must not be indexed, retained or published. A below-threshold add
-    /// answers `Ok` on a latched oplog, so no earlier result can stand in for this check.
-    fn committed_unless_fenced(&self) -> Result<(), StreamStoreError> {
-        match self.oplog.fence() {
-            Some(fence) => Err(StreamStoreError::Fenced(fence)),
-            None => Ok(()),
-        }
     }
 }

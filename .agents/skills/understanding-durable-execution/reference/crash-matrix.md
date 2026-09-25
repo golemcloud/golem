@@ -7,7 +7,7 @@ matrix says what the next incarnation does for a crash inside each window and wh
 makes that safe.
 
 Resharding and the oplog epoch fence are different: the generation running here does not
-reconstruct at all. It is given up (`InterruptKind::ShardLost`) — stopped without writing its
+reconstruct at all. It is retired (`InterruptKind::ShardLost`) — stopped without writing its
 status, dropped here, never restarted — and the executor that now holds the shard runs
 `prepare_instance` / `resume_replay` from the committed oplog: the new owner, or this executor
 again if the shard came back to it at a higher epoch. See "Resharding and the oplog epoch fence"
@@ -101,25 +101,24 @@ below for what that leaves behind.
 | Body traps | no entity terminal | Owner invocation fails; owner group drains; siblings blocked on the lane are fenced | `guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group` |
 | Owner reaches replay tail while a body is still reconstructing | — | `HistoricalReconstruction` fences keep `PendingReplayToLive` closed until every active body validates | `completed_reconstruction_claim_blocks_concurrent_replay_to_live` |
 
-## Resharding and the oplog epoch fence (`worker/mod.rs::give_up`, `services/oplog/primary.rs`)
+## Resharding and the oplog epoch fence (`worker/mod.rs::interrupt_and_retire`, `services/oplog/primary.rs`)
 
-Two triggers give up an agent instead of reconstructing it here: the shard manager revoking or
-reassigning the shard (`GiveUpReason::ShardRevoked` for a `RevokeShards` push,
-`GiveUpReason::ShardNotAssigned` for any delivered assignment that drops the shard or raises its
-epoch), and a write refused because the epoch this executor asserted no longer matches storage
-(`OplogError::Fenced`, `GiveUpReason::Fenced`). Every indexed-storage backend refuses such a write.
-Only a durable agent's primary oplog asserts an epoch; ephemeral oplogs, fork stages and archive
-layers do not, so an ephemeral agent is given up only by an assignment change.
+Two triggers retire an agent for its lost shard instead of reconstructing it here: the shard
+manager revoking or reassigning the shard (a `RevokeShards` push, or any delivered assignment that
+drops the shard or raises its epoch), and a write refused because the epoch this executor asserted
+no longer matches storage (`OplogError::Fenced`). Every indexed-storage backend refuses such a
+write. Only a durable agent's primary oplog asserts an epoch; ephemeral oplogs, fork stages and
+archive layers do not, so an ephemeral agent is retired only by an assignment change.
 
 | Crash window | Oplog shape left behind | What happens here | Durable fact relied on |
 |---|---|---|---|
-| Assignment revoked/reassigned, before any write is attempted | whatever was already committed, plus any buffered entries the stop commits while storage still accepts this executor's epoch | `give_up_matching` stops matching agents directly; no status blob, checkpoint or recovery-index row is written (`mark_given_up` stops the flusher and checkpointer) | `ShardService::check_worker` / the delivered assignment, not the oplog |
-| The shard moves while a live call's `Start` is only buffered | nothing from this call | Its effect has already run here (an idempotent `WriteRemote` opens no committed scope); the next commit is refused and the agent gives up; the owner runs the call again | Idempotence mode, as for a crash before the commit; non-idempotent, batched and transactional calls commit their scope `Start` first |
-| A write is attempted after the shard actually moved | nothing new; the attempted batch is refused, not partially written | The refusal is returned (`OplogError::Fenced`), not retried or swallowed; the agent gives up | Epoch asserted inside the storage transaction |
+| Assignment revoked/reassigned, before any write is attempted | whatever was already committed, plus any buffered entries the stop commits while storage still accepts this executor's epoch | `give_up_matching` retires matching agents through `interrupt_and_retire`; no status blob, checkpoint or recovery-index row is written (`record_retirement` stops the flusher and checkpointer) | `ShardService::check_worker` / the delivered assignment, not the oplog |
+| The shard moves while a live call's `Start` is only buffered | nothing from this call | Its effect has already run here (an idempotent `WriteRemote` opens no committed scope); the next commit is refused and the agent is retired; the owner runs the call again | Idempotence mode, as for a crash before the commit; non-idempotent, batched and transactional calls commit their scope `Start` first |
+| A write is attempted after the shard actually moved | nothing new; the attempted batch is refused, not partially written | The refusal is returned (`OplogError::Fenced`), not retried or swallowed; the agent is retired | Epoch asserted inside the storage transaction |
 | An earlier attempt of the refused batch ended indeterminate | that attempt's entries, if it landed before the takeover | The refusal is still returned, so the batch is never acknowledged here; the owner replays it like any committed entry | Nothing is acknowledged that the owner cannot see |
 | Any later write on the same oplog handle | still nothing new | The fence latches: every later add/commit is refused immediately, without a second storage round trip | The oplog's own latched `OplogFence` |
-| An invocation still queued when the give-up runs | unaffected; its `PendingAgentInvocation` stays pending | Failed in memory with a retriable error (`fail_pending_invocations` / `give_up_error`: `ShardingNotReady`, or `OplogFenced`), never a cached result | The `PendingAgentInvocation` left pending in the oplog, for the owner to run |
-| A deletion is under way when the give-up runs | whatever the deletion had committed | The deletion keeps going: its stream-cleanup commits and its storage remove run with the epoch asserted (its calls to dependent agents do not). Each succeeds while the key is still this executor's; once another executor holds it, the first refused step hands the delete to that owner | Epoch asserted by the cleanup commits and by the remove |
+| An invocation still queued when the retirement runs | unaffected; its `PendingAgentInvocation` stays pending | Failed in memory with a retriable error (`fail_pending_invocations` / `retirement_error`: `ShardingNotReady`), never a cached result | The `PendingAgentInvocation` left pending in the oplog, for the owner to run |
+| A deletion step is refused by the fence | whatever the deletion had committed | The attempt fails with `ShardingNotReady` and the generation stays cached in `Deleting` with its completed stages; a retry here is refused at entry, so no remote effect repeats, and stream cleanup confirms the epoch before reaching any other agent, since a re-run elsewhere finds its fenced records already written; the generation is evicted once the shard has left, and the owner finishes the delete | Epoch asserted by the cleanup commits and by the remove, which checks ownership before removing anything and deletes the oplog after everything it can rebuild |
 | The owner opens the same agent | the fenced executor's last accepted entries | Ordinary `prepare_instance` / `resume_replay`, from committed history exactly as it was left | Nothing is acknowledged after the fence latched, and no entry is appended or deleted without the asserted epoch |
 
 ## Oplog-processor plugins (`services/oplog/plugin.rs`)

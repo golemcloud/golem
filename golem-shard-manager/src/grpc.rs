@@ -56,22 +56,11 @@ impl ShardManagerServiceImpl {
         executor_id: ExecutorId,
         pod: Pod,
         pod_name: Option<String>,
-        previous_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<RegisterAck, ShardManagerError> {
-        debug!(
-            executor_id = %executor_id,
-            addr = %pod,
-            previous_shards = previous_epochs.len(),
-            "Received request to register executor"
-        );
+        debug!(executor_id = %executor_id, addr = %pod, "Received request to register executor");
         let ack = self
             .shard_management
-            .register_executor_with_previous_epochs(
-                executor_id,
-                ExecutorAddr::from(pod),
-                pod_name,
-                previous_epochs,
-            )
+            .register_executor(executor_id, ExecutorAddr::from(pod), pod_name)
             .await?;
         debug!(executor_id = %executor_id, addr = %pod, "Registered executor");
         Ok(ack)
@@ -111,14 +100,11 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .ok_or_else(|| tonic::Status::invalid_argument("missing source IP"))?
             .ip();
 
-        let mut request = request.into_inner();
+        let request = request.into_inner();
 
-        // Both before anything touches the state: an executor that cannot name itself has no
-        // identity to renew or deregister a lease with, and carried epochs the manager cannot
-        // decode is not evidence it can weigh.
+        // Before anything touches the state: an executor that cannot name itself has no identity to
+        // renew or deregister a lease with.
         let executor_id = parse_executor_id(&request.executor_id)?;
-        let previous_epochs =
-            parse_shard_epochs(std::mem::take(&mut request.previous_shard_epochs))?;
 
         let record = recorded_grpc_api_request!(
             "register",
@@ -131,7 +117,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
         let pod = make_pod(source_ip, request.port)?;
 
         let response = self
-            .register_internal(executor_id, pod, request.pod_name, previous_epochs)
+            .register_internal(executor_id, pod, request.pod_name)
             .instrument(record.span.clone())
             .await;
 
@@ -165,16 +151,14 @@ impl ShardManagerService for ShardManagerServiceImpl {
     ) -> Result<Response<golem::shardmanager::v1::RenewShardLeaseResponse>, tonic::Status> {
         let request = request.into_inner();
 
-        // All before any state is touched: an executor that cannot name itself has no lease to
-        // renew, and a held or fenced epoch the manager cannot decode is not evidence it can
-        // weigh.
+        // Both before any state is touched: an executor that cannot name itself has no lease to
+        // renew, and a claim the manager cannot decode is not one it can validate.
         let executor_id = parse_executor_id(&request.executor_id)?;
-        let held = parse_shard_epochs(request.shard_epochs)?;
-        let fenced = parse_shard_epochs(request.fenced_shard_epochs)?;
+        let claimed = parse_shard_epochs(request.shard_epochs)?;
 
         let result = match self
             .shard_management
-            .renew_shard_lease_with_fenced_epochs(executor_id, held, fenced)
+            .renew_shard_lease(executor_id, claimed)
             .await
         {
             Ok(grant) => golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
@@ -204,11 +188,11 @@ impl ShardManagerService for ShardManagerServiceImpl {
         let request = request.into_inner();
 
         let executor_id = parse_executor_id(&request.executor_id)?;
-        let held = parse_shard_epochs(request.shard_epochs)?;
+        let claimed = parse_shard_epochs(request.shard_epochs)?;
 
         let result = match self
             .shard_management
-            .deregister_executor(executor_id, held)
+            .deregister_executor(executor_id, claimed)
             .await
         {
             Ok(()) => golem::shardmanager::v1::deregister_response::Result::Success(
@@ -459,11 +443,11 @@ fn parse_executor_id(raw: &str) -> Result<ExecutorId, tonic::Status> {
         .map_err(|err| tonic::Status::invalid_argument(format!("invalid executor_id: {err}")))
 }
 
-/// The shard set an executor sends as held, decoded from the wire.
+/// The shard set an executor claims, decoded from the wire.
 ///
 /// A `ShardEpochEntry` without a shard id names no shard, so it cannot be validated against
 /// anything: that is a malformed request, refused before any state is touched rather than silently
-/// dropped from a set whose whole point is to be exact.
+/// dropped from a claim whose whole point is to be exact.
 fn parse_shard_epochs(
     entries: Vec<golem::shardmanager::ShardEpochEntry>,
 ) -> Result<BTreeMap<ShardId, ShardEpoch>, tonic::Status> {

@@ -476,7 +476,6 @@ async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
         agent_id: agent_id.clone(),
         expected_epoch: golem_common::model::ShardEpoch(3),
         actual_epoch: Some(golem_common::model::ShardEpoch(4)),
-        writer_conflict: false,
     }));
     let seed_oplog = Arc::new(InMemoryOplog::new());
     seed_oplog
@@ -1183,8 +1182,12 @@ impl Oplog for InMemoryOplog {
         None
     }
 
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
-        true
+    async fn wait_for_replicas(
+        &self,
+        _replicas: u8,
+        _timeout: Duration,
+    ) -> Result<bool, crate::services::oplog::OplogError> {
+        Ok(true)
     }
 
     async fn read_exact(

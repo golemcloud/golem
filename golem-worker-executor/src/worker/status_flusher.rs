@@ -167,7 +167,7 @@ impl AgentStatusFlusher {
     /// recovery-index row alike: both belong to the shard's new owner now, and a write from here
     /// could overwrite its status or drop the row its crash recovery relies on.
     ///
-    /// Synchronous, so `Worker::mark_given_up` can call it under the worker lifecycle lock. Unlike
+    /// Synchronous, so `Worker::record_retirement` can call it under the worker lifecycle lock. Unlike
     /// [`Self::begin_delete`] it does not wait out a flush already past its early-out; that write
     /// was under way before the give-up, like any other write racing the takeover.
     pub fn stop_for_give_up(&self) {

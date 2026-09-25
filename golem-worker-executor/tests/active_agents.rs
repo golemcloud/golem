@@ -29,6 +29,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
+/// The shard manager process every shard push in these tests names.
+const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
+
 inherit_test_dep!(Tracing);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -58,7 +61,7 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
                 epoch: 1,
             }],
             revision: 1,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -106,7 +109,7 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -133,7 +136,7 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
                 epoch: 2,
             }],
             revision: 2,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -175,7 +178,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                 epoch: 1,
             }],
             revision: 1,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -226,7 +229,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                         number_of_shards: 1,
                         shard_epochs: vec![],
                         revision,
-                        incarnation_id: String::new(),
+                        incarnation_id: TEST_SHARD_MANAGER.to_string(),
                     })
                     .await?
                     .into_inner();
@@ -239,7 +242,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                     .revoke_shards(RevokeShardsRequest {
                         shard_ids: vec![ShardId { value: 0 }],
                         revision,
-                        incarnation_id: String::new(),
+                        incarnation_id: TEST_SHARD_MANAGER.to_string(),
                     })
                     .await?
                     .into_inner();
@@ -295,7 +298,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                     epoch: cycle as u64 + 2,
                 }],
                 revision: revision + 1,
-                incarnation_id: String::new(),
+                incarnation_id: TEST_SHARD_MANAGER.to_string(),
             })
             .await?
             .into_inner();
@@ -381,7 +384,7 @@ async fn a_push_of_zero_shards_is_refused_rather_than_applied(
             }],
             revision: 5,
             number_of_shards: 0,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -451,7 +454,7 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
             }],
             revision: 5,
             number_of_shards: 1,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -466,7 +469,7 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 3,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -486,7 +489,7 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 5,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -547,7 +550,7 @@ async fn a_delivery_that_raises_a_kept_shards_epoch_gives_its_agents_up(
         }],
         revision,
         number_of_shards: 1,
-        incarnation_id: String::new(),
+        incarnation_id: TEST_SHARD_MANAGER.to_string(),
     };
 
     // The handler sweeps on every applied push, changed or not, so this does run the sweep.
@@ -796,7 +799,7 @@ async fn an_agent_whose_shard_leaves_while_it_is_being_created_is_given_up_once_
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();

@@ -1342,7 +1342,6 @@ mod tests {
             _port: u16,
             _pod_name: Option<String>,
             _executor_id: Uuid,
-            _previous_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
         ) -> Result<ShardRegistration, ShardManagerError> {
             unimplemented!()
         }
@@ -1351,7 +1350,6 @@ mod tests {
             &self,
             _executor_id: Uuid,
             _shard_epochs: BTreeMap<ShardId, ShardEpoch>,
-            _fenced_shard_epochs: BTreeMap<ShardId, ShardEpoch>,
         ) -> Result<ShardLease, ShardLeaseError> {
             unimplemented!()
         }

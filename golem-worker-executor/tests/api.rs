@@ -74,6 +74,9 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span, debug, info};
 
+/// The shard manager process every shard push in these tests names.
+const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
@@ -2059,7 +2062,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 1,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2095,7 +2098,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
             }],
             number_of_shards: 1,
             revision: 2,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2119,7 +2122,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
             }],
             number_of_shards: 1,
             revision: 3,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -8187,14 +8190,12 @@ async fn a_deletion_that_outlived_the_shard_leaves_the_agent_to_its_new_owner(
     Ok(())
 }
 
-/// A deletion removes the agent's oplog first and its cached status after. When the second step
-/// fails, the retry has to finish the job: the oplog delete it repeats asserts this executor's
-/// epoch against a key whose record the first attempt already removed, and that has to count as
-/// deleted rather than as a key another executor took over.
+/// A deletion removes the agent's derived state first and its oplog last. When a removal before
+/// the oplog fails, the oplog is still there, and the retry finishes the job from it.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn a_deletion_retried_after_it_removed_the_oplog_finishes_the_cleanup(
+async fn a_deletion_that_fails_before_the_oplog_is_finished_by_its_retry(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -8223,15 +8224,15 @@ async fn a_deletion_retried_after_it_removed_the_oplog_finishes_the_cleanup(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("Clocks", "deletion-retried-after-the-oplog-went");
+    let name = agent_id!("Clocks", "deletion-retried-before-the-oplog-went");
     let worker_id = executor.start_agent(&component.id, name.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &name, "sleep_for", data_value!(0.0f64))
         .await?;
     let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
 
-    // Armed once the deletion reaches the durable state, so the failure lands between the oplog
-    // delete and the removal of the cached status rather than in an earlier stage.
+    // Armed once the deletion reaches the durable state, so the failure lands in the removal of the
+    // derived state, before the oplog delete, rather than in an earlier stage.
     let hook = Arc::new(DeletionStageHook::new(
         owned.clone(),
         Some(WorkerDeletionStage::DurableStateRemoved),
@@ -8258,10 +8259,9 @@ async fn a_deletion_retried_after_it_removed_the_oplog_finishes_the_cleanup(
         first.is_err(),
         "the injected failure has to fail the first attempt"
     );
-    assert_eq!(
-        agent_oplog_length(deps, &context, &owned).await?,
-        0,
-        "the first attempt failed after it had removed the oplog"
+    assert!(
+        agent_oplog_length(deps, &context, &owned).await? > 0,
+        "the first attempt failed before it reached the oplog, which has to still be there"
     );
 
     executor.delete_worker(&worker_id).await?;
@@ -8385,26 +8385,34 @@ async fn a_stop_that_finds_the_fence_on_its_own_commit_tells_the_caller_to_rerou
 /// these tests lives on shard 0. Moving that one shard moves all of them.
 async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::shardmanager::ShardId;
-    use golem_api_grpc::proto::golem::workerexecutor::v1::RevokeShardsRequest;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        RevokeShardsRequest, revoke_shards_response,
+    };
 
-    executor
+    let revoked = executor
         .client
         .clone()
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
-        .await?;
-    Ok(())
+        .await?
+        .into_inner();
+    match revoked.result {
+        Some(revoke_shards_response::Result::Success(_)) => Ok(()),
+        other => bail!("the executor refused the revoke: {other:?}"),
+    }
 }
 
 /// Hands shard 0 back, so the agents on it are this executor's again.
 async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
-    use golem_api_grpc::proto::golem::workerexecutor::v1::AssignShardsRequest;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AssignShardsRequest, assign_shards_response,
+    };
 
-    executor
+    let assigned = executor
         .client
         .clone()
         .assign_shards(AssignShardsRequest {
@@ -8414,10 +8422,14 @@ async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
             }],
             number_of_shards: 1,
             revision: 2,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
-        .await?;
-    Ok(())
+        .await?
+        .into_inner();
+    match assigned.result {
+        Some(assign_shards_response::Result::Success(_)) => Ok(()),
+        other => bail!("the executor refused the assignment: {other:?}"),
+    }
 }
 
 /// Starts an agent, opens an `invoke_and_await` against it, and returns once
@@ -8643,7 +8655,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 1,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -8675,7 +8687,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
                         }],
                         number_of_shards: 1,
                         revision: 2,
-                        incarnation_id: String::new(),
+                        incarnation_id: TEST_SHARD_MANAGER.to_string(),
                     })
                     .await
             }
@@ -8689,7 +8701,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 3,
-            incarnation_id: String::new(),
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();

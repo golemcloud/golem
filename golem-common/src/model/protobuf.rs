@@ -913,7 +913,15 @@ mod tests {
         assert_eq!(received, pushed);
 
         let mut assignment = ShardAssignment::default();
-        assignment.set_shards(1024, &received, ShardLeaseRevision::of(1));
+        let manager = uuid::Uuid::new_v4();
+        assignment.set_shards(
+            1024,
+            &received,
+            ShardLeaseRevision {
+                incarnation: manager,
+                number: 1,
+            },
+        );
 
         assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));
         assert_eq!(assignment.epoch_of(&ShardId::new(7)), Some(ShardEpoch(42)));

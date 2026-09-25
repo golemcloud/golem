@@ -865,6 +865,17 @@ impl OplogService for ForwardingOplogService {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+            .await
+    }
+
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -1482,7 +1493,7 @@ impl Oplog for ForwardingOplog {
         self.inner.last_added_non_hint_entry().await
     }
 
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError> {
         self.inner.wait_for_replicas(replicas, timeout).await
     }
 
@@ -3176,8 +3187,12 @@ mod tests {
             None
         }
 
-        async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
-            true
+        async fn wait_for_replicas(
+            &self,
+            _replicas: u8,
+            _timeout: Duration,
+        ) -> Result<bool, OplogError> {
+            Ok(true)
         }
 
         async fn read_exact(
@@ -3356,7 +3371,6 @@ mod tests {
             agent_id: metadata.agent_id.clone(),
             expected_epoch: ShardEpoch(1),
             actual_epoch: Some(ShardEpoch(2)),
-            writer_conflict: false,
         });
         let inner: Arc<dyn Oplog> = in_memory.clone();
 

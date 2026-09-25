@@ -228,7 +228,7 @@ async fn shutdown_waits_for_admitted_commit_tail_after_cancelled_waiter() {
             let release = release.clone();
             Box::pin(async move {
                 oplog.commit(CommitLevel::Always).await.unwrap();
-                receipt.unwrap().send(()).unwrap();
+                receipt.unwrap().send(Ok(())).unwrap();
                 reached.notify_one();
                 release.acquire().await.unwrap().forget();
             })

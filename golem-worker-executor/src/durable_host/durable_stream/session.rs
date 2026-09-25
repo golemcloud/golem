@@ -114,7 +114,7 @@ impl DurableStreamStore {
     pub async fn persisted_control_metadata(
         &self,
         key: &StreamSessionKey,
-    ) -> Result<Option<SessionControlMetadata>, String> {
+    ) -> Result<Option<SessionControlMetadata>, SessionError> {
         self.ensure_healthy()?;
         let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(None);
@@ -128,6 +128,7 @@ impl DurableStreamStore {
             .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, *fingerprint, key))
             .await
             .map(Some)
+            .map_err(SessionError::from)
     }
 
     /// Refreshes a disposable control projection from this owner's complete local journal.
@@ -135,7 +136,7 @@ impl DurableStreamStore {
         &self,
         session_key: &StreamSessionKey,
         metadata: &mut SessionControlMetadata,
-    ) -> Result<(), String> {
+    ) -> Result<(), SessionError> {
         if !metadata.is_loaded()
             && let Some(persisted) = self.persisted_control_metadata(session_key).await?
         {
@@ -192,7 +193,7 @@ impl DurableStreamStore {
                 }
             }
         }
-        metadata.ensure_valid()
+        metadata.ensure_valid().map_err(SessionError::from)
     }
 
     /// Loads committed per-stream consumer ordinals and source offsets.
@@ -200,7 +201,7 @@ impl DurableStreamStore {
         &self,
         key: &StreamSessionKey,
         reader: LocalStreamReaderId,
-    ) -> Result<Option<(OplogIndex, Vec<OplogIndex>)>, String> {
+    ) -> Result<Option<(OplogIndex, Vec<OplogIndex>)>, SessionError> {
         self.ensure_healthy()?;
         let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(None);

@@ -4505,7 +4505,7 @@ impl Oplog for TestOplog {
         self.pause_before_agent_initialization_enqueue(&entry).await;
         // Tests inject write failures by entry name.
         if let Err(details) = self.check_oplog_add(&entry).await {
-            return Err(golem_worker_executor::services::oplog::OplogError::Storage(
+            return Err(golem_worker_executor::services::oplog::OplogError::Payload(
                 details,
             ));
         }
@@ -4640,7 +4640,11 @@ impl Oplog for TestOplog {
         self.oplog.last_added_non_hint_entry().await
     }
 
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+    async fn wait_for_replicas(
+        &self,
+        replicas: u8,
+        timeout: Duration,
+    ) -> Result<bool, golem_worker_executor::services::oplog::OplogError> {
         self.oplog.wait_for_replicas(replicas, timeout).await
     }
 
@@ -4833,7 +4837,7 @@ impl Oplog for TestOplog {
         // The second entry is only built once the first has its index, so the injected failure
         // check covers the pair through the first entry alone.
         if let Err(details) = self.check_oplog_add(&start).await {
-            return Err(golem_worker_executor::services::oplog::OplogError::Storage(
+            return Err(golem_worker_executor::services::oplog::OplogError::Payload(
                 details,
             ));
         }
@@ -6216,6 +6220,15 @@ impl ShardService for FakeOwnership {
             .register(number_of_shards, shard_epochs, expires_at, revision)
     }
 
+    fn install_unexpiring(
+        &self,
+        number_of_shards: usize,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+    ) -> ShardDeliveryOutcome {
+        self.inner
+            .install_unexpiring(number_of_shards, shard_epochs)
+    }
+
     fn revoke_shards(
         &self,
         shard_ids: &HashSet<ShardId>,
@@ -6243,23 +6256,6 @@ impl ShardService for FakeOwnership {
 
     fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
         self.inner.try_get_current_assignment()
-    }
-
-    fn fence_learned_epochs(&self) -> std::collections::BTreeMap<ShardId, ShardEpoch> {
-        self.inner.fence_learned_epochs()
-    }
-
-    fn retire_fence_learned_epochs(
-        &self,
-        reported: &std::collections::BTreeMap<ShardId, ShardEpoch>,
-    ) {
-        self.inner.retire_fence_learned_epochs(reported)
-    }
-}
-
-impl golem_worker_executor::services::oplog::OplogFenceObserver for FakeOwnership {
-    fn fenced(&self, fence: &golem_worker_executor::services::oplog::OplogFence) {
-        self.inner.fenced(fence)
     }
 }
 

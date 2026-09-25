@@ -14,7 +14,7 @@
 
 use super::{
     FencedTxError, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanResume, WriterId,
+    IndexedStorageNamespace, ScanResume,
 };
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
@@ -46,9 +46,6 @@ pub struct PostgresIndexedStorage {
     pool: PostgresPool,
     drop_prefix_delete_batch_size: u64,
     semaphore: Option<Arc<Semaphore>>,
-    /// Recorded beside the epoch on every key this process claims, so an equal epoch from
-    /// another process is refused rather than shared. One per process; see [`WriterId`].
-    writer_id: WriterId,
 }
 
 impl PostgresIndexedStorage {
@@ -87,7 +84,6 @@ impl PostgresIndexedStorage {
             pool,
             drop_prefix_delete_batch_size: config.drop_prefix_delete_batch_size,
             semaphore,
-            writer_id: WriterId::process(),
         })
     }
 
@@ -96,16 +92,7 @@ impl PostgresIndexedStorage {
             pool,
             drop_prefix_delete_batch_size: 1024,
             semaphore: None,
-            writer_id: WriterId::process(),
         })
-    }
-
-    /// Writes as `writer_id` rather than as this process's own. The fan-out backend uses it to
-    /// give every storage it opens one identity, and a test uses it to play two executors racing
-    /// over one oplog inside a single process.
-    pub fn for_writer(mut self, writer_id: WriterId) -> Self {
-        self.writer_id = writer_id;
-        self
     }
 
     pub async fn run_metrics_loop(&self) -> anyhow::Result<()> {
@@ -364,7 +351,6 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert));
         }
 
-        let writer_id = self.writer_id.to_string();
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 async move {
@@ -373,10 +359,10 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // lost the shard cannot slip a batch in between the check and the insert.
                     // `FOR UPDATE` is what serialises two executors racing over the same oplog.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64, String)> = tx
+                        let stored: Option<(i64,)> = tx
                             .fetch_optional_as(
                                 sqlx::query_as(
-                                    "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
                                 )
                                 .bind(namespace.clone())
                                 .bind(key.clone()),
@@ -385,8 +371,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                         FencedTxError::check_record(
                             &key,
                             expected,
-                            stored,
-                            &writer_id,
+                            stored.map(|(epoch,)| epoch),
                             Self::negative_epoch_message,
                         )?;
                     }
@@ -425,9 +410,8 @@ impl IndexedStorage for PostgresIndexedStorage {
     /// Postgres's half of [`IndexedStorage::set_key_epoch`], which states the rule this
     /// enforces.
     ///
-    /// The `WHERE` on the conflict path is where it lives: `epoch < EXCLUDED.epoch` for a higher
-    /// generation, or `= EXCLUDED.epoch AND writer = EXCLUDED.writer` for the same process re-opening
-    /// at the one it holds. With no record there is no conflict and any epoch is inserted. Postgres
+    /// The `WHERE` on the conflict path is where it lives: `epoch <= EXCLUDED.epoch`, a higher
+    /// generation or the one already recorded. With no record there is no conflict and any epoch is inserted. Postgres
     /// reports one row affected for an insert and for an accepted update, and zero when the `WHERE`
     /// excludes it - which is what the read-back below turns into a fence.
     async fn set_key_epoch(
@@ -442,51 +426,44 @@ impl IndexedStorage for PostgresIndexedStorage {
         let namespace = Self::namespace(namespace);
         let epoch = Self::to_i64(new_epoch.0, "epoch")?;
 
-        let writer_id = self.writer_id.to_string();
-
         let mut api = self.pool.with_rw(svc_name, api_name);
         let result = api
             .execute(
                 sqlx::query(
-                    r#"INSERT INTO indexed_key_epoch (namespace, key, epoch, writer) VALUES ($1, $2, $3, $4)
-                       ON CONFLICT (namespace, key) DO UPDATE SET epoch = EXCLUDED.epoch, writer = EXCLUDED.writer
-                       WHERE indexed_key_epoch.epoch < EXCLUDED.epoch
-                          OR (indexed_key_epoch.epoch = EXCLUDED.epoch AND indexed_key_epoch.writer = EXCLUDED.writer);"#,
+                    r#"INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES ($1, $2, $3)
+                       ON CONFLICT (namespace, key) DO UPDATE SET epoch = EXCLUDED.epoch
+                       WHERE indexed_key_epoch.epoch <= EXCLUDED.epoch;"#,
                 )
                 .bind(namespace.clone())
                 .bind(key)
-                .bind(epoch)
-                .bind(writer_id.clone()),
+                .bind(epoch),
             )
             .await
             .map_err(Self::classify_repo_error_general)?;
 
         if result.rows_affected() == 0 {
             // Rejected. Read the stored epoch back purely so the error can name it.
-            let stored: Option<(i64, String)> = api
+            let stored: Option<(i64,)> = api
                 .fetch_optional_as(
                     sqlx::query_as(
-                        "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;",
+                        "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;",
                     )
                     .bind(namespace)
                     .bind(key),
                 )
                 .await
                 .map_err(Self::classify_repo_error_general)?;
-            let mut actual = None;
-            let mut writer_matches = false;
-            if let Some((epoch, writer)) = stored {
-                let epoch = u64::try_from(epoch).map_err(|_| {
-                    IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
-                })?;
-                actual = Some(ShardEpoch(epoch));
-                writer_matches = writer == writer_id;
-            }
+            let actual = stored
+                .map(|(epoch,)| {
+                    u64::try_from(epoch).map(ShardEpoch).map_err(|_| {
+                        IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
+                    })
+                })
+                .transpose()?;
             return Err(IndexedStorageError::Fenced {
                 key: key.to_string(),
                 expected: new_epoch,
                 actual,
-                writer_conflict: actual == Some(new_epoch) && !writer_matches,
             });
         }
 
@@ -504,17 +481,16 @@ impl IndexedStorage for PostgresIndexedStorage {
         let _permit = self.acquire_permit().await;
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
-        let writer_id = self.writer_id.to_string();
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 async move {
                     // Holding the row, as an append does: a writer taking the key over waits for
                     // this transaction, and then finds nothing left to take over.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64, String)> = tx
+                        let stored: Option<(i64,)> = tx
                             .fetch_optional_as(
                                 sqlx::query_as(
-                                    "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
                                 )
                                 .bind(namespace.clone())
                                 .bind(key.clone()),
@@ -542,8 +518,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                         FencedTxError::check_record(
                             &key,
                             expected,
-                            stored,
-                            &writer_id,
+                            stored.map(|(epoch,)| epoch),
                             Self::negative_epoch_message,
                         )?;
                     }

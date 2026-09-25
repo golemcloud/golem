@@ -55,8 +55,7 @@ use super::status::{
 };
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
-    GiveUpReason, PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance,
-    WorkerStatusMetric,
+    PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric,
 };
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence};
@@ -168,6 +167,34 @@ pub(crate) struct OwnerCommitController {
     owned_agent_id: OwnedAgentId,
 }
 
+/// Who hears that a commit landed, ahead of the fold behind it.
+pub enum CommitReceipt {
+    /// Signalled on a commit and dropped on a refusal, which its waiter reads as "nothing was
+    /// committed".
+    Plain(oneshot::Sender<()>),
+    /// Answered either way, so a refusal reaches the waiter as the fence itself.
+    Refusable(oneshot::Sender<Result<(), OplogFence>>),
+}
+
+impl CommitReceipt {
+    fn committed(self) {
+        match self {
+            Self::Plain(receipt) => {
+                let _ = receipt.send(());
+            }
+            Self::Refusable(receipt) => {
+                let _ = receipt.send(Ok(()));
+            }
+        }
+    }
+
+    fn refused(self, fence: &OplogFence) {
+        if let Self::Refusable(receipt) = self {
+            let _ = receipt.send(Err(fence.clone()));
+        }
+    }
+}
+
 /// A request processed by the status task, which exclusively owns the commit + status-fold
 /// transaction. Jobs are processed strictly in enqueue order, giving the same serialization the
 /// former `update_state_lock` mutex provided — without lock-ownership handoff to potentially
@@ -181,7 +208,7 @@ enum StatusJob {
     /// invocation loop notified about the change, it enqueues a lifecycle job afterwards.
     CommitAndUpdateState {
         level: CommitLevel,
-        committed: Option<oneshot::Sender<()>>,
+        committed: Option<CommitReceipt>,
         notify_after_fold: bool,
         done: oneshot::Sender<Result<(OplogIndex, bool), OplogFence>>,
     },
@@ -381,7 +408,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     // The shard has a new owner: give the agent up and leave no
                                     // further trace in an oplog that is no longer ours.
                                     Err(OplogError::Fenced(fence)) => {
-                                        state.give_up_fenced_agent(fence.clone());
+                                        state.give_up_fenced_agent();
                                         Err(fenced_error(&fence))
                                     }
                                     Err(error) => panic!("oplog write: {error}"),
@@ -415,8 +442,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 // Returned rather than reported as a moved version: the caller
                                 // retries on `false`, and a fenced oplog refuses every retry.
                                 if let Err(error) = state.oplog.add(*entry).await {
-                                    if let OplogError::Fenced(fence) = &error {
-                                        state.give_up_fenced_agent(fence.clone());
+                                    if matches!(error, OplogError::Fenced(_)) {
+                                        state.give_up_fenced_agent();
                                     }
                                     return Err(error);
                                 }
@@ -571,7 +598,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn commit_and_update_state_notifying(
         &self,
         level: CommitLevel,
-        committed: oneshot::Sender<()>,
+        committed: CommitReceipt,
     ) -> Result<(OplogIndex, bool), OplogFence> {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
@@ -588,7 +615,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub fn enqueue_commit_and_update_state_notifying(
         &self,
         level: CommitLevel,
-    ) -> oneshot::Receiver<()> {
+    ) -> oneshot::Receiver<Result<(), OplogFence>> {
         let (committed, committed_rx) = oneshot::channel();
         let (done, _done_rx) = oneshot::channel();
         if self
@@ -596,7 +623,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .status_jobs
             .send(StatusJob::CommitAndUpdateState {
                 level,
-                committed: Some(committed),
+                committed: Some(CommitReceipt::Refusable(committed)),
                 notify_after_fold: true,
                 done,
             })
@@ -830,20 +857,20 @@ async fn complete_status_job<R>(transaction: impl Future<Output = R>, done: ones
 }
 
 impl<Ctx: WorkerCtx> StatusState<Ctx> {
-    /// Gives the agent up after a background oplog write was refused because its shard moved.
+    /// Retires the agent after a background oplog write was refused because its shard moved.
     ///
     /// Spawned rather than awaited: this runs on the status task, which must never take the
     /// worker's instance lock (callers holding that lock await status jobs), and the stop inside
-    /// [`Worker::give_up`] does take it. Handing the stop to an independent task keeps that
-    /// discipline while still dropping the agent from this executor - which a bare
-    /// `mark_given_up` would not do, because on a background path nothing else is unwinding
-    /// to carry the stop out.
+    /// [`Worker::interrupt_and_retire`] does take it. Handing the stop to an independent task keeps
+    /// that discipline while still dropping the agent from this executor - which recording the
+    /// retirement alone would not do, because on a background path nothing else is unwinding to
+    /// carry the stop out.
     ///
     /// Only the generation this actor belongs to is given up, identified by the status cell the
     /// two share. By the time the task runs that generation may be gone and a newer one cached
     /// under the same id, which is left alone: at a stale epoch its own open latches the fence and
     /// gives it up, and at a re-granted epoch it is legitimately this executor's.
-    fn give_up_fenced_agent(&self, fence: OplogFence) {
+    fn give_up_fenced_agent(&self) {
         let active_agents = self.deps.active_agents();
         let owned_agent_id = self.owned_agent_id.clone();
         let status_cell = self.last_known_status.clone();
@@ -851,9 +878,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             if let Some(worker) = active_agents.try_get_cached(&owned_agent_id).await
                 && worker.shares_status_cell(&status_cell)
             {
-                worker
-                    .give_up(GiveUpReason::Fenced(Some(Box::new(fence))))
-                    .await;
+                let _ = worker.interrupt_and_retire(InterruptKind::ShardLost).await;
             }
         });
     }
@@ -869,7 +894,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     async fn commit_and_update_state(
         &self,
         commit_level: CommitLevel,
-        committed: Option<oneshot::Sender<()>>,
+        committed: Option<CommitReceipt>,
     ) -> Result<bool, OplogFence> {
         // Sample before committing: a later sample could include new, uncommitted appends.
         // Reading the index is not a write, so a fenced oplog still answers it; the sample is
@@ -878,16 +903,17 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         let mut new_entries = match self.oplog.commit(commit_level).await {
             Ok(entries) => entries,
             Err(OplogError::Fenced(fence)) => {
-                // Nothing was committed and nothing more can be. The `committed` sender is
-                // dropped rather than signalled: a fenced commit is not a commit, and every
-                // awaiter already reads a dropped sender as "no commit observed".
-                self.give_up_fenced_agent(fence.clone());
+                // Nothing was committed and nothing more can be.
+                if let Some(committed) = committed {
+                    committed.refused(&fence);
+                }
+                self.give_up_fenced_agent();
                 return Err(fence);
             }
             Err(error) => panic!("oplog write: {error}"),
         };
         if let Some(committed) = committed {
-            let _ = committed.send(());
+            committed.committed();
         }
 
         let mut authority_change_count = new_entries
@@ -930,7 +956,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                     match self.oplog.commit(CommitLevel::Always).await {
                         Ok(_) => {}
                         Err(OplogError::Fenced(fence)) => {
-                            self.give_up_fenced_agent(fence.clone());
+                            self.give_up_fenced_agent();
                             return Err(fence);
                         }
                         Err(error) => panic!("oplog write: {error}"),

@@ -290,22 +290,6 @@ pub enum TrapType {
 }
 
 impl TrapType {
-    /// `ShardLost` once the agent's oplog has latched a fence, whatever the trap was.
-    ///
-    /// A latched oplog refuses every later write, so giving the agent up is the only outcome
-    /// left. It also catches a fence that crossed a `String` boundary on its way to the trap and
-    /// no longer classifies as `ShardLost` by itself.
-    pub fn under_latched_fence(
-        self,
-        latched: Option<&crate::services::oplog::OplogFence>,
-    ) -> TrapType {
-        if latched.is_some() {
-            TrapType::Interrupt(InterruptKind::ShardLost)
-        } else {
-            self
-        }
-    }
-
     pub fn from_worker_executor_error<Ctx: WorkerCtx>(
         error: WorkerExecutorError,
         fallback_retry_from: OplogIndex,
@@ -520,9 +504,8 @@ impl TrapType {
                             //
                             // `WorkerExecutorError::Runtime` is intentionally NOT
                             // mapped here: it is also used as a generic transient
-                            // error wrapper (e.g. for an `OplogError::Storage`
-                            // failures) and must remain retriable via the default
-                            // policy path (`AgentError::Unknown`).
+                            // error wrapper and must remain retriable via the
+                            // default policy path (`AgentError::Unknown`).
                             Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
                                 make_error(AgentError::InternalError(format!(
                                     "Unexpected oplog entry during replay: expected {expected}, got {got}"
@@ -953,7 +936,6 @@ mod tests {
             },
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
-            writer_conflict: false,
         };
 
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
@@ -972,14 +954,14 @@ mod tests {
         );
     }
 
-    /// The deliberate other half: a transient storage failure is not a fence and must stay a
-    /// retriable failure. Classifying it as `ShardLost` would hand an agent to another executor
-    /// over a blip that retrying would have cleared.
+    /// The deliberate other half: an entry whose payload could not be built is not a fence.
+    /// Classifying it as `ShardLost` would hand an agent to another executor over a failure that
+    /// has nothing to do with who owns it.
     #[test]
-    fn a_transient_oplog_storage_failure_does_not_give_up_the_agent() {
+    fn an_oplog_payload_failure_does_not_give_up_the_agent() {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::anyhow!(WorkerExecutorError::from(
-                crate::services::oplog::OplogError::Storage("connection reset".to_string())
+                crate::services::oplog::OplogError::Payload("payload too large".to_string())
             )),
             OplogIndex::INITIAL,
             false,
@@ -989,7 +971,7 @@ mod tests {
 
         assert!(
             !matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
-            "a transient storage failure must not be treated as a lost shard, got {trap:?}"
+            "a payload failure must not be treated as a lost shard, got {trap:?}"
         );
     }
 
@@ -1001,7 +983,6 @@ mod tests {
             },
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
-            writer_conflict: false,
         }
     }
 
@@ -1033,10 +1014,10 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_oplog_storage_error_is_not_shard_lost() {
+    fn a_bare_oplog_payload_error_is_not_shard_lost() {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
-            &anyhow::Error::from(crate::services::oplog::OplogError::Storage(
-                "connection reset".to_string(),
+            &anyhow::Error::from(crate::services::oplog::OplogError::Payload(
+                "payload too large".to_string(),
             )),
             OplogIndex::INITIAL,
             false,
@@ -1046,51 +1027,8 @@ mod tests {
 
         assert!(
             !matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
-            "a bare storage failure must stay a retriable failure, got {trap:?}"
+            "a bare payload failure must stay an ordinary failure, got {trap:?}"
         );
-    }
-
-    /// Once the oplog has latched a fence nothing more can be written for the agent, so no trap
-    /// may lead to a retry, an exit record or a jump - only to giving the agent up.
-    #[test]
-    fn a_latched_fence_turns_every_trap_into_shard_lost() {
-        let fence = fence_for("latched");
-        let unknown_error = || TrapType::Error {
-            error: AgentError::Unknown("fence flattened into text".to_string()),
-            retry_from: OplogIndex::INITIAL,
-            in_atomic_region: false,
-            atomic_region_had_side_effects: false,
-            semantic_trap_retry_override: None,
-        };
-
-        for trap in [
-            unknown_error(),
-            TrapType::Exit,
-            TrapType::Interrupt(InterruptKind::Jump),
-            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc())),
-        ] {
-            let reclassified = trap.clone().under_latched_fence(Some(&fence));
-            assert!(
-                matches!(reclassified, TrapType::Interrupt(InterruptKind::ShardLost)),
-                "{trap:?} under a latched fence must be a lost shard, got {reclassified:?}"
-            );
-            let decision = crate::durable_host::DurableWorkerCtx::<
-                crate::workerctx::default::Context,
-            >::fixed_decision_for_trap_type(&reclassified);
-            assert_eq!(decision, Some(RetryDecision::None));
-        }
-
-        assert!(matches!(
-            unknown_error().under_latched_fence(None),
-            TrapType::Error {
-                error: AgentError::Unknown(_),
-                ..
-            }
-        ));
-        assert!(matches!(
-            TrapType::Interrupt(InterruptKind::Jump).under_latched_fence(None),
-            TrapType::Interrupt(InterruptKind::Jump)
-        ));
     }
 
     #[test]
@@ -1243,10 +1181,10 @@ mod tests {
 
     #[test]
     fn runtime_error_falls_back_to_unknown_and_is_policy_retriable() {
-        // `WorkerExecutorError::Runtime` is a generic transient-error wrapper
-        // (used e.g. for `OplogError::Storage` failures). It must not be
-        // classified as `InternalError` (non-retriable); it must fall through
-        // to `AgentError::Unknown` so the configured retry policy applies.
+        // `WorkerExecutorError::Runtime` is a generic transient-error wrapper.
+        // It must not be classified as `InternalError` (non-retriable); it
+        // must fall through to `AgentError::Unknown` so the configured retry
+        // policy applies.
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(
                 golem_service_base::error::worker_executor::WorkerExecutorError::runtime(

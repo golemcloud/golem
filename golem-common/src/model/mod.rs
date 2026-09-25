@@ -566,46 +566,36 @@ impl Display for ShardEpoch {
 /// process that sent it, and the revision of the persisted state the set was
 /// read from. Every delivery carries one - a registration, a push, a renewal -
 /// and an executor applies a delivery only if its number is at least the last
-/// one it applied, so two deliveries that cross on the network cannot leave the
-/// older set in place. `0` is "nothing applied yet".
+/// one it applied from that process, so two deliveries that cross on the
+/// network cannot leave the older set in place.
 ///
 /// The numbers of two manager processes are not comparable: one that failed
 /// over, or came back on a wiped or restored store, counts from a state this
 /// executor's last applied number says nothing about. So this has no `Ord`, and
-/// [`ShardAssignment`] is the one place the two halves are read together.
-/// `incarnation` is `None` from a manager that does not send one. The
+/// [`ShardAssignment`] is the one place the two halves are read together. The
 /// executor's own type; it never imports the shard manager's.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ShardLeaseRevision {
-    pub incarnation: Option<Uuid>,
+    pub incarnation: Uuid,
     pub number: u64,
 }
 
 impl ShardLeaseRevision {
-    /// A revision from a manager that names no incarnation.
-    pub const fn of(number: u64) -> Self {
-        Self {
-            incarnation: None,
+    /// Off the wire. Every delivery names the process that sent it, so an id
+    /// that is empty, or not a UUID, makes the delivery malformed.
+    pub fn from_wire(incarnation_id: &str, number: u64) -> Result<Self, String> {
+        let incarnation = Uuid::parse_str(incarnation_id)
+            .map_err(|error| format!("incarnation_id {incarnation_id:?} is not a UUID: {error}"))?;
+        Ok(Self {
+            incarnation,
             number,
-        }
-    }
-
-    /// Off the wire. An id that is empty, or not a UUID, reads as no
-    /// incarnation, and the delivery is then ordered by its number alone.
-    pub fn from_wire(incarnation_id: &str, number: u64) -> Self {
-        Self {
-            incarnation: Uuid::parse_str(incarnation_id).ok(),
-            number,
-        }
+        })
     }
 }
 
 impl Display for ShardLeaseRevision {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self.incarnation {
-            Some(incarnation) => write!(f, "{}@{incarnation}", self.number),
-            None => write!(f, "{}", self.number),
-        }
+        write!(f, "{}@{}", self.number, self.incarnation)
     }
 }
 
@@ -658,8 +648,10 @@ pub struct ShardAssignment {
     pub expires_at: Option<Instant>,
     /// The revision of the delivery this set came from, and the shard manager
     /// process this executor follows. A delivery older than this, or pushed
-    /// by another process, is ignored; see [`ShardLeaseRevision`].
-    pub revision: ShardLeaseRevision,
+    /// by another process, is ignored; see [`ShardLeaseRevision`]. `None`
+    /// until a delivery has been applied, and for good on the single-shard
+    /// assignment, which no shard manager delivers.
+    pub revision: Option<ShardLeaseRevision>,
 }
 
 impl ShardAssignment {
@@ -677,7 +669,7 @@ impl ShardAssignment {
                 .map(|shard_id| (shard_id, ShardEpoch::default()))
                 .collect(),
             expires_at: None,
-            revision: ShardLeaseRevision::default(),
+            revision: None,
         }
     }
 
@@ -792,7 +784,11 @@ impl ShardAssignment {
     /// proves nothing of the kind - a deposed manager can still be sending -
     /// so it is ignored, and the caller renews to hear from the one in charge.
     /// Starting the numbers over cannot let an old manager's delayed push
-    /// back in, because that push no longer names the process followed.
+    /// back in, because that push no longer names the process followed. The
+    /// first delivery applied names the process followed, whichever way it
+    /// came; on an executor that is a registration's reply, because the shard
+    /// service refuses pushes until a registration has installed an
+    /// assignment.
     fn apply(
         &mut self,
         number_of_shards: Option<usize>,
@@ -800,42 +796,31 @@ impl ShardAssignment {
         revision: ShardLeaseRevision,
         path: ShardDeliveryPath,
     ) -> ShardDeliveryOutcome {
-        let from_another_manager = matches!(
-            (revision.incarnation, self.revision.incarnation),
-            (Some(delivered), Some(followed)) if delivered != followed
-        );
-        if from_another_manager {
-            match path {
-                ShardDeliveryPath::Reply => self.revision = ShardLeaseRevision::default(),
-                ShardDeliveryPath::Push => {
-                    return ShardDeliveryOutcome::FromAnotherManager {
-                        delivered: revision,
-                        applied: self.revision,
-                    };
+        if let Some(applied) = self.revision {
+            if revision.incarnation != applied.incarnation {
+                match path {
+                    // The process in charge answered: its numbers start over.
+                    ShardDeliveryPath::Reply => {}
+                    ShardDeliveryPath::Push => {
+                        return ShardDeliveryOutcome::FromAnotherManager {
+                            delivered: revision,
+                            applied,
+                        };
+                    }
                 }
+            } else if revision.number < applied.number {
+                return ShardDeliveryOutcome::Stale {
+                    delivered: revision,
+                    applied,
+                };
             }
-        }
-        if revision.number < self.revision.number {
-            return ShardDeliveryOutcome::Stale {
-                delivered: revision,
-                applied: self.revision,
-            };
         }
         let set_changed = self.shard_epochs != *shard_epochs;
         if let Some(number_of_shards) = number_of_shards {
             self.number_of_shards = number_of_shards;
         }
         self.shard_epochs = shard_epochs.clone();
-        // Only a reply names a manager to follow, and one that names none does not make this
-        // executor forget the one it follows.
-        let followed = self.revision.incarnation;
-        self.revision = ShardLeaseRevision {
-            incarnation: match path {
-                ShardDeliveryPath::Reply => revision.incarnation.or(followed),
-                ShardDeliveryPath::Push => followed,
-            },
-            number: revision.number,
-        };
+        self.revision = Some(revision);
         ShardDeliveryOutcome::Applied { set_changed }
     }
 
@@ -3041,18 +3026,21 @@ mod shard_assignment_tests {
         Instant::now() + Duration::from_secs(seconds)
     }
 
+    /// The manager process behind every delivery in the tests that do not care which one sent it.
+    const MANAGER: Uuid = Uuid::from_u128(0x5eed);
+
     /// The push says "exactly these"; anything absent is dropped.
     #[test]
     fn set_shards_replaces_the_set_rather_than_merging_into_it() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
 
-        let outcome = assignment.set_shards(8, &epochs([(1, 4)]), ShardLeaseRevision::of(1));
+        let outcome = assignment.set_shards(8, &epochs([(1, 4)]), revision_of(MANAGER, 1));
 
         assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
         assert!(!assignment.contains(&ShardId::new(0)));
         assert_eq!(assignment.epoch_of(&ShardId::new(1)), Some(ShardEpoch(4)));
         assert_eq!(assignment.len(), 1);
-        assert_eq!(assignment.revision, ShardLeaseRevision::of(1));
+        assert_eq!(assignment.revision, Some(revision_of(MANAGER, 1)));
     }
 
     /// Two deliveries can cross on the network. A renewal reply read from an
@@ -3064,17 +3052,17 @@ mod shard_assignment_tests {
     #[test]
     fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
-        assignment.set_shards(8, &epochs([(0, 1), (5, 2)]), ShardLeaseRevision::of(7));
+        assignment.set_shards(8, &epochs([(0, 1), (5, 2)]), revision_of(MANAGER, 7));
 
         let granted = in_secs(60);
         let outcome =
-            assignment.adopt_grant(None, &epochs([(0, 1)]), granted, ShardLeaseRevision::of(6));
+            assignment.adopt_grant(None, &epochs([(0, 1)]), granted, revision_of(MANAGER, 6));
 
         assert_eq!(
             outcome,
             ShardDeliveryOutcome::Stale {
-                delivered: ShardLeaseRevision::of(6),
-                applied: ShardLeaseRevision::of(7),
+                delivered: revision_of(MANAGER, 6),
+                applied: revision_of(MANAGER, 7),
             }
         );
         assert_eq!(
@@ -3082,7 +3070,7 @@ mod shard_assignment_tests {
             epochs([(0, 1), (5, 2)]),
             "the older delivery narrowed the set the newer one had just widened"
         );
-        assert_eq!(assignment.revision, ShardLeaseRevision::of(7));
+        assert_eq!(assignment.revision, Some(revision_of(MANAGER, 7)));
         assert_eq!(
             assignment.expires_at,
             Some(granted),
@@ -3096,15 +3084,11 @@ mod shard_assignment_tests {
     #[test]
     fn a_delivery_at_the_same_revision_is_applied() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
-        assignment.set_shards(8, &epochs([(0, 1)]), ShardLeaseRevision::of(7));
+        assignment.set_shards(8, &epochs([(0, 1)]), revision_of(MANAGER, 7));
 
         let refreshed = in_secs(60);
-        let outcome = assignment.adopt_grant(
-            None,
-            &epochs([(0, 1)]),
-            refreshed,
-            ShardLeaseRevision::of(7),
-        );
+        let outcome =
+            assignment.adopt_grant(None, &epochs([(0, 1)]), refreshed, revision_of(MANAGER, 7));
 
         assert_eq!(
             outcome,
@@ -3124,13 +3108,13 @@ mod shard_assignment_tests {
             Some(8),
             &epochs([(0, 1), (1, 1)]),
             granted,
-            ShardLeaseRevision::of(1),
+            revision_of(MANAGER, 1),
         );
 
         assignment.set_shards(
             8,
             &epochs([(0, 1), (1, 1), (2, 1)]),
-            ShardLeaseRevision::of(2),
+            revision_of(MANAGER, 2),
         );
         assert_eq!(
             assignment.expires_at,
@@ -3138,7 +3122,7 @@ mod shard_assignment_tests {
             "a full-replace push must leave the lease where the grant put it"
         );
 
-        assignment.revoke_shards(&HashSet::from([ShardId::new(2)]), ShardLeaseRevision::of(3));
+        assignment.revoke_shards(&HashSet::from([ShardId::new(2)]), revision_of(MANAGER, 3));
         assert_eq!(
             assignment.expires_at,
             Some(granted),
@@ -3158,14 +3142,14 @@ mod shard_assignment_tests {
             Some(8),
             &epochs([(0, 1)]),
             now + Duration::from_secs(60),
-            ShardLeaseRevision::of(1),
+            revision_of(MANAGER, 1),
         );
 
         assignment.adopt_grant(
             None,
             &epochs([(0, 1)]),
             now + Duration::from_secs(30),
-            ShardLeaseRevision::of(2),
+            revision_of(MANAGER, 2),
         );
 
         assert_eq!(assignment.expires_at, Some(now + Duration::from_secs(30)));
@@ -3182,16 +3166,16 @@ mod shard_assignment_tests {
             Some(8),
             &epochs([(0, 1), (1, 1)]),
             expiry,
-            ShardLeaseRevision::of(3),
+            revision_of(MANAGER, 3),
         );
         let revoked = HashSet::from([ShardId::new(0)]);
 
-        let stale = assignment.revoke_shards(&revoked, ShardLeaseRevision::of(2));
+        let stale = assignment.revoke_shards(&revoked, revision_of(MANAGER, 2));
         assert_eq!(
             stale,
             ShardDeliveryOutcome::Stale {
-                delivered: ShardLeaseRevision::of(2),
-                applied: ShardLeaseRevision::of(3),
+                delivered: revision_of(MANAGER, 2),
+                applied: revision_of(MANAGER, 3),
             }
         );
         assert!(
@@ -3199,12 +3183,12 @@ mod shard_assignment_tests {
             "a revoke older than the last delivery applied must be ignored"
         );
 
-        let applied = assignment.revoke_shards(&revoked, ShardLeaseRevision::of(5));
+        let applied = assignment.revoke_shards(&revoked, revision_of(MANAGER, 5));
         assert_eq!(applied, ShardDeliveryOutcome::Applied { set_changed: true });
         assert!(!assignment.contains(&ShardId::new(0)));
         assert_eq!(
             assignment.revision,
-            ShardLeaseRevision::of(5),
+            Some(revision_of(MANAGER, 5)),
             "the revoke's revision is recorded like any other delivery's"
         );
         assert_eq!(
@@ -3217,7 +3201,7 @@ mod shard_assignment_tests {
             None,
             &epochs([(0, 1), (1, 1)]),
             in_secs(60),
-            ShardLeaseRevision::of(4),
+            revision_of(MANAGER, 4),
         );
         assert!(matches!(late_grant, ShardDeliveryOutcome::Stale { .. }));
         assert!(
@@ -3232,13 +3216,13 @@ mod shard_assignment_tests {
     #[test]
     fn a_renewal_that_changes_the_set_reports_it() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
-        assignment.set_shards(8, &epochs([(0, 1), (1, 1)]), ShardLeaseRevision::of(3));
+        assignment.set_shards(8, &epochs([(0, 1), (1, 1)]), revision_of(MANAGER, 3));
 
         let outcome = assignment.adopt_grant(
             None,
             &epochs([(1, 1), (2, 5)]),
             in_secs(60),
-            ShardLeaseRevision::of(4),
+            revision_of(MANAGER, 4),
         );
 
         assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
@@ -3247,12 +3231,12 @@ mod shard_assignment_tests {
             "the dropped shard is gone"
         );
         assert_eq!(assignment.epoch_of(&ShardId::new(2)), Some(ShardEpoch(5)));
-        assert_eq!(assignment.revision, ShardLeaseRevision::of(4));
+        assert_eq!(assignment.revision, Some(revision_of(MANAGER, 4)));
     }
 
     fn revision_of(incarnation: Uuid, number: u64) -> ShardLeaseRevision {
         ShardLeaseRevision {
-            incarnation: Some(incarnation),
+            incarnation,
             number,
         }
     }
@@ -3281,7 +3265,7 @@ mod shard_assignment_tests {
 
         assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
         assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(5)));
-        assert_eq!(assignment.revision, revision_of(new_manager, 3));
+        assert_eq!(assignment.revision, Some(revision_of(new_manager, 3)));
     }
 
     /// Starting the revisions over must not be a way back in for the manager that was left: its
@@ -3332,37 +3316,28 @@ mod shard_assignment_tests {
             );
         }
         assert_eq!(assignment.shard_epochs, epochs([(0, 5)]));
-        assert_eq!(assignment.revision, revision_of(new_manager, 3));
+        assert_eq!(assignment.revision, Some(revision_of(new_manager, 3)));
 
         // The followed manager's own pushes are ordered by number as ever.
         let push = assignment.set_shards(8, &epochs([(0, 5), (2, 1)]), revision_of(new_manager, 4));
         assert_eq!(push, ShardDeliveryOutcome::Applied { set_changed: true });
     }
 
-    /// A manager from before incarnations sends none. Its deliveries are ordered by number alone,
-    /// and they do not make the executor forget the process it follows.
+    /// Every delivery names the process that sent it. One that names none is malformed, not
+    /// ordered by its number alone: that would let a deposed manager's delayed push back in.
     #[test]
-    fn a_delivery_that_names_no_incarnation_is_ordered_by_its_number_alone() {
+    fn a_delivery_must_name_its_manager_process() {
         let manager = Uuid::new_v4();
-        let mut assignment = ShardAssignment::default();
-        assignment.adopt_grant(
-            Some(8),
-            &epochs([(0, 1)]),
-            in_secs(60),
-            revision_of(manager, 5),
+        assert_eq!(
+            ShardLeaseRevision::from_wire(&manager.to_string(), 3),
+            Ok(revision_of(manager, 3))
         );
-
-        let stale = assignment.set_shards(8, &epochs([(1, 1)]), ShardLeaseRevision::of(4));
-        assert!(matches!(stale, ShardDeliveryOutcome::Stale { .. }));
-
-        let newer = assignment.adopt_grant(
-            None,
-            &epochs([(1, 1)]),
-            in_secs(60),
-            ShardLeaseRevision::of(6),
-        );
-        assert_eq!(newer, ShardDeliveryOutcome::Applied { set_changed: true });
-        assert_eq!(assignment.revision, revision_of(manager, 6));
+        for malformed in ["", "not-a-uuid"] {
+            assert!(
+                ShardLeaseRevision::from_wire(malformed, 3).is_err(),
+                "{malformed:?} must not decode"
+            );
+        }
     }
 
     /// `clear()` lapses the lease as of `now`. `None` would mean

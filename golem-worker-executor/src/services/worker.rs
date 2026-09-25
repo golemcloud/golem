@@ -367,15 +367,19 @@ pub trait WorkerService: Send + Sync {
         &self,
     ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
 
-    /// Deletes the worker: its oplog, its cached status and its entry in the recovery index.
+    /// Deletes the worker: its cached status, its indexes, its oplog and its entry in the recovery
+    /// index, in that order.
     ///
-    /// Returns `Err` when the storage could not be reached. Delete is not retried by the caller:
-    /// a retry would re-run the oplog delete, so the error is reported instead.
+    /// Returns `Err` when the storage could not be reached. Safe to run again, and it is: by
+    /// `Worker::delete`'s staged deletion and by the worker service's re-dispatch. The oplog goes
+    /// after everything it can rebuild, so a run that stops part-way leaves the oplog the next one
+    /// re-derives the rest from. Only the recovery-index entry follows it; one a crash leaves
+    /// behind names no oplog, and the next recovery scan drops it.
     ///
-    /// `expected_epoch` is the epoch the caller's oplog handle asserts. The oplog is deleted only
-    /// while this executor still holds it at that epoch; otherwise nothing at all is removed and
-    /// the result is [`WorkerExecutorError::OplogFenced`], because the agent's state belongs to
-    /// the shard's new owner.
+    /// `expected_epoch` is the epoch the caller's oplog handle asserts, confirmed before anything is
+    /// removed; refused, nothing is removed and the result is [`WorkerExecutorError::OplogFenced`],
+    /// because the agent's state belongs to the shard's new owner. `None` is an ephemeral oplog,
+    /// which nothing fences.
     async fn remove(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -1677,20 +1681,21 @@ impl WorkerService for DefaultWorkerService {
             None => false,
         };
 
-        // The oplog first, so that a refusal leaves every other piece of the agent's state in place
-        // too. Only this incarnation's: a recreated agent's oplog is not the deleting one's to remove.
-        if delete_current_oplog {
+        // The oplog goes after everything it can rebuild, so a crash part-way leaves an oplog
+        // behind: the next attempt (or load) re-derives whatever of the state below is missing and
+        // finishes from there. Removed first, a crash would leave orphaned keys that a retry reads
+        // as an agent already gone. The recovery-index entry comes after it: one a crash leaves
+        // behind names no oplog, and the next recovery scan drops it.
+        //
+        // The epoch is confirmed before anything is removed, so a delete turned away by the fence
+        // removes nothing. A new owner claiming the shard between this check and the oplog delete
+        // is still refused by that delete, which keeps the oplog: the state removed in between is
+        // what the new owner rebuilds from it.
+        if delete_current_oplog && let Some(epoch) = expected_epoch {
             self.oplog_service
-                .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+                .assert_owning_epoch(owned_agent_id, agent_mode, epoch)
                 .await
-                .map_err(|error| match error {
-                    OplogError::Fenced(fence) => WorkerExecutorError::oplog_fenced(
-                        fence.agent_id,
-                        fence.expected_epoch.0,
-                        fence.actual_epoch.map(|epoch| epoch.0),
-                    ),
-                    other => WorkerExecutorError::runtime(other.to_string()),
-                })?;
+                .map_err(oplog_removal_error)?;
         }
 
         self.remove_cached_status(owned_agent_id, fingerprint)
@@ -1713,6 +1718,14 @@ impl WorkerService for DefaultWorkerService {
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
+
+        // Only this incarnation's oplog: a recreated agent's is not the deleting one's to remove.
+        if delete_current_oplog {
+            self.oplog_service
+                .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+                .await
+                .map_err(oplog_removal_error)?;
+        }
 
         let shard_assignment = self
             .shard_service
@@ -2394,7 +2407,7 @@ mod tests {
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
         AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardEpoch, ShardLeaseRevision,
+        PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardEpoch,
     };
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
@@ -2519,6 +2532,15 @@ mod tests {
                 .next_back()
                 .copied()
                 .unwrap_or(OplogIndex::NONE)
+        }
+
+        async fn assert_owning_epoch(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _expected_epoch: golem_common::model::ShardEpoch,
+        ) -> Result<(), crate::services::oplog::OplogError> {
+            Ok(())
         }
 
         async fn delete(
@@ -2779,7 +2801,7 @@ mod tests {
             }),
         };
         let shard_service = Arc::new(ShardServiceDefault::new());
-        shard_service.register(4, &HashMap::new(), None, ShardLeaseRevision::default());
+        shard_service.install_unexpiring(4, &HashMap::new());
         let service = DefaultWorkerService::new(
             Arc::new(InMemoryKeyValueStorage::new()),
             shard_service,
@@ -3015,12 +3037,7 @@ mod tests {
         let key_value_storage = Arc::new(InMemoryKeyValueStorage::new());
         let shard_service = Arc::new(ShardServiceDefault::new());
         let number_of_shards = 4;
-        shard_service.register(
-            number_of_shards,
-            &HashMap::new(),
-            None,
-            ShardLeaseRevision::default(),
-        );
+        shard_service.install_unexpiring(number_of_shards, &HashMap::new());
         let service = DefaultWorkerService::new(
             key_value_storage.clone(),
             shard_service,
@@ -4329,6 +4346,15 @@ mod tests {
             unreachable!()
         }
 
+        async fn assert_owning_epoch(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _expected_epoch: golem_common::model::ShardEpoch,
+        ) -> Result<(), crate::services::oplog::OplogError> {
+            Ok(())
+        }
+
         async fn delete(
             &self,
             _lifecycle: &mut OplogLifecycleGuard,
@@ -4690,5 +4716,18 @@ mod tests {
             result.is_err(),
             "expected the index read failure to surface"
         );
+    }
+}
+
+/// A refused oplog delete or ownership check is the routing miss that sends the delete to the
+/// shard's new owner; anything else is a failure of the delete.
+fn oplog_removal_error(error: OplogError) -> WorkerExecutorError {
+    match error {
+        OplogError::Fenced(fence) => WorkerExecutorError::oplog_fenced(
+            fence.agent_id,
+            fence.expected_epoch.0,
+            fence.actual_epoch.map(|epoch| epoch.0),
+        ),
+        other => WorkerExecutorError::runtime(other.to_string()),
     }
 }

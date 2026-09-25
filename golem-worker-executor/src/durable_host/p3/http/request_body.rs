@@ -23,7 +23,7 @@ use crate::durable_host::p3::{
     DurableP3, durable_worker_ctx, observe_function_call_store, wasi_http_view,
 };
 use crate::durable_host::tail_work::TailActivity;
-use crate::services::oplog::{Oplog, OplogOps};
+use crate::services::oplog::{Oplog, OplogError, OplogFence, OplogOps};
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::oplog::host_functions::P3HttpClientRequestBodyTransmission;
@@ -117,7 +117,7 @@ struct DurableRequestBodyState {
     cached_resend_bytes: usize,
     terminal: Option<RequestBodyTerminal>,
     /// First frame-recording failure; refuses resends and fails views.
-    recording_failed: Option<String>,
+    recording_failed: Option<OplogError>,
     live_polled: bool,
     active_live_view: bool,
     /// Bumped when an attempt's view is revoked (the attempt was abandoned
@@ -225,6 +225,15 @@ impl DurableRequestBody {
             live_claimed: false,
             pending_load: None,
             epoch,
+        }
+    }
+
+    /// The refusal a frame recording met, if the storage refused one: the send then failed because
+    /// this agent's shard has a new owner, not because of the request.
+    pub(super) fn recording_fence(&self) -> Option<OplogFence> {
+        match &self.lock_state().recording_failed {
+            Some(OplogError::Fenced(fence)) => Some(fence.clone()),
+            _ => None,
         }
     }
 
@@ -459,7 +468,7 @@ pub(super) async fn record_frame_entry(
     oplog: Arc<dyn Oplog>,
     parent_start_index: OplogIndex,
     frame: SerializableP3HttpRequestBodyFrame,
-) -> Result<OplogIndex, String> {
+) -> Result<OplogIndex, OplogError> {
     let request = HostRequest::from(HostRequestP3HttpClientRequestBodyFrame { frame });
     let bytes = serialize(&request)?;
     let raw = oplog.upload_raw_payload(bytes).await?;
@@ -471,7 +480,6 @@ pub(super) async fn record_frame_entry(
             payload,
         ))
         .await
-        .map_err(|error| error.to_string())
 }
 
 /// Loads one recorded data/trailers frame back from its `HostStreamFrame`
@@ -756,8 +764,8 @@ impl HttpBody for DurableRequestBodyView {
             }
             let shared = this.shared.clone();
             let mut state = shared.lock_state();
-            if let Some(message) = &state.recording_failed {
-                return Poll::Ready(Some(Err(ErrorCode::InternalError(Some(message.clone())))));
+            if let Some(error) = &state.recording_failed {
+                return Poll::Ready(Some(Err(ErrorCode::InternalError(Some(error.to_string())))));
             }
             if this.pos < state.slots.len() {
                 // A cached frame is served synchronously (even while its oplog

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::fmt::{self, Debug, Display, Formatter};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -23,7 +23,6 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::{AgentId, ShardEpoch};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
-use uuid::Uuid;
 
 pub mod memory;
 pub mod multi_sqlite;
@@ -47,37 +46,12 @@ pub enum IndexedStorageError {
     InvalidResume(String),
     /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
-    /// The write was refused because the epoch it asserted is not the one recorded for the key,
-    /// or the record is held by another writer at that epoch.
+    /// The write was refused because the epoch it asserted is not the one recorded for the key.
     Fenced {
         key: String,
         expected: ShardEpoch,
         actual: Option<ShardEpoch>,
-        /// The stored epoch equals the asserted one but another writer recorded it, so the epoch
-        /// alone no longer says who may write - see [`WriterId`].
-        writer_conflict: bool,
     },
-}
-
-/// The process behind a write, recorded alongside the epoch it asserts.
-///
-/// One value per process, kept for the life of the process, so that whatever issues epochs can
-/// re-issue one without this process losing the keys it already holds at it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WriterId(pub Uuid);
-
-impl WriterId {
-    /// This process's writer identity, created once on first use.
-    pub fn process() -> Self {
-        static PROCESS: OnceLock<WriterId> = OnceLock::new();
-        *PROCESS.get_or_init(|| WriterId(Uuid::new_v4()))
-    }
-}
-
-impl Display for WriterId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
 }
 
 impl IndexedStorageError {
@@ -115,13 +89,7 @@ impl Display for IndexedStorageError {
                 key,
                 expected,
                 actual,
-                writer_conflict,
             } => match actual {
-                Some(actual) if *writer_conflict => write!(
-                    f,
-                    "Write fenced for key {key}: asserted epoch {expected}, \
-                     which another writer holds - the stored epoch is {actual}"
-                ),
                 Some(actual) => write!(
                     f,
                     "Write fenced for key {key}: asserted epoch {expected}, \
@@ -153,7 +121,6 @@ pub(crate) enum FencedTxError {
         key: String,
         expected: ShardEpoch,
         actual: Option<ShardEpoch>,
-        writer_conflict: bool,
     },
     /// A stored value the schema should have made impossible - a negative epoch, say. Not a fence:
     /// nobody took the key over, the row itself cannot be trusted.
@@ -170,24 +137,21 @@ impl FencedTxError {
     pub(crate) fn check_record(
         key: &str,
         expected: ShardEpoch,
-        stored: Option<(i64, String)>,
-        writer_id: &str,
+        stored: Option<i64>,
         negative_epoch_message: fn(i64, &str) -> String,
     ) -> Result<(), FencedTxError> {
-        let mut actual = None;
-        let mut writer_matches = false;
-        if let Some((epoch, writer)) = stored {
-            let epoch = u64::try_from(epoch)
-                .map_err(|_| FencedTxError::Corrupt(negative_epoch_message(epoch, key)))?;
-            actual = Some(ShardEpoch(epoch));
-            writer_matches = writer == writer_id;
-        }
-        if actual != Some(expected) || !writer_matches {
+        let actual = stored
+            .map(|epoch| {
+                u64::try_from(epoch)
+                    .map(ShardEpoch)
+                    .map_err(|_| FencedTxError::Corrupt(negative_epoch_message(epoch, key)))
+            })
+            .transpose()?;
+        if actual != Some(expected) {
             return Err(FencedTxError::Fenced {
                 key: key.to_string(),
                 expected,
                 actual,
-                writer_conflict: actual == Some(expected) && !writer_matches,
             });
         }
         Ok(())
@@ -204,12 +168,10 @@ impl FencedTxError {
                 key,
                 expected,
                 actual,
-                writer_conflict,
             } => IndexedStorageError::Fenced {
                 key,
                 expected,
                 actual,
-                writer_conflict,
             },
             FencedTxError::Corrupt(msg) => IndexedStorageError::Other(msg),
         }
@@ -488,10 +450,9 @@ pub trait IndexedStorage: Debug + Sync {
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError>;
 
-    /// Records the writer generation for the given key: `epoch`, and this process as the writer
-    /// holding it. A monotonic compare-and-set - accepted when `epoch` is above the stored one, or
-    /// equal to it and recorded by this same writer, and refused with
-    /// [`IndexedStorageError::Fenced`] otherwise. Inserts the record if the key has none.
+    /// Records the writer generation for the given key. A monotonic compare-and-set - accepted when
+    /// `epoch` is at least the stored one, and refused with [`IndexedStorageError::Fenced`]
+    /// otherwise. Inserts the record if the key has none.
     async fn set_key_epoch(
         &self,
         svc_name: &'static str,

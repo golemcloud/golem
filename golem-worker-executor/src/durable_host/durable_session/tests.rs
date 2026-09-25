@@ -1,5 +1,6 @@
 use super::*;
 use crate::durable_host::durable_stream::AttachedStreamSegmentSource;
+use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::durable_stream::tests::{
     TestIdentity, TestOplog, attachment_key, identity, registration, test_fence,
 };
@@ -896,7 +897,7 @@ struct TestConsumerJournal(Arc<dyn Oplog>);
 
 #[async_trait::async_trait]
 impl DurableStreamConsumerJournal for TestConsumerJournal {
-    async fn commit(&self) -> Result<(), String> {
+    async fn commit(&self) -> Result<(), SessionError> {
         self.0.commit(CommitLevel::Always).await.unwrap();
         Ok(())
     }
@@ -904,7 +905,7 @@ impl DurableStreamConsumerJournal for TestConsumerJournal {
     async fn committed_finished_index(
         &self,
         _session: &StreamSessionKey,
-    ) -> Result<Option<OplogIndex>, String> {
+    ) -> Result<Option<OplogIndex>, SessionError> {
         Ok(None)
     }
 }
@@ -1392,7 +1393,7 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
             producer
                 .run_admitted(None, 0, false, move |_, _admission| async move {
                     admitted.wait().await;
-                    Ok::<_, String>(())
+                    Ok::<_, SessionError>(())
                 })
                 .await
         });
@@ -1518,7 +1519,7 @@ async fn concurrent_nested_mapping_reuses_identity_before_commit_callback_finish
             Box::pin(async move {
                 oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(receipt) = receipt {
-                    let _ = receipt.send(());
+                    let _ = receipt.send(Ok(()));
                 }
                 if block.load(Ordering::Acquire) {
                     reached.notify_one();
@@ -2876,7 +2877,7 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
             .reconcile_foreign_cancellation_intents(Duration::from_millis(10))
             .await
             .unwrap_err();
-        assert_eq!(error, "RecoveryRequired");
+        assert_eq!(error.to_string(), "RecoveryRequired");
         assert_eq!(remote_oplog.current_oplog_index().await, before);
         assert!(
             streams
@@ -2887,7 +2888,7 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
         );
         streams
             .producer
-            .run_lifecycle(None, 0, |_, _context| async { Ok::<_, String>(()) })
+            .run_lifecycle(None, 0, |_, _context| async { Ok::<_, SessionError>(()) })
             .await
             .expect("remote timeout must not poison the local producer");
         streams
@@ -3061,7 +3062,7 @@ async fn a_fenced_oplog_refuses_a_foreign_mapping_and_releases_the_session() {
     .unwrap_err();
 
     assert!(
-        error.contains("Fenced"),
+        matches!(error, SessionError::Fenced(_)),
         "a foreign mapping on a fenced oplog must report the fence itself, so the caller reroutes \
          instead of treating it as a local failure, got {error}"
     );
@@ -3183,7 +3184,10 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
         .await
         .expect("remote preparation prevented local retirement")
         .unwrap_err();
-        assert_eq!(error, StreamStoreError::RecoveryRequired.to_string());
+        assert_eq!(
+            error.to_string(),
+            StreamStoreError::RecoveryRequired.to_string()
+        );
         producer.wait_durable_drained().await;
         assert!(streams.session_lock.try_lock().is_ok());
         return;
@@ -3201,7 +3205,10 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
     .await
     .expect("RPC callback could not drain local producer")
     .unwrap_err();
-    assert_eq!(error, StreamStoreError::RecoveryRequired.to_string());
+    assert_eq!(
+        error.to_string(),
+        StreamStoreError::RecoveryRequired.to_string()
+    );
     assert!(matches!(
         producer.ensure_healthy(),
         Err(StreamStoreError::RecoveryRequired)
@@ -3372,7 +3379,7 @@ async fn same_owner_foreign_cancellation_requires_routed_authority() {
         .await
         .unwrap_err();
     assert_eq!(
-        error,
+        error.to_string(),
         "foreign durable stream cancellation routing is unavailable"
     );
     assert_eq!(oplog.current_oplog_index().await, before);
@@ -3380,7 +3387,8 @@ async fn same_owner_foreign_cancellation_requires_routed_authority() {
         streams
             .reconcile_foreign_cancellation_intents(Duration::from_secs(1))
             .await
-            .unwrap_err(),
+            .unwrap_err()
+            .to_string(),
         "foreign cancellation routing is unavailable"
     );
     assert_eq!(oplog.current_oplog_index().await, before);
@@ -3860,7 +3868,7 @@ async fn cancelled_forwarded_result_persists_intent_without_remote_activation() 
     let persisted = streams.remote_result_record().await.unwrap().unwrap();
     assert_eq!(persisted.stream_mappings[0].source, source);
     producer
-        .run_lifecycle(None, 0, |_, _context| async { Ok::<_, String>(()) })
+        .run_lifecycle(None, 0, |_, _context| async { Ok::<_, SessionError>(()) })
         .await
         .unwrap();
 }
@@ -4191,7 +4199,7 @@ async fn root_union_stream_coordinates_use_the_selected_branch_and_survive_reloa
 
 #[async_trait::async_trait]
 impl DurableStreamConsumerJournal for RecordingConsumerJournal {
-    async fn commit(&self) -> Result<(), String> {
+    async fn commit(&self) -> Result<(), SessionError> {
         self.oplog.commit(CommitLevel::Always).await.unwrap();
         self.commits.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -4200,7 +4208,7 @@ impl DurableStreamConsumerJournal for RecordingConsumerJournal {
     async fn committed_finished_index(
         &self,
         _session: &StreamSessionKey,
-    ) -> Result<Option<OplogIndex>, String> {
+    ) -> Result<Option<OplogIndex>, SessionError> {
         Ok(None)
     }
 }
@@ -9856,14 +9864,14 @@ async fn finalization_after_retirement_requires_matching_committed_finished() {
 
     #[async_trait::async_trait]
     impl DurableStreamConsumerJournal for FinishedJournal {
-        async fn commit(&self) -> Result<(), String> {
+        async fn commit(&self) -> Result<(), SessionError> {
             panic!("a repeated finalization must not commit buffered entries")
         }
 
         async fn committed_finished_index(
             &self,
             _session: &StreamSessionKey,
-        ) -> Result<Option<OplogIndex>, String> {
+        ) -> Result<Option<OplogIndex>, SessionError> {
             let first = self.reads.fetch_add(1, Ordering::Relaxed) == 0;
             Ok(if first && self.hide_first {
                 None

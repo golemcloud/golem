@@ -891,8 +891,7 @@ pub async fn create_worker_executor_impl<
         golem_config.oplog.max_payload_size,
         golem_config.indexed_storage_retry.clone(),
     )
-    .await
-    .with_fence_observer(shard_service.clone());
+    .await;
 
     let base_oplog_service: Arc<dyn OplogService> = match oplog_archives {
         None => Arc::new(primary_oplog_service),

@@ -106,7 +106,7 @@ pub(super) async fn materialize_input(
     let materialized = streams
         .materialize_agent_input(input.value(), input.graph(), &input.graph().root, revision)
         .await
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
     let value = streams
         .decode_initial(
             materialized.value,
@@ -114,7 +114,7 @@ pub(super) async fn materialize_input(
             SessionStreamRole::Input,
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
     Ok(TypedSchemaValue::new(input.graph().clone(), value))
 }
 
@@ -144,7 +144,7 @@ pub(super) async fn restore_response(
         && let Some(materialized) = streams
             .replay_remote_result()
             .await
-            .map_err(WorkerExecutorError::runtime)?
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
     {
         *value = TypedSchemaValue::new(value.graph().clone(), materialized);
     }
@@ -168,6 +168,6 @@ pub(super) async fn materialize_response(
     streams
         .materialize_result(value, &graph, &graph.root, revision)
         .await
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
     Ok(stripped)
 }

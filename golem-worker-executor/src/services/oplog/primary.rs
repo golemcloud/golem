@@ -26,9 +26,8 @@ use crate::services::oplog::reader::{
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
-    OplogFenceObserver, OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload,
-    ReservedPayload, ReservedRawStartBuilder, decode_scan_cursor, next_scan_cursor,
-    retry_scan_storage_op,
+    OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload, ReservedPayload,
+    ReservedRawStartBuilder, decode_scan_cursor, next_scan_cursor, retry_scan_storage_op,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -328,9 +327,6 @@ async fn retry_oplog_append(
 /// first. Written before the oplog's first entry -
 /// an absent record fences too, which is what closes the window between creating an oplog and
 /// recording who owns it.
-///
-/// A refusal is also handed to `fence_observer`, because the epoch it carries is what a shard
-/// manager whose state lost history has to mint above.
 /// Whether an open still has to record the epoch it asserts, or its caller did so already.
 #[derive(Clone)]
 enum EpochRecord {
@@ -347,7 +343,6 @@ async fn record_owning_epoch(
     agent_mode: AgentMode,
     key: &str,
     shard_epoch: ShardEpoch,
-    fence_observer: Option<&dyn OplogFenceObserver>,
 ) -> Option<OplogFence> {
     let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {
         let ns = IndexedStorageNamespace::OpLog {
@@ -366,27 +361,19 @@ async fn record_owning_epoch(
     match outcome {
         Ok(()) => None,
         Err(IndexedStorageError::Fenced {
-            expected,
-            actual,
-            writer_conflict,
-            ..
+            expected, actual, ..
         }) => {
             warn!(
                 agent_id = %owned_agent_id,
                 expected_epoch = expected.0,
                 actual_epoch = ?actual.map(|epoch| epoch.0),
-                writer_conflict,
                 "Oplog opened at a stale shard epoch: the shard has a new owner"
             );
             let fence = OplogFence {
                 agent_id: owned_agent_id.agent_id(),
                 expected_epoch: expected,
                 actual_epoch: actual,
-                writer_conflict,
             };
-            if let Some(observer) = fence_observer {
-                observer.fenced(&fence);
-            }
             Some(fence)
         }
         // `retry_storage_op_fenceable` panics on every other permanent failure.
@@ -434,9 +421,6 @@ pub struct PrimaryOplogService {
     retry_config: RetryConfig,
     oplogs: OpenOplogs,
     stream_session_index: Arc<std::sync::OnceLock<Arc<super::StreamSessionIndexService>>>,
-    /// Told of every refusal the storage returns for an oplog this service opened, so the epochs
-    /// the refusals carry can reach the shard manager. `None` reports nothing.
-    fence_observer: Option<Arc<dyn OplogFenceObserver>>,
 }
 
 impl Debug for PrimaryOplogService {
@@ -457,7 +441,6 @@ impl Debug for PrimaryOplogService {
             .field("retry_config", &self.retry_config)
             .field("oplogs", &self.oplogs)
             .field("stream_session_index", &self.stream_session_index)
-            .field("fence_observer", &self.fence_observer.is_some())
             .finish()
     }
 }
@@ -486,15 +469,7 @@ impl PrimaryOplogService {
             retry_config,
             oplogs: OpenOplogs::new("primary oplog"),
             stream_session_index: Arc::new(std::sync::OnceLock::new()),
-            fence_observer: None,
         }
-    }
-
-    /// Reports every refusal the storage returns for an oplog this service opens to `observer`,
-    /// with the epoch recorded on the oplog.
-    pub fn with_fence_observer(mut self, observer: Arc<dyn OplogFenceObserver>) -> Self {
-        self.fence_observer = Some(observer);
-        self
     }
 
     fn oplog_key(agent_id: &AgentId) -> String {
@@ -605,7 +580,6 @@ impl PrimaryOplogService {
                     initial_worker_metadata.created_by,
                     initial_worker_metadata.fingerprint,
                     self.stream_session_index(),
-                    self.fence_observer.clone(),
                 ),
             )
             .await
@@ -757,7 +731,6 @@ impl OplogService for PrimaryOplogService {
             initial_worker_metadata.created_by,
             initial_worker_metadata.fingerprint,
             None,
-            None,
             Box::new(|| {}),
         )))
     }
@@ -861,7 +834,6 @@ impl OplogService for PrimaryOplogService {
                     agent_mode,
                     &key,
                     epoch,
-                    self.fence_observer.as_deref(),
                 )
                 .await
             }
@@ -942,7 +914,6 @@ impl OplogService for PrimaryOplogService {
                     agent_mode,
                     &key,
                     epoch,
-                    self.fence_observer.as_deref(),
                 )
                 .await
             }
@@ -1017,6 +988,29 @@ impl OplogService for PrimaryOplogService {
         .await
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        record_oplog_call("assert_owning_epoch");
+        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        match record_owning_epoch(
+            self.indexed_storage.as_ref(),
+            &self.retry_config,
+            owned_agent_id,
+            agent_mode,
+            &key,
+            expected_epoch,
+        )
+        .await
+        {
+            None => Ok(()),
+            Some(fence) => Err(OplogError::Fenced(fence)),
+        }
+    }
+
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -1049,27 +1043,19 @@ impl OplogService for PrimaryOplogService {
         match outcome {
             Ok(()) => Ok(()),
             Err(IndexedStorageError::Fenced {
-                expected,
-                actual,
-                writer_conflict,
-                ..
+                expected, actual, ..
             }) => {
                 warn!(
                     agent_id = %owned_agent_id,
                     expected_epoch = expected.0,
                     actual_epoch = ?actual.map(|epoch| epoch.0),
-                    writer_conflict,
                     "Oplog delete refused: the shard has a new owner"
                 );
                 let fence = OplogFence {
                     agent_id,
                     expected_epoch: expected,
                     actual_epoch: actual,
-                    writer_conflict,
                 };
-                if let Some(observer) = &self.fence_observer {
-                    observer.fenced(&fence);
-                }
                 Err(OplogError::Fenced(fence))
             }
             // `retry_storage_op_fenceable` panics on every other permanent failure.
@@ -1253,7 +1239,6 @@ struct CreateOplogConstructor {
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     shard_epoch: Option<ShardEpoch>,
     epoch_record: EpochRecord,
-    fence_observer: Option<Arc<dyn OplogFenceObserver>>,
 }
 
 impl CreateOplogConstructor {
@@ -1275,7 +1260,6 @@ impl CreateOplogConstructor {
         account_id: AccountId,
         fingerprint: AgentFingerprint,
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
-        fence_observer: Option<Arc<dyn OplogFenceObserver>>,
     ) -> Self {
         Self {
             shard_epoch,
@@ -1294,7 +1278,6 @@ impl CreateOplogConstructor {
             account_id,
             fingerprint,
             stream_session_index,
-            fence_observer,
         }
     }
 }
@@ -1322,7 +1305,6 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.agent_mode,
                     &self.key,
                     shard_epoch,
-                    self.fence_observer.as_deref(),
                 )
                 .await
             }
@@ -1370,7 +1352,6 @@ impl OplogConstructor for CreateOplogConstructor {
             self.account_id,
             self.fingerprint,
             self.stream_session_index,
-            self.fence_observer,
             close,
         ))
     }
@@ -1536,7 +1517,6 @@ impl PrimaryOplog {
         account_id: AccountId,
         fingerprint: AgentFingerprint,
         stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
-        fence_observer: Option<Arc<dyn OplogFenceObserver>>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let account_id_label = account_id.to_string();
@@ -1548,7 +1528,6 @@ impl PrimaryOplog {
         let mut state = PrimaryOplogState {
             shard_epoch,
             fence: fence.clone(),
-            fence_observer,
             indexed_storage,
             blob_storage,
             replicas,
@@ -2056,9 +2035,6 @@ struct PrimaryOplogState {
     /// now, so there is nothing to be gained by asking the storage again. Shared with the handle,
     /// which answers [`Oplog::fence`] from it without a round trip through the actor.
     fence: Arc<std::sync::OnceLock<OplogFence>>,
-    /// Told of the refusal that sets [`Self::fence`]; the latched fast-fail asks the storage
-    /// nothing and reports nothing.
-    fence_observer: Option<Arc<dyn OplogFenceObserver>>,
 }
 
 impl PrimaryOplogState {
@@ -2217,9 +2193,6 @@ impl PrimaryOplogState {
                         "Oplog append fenced: the shard has a new owner, refusing further writes"
                     );
                 }
-                if let Some(observer) = &self.fence_observer {
-                    observer.fenced(fence);
-                }
                 self.retain_refused(pairs.into_iter().map(|(_, entry)| entry));
             }
             return Err(error);
@@ -2280,21 +2253,19 @@ impl PrimaryOplogState {
         Ok(())
     }
 
-    /// Names the agent on a storage error, so the worker that hit it can be given up by id.
+    /// Names the agent on a refused write, so the worker that hit it can be given up by id.
     fn as_oplog_error(owned_agent_id: &OwnedAgentId, err: IndexedStorageError) -> OplogError {
         match err {
             IndexedStorageError::Fenced {
-                expected,
-                actual,
-                writer_conflict,
-                ..
+                expected, actual, ..
             } => OplogError::Fenced(OplogFence {
                 agent_id: owned_agent_id.agent_id(),
                 expected_epoch: expected,
                 actual_epoch: actual,
-                writer_conflict,
             }),
-            other => OplogError::Storage(other.to_string()),
+            other => unreachable!(
+                "retry_oplog_append panics on every storage failure but a fence, got {other}"
+            ),
         }
     }
 
@@ -2519,14 +2490,14 @@ impl Oplog for PrimaryOplog {
             .await
     }
 
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError> {
         record_oplog_call("wait_for_replicas");
 
         self.run_job(|done| OplogJob::Flush { done }).await;
         // A refused flush reached no replica. The storage would still answer with its replica
         // count, and passing that on would tell the caller that entries it turned away are durable.
-        if self.fence.get().is_some() {
-            return false;
+        if let Some(fence) = self.fence.get() {
+            return Err(OplogError::Fenced(fence.clone()));
         }
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         let replicas = replicas.min(reader.replicas);
@@ -2536,10 +2507,10 @@ impl Oplog for PrimaryOplog {
             .wait_for_replicas(replicas, timeout)
             .await
         {
-            Ok(n) => n == replicas,
+            Ok(n) => Ok(n == replicas),
             Err(err) => {
                 error!("Failed to wait for replicas to sync indexed storage: {err}");
-                false
+                Ok(false)
             }
         }
     }

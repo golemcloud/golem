@@ -49,7 +49,7 @@ use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, ConsumerAttachmentStatus,
     DbDirectStreamAttachmentConsumerProbe, DurableStreamCommit, DurableStreamStore,
     ProducerRegistrationRequest, RoutedStreamAttachmentControl, SessionControlMetadata,
-    StreamAttachmentConsumerProbe, StreamAttachmentControl,
+    SessionError, StreamAttachmentConsumerProbe, StreamAttachmentControl,
 };
 use crate::durable_host::schema_value_stream::contains_stream;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
@@ -673,7 +673,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     cache_retirement_in_progress: AtomicBool,
     /// Set once this executor has given the agent up. One-shot: the first reason wins, and the
     /// agent is never revived here.
-    given_up_reason: std::sync::OnceLock<GiveUpReason>,
+    retirement_kind: std::sync::OnceLock<InterruptKind>,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
@@ -993,12 +993,12 @@ struct WorkerDurableStreamConsumerJournal<Ctx: WorkerCtx> {
 #[async_trait::async_trait]
 impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsumerJournal<Ctx> {
     #[tracing::instrument(name = "durable_stream.consumer.commit", level = "debug", skip_all)]
-    async fn commit(&self) -> Result<(), String> {
+    async fn commit(&self) -> Result<(), SessionError> {
         let (_, changed) = self
             .state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
-            .map_err(|fence| OplogError::Fenced(fence).to_string())?;
+            .map_err(SessionError::Fenced)?;
         if changed {
             self.state_actor.notify_status_changed();
         }
@@ -1008,7 +1008,7 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
     async fn committed_finished_index(
         &self,
         session: &StreamSessionKey,
-    ) -> Result<Option<OplogIndex>, String> {
+    ) -> Result<Option<OplogIndex>, SessionError> {
         let status = self.status.load_full();
         self.worker_service
             .lookup_durable_stream_session(
@@ -1020,6 +1020,7 @@ impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsume
             )
             .await
             .map(|session| session.and_then(|session| session.finished))
+            .map_err(SessionError::from)
     }
 }
 
@@ -1114,35 +1115,22 @@ fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
     }
 }
 
-/// Why the agent is given up because of `error`, if the failure is really a lost shard.
+/// Whether `error` means the agent's shard was lost.
 ///
 /// Such a failure is not this executor's to record or to retry. An append would be refused by the
-/// same fence that caused it, and on a shard given up without one it would write an error into an
+/// same fence that caused it, and on a shard lost without one it would write an error into an
 /// oplog the new owner is already recovering. A retry in place would reopen the oplog at the epoch
 /// this executor no longer holds. Every path that fails on a lost shard - startup and replay
 /// recovery, streaming-session completion, the dropped-call drain, an interrupt - classifies with
 /// this one predicate, so none of them can take the in-place retry another one refuses.
-///
-/// `latched` is the fence the oplog holds, for a refusal that reached its caller flattened into
-/// some other error; the classified shapes are recognised without one.
-pub(crate) fn shard_lost_give_up_reason(
-    error: &WorkerExecutorError,
-    latched: Option<OplogFence>,
-) -> Option<GiveUpReason> {
-    match latched {
-        Some(fence) => Some(GiveUpReason::Fenced(Some(Box::new(fence)))),
-        None if matches!(
-            error,
-            WorkerExecutorError::OplogFenced { .. }
-                | WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::ShardLost
-                }
-        ) =>
-        {
-            Some(GiveUpReason::Fenced(None))
-        }
-        None => None,
-    }
+pub(crate) fn is_shard_lost(error: &WorkerExecutorError) -> bool {
+    matches!(
+        error,
+        WorkerExecutorError::OplogFenced { .. }
+            | WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost
+            }
+    )
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -1239,44 +1227,46 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap_or_else(|| "-".to_string())
     }
 
-    /// Records that this executor is giving the agent up. Idempotent; the first reason wins and is
-    /// the only one logged.
+    /// Records that this worker is being retired as its owner for `kind`; the first kind recorded
+    /// wins. A lost shard shuts every owner write at once: the `owner_retirement_requested` token
+    /// the owner's write paths check, the durable stream producer, and the status flusher and
+    /// checkpointer, whose writes carry no epoch.
     ///
-    /// Synchronous and lock-free on purpose: the stop path calls it while holding the worker
-    /// lifecycle lock, where anything that could take that lock again would deadlock. Logging takes
-    /// no worker lifecycle lock.
-    pub(crate) fn mark_given_up(&self, reason: GiveUpReason) -> bool {
-        let first = self.given_up_reason.set(reason).is_ok();
-        // Before anything else can run: the status blob, its checkpoint and the recovery-index
-        // row are the new owner's now, and none of them is fenced.
-        self.status_flusher.stop_for_give_up();
-        self.status_checkpointer.stop_for_give_up();
-        if first && let Some(reason) = self.given_up_reason.get() {
-            // Debug rather than warn: the oplog that latched a fence has already warned with both
-            // epochs, and a revoke or reassignment is logged by the sweep that gives agents up.
-            debug!(
-                agent_id = %self.owned_agent_id,
-                ?reason,
-                "Giving the agent up: this executor no longer owns its shard"
-            );
+    /// Synchronous and lock-free, so a write path that meets a fence under the worker lifecycle
+    /// lock can record it there; the stop itself - [`Self::interrupt_and_retire`], or the stop the
+    /// invocation loop unwinds to - runs once that lock is released.
+    pub(crate) fn record_retirement(&self, kind: InterruptKind) -> bool {
+        let first = self.retirement_kind.set(kind).is_ok();
+        if self.retired_for_lost_shard() {
+            self.owner_retirement_requested.cancel();
+            self.durable_stream_producer.fence();
+            self.status_flusher.stop_for_give_up();
+            self.status_checkpointer.stop_for_give_up();
+            if first {
+                // Debug rather than warn: the oplog that latched a fence has already warned with
+                // both epochs, and a revoke or reassignment is logged by the sweep.
+                debug!(
+                    agent_id = %self.owned_agent_id,
+                    "Retiring the agent: this executor no longer owns its shard"
+                );
+            }
         }
         first
     }
 
-    pub(crate) fn is_given_up(&self) -> bool {
-        self.given_up_reason.get().is_some()
+    /// Whether this worker is retired because its shard moved to another executor.
+    pub(crate) fn retired_for_lost_shard(&self) -> bool {
+        matches!(self.retirement_kind.get(), Some(InterruptKind::ShardLost))
     }
 
-    /// Marks the agent given up when `error` means its shard was lost, per
-    /// [`shard_lost_give_up_reason`]. Returns whether the agent is given up, by this failure or
-    /// for an earlier reason: either way the caller must neither record the failure nor retry in
-    /// place. Marked rather than stopped, for the same reason as [`Self::mark_given_up`]: the
-    /// callers unwind to a stop, some of them while holding the worker lifecycle lock.
-    pub(crate) fn give_up_if_shard_lost(&self, error: &WorkerExecutorError) -> bool {
-        if let Some(reason) = shard_lost_give_up_reason(error, self.oplog.fence()) {
-            self.mark_given_up(reason);
+    /// Records a lost-shard retirement when `error` is one, per [`is_shard_lost`]. Returns whether
+    /// the worker is retired for a lost shard, by this failure or an earlier one: either way the
+    /// caller must neither record the failure nor retry in place.
+    pub(crate) fn retire_if_shard_lost(&self, error: &WorkerExecutorError) -> bool {
+        if is_shard_lost(error) {
+            self.record_retirement(InterruptKind::ShardLost);
         }
-        self.is_given_up()
+        self.retired_for_lost_shard()
     }
 
     /// Stops this worker through this handle, whichever generation it is. Nothing public reaches
@@ -1297,52 +1287,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await;
     }
 
-    /// [`GiveUpReason::to_error`] for the reason recorded for this agent, or
-    /// `ShardingNotReady` when none is recorded yet.
-    pub(crate) fn give_up_error(&self) -> WorkerExecutorError {
-        self.given_up_reason
-            .get()
-            .map_or(WorkerExecutorError::ShardingNotReady, |reason| {
-                reason.to_error()
-            })
-    }
-
-    /// What entity bodies are torn down with once this agent has been given up; `None` while it is
-    /// still this executor's.
-    pub(crate) fn given_up_owner_failure(&self) -> Option<OwnerFailureWinner> {
-        self.given_up_reason.get().map(GiveUpReason::owner_failure)
-    }
-
-    /// Give the agent up: stop it here without writing to its oplog or its status, and drop it
-    /// from this executor so the worker service resumes it on the shard's owner.
-    ///
-    /// Never a restart in place - that would reopen the oplog with the same stale epoch and let
-    /// this executor keep writing to an agent it no longer owns.
-    pub(crate) async fn give_up(&self, reason: GiveUpReason) {
-        self.mark_given_up(reason);
-        let error = self.give_up_error();
-        // Signalled before the stop so a running guest actually leaves wasmtime; the loop then
-        // exits through `stop_internal`, which is where the agent is dropped. The ack is
-        // deliberately not awaited: a caller that blocks on it would panic if the worker was
-        // already stopping and its broadcast sender had gone.
-        self.set_interrupting_for(InterruptKind::ShardLost, UnloadReason::ShardLost)
-            .await;
-        // A deletion already retiring this worker owns its stop and its removal, and may be
-        // waiting on the invocation this stop would wait for. The mark is enough: the loop's exit
-        // paths and the removal honour it, so nothing more is written for the agent.
-        if self.deletion_owns_retirement().await {
-            return;
+    /// What a caller of a retired worker is told. A lost shard is answered with the routing miss
+    /// the worker service retries on the shard's new owner; any other retirement is final here.
+    pub(crate) fn retirement_error(&self) -> WorkerExecutorError {
+        if self.retired_for_lost_shard() {
+            WorkerExecutorError::ShardingNotReady
+        } else {
+            WorkerExecutorError::runtime("Worker ownership has retired")
         }
-        self.stop_internal(
-            false,
-            Some(error.clone()),
-            UnloadRequest::ordinary(UnloadReason::ShardLost),
-            FinalWorkerState::Unloaded {
-                startup_failure: Some(error),
-            },
-            PendingLiveInvocationDisposition::Fail,
-        )
-        .await;
+    }
+
+    /// What retiring reports to whoever asked for it: done, or for a lost shard the routing miss,
+    /// so a caller that wanted this executor to act on the agent goes to its new owner instead.
+    fn retirement_result(&self) -> Result<(), WorkerExecutorError> {
+        if self.retired_for_lost_shard() {
+            Err(WorkerExecutorError::ShardingNotReady)
+        } else {
+            Ok(())
+        }
     }
 
     /// Whether `cell` is this worker's published status. Each generation shares its cell with its
@@ -1362,11 +1324,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Takes `&self` rather than the `Arc`, because the stop path that removes a given-up
     /// generation holds only a reference; the cache supplies the `Arc` it checks identity against.
     pub(crate) async fn remove_from_active_agents(&self) {
-        // A given-up agent's entity bodies are torn down as `ShardLost`: it was not
+        // A lost shard's entity bodies are torn down as `ShardLost`: the agent was not
         // interrupted through the Golem API, its shard moved.
-        let owner_failure = self.given_up_owner_failure().unwrap_or_else(|| {
+        let owner_failure = if self.retired_for_lost_shard() {
+            OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
+        } else {
             OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc()))
-        });
+        };
         self.deps
             .active_agents()
             .remove_generation(self, owner_failure)
@@ -1381,18 +1345,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .is_some_and(|worker| std::ptr::eq(worker.as_ref(), self))
     }
 
-    /// Interrupts and retires this worker as its owner - an environment deletion, for example -
-    /// draining it and dropping it from `ActiveAgents`. Idempotent and shared: a second caller
-    /// while retirement is already in flight awaits the same outcome instead of repeating it.
+    /// Interrupts and retires this worker as its owner - an environment deletion, or its shard
+    /// moving to another executor (`ShardLost`) - draining it and dropping it from `ActiveAgents`.
+    /// Idempotent and shared: a second caller while retirement is already in flight awaits the
+    /// same outcome instead of repeating it.
     ///
-    /// An agent given up before or during retirement (its shard moved) is not retired here:
-    /// [`Self::quiesce_for_owner_retirement`] writes and caches nothing for it, sends its waiters
-    /// to the shard's new owner and returns the give-up error, and the give-up that marked it
-    /// removes the generation.
+    /// A lost shard writes and caches nothing - the oplog is the new owner's - and answers every
+    /// caller with the routing miss that sends it to the new owner.
     pub(crate) async fn interrupt_and_retire(
         self: &Arc<Self>,
         interrupt: InterruptKind,
     ) -> Result<(), WorkerExecutorError> {
+        if matches!(interrupt, InterruptKind::ShardLost) {
+            self.record_retirement(InterruptKind::ShardLost);
+            // Signalled first, so a running guest leaves wasmtime even when a deletion owns the
+            // stop or this generation is no longer the cached one. The ack is not awaited: a
+            // caller blocking on it would panic if the worker was already stopping.
+            self.set_interrupting_for(InterruptKind::ShardLost, UnloadReason::ShardLost)
+                .await;
+        }
         self.owner_retirement
             .get_or_init(|| {
                 std::future::ready({
@@ -1400,12 +1371,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     let task = tokio::spawn(async move {
                         let mut cleanup = worker.owner_cleanup.lock().await;
                         if worker.deletion_owns_retirement().await {
-                            return Ok(());
+                            // A deletion that already failed on the lost shard holds the cache entry
+                            // with nothing running: nothing here can finish it any more.
+                            if worker.retired_for_lost_shard() && worker.deletion_failed().await {
+                                worker.evict_failed_deletion().await;
+                            }
+                            return worker.retirement_result();
                         }
                         if *cleanup == OwnerCleanupState::Retired
                             || !worker.is_current_cached_owner().await
                         {
-                            return Ok(());
+                            return worker.retirement_result();
                         }
                         worker.owner_retirement_requested.cancel();
                         worker.durable_stream_producer.fence();
@@ -1415,7 +1391,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .await?;
                         worker.remove_from_active_agents().await;
                         *cleanup = OwnerCleanupState::Retired;
-                        Ok(())
+                        worker.retirement_result()
                     });
                     async move {
                         task.await.map_err(|error| {
@@ -1456,13 +1432,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
             return Err(error.clone());
         }
-        // Given up before this retirement: the oplog is the shard's new owner's. No terminal is
-        // claimed, written or cached, and the waiters and the caller are sent to the owner.
-        if self.is_given_up() {
-            self.fail_pending_invocations(self.give_up_error()).await;
-            return Err(self.give_up_error());
-        }
-        if interrupt.is_some() {
+        // A lost shard: the oplog is the new owner's. No terminal is claimed, written or cached,
+        // and the waiters are sent to the owner.
+        if self.retired_for_lost_shard() {
+            self.fail_pending_invocations(self.retirement_error()).await;
+        } else if interrupt.is_some() {
             let pending = self.interrupt_signal.lock().await.claim_pending_terminal();
             if let Some(pending) = pending {
                 let status = self.get_attached_last_known_status().await;
@@ -1480,14 +1454,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         }
                     };
                     if let Some(entry) = entry {
-                        // Refused, the agent has been given up during this retirement: no failure
-                        // is cached for the invocation the new owner resumes, and its waiters are
-                        // sent there before anything removes this generation.
+                        // Refused, the shard moved during this retirement: nothing is cached for
+                        // the invocation the new owner resumes, and its waiters are sent there.
                         if self.add_and_commit_oplog(entry).await.is_err() {
-                            self.fail_pending_invocations(self.give_up_error()).await;
-                            return Err(self.give_up_error());
-                        }
-                        if matches!(pending.kind, InterruptKind::Interrupt(_))
+                            self.record_retirement(InterruptKind::ShardLost);
+                            self.fail_pending_invocations(self.retirement_error()).await;
+                        } else if matches!(pending.kind, InterruptKind::Interrupt(_))
                             && let Some(key) = &status.current_idempotency_key
                         {
                             self.store_invocation_failure(key, &TrapType::Interrupt(pending.kind))
@@ -1498,12 +1470,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
         self.durable_stream_attachment_reconciler.stop().await;
-        retirement.await?;
-        self.state_actor.drain_lifecycle().await?;
+        let lost_shard = self.retired_for_lost_shard();
+        // A lost shard's producer and lifecycle writes are refused, which changes nothing about
+        // the stop that follows.
+        let retired = retirement.await;
+        let drained = self.state_actor.drain_lifecycle().await;
+        if !lost_shard {
+            retired?;
+            drained?;
+        }
         if let Some(forwarding) = forwarding {
             forwarding.drain_forwarding().await;
         }
-        self.durable_stream_commit()(None).await;
+        if !lost_shard {
+            self.durable_stream_commit()(None).await;
+        }
         self.status_flusher.begin_delete().await;
         self.status_checkpointer.begin_delete().await;
         Ok(())
@@ -1616,7 +1597,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .durable_stream_producer
                 .retain_response_or_wait_for_archive()
                 .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
             {
                 return Ok((worker, Some(lease)));
             }
@@ -1658,7 +1639,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .durable_stream_producer
                 .retain_response_or_wait_for_archive()
                 .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
             {
                 return Ok((worker, Some(lease)));
             }
@@ -2106,7 +2087,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.oplog().shard_epoch(),
         ) {
             info!("The agent's shard left this executor while the agent was being created");
-            self.give_up(GiveUpReason::ShardNotAssigned).await;
+            let _ = self.interrupt_and_retire(InterruptKind::ShardLost).await;
         }
     }
 
@@ -2335,7 +2316,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             cache_retirement_in_progress: AtomicBool::new(false),
-            given_up_reason: std::sync::OnceLock::new(),
+            retirement_kind: std::sync::OnceLock::new(),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
@@ -2678,12 +2659,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         oom_retry_count: u32,
         existing_start_attempt: Option<Uuid>,
     ) -> Result<Option<Uuid>, WorkerExecutorError> {
-        // A handle kept past a generation this executor has given up must not start it again: the
+        // A handle kept past a generation this executor has retired must not start it again: the
         // start would take permits, could append `Resumed` to an oplog the new owner now writes,
         // and a failure in it would publish, by agent id, to the waiters of the generation that
         // replaced this one.
-        if this.is_given_up() {
-            return Err(this.give_up_error());
+        if this.owner_retirement_requested.is_cancelled() {
+            return Err(this.retirement_error());
         }
 
         {
@@ -2986,6 +2967,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         retry_cleanup: bool,
     ) -> Result<(), WorkerExecutorError> {
+        // Retired for a lost shard, by an earlier attempt's refused write or by a sweep: the agent's
+        // durable state is the new owner's, so no stage runs here again and no remote effect is
+        // repeated.
+        if self.retired_for_lost_shard() {
+            return Err(self.retirement_error());
+        }
         let interrupt_kind = InterruptKind::Interrupt(Timestamp::now_utc());
         if !self
             .deletion_stage_completed(WorkerDeletionStage::ExecutionFenced)
@@ -3066,6 +3053,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             self.before_deletion_stage(WorkerDeletionStage::StreamsCleaned)
                 .await?;
+            // The steps below reach other agents, and each skips its fenced record when an earlier
+            // attempt, here or in another process, already wrote it. Test the fence first, without
+            // writing, so an executor that has lost the shard sends nothing.
+            if let Some(epoch) = self.oplog.shard_epoch()
+                && let Err(error) = self
+                    .oplog_service()
+                    .assert_owning_epoch(
+                        &self.owned_agent_id,
+                        self.initial_worker_metadata.agent_mode,
+                        epoch,
+                    )
+                    .await
+            {
+                return Err(self.deletion_step_failed(error.into()).await);
+            }
             let producer = match DurableStreamStore::load_indexed_with_commit(
                 self.oplog.clone(),
                 self.owned_agent_id.clone(),
@@ -3106,7 +3108,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ),
                     )
                     .await
-                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                    .map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?;
                 let probe = DbDirectStreamAttachmentConsumerProbe::new_routed(
                     self.worker_service(),
                     self.oplog_service(),
@@ -3121,13 +3125,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             "Worker deletion is blocked by durable stream dependents: {evidence}"
                         ))
                     } else {
-                        WorkerExecutorError::runtime(error.to_string())
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
                     }
                 })?;
-                let diagnostics = producer
-                    .deletion_diagnostics()
-                    .await
-                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                let diagnostics = producer.deletion_diagnostics().await.map_err(|error| {
+                    error.into_worker_executor_error(WorkerExecutorError::runtime)
+                })?;
                 debug!(
                     agent_id = %self.owned_agent_id,
                     deleting = diagnostics.deleting,
@@ -3196,10 +3199,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
             if let Err(error) = removed {
                 drop(lifecycle);
-                return Err(match shard_lost_give_up_reason(&error, None) {
-                    Some(reason) => self.leave_deletion_to_new_owner(reason).await,
-                    None => error,
-                });
+                return Err(self.deletion_step_failed(error).await);
             }
             self.complete_deletion_stage(WorkerDeletionStage::DurableStateRemoved)
                 .await;
@@ -3222,30 +3222,45 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
-    /// Ends a deletion whose agent has moved to another executor. Its durable state is the new
-    /// owner's now, so nothing more is removed from storage: this executor drops only its own cached
-    /// generation - which `give_up` left to the deletion - and the caller gets the answer that
-    /// sends the delete to the new owner.
-    async fn leave_deletion_to_new_owner(
-        self: &Arc<Self>,
-        reason: GiveUpReason,
-    ) -> WorkerExecutorError {
-        self.mark_given_up(reason);
-        self.active_agents().remove_worker(self, true).await;
-        self.give_up_error()
-    }
-
-    /// The error a failed deletion step ends the attempt with. A step that failed because the
-    /// shard has a new owner - typed, or flattened into another error after the refused write
-    /// latched this oplog's fence - hands the deletion to that owner, as a refused storage remove
-    /// does. Any other failure is returned unchanged.
+    /// The error a failed deletion step ends the attempt with. A step refused because the shard
+    /// has a new owner retires the worker for a lost shard and answers with the routing miss that
+    /// sends the delete there. The generation stays cached in `Deleting` with the stages it
+    /// completed, as any failed attempt does, so a retry here runs no stage again and repeats no
+    /// remote effect; it leaves the cache once the shard has left this executor. Any other failure
+    /// is returned unchanged.
     async fn deletion_step_failed(
         self: &Arc<Self>,
         error: WorkerExecutorError,
     ) -> WorkerExecutorError {
-        match shard_lost_give_up_reason(&error, self.oplog.fence()) {
-            Some(reason) => self.leave_deletion_to_new_owner(reason).await,
-            None => error,
+        if !self.retire_if_shard_lost(&error) {
+            return error;
+        }
+        if self
+            .shard_service()
+            .check_worker(&self.owned_agent_id.agent_id)
+            .is_err()
+        {
+            self.evict_failed_deletion().await;
+        }
+        self.retirement_error()
+    }
+
+    /// Whether this generation holds a deletion whose last attempt failed, with nothing running.
+    async fn deletion_failed(&self) -> bool {
+        matches!(
+            &*self.instance.lock().await,
+            WorkerInstance::Deleting(deleting) if matches!(deleting.handle.result(), Some(Err(_)))
+        )
+    }
+
+    /// Drops a lost-shard generation whose deletion can no longer finish here. A retry cannot
+    /// rebuild it, because the delete is refused at the door once the shard has left.
+    async fn evict_failed_deletion(self: &Arc<Self>) {
+        if !self.active_agents().remove_worker(self, true).await {
+            debug!(
+                agent_id = %self.owned_agent_id,
+                "A newer generation replaced this one before its failed deletion was evicted"
+            );
         }
     }
 
@@ -3349,7 +3364,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }),
                 )
                 .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
         if dependencies.is_empty() {
             return Ok(());
@@ -3363,7 +3378,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Timestamp::now_utc().to_millis(),
                 )
                 .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
         Ok(())
     }
@@ -3408,8 +3423,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         result: Result<(), WorkerExecutorError>,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_given_up() {
-            Err(self.give_up_error())
+        if self.retired_for_lost_shard() {
+            Err(self.retirement_error())
         } else {
             result
         }
@@ -3462,7 +3477,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // agent. Under a fence the append is refused anyway; this also covers a shard revoked or
         // reassigned without one.
         if is_active
-            && !self.is_given_up()
+            && !self.retired_for_lost_shard()
             && self
                 .get_non_detached_last_known_status()
                 .await
@@ -3506,7 +3521,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // this, and that stop is where the agent is dropped. An agent given up for a reason that
         // never reached this error - a revoked or reassigned shard - is not recorded either: the
         // oplog would still accept the entry, at the epoch the agent no longer owns in spirit.
-        if self.give_up_if_shard_lost(error) {
+        if self.retire_if_shard_lost(error) {
             return;
         }
 
@@ -3621,7 +3636,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let instance_guard = self.lock_non_stopping_worker_owned().await;
         instance_guard.ensure_not_deleting()?;
         if self.owner_retirement_requested.is_cancelled() || self.oplog.is_retired() {
-            return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
+            return Err(self.retirement_error());
         }
         let status = self.state_actor.try_attached_status().await?;
         if candidate.export.source_fingerprint != self.initial_worker_metadata.fingerprint
@@ -4680,7 +4695,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         update_description: UpdateDescription,
     ) -> Result<bool, WorkerExecutorError> {
         let instance_guard = self.instance.lock().await;
-        if self.stopping_or_given_up(&instance_guard) {
+        if self.stopping_or_retired(&instance_guard) {
             return Ok(false);
         }
         self.enqueue_update_locked(&instance_guard, update_description)
@@ -4691,11 +4706,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Whether the runtime is stopping - on its own or inside a deletion, which wraps the runtime
     /// it stops - or the agent has been given up. Checked under the worker lifecycle lock by the
     /// loop-side operations, which must not wait for a stop that waits for the loop.
-    fn stopping_or_given_up(&self, instance_guard: &MutexGuard<'_, WorkerInstance>) -> bool {
+    fn stopping_or_retired(&self, instance_guard: &MutexGuard<'_, WorkerInstance>) -> bool {
         matches!(
             instance_guard.deletion_runtime(),
             WorkerInstance::Stopping(_)
-        ) || self.is_given_up()
+        ) || self.retired_for_lost_shard()
     }
 
     async fn enqueue_update_locked(
@@ -4858,6 +4873,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_keys_to_fail(&status, Some(key), !trap_type.is_invocation_rejection());
         let stderr = self.worker_event_service.get_last_invocation_errors();
         let golem_error = trap_type.as_golem_error(&stderr);
+        // A lost shard is not the invocation's outcome: the new owner resumes it. The waiters are
+        // sent there, and nothing is cached that a later poller here would read as its result.
+        if matches!(trap_type, TrapType::Interrupt(InterruptKind::ShardLost)) {
+            for key in &keys_to_fail {
+                self.publish_completion(key, Err(WorkerExecutorError::ShardingNotReady));
+            }
+            return;
+        }
         let mut map = self.hydrated_invocation_results.write().await;
         // Co-pending fail-fast results exist only in this bounded warm cache. Once evicted, a
         // poller sees the same `Pending` state that reconstructing this status from the oplog does.
@@ -5401,7 +5424,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         loop {
             let delta = growth.delta.swap(0, Ordering::AcqRel);
             if delta > 0 {
-                self.add_to_oplog_or_give_up(OplogEntry::grow_memory(delta))
+                self.add_to_oplog_or_retire(OplogEntry::grow_memory(delta))
                     .await;
             }
 
@@ -5623,7 +5646,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ));
             };
             if self.owner_retirement_requested.is_cancelled() {
-                return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
+                return Err(self.retirement_error());
             }
 
             if let Some(err) = instance_guard.startup_failure() {
@@ -5682,7 +5705,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ));
                     }
                     if self.owner_retirement_requested.is_cancelled() {
-                        return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
+                        return Err(self.retirement_error());
                     }
                     if !self
                         .state_actor
@@ -5787,7 +5810,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
         if self.owner_retirement_requested.is_cancelled() {
-            return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
+            return Err(self.retirement_error());
         }
 
         if let Some(err) = instance_guard.startup_failure() {
@@ -6006,7 +6029,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let producer = self.durable_stream_producer().await?;
         let instance_guard = self.lock_non_stopping_worker_owned().await;
         if self.owner_retirement_requested.is_cancelled() {
-            return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
+            return Err(self.retirement_error());
         }
         if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
@@ -6041,13 +6064,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Some(
                 self.durable_stream_producer
                     .retain_response()
-                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+                    .map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?,
             )
         } else {
             None
         };
         if self.owner_retirement_requested.is_cancelled() {
-            return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
+            return Err(self.retirement_error());
         }
         let session_key = request.attempt.session_key.clone();
         let records = self.stream_session_records(&session_key, None).await?;
@@ -6220,7 +6245,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         producer
                             .local_binding(*transport_stream_id, handle, roles[transport_stream_id])
                             .await
-                            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?,
                     );
                 }
                 bindings
@@ -6270,7 +6297,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             session_key: session_key.clone(),
                             attachment: streams
                                 .attachment_key(&mapping.handle, initial_epoch)
-                                .map_err(WorkerExecutorError::runtime)?,
+                                .map_err(|error| {
+                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
+                                })?,
                             mapping: mapping.clone(),
                         },
                     )
@@ -6395,7 +6424,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             prepared.stream_mappings.iter().cloned(),
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         .with_attachment(initial_epoch, prepared.attempt.attempt_id)
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
@@ -6409,7 +6438,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let persisted_foreign_mappings = producer
             .materialize_bindings(persisted_foreign_bindings)
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
             .into_iter()
             .filter(|mapping| !producer.owns_handle_identity(&mapping.handle))
             .collect::<Vec<_>>();
@@ -6417,14 +6446,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if streams
                 .has_journaled_consumer_terminal(mapping)
                 .await
-                .map_err(WorkerExecutorError::runtime)?
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
             {
                 continue;
             }
             streams
                 .prepare_foreign_mapping(mapping.clone(), initial_epoch)
                 .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
         if !retained_acceptance && !attached_during_prepare {
             let pending = self
@@ -6458,13 +6487,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             streams
                 .commit_consumer_journal()
                 .await
-                .map_err(|error| self.runtime_error_unless_fenced(error))?;
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
         for mapping in &persisted_foreign_mappings {
             if streams
                 .has_journaled_consumer_terminal(mapping)
                 .await
-                .map_err(WorkerExecutorError::runtime)?
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
             {
                 continue;
             }
@@ -6474,27 +6503,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // agent this executor no longer owns stops retrying.
             loop {
                 if self.owner_retirement_requested.is_cancelled() {
-                    return Err(WorkerExecutorError::runtime("worker owner is retiring"));
+                    return Err(self.retirement_error());
                 }
-                producer
-                    .ensure_healthy()
-                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                producer.ensure_healthy().map_err(|error| {
+                    error.into_worker_executor_error(WorkerExecutorError::runtime)
+                })?;
                 match streams
                     .activate_foreign_mapping(mapping.clone(), initial_epoch)
                     .await
                 {
                     Ok(()) => break,
                     // A refusal is permanent. Retrying it would hold the worker lifecycle lock
-                    // forever, and the give-up that has to take that lock could never stop the
+                    // forever, and the retirement that has to take that lock could never stop the
                     // agent.
-                    Err(_) if self.oplog.fence().is_some() => {
-                        return Err(self.runtime_error_unless_fenced(
-                            "durable foreign topology activation was fenced".to_string(),
-                        ));
+                    Err(error @ SessionError::Fenced(_)) => {
+                        return Err(error.into_worker_executor_error(WorkerExecutorError::runtime));
                     }
-                    // A revoke writes nothing, so no fence latches: the mark is all there is, and
-                    // `give_up` is already waiting for this lock.
-                    Err(_) if self.is_given_up() => return Err(self.give_up_error()),
                     Err(error) => {
                         warn!(
                             session = %prepared.attempt.session_key.idempotency_key,
@@ -6519,12 +6543,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.state_actor
                 .commit_and_update_state_notifying(
                     CommitLevel::Always,
-                    acceptance_committed
-                        .take()
-                        .expect("legacy durable session has a commit notification"),
+                    state_actor::CommitReceipt::Plain(
+                        acceptance_committed
+                            .take()
+                            .expect("legacy durable session has a commit notification"),
+                    ),
                 )
                 .await
-                .map_err(|fence| self.given_up_by(fence))?;
+                .map_err(|fence| self.retired_by(fence))?;
             self.state_actor.notify_status_changed();
         }
         if !retained_acceptance && let WorkerInstance::Running(running) = &*instance_guard {
@@ -6559,7 +6585,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Some(
                 self.durable_stream_producer
                     .retain_response()
-                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+                    .map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?,
             )
         } else {
             None
@@ -6677,7 +6705,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let materialized_mappings = producer
             .materialize_bindings(&mappings)
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let base_streams = StreamSession::open(
             producer.clone(),
             self.oplog.clone(),
@@ -6685,7 +6713,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             mappings.iter().cloned(),
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
@@ -6712,18 +6740,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 && streams
                                     .has_journaled_consumer_terminal(mapping)
                                     .await
-                                    .map_err(WorkerExecutorError::runtime)?
+                                    .map_err(|error| {
+                                        error.into_worker_executor_error(
+                                            WorkerExecutorError::runtime,
+                                        )
+                                    })?
                             {
                                 continue;
                             }
                             streams
                                 .prepare_foreign_mapping(mapping.clone(), existing.accepted_epoch)
                                 .await
-                                .map_err(WorkerExecutorError::runtime)?;
+                                .map_err(|error| {
+                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
+                                })?;
                             streams
                                 .activate_foreign_mapping(mapping.clone(), existing.accepted_epoch)
                                 .await
-                                .map_err(WorkerExecutorError::runtime)?;
+                                .map_err(|error| {
+                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
+                                })?;
                         }
                     }
                 }
@@ -6759,7 +6795,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } = make_streams(attempt.expected_epoch, attempt.attempt_id)?
             .authoritative_attachment_state()
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         if attempt.expected_epoch < current_epoch {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "StaleEpoch: current attachment epoch is {current_epoch}"
@@ -6783,7 +6819,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         current_streams
             .validate_resume_cursors(&attempt.cursors)
             .await
-            .map_err(WorkerExecutorError::invalid_request)?;
+            .map_err(|error| {
+                error.into_worker_executor_error(WorkerExecutorError::invalid_request)
+            })?;
 
         let accepted_epoch = current_epoch.checked_add(1).ok_or_else(|| {
             WorkerExecutorError::invalid_request(
@@ -6798,11 +6836,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 accepted_epoch,
             })
             .await
-            .map_err(|error| match self.oplog.fence() {
-                // The attempt reports its errors as text. A refused append behind one has already
-                // latched the fence, which is reported as such so the caller reroutes to the owner.
-                Some(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
-                None => WorkerExecutorError::invalid_request(error),
+            .map_err(|error| {
+                error.into_worker_executor_error(WorkerExecutorError::invalid_request)
             })?;
 
         let streams = make_streams(accepted_epoch, attempt.attempt_id)?;
@@ -6814,18 +6849,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     && streams
                         .has_journaled_consumer_terminal(mapping)
                         .await
-                        .map_err(WorkerExecutorError::runtime)?
+                        .map_err(|error| {
+                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                        })?
                 {
                     continue;
                 }
                 streams
                     .prepare_foreign_mapping(mapping.clone(), accepted_epoch)
                     .await
-                    .map_err(WorkerExecutorError::runtime)?;
+                    .map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?;
                 streams
                     .activate_foreign_mapping(mapping.clone(), accepted_epoch)
                     .await
-                    .map_err(WorkerExecutorError::runtime)?;
+                    .map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?;
             }
         }
         drop(instance_guard);
@@ -6995,7 +7036,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?
             .read_session_record(index)
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
     }
 
     pub(crate) async fn prepared_stream_session(
@@ -7031,14 +7072,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             prepared.stream_mappings.iter().cloned(),
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         streams
             .recover_session_mappings()
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         Ok(Some((prepared, streams)))
     }
 
@@ -7067,7 +7108,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mappings = producer
             .materialize_bindings(&prepared.stream_mappings)
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let streams = StreamSession::open(
             producer,
             self.oplog.clone(),
@@ -7075,18 +7116,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             prepared.stream_mappings.iter().cloned(),
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         streams
             .recover_nested_input_mappings()
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         streams
             .recover_session_mappings()
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let encoded = prepared.attempt.invocation.invocation_value.as_slice();
         let typed = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(encoded)
             .map_err(|error| {
@@ -7105,7 +7146,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let input = streams
             .decode_initial(value, &mappings, SessionStreamRole::Input)
             .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         Ok(replace_invocation_input(
             invocation,
             TypedSchemaValue::new(graph, input),
@@ -7141,7 +7182,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             prepared.stream_mappings.iter().cloned(),
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
@@ -7151,7 +7192,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         streams
             .materialize_result(value, graph, root, component_revision)
             .await
-            .map_err(WorkerExecutorError::runtime)
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
     }
 
     /// Records a failed terminal for the invocation's durable stream session.
@@ -7217,7 +7258,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             mappings,
         )
         .await
-        .map_err(WorkerExecutorError::runtime)?
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
@@ -7225,7 +7266,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Ok(()) => streams.complete_or_defer_for_forwarded_inputs().await,
             Err(details) => streams.fail(details).await,
         }
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         Ok(())
     }
 
@@ -7255,7 +7296,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<Arc<DurableStreamStore>, WorkerExecutorError> {
         self.load_durable_stream_producer()
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
     }
 
     /// Fences an idle producer before cache eviction; admitted mutations keep the owner resident.
@@ -7272,7 +7313,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         async move {
             retirement
                 .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
         }
     }
 
@@ -7309,7 +7350,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(producer)
             })
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
     }
 
     fn durable_stream_commit_for(data: &ResolvedWorkerData<Ctx>) -> DurableStreamCommit {
@@ -7319,16 +7360,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Box::pin(async move {
                 let committed = if let Some(committed) = committed {
                     state_actor
-                        .commit_and_update_state_notifying(CommitLevel::Always, committed)
+                        .commit_and_update_state_notifying(
+                            CommitLevel::Always,
+                            state_actor::CommitReceipt::Refusable(committed),
+                        )
                         .await
                 } else {
                     state_actor
                         .commit_and_update_state(CommitLevel::Always)
                         .await
                 };
-                // A refusal is not reported through this closure: the producer reads it
-                // back from the oplog's latch, which the refused append set before the
-                // status actor replied, and the actor has spawned the give-up.
+                // A refusal reaches the producer through the receipt; the actor has spawned the
+                // give-up.
                 if let Ok((_, true)) = committed {
                     state_actor.notify_status_changed();
                 }
@@ -7422,7 +7465,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &probe,
             )
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         Ok(producer.has_reconcilable_attachments().await)
     }
 
@@ -7531,11 +7574,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             streams
                 .reconcile_local_cancellation_intents(None)
                 .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
             let mut cancellations_done = !streams
                 .current_control_metadata()
                 .await
-                .map_err(WorkerExecutorError::runtime)?
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
                 .has_cancellation_intents();
             if retry_remote_cancellations && !cancellations_done {
                 let result = streams
@@ -7621,7 +7664,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         if recoverable.is_empty() {
             if let Some(error) = first_error {
-                return Err(WorkerExecutorError::runtime(error));
+                return Err(error.into_worker_executor_error(WorkerExecutorError::runtime));
             }
             return Ok(self.durable_topology_recovery.lock().await.needs_recovery());
         }
@@ -7675,7 +7718,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
         if let Some(error) = first_error {
-            return Err(WorkerExecutorError::runtime(error));
+            return Err(error.into_worker_executor_error(WorkerExecutorError::runtime));
         }
         Ok(self.durable_topology_recovery.lock().await.needs_recovery())
     }
@@ -7717,7 +7760,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     *consumer_read_ordinal,
                 )
                 .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()));
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime));
         }
         if key.producer_environment_id != self.owned_agent_id.environment_id
             || key.producer != self.owned_agent_id.agent_id
@@ -7771,7 +7814,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             probe.status_exact(key, Some(mapping)).await
         }
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let authorized = match &request.operation {
             StreamAttachmentControlOperation::Prepare { .. } => matches!(
                 consumer_status,
@@ -7847,7 +7890,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     && producer
                         .registered_stream_role(&mapping.handle)
                         .await
-                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                        .map_err(|error| {
+                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                        })?
                         == SessionStreamRole::Output
                     && let Some(prepared) = self
                         .prepared_stream_session(&source.idempotency_key)
@@ -7862,7 +7907,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         )
                         .await
                         .map(|outcome| outcome.replayed)
-                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()));
+                        .map_err(|error| {
+                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                        });
                 }
                 producer
                     .cancel_open(None, key.stream_id, role, reason, details)
@@ -7877,7 +7924,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 unreachable!("source-unavailable controls return before producer execution")
             }
         }
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         Ok(replayed)
     }
 
@@ -7947,7 +7994,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if probe
             .status_exact(key, Some(&request.mapping))
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
             != ConsumerAttachmentStatus::Active
         {
             return Err(WorkerExecutorError::invalid_request(
@@ -7982,7 +8029,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && probe
                 .status_exact(key, Some(&request.mapping))
                 .await
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
                 != ConsumerAttachmentStatus::Active
         {
             return Err(WorkerExecutorError::invalid_request(
@@ -8090,22 +8137,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Appends an entry on a path that has no way to report the failure to its caller.
     ///
-    /// A fenced write means the shard moved while this agent was resident. The agent is marked
-    /// given up so the stop that follows drops it from this executor rather than writing to an
-    /// oplog another executor owns now, and `OplogIndex::NONE` is returned for the entry that was
+    /// A fenced write means the shard moved while this agent was resident. The retirement is
+    /// recorded so the stop that follows drops the agent from this executor rather than writing to
+    /// an oplog another executor owns now, and `OplogIndex::NONE` is returned for the entry that was
     /// not written - the same "no index" value a debugging session's discarded write returns.
     ///
-    /// Marked rather than stopped here on purpose: these callers run under the worker lifecycle
-    /// lock and inside the wasm store, where `give_up` would deadlock on the lock it already
+    /// Recorded rather than stopped here on purpose: these callers run under the worker lifecycle
+    /// lock and inside the wasm store, where stopping would deadlock on the lock it already
     /// holds. The fence latches on the oplog, so the invocation's next write is refused too and
     /// unwinds the loop, which is where the stop belongs.
     ///
     /// Every other storage failure keeps the fail-stop behaviour it has always had.
-    pub async fn add_to_oplog_or_give_up(&self, entry: OplogEntry) -> OplogIndex {
+    pub async fn add_to_oplog_or_retire(&self, entry: OplogEntry) -> OplogIndex {
         match self.oplog.add(entry).await {
             Ok(index) => index,
-            Err(OplogError::Fenced(fence)) => {
-                self.mark_given_up(GiveUpReason::Fenced(Some(Box::new(fence))));
+            Err(OplogError::Fenced(_)) => {
+                self.record_retirement(InterruptKind::ShardLost);
                 OplogIndex::NONE
             }
             Err(error) => panic!("oplog write: {error}"),
@@ -8137,32 +8184,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 Ok(index)
             }
-            Err(fence) => Err(self.given_up_by(fence)),
+            Err(fence) => Err(self.retired_by(fence)),
         }
     }
 
     /// Enqueues an actor-owned commit + fold and waits only until the commit is acknowledged.
     /// Later ordered status reads remain behind the fold on the same FIFO queue.
     ///
-    /// A refused commit is never acknowledged: the actor drops the receipt once the oplog has
-    /// latched the fence, so a missing acknowledgement with a latched fence is reported as
-    /// `OplogError::Fenced` (see [`Self::commit_oplog_and_update_state`]). Without one it means
-    /// the actor stopped, which stays fatal.
+    /// A refused commit is acknowledged with the fence, reported as `OplogError::Fenced` (see
+    /// [`Self::commit_oplog_and_update_state`]). No acknowledgement at all means the actor
+    /// stopped, which stays fatal.
     pub async fn commit_oplog_before_status_update(
         &self,
         commit_level: CommitLevel,
     ) -> Result<(), OplogError> {
-        if self
+        match self
             .state_actor
             .enqueue_commit_and_update_state_notifying(commit_level)
             .await
-            .is_ok()
         {
-            return Ok(());
-        }
-        match self.oplog.fence() {
-            Some(fence) => Err(self.given_up_by(fence)),
-            None => panic!(
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(fence)) => Err(self.retired_by(fence)),
+            Err(_) => panic!(
                 "Worker state actor for {} stopped before acknowledging commit",
                 self.owned_agent_id
             ),
@@ -8173,7 +8216,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// [`Self::commit_oplog_and_update_state`]).
     ///
     /// Every other storage failure keeps the fail-stop behaviour of
-    /// [`Self::add_to_oplog_or_give_up`].
+    /// [`Self::add_to_oplog_or_retire`].
     pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
         let index = self.add_to_oplog_or_fenced(entry).await?;
         self.commit_oplog_and_update_state(CommitLevel::Always)
@@ -8186,25 +8229,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn add_to_oplog_or_fenced(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
         match self.oplog.add(entry).await {
             Ok(index) => Ok(index),
-            Err(OplogError::Fenced(fence)) => Err(self.given_up_by(fence)),
+            Err(OplogError::Fenced(fence)) => Err(self.retired_by(fence)),
             Err(error) => panic!("oplog write: {error}"),
-        }
-    }
-
-    /// A failure that reached its caller flattened into a string, reported as the fence when the
-    /// oplog has latched one: the worker service retries a lost shard on its new owner, but not an
-    /// internal error.
-    fn runtime_error_unless_fenced(&self, error: String) -> WorkerExecutorError {
-        match self.oplog.fence() {
-            Some(fence) => self.given_up_by(fence).into(),
-            None => WorkerExecutorError::runtime(error),
         }
     }
 
     /// Marks the agent given up because its oplog refused a write, and returns the refusal for the
     /// caller to propagate.
-    pub(crate) fn given_up_by(&self, fence: OplogFence) -> OplogError {
-        self.mark_given_up(GiveUpReason::Fenced(Some(Box::new(fence.clone()))));
+    pub(crate) fn retired_by(&self, fence: OplogFence) -> OplogError {
+        self.record_retirement(InterruptKind::ShardLost);
         OplogError::Fenced(fence)
     }
 
@@ -8361,7 +8394,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
-            .map_err(|fence| self.given_up_by(fence))?;
+            .map_err(|fence| self.retired_by(fence))?;
 
         if changed
             && let Some(wakeup) = wakeup
@@ -8481,7 +8514,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
     ) -> Result<bool, WorkerExecutorError> {
         let instance_guard = self.instance.lock().await;
-        if self.stopping_or_given_up(&instance_guard) {
+        if self.stopping_or_retired(&instance_guard) {
             return Ok(false);
         }
         self.cancel_invocation_locked(&instance_guard, idempotency_key)
@@ -8882,8 +8915,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Given up here, so no result for the key will be published on this executor. The
                 // retry answer is published when the agent is given up but not cached, and a
                 // receiver that lagged past it, or subscribed after it, finds it here instead.
-                LookupResult::New | LookupResult::Pending if self.is_given_up() => {
-                    break Ok(LookupResult::Complete(Err(self.give_up_error())));
+                LookupResult::New | LookupResult::Pending if self.retired_for_lost_shard() => {
+                    break Ok(LookupResult::Complete(Err(self.retirement_error())));
                 }
                 LookupResult::New | LookupResult::Pending => {
                     let waiting = subscription.wait_for(|event| match event {
@@ -8920,7 +8953,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             // A key the give-up did not know about yet (enqueued, not yet folded
                             // into the status it failed from) gets no retry answer published.
                             // The lookup at the top of the loop answers it.
-                            if self.is_given_up() {
+                            if self.retired_for_lost_shard() {
                                 continue;
                             }
 
@@ -9177,8 +9210,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // keeps the failure away from a newer generation's waiters, which match by agent id. Keys
         // that already have a result keep it. A generation that left the cache some other way
         // first (an idle expiry, an environment unload) is not reached here.
-        if self.is_given_up() && self.deps.active_agents().is_cached_generation(self).await {
-            self.fail_pending_invocations(self.give_up_error()).await;
+        if self.retired_for_lost_shard()
+            && self.deps.active_agents().is_cached_generation(self).await
+        {
+            self.fail_pending_invocations(self.retirement_error()).await;
             self.remove_from_active_agents().await;
         }
 
@@ -9310,11 +9345,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Make sure the oplog is committed. Best-effort: a stop must finish.
                 match self.oplog.commit(CommitLevel::Always).await {
                     Ok(_) => {}
-                    Err(OplogError::Fenced(fence)) => {
-                        // The shard has a new owner. `mark_given_up` is synchronous and takes
-                        // no lock, so it is safe under the worker lifecycle lock this arm holds -
-                        // calling `give_up` here would deadlock on that same lock.
-                        self.mark_given_up(GiveUpReason::Fenced(Some(Box::new(fence))));
+                    Err(OplogError::Fenced(_)) => {
+                        // The shard has a new owner. Recording the retirement is synchronous and
+                        // takes no lock, so it is safe under the worker lifecycle lock this arm
+                        // holds.
+                        self.record_retirement(InterruptKind::ShardLost);
                     }
                     Err(error) => {
                         warn!(%error, "Committing the oplog while stopping failed");
@@ -9338,11 +9373,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // logged/metered inside `flush` and re-queued; the blob is reconstructable from the
                 // oplog, so it must not block the stop.
                 //
-                // Skipped entirely for an agent given up here, whether by the commit above or by a
-                // revoke or reassignment that latched no fence: this is a key-value write, which
-                // is NOT fenced, so it would happily overwrite the new owner's newer status blob
-                // with our stale one. The flusher refuses it too once `mark_given_up` has run.
-                if !self.is_given_up()
+                // Skipped entirely for a lost shard, whether the commit above was refused or a
+                // revoke or reassignment retired the agent: this is a key-value write, which is
+                // NOT fenced, so it would happily overwrite the new owner's newer status blob with
+                // our stale one. The flusher refuses it too once the retirement is recorded.
+                if !self.retired_for_lost_shard()
                     && let Err(err) = self
                         .status_flusher
                         .flush(status_flusher::FlushReason::Forced)
@@ -9499,8 +9534,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if pending_live_invocations == PendingLiveInvocationDisposition::Fail && !queue.is_empty() {
             // A given-up agent's queued work moves to the shard's new owner, so its waiters get
             // the retry answer, as in `fail_pending_invocations`.
-            let error = if self.is_given_up() {
-                self.give_up_error()
+            let error = if self.retired_for_lost_shard() {
+                self.retirement_error()
             } else {
                 let status = self.get_attached_last_known_status().await;
                 Self::ensure_not_failed(
@@ -9554,9 +9589,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // the invocation loop, finding the key complete, would cancel the pending invocation -
         // waiting on this very stop to do it, or, with nothing fenced yet, cancelling work the new
         // owner still has to run.
-        let given_up = self.is_given_up();
+        let given_up = self.retired_for_lost_shard();
         let error = if given_up {
-            self.give_up_error()
+            self.retirement_error()
         } else {
             error
         };
@@ -10465,49 +10500,6 @@ pub(crate) fn given_up_by_assignment(
     match assignment.epoch_of(&shard_id) {
         None => true,
         assigned => epoch_superseded(held, assigned),
-    }
-}
-
-/// Why this executor is giving an agent up: it no longer owns the agent's shard.
-///
-/// Distinct from [`UnloadReason`], which says why an agent left memory. An agent can be unloaded
-/// for memory pressure and be back a moment later; a given-up one is gone from this executor
-/// and belongs to the shard's new owner.
-#[derive(Clone, Debug)]
-pub(crate) enum GiveUpReason {
-    /// A write to the agent's oplog was refused by the storage. Carries the fence when the write
-    /// path had it to hand; `None` when the loop only saw the classified interrupt.
-    Fenced(Option<Box<OplogFence>>),
-    /// The shard manager revoked the shard.
-    ShardRevoked,
-    /// A delivered assignment no longer holds the agent's shard, or holds it at a higher epoch
-    /// than the agent's oplog asserts. In the second case the shard came back to this executor,
-    /// and the agent is reopened here at the new epoch.
-    ShardNotAssigned,
-}
-
-impl GiveUpReason {
-    /// What anyone waiting on the agent is told. Every variant is one the worker service answers
-    /// by refreshing its routing table and retrying, so the invocation lands on the new owner
-    /// instead of failing.
-    pub(crate) fn to_error(&self) -> WorkerExecutorError {
-        match self {
-            GiveUpReason::Fenced(Some(fence)) => WorkerExecutorError::oplog_fenced(
-                fence.agent_id.clone(),
-                fence.expected_epoch.0,
-                fence.actual_epoch.map(|epoch| epoch.0),
-            ),
-            // The loop saw the classified interrupt without the fence details, or the shard was
-            // taken back explicitly. Either way the caller's move is the same.
-            GiveUpReason::Fenced(None)
-            | GiveUpReason::ShardRevoked
-            | GiveUpReason::ShardNotAssigned => WorkerExecutorError::ShardingNotReady,
-        }
-    }
-
-    /// Which `OwnerFailureWinner` entity bodies are torn down with.
-    pub(crate) fn owner_failure(&self) -> OwnerFailureWinner {
-        OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
     }
 }
 
@@ -12209,36 +12201,22 @@ mod tests {
             agent_id: agent_id.clone(),
             expected_epoch: ShardEpoch(2),
             actual_epoch: Some(ShardEpoch(3)),
-            writer_conflict: false,
         };
 
-        // A latched fence wins over whatever the refusal was flattened into on its way out, and
-        // its details are kept for the error the waiters are given.
-        assert!(matches!(
-            shard_lost_give_up_reason(
-                &WorkerExecutorError::runtime("durable stream commit failed"),
-                Some(fence.clone())
-            ),
-            Some(GiveUpReason::Fenced(Some(latched))) if *latched == fence
-        ));
-        assert!(matches!(
-            shard_lost_give_up_reason(
-                &WorkerExecutorError::oplog_fenced(agent_id, 2, Some(3)),
-                None
-            ),
-            Some(GiveUpReason::Fenced(None))
-        ));
+        // A text failure is never a fence: only the typed refusal is.
+        assert!(!is_shard_lost(&WorkerExecutorError::runtime(
+            OplogError::Fenced(fence).to_string()
+        )));
+        assert!(is_shard_lost(&WorkerExecutorError::oplog_fenced(
+            agent_id,
+            2,
+            Some(3)
+        )));
         // Without a latched fence: a shard revoked or reassigned interrupts the agent with
         // `ShardLost` and writes nothing, so no fence ever latches.
-        assert!(matches!(
-            shard_lost_give_up_reason(
-                &WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::ShardLost
-                },
-                None
-            ),
-            Some(GiveUpReason::Fenced(None))
-        ));
+        assert!(is_shard_lost(&WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost
+        }));
 
         // Every other failure is still the agent's own, to be recorded or retried.
         for kind in [
@@ -12248,12 +12226,11 @@ mod tests {
             InterruptKind::Jump,
         ] {
             assert!(
-                shard_lost_give_up_reason(&WorkerExecutorError::Interrupted { kind }, None)
-                    .is_none(),
+                !is_shard_lost(&WorkerExecutorError::Interrupted { kind }),
                 "{kind:?} is not a lost shard"
             );
         }
-        assert!(shard_lost_give_up_reason(&WorkerExecutorError::runtime("boom"), None).is_none());
+        assert!(!is_shard_lost(&WorkerExecutorError::runtime("boom")));
     }
 
     #[test]
@@ -13174,61 +13151,6 @@ mod tests {
                 RetryDecision::ReacquirePermits,
                 "reacquire_permits must override the kind-based decision"
             );
-        }
-    }
-
-    #[test]
-    fn a_given_up_agent_reports_an_error_its_caller_can_retry() {
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "given_up".to_string(),
-        };
-        let fence = OplogFence {
-            agent_id,
-            expected_epoch: golem_common::model::ShardEpoch(3),
-            actual_epoch: Some(golem_common::model::ShardEpoch(4)),
-            writer_conflict: false,
-        };
-
-        // A fence the write path saw in full names both epochs, so an operator reading the log
-        // can tell which generation lost.
-        assert!(matches!(
-            GiveUpReason::Fenced(Some(Box::new(fence))).to_error(),
-            WorkerExecutorError::OplogFenced {
-                expected_epoch: 3,
-                actual_epoch: Some(4),
-                ..
-            }
-        ));
-
-        // Every other shape gives the same answer a lapsed lease does: the worker service
-        // refreshes its routing table and retries on the owner. None of them may look like a
-        // plain invocation failure, or the caller would give up instead of moving.
-        for reason in [
-            GiveUpReason::Fenced(None),
-            GiveUpReason::ShardRevoked,
-            GiveUpReason::ShardNotAssigned,
-        ] {
-            assert!(
-                matches!(reason.to_error(), WorkerExecutorError::ShardingNotReady),
-                "{reason:?} must be retriable on the new owner"
-            );
-        }
-    }
-
-    #[test]
-    fn giving_an_agent_up_never_looks_like_an_api_interrupt() {
-        // Entity bodies are torn down as `ShardLost`, not `Interrupt`: the agent was not
-        // interrupted through the Golem API, its shard moved.
-        for reason in [
-            GiveUpReason::Fenced(None),
-            GiveUpReason::ShardRevoked,
-            GiveUpReason::ShardNotAssigned,
-        ] {
-            assert!(matches!(
-                reason.owner_failure(),
-                OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
-            ));
         }
     }
 

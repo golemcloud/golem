@@ -14,7 +14,7 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanResume, WriterId,
+    ScanResume,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -37,39 +37,26 @@ use std::time::Duration;
 #[derive(Debug)]
 pub struct RedisIndexedStorage {
     redis: RedisPool,
-    writer_id: WriterId,
 }
 
 impl RedisIndexedStorage {
     pub fn new(redis: RedisPool) -> Self {
-        Self {
-            redis,
-            writer_id: WriterId::process(),
-        }
+        Self { redis }
     }
 
-    /// The same store written as `writer_id`. See [`WriterId`] for why a process uses one value.
-    pub fn for_writer(mut self, writer_id: WriterId) -> Self {
-        self.writer_id = writer_id;
-        self
-    }
-
-    /// `ARGV`: the asserted epoch, the writer, then `id, value` pairs.
+    /// `ARGV`: the asserted epoch, then `id, value` pairs.
     ///
     /// Numbers stay decimal strings throughout, because a Lua number is a double and loses
     /// precision above 2^53; with no leading zeros they order by length and then lexically. The
     /// ids are checked against the stream before the first `XADD` because a script is atomic but
     /// not transactional: an `XADD` failing half way would leave the ones before it behind.
     const FENCED_APPEND_SCRIPT: &'static str = r#"
-local stored = redis.call('HMGET', KEYS[2], 'epoch', 'writer')
-if stored[1] == false then
-  return redis.error_reply('FENCED - 0')
+local stored = redis.call('HGET', KEYS[2], 'epoch')
+if stored == false then
+  return redis.error_reply('FENCED -')
 end
-if stored[1] ~= ARGV[1] then
-  return redis.error_reply('FENCED ' .. stored[1] .. ' 0')
-end
-if stored[2] ~= ARGV[2] then
-  return redis.error_reply('FENCED ' .. stored[1] .. ' 1')
+if stored ~= ARGV[1] then
+  return redis.error_reply('FENCED ' .. stored)
 end
 local top = nil
 if redis.call('EXISTS', KEYS[1]) == 1 then
@@ -80,51 +67,44 @@ if redis.call('EXISTS', KEYS[1]) == 1 then
     end
   end
 end
-for i = 3, #ARGV, 2 do
+for i = 2, #ARGV, 2 do
   local id = ARGV[i]
   if top and not (#id > #top or (#id == #top and id > top)) then
     return redis.error_reply('ERR The ID specified in XADD is equal or smaller than the target stream top item')
   end
   top = id
 end
-for i = 3, #ARGV, 2 do
+for i = 2, #ARGV, 2 do
   redis.call('XADD', KEYS[1], ARGV[i], 'key', ARGV[i + 1])
 end
 return redis.status_reply('OK')
 "#;
 
-    /// `ARGV`: the epoch and the writer, compared the way [`Self::FENCED_APPEND_SCRIPT`] does.
+    /// `ARGV`: the epoch, compared the way [`Self::FENCED_APPEND_SCRIPT`] does.
     const SET_KEY_EPOCH_SCRIPT: &'static str = r#"
-local stored = redis.call('HMGET', KEYS[1], 'epoch', 'writer')
-local epoch = stored[1]
+local epoch = redis.call('HGET', KEYS[1], 'epoch')
 local higher = epoch ~= false and (#ARGV[1] > #epoch or (#ARGV[1] == #epoch and ARGV[1] > epoch))
-if epoch == false or higher or (epoch == ARGV[1] and stored[2] == ARGV[2]) then
-  redis.call('HSET', KEYS[1], 'epoch', ARGV[1], 'writer', ARGV[2])
+if epoch == false or higher or epoch == ARGV[1] then
+  redis.call('HSET', KEYS[1], 'epoch', ARGV[1])
   return redis.status_reply('OK')
 end
-if epoch == ARGV[1] then
-  return redis.error_reply('FENCED ' .. epoch .. ' 1')
-end
-return redis.error_reply('FENCED ' .. epoch .. ' 0')
+return redis.error_reply('FENCED ' .. epoch)
 "#;
 
-    /// `KEYS`: the stream, then its epoch record. `ARGV`: the epoch and the writer the delete
-    /// asserts, compared the way [`Self::FENCED_APPEND_SCRIPT`] does, or nothing for an
-    /// unconditional delete. Both keys go in the one `DEL`, so a refused delete removes neither.
+    /// `KEYS`: the stream, then its epoch record. `ARGV`: the epoch the delete asserts, compared
+    /// the way [`Self::FENCED_APPEND_SCRIPT`] does, or nothing for an unconditional delete. Both
+    /// keys go in the one `DEL`, so a refused delete removes neither.
     const DELETE_WITH_EPOCH_SCRIPT: &'static str = r#"
 if #ARGV > 0 then
-  local stored = redis.call('HMGET', KEYS[2], 'epoch', 'writer')
-  if stored[1] == false then
+  local stored = redis.call('HGET', KEYS[2], 'epoch')
+  if stored == false then
     if redis.call('EXISTS', KEYS[1]) == 0 then
       return redis.status_reply('OK')
     end
-    return redis.error_reply('FENCED - 0')
+    return redis.error_reply('FENCED -')
   end
-  if stored[1] ~= ARGV[1] then
-    return redis.error_reply('FENCED ' .. stored[1] .. ' 0')
-  end
-  if stored[2] ~= ARGV[2] then
-    return redis.error_reply('FENCED ' .. stored[1] .. ' 1')
+  if stored ~= ARGV[1] then
+    return redis.error_reply('FENCED ' .. stored)
   end
 end
 redis.call('DEL', KEYS[1], KEYS[2])
@@ -162,7 +142,7 @@ return redis.status_reply('OK')
         }
     }
 
-    /// The `FENCED <stored epoch or -> <writer conflict 0|1>` reply of the scripts above.
+    /// The `FENCED <stored epoch or ->` reply of the scripts above.
     fn parse_fenced(
         error: &RedisError,
         key: &str,
@@ -177,20 +157,17 @@ return redis.status_reply('OK')
             "-" => None,
             epoch => Some(ShardEpoch(epoch.parse::<u64>().ok()?)),
         };
-        let writer_conflict = parts.next()? == "1";
         Some(IndexedStorageError::Fenced {
             key: key.to_string(),
             expected,
             actual,
-            writer_conflict,
         })
     }
 
     /// The error of [`IndexedStorage::set_key_epoch`] or [`IndexedStorage::delete_with_epoch`]:
     /// the scripts' fence, or else classified as a read is. A lost connection or a timeout is
-    /// `Transient` even if the script ran, because both repeat safely for the same writer: the
-    /// epoch it already holds is accepted again, and a deletion that already happened finds
-    /// nothing left and succeeds.
+    /// `Transient` even if the script ran, because both repeat safely: the epoch already recorded
+    /// is accepted again, and a deletion that already happened finds nothing left and succeeds.
     fn classify_epoch_error(
         error: RedisError,
         key: &str,
@@ -212,10 +189,7 @@ return redis.status_reply('OK')
         options: Option<&Options>,
         primary_oplog_insert: bool,
     ) -> Result<(), IndexedStorageError> {
-        let mut args = vec![
-            Value::from(expected_epoch.0.to_string()),
-            Value::from(self.writer_id.to_string()),
-        ];
+        let mut args = vec![Value::from(expected_epoch.0.to_string())];
         for (id, value) in pairs {
             args.push(Value::from(id.to_string()));
             args.push(Value::Bytes(value));
@@ -577,10 +551,7 @@ impl IndexedStorage for RedisIndexedStorage {
             .eval(
                 Self::SET_KEY_EPOCH_SCRIPT,
                 &[Self::epoch_key(namespace, key)],
-                vec![
-                    Value::from(epoch.0.to_string()),
-                    Value::from(self.writer_id.to_string()),
-                ],
+                vec![Value::from(epoch.0.to_string())],
                 None,
             )
             .await
@@ -597,10 +568,7 @@ impl IndexedStorage for RedisIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let args = match expected_epoch {
-            Some(expected) => vec![
-                Value::from(expected.0.to_string()),
-                Value::from(self.writer_id.to_string()),
-            ],
+            Some(expected) => vec![Value::from(expected.0.to_string())],
             None => vec![],
         };
         self.redis
@@ -795,7 +763,7 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn a_fenced_reply_carries_the_stored_epoch_and_the_writer_conflict() {
+    fn a_fenced_reply_carries_the_stored_epoch() {
         let fenced = |details: &'static str| {
             RedisIndexedStorage::parse_fenced(
                 &RedisError::new(ErrorKind::Unknown, details),
@@ -805,28 +773,15 @@ mod tests {
         };
 
         assert!(matches!(
-            fenced("FENCED 9 0"),
+            fenced("FENCED 9"),
             Some(IndexedStorageError::Fenced {
                 actual: Some(ShardEpoch(9)),
-                writer_conflict: false,
                 ..
             })
         ));
         assert!(matches!(
-            fenced("FENCED 7 1"),
-            Some(IndexedStorageError::Fenced {
-                actual: Some(ShardEpoch(7)),
-                writer_conflict: true,
-                ..
-            })
-        ));
-        assert!(matches!(
-            fenced("FENCED - 0"),
-            Some(IndexedStorageError::Fenced {
-                actual: None,
-                writer_conflict: false,
-                ..
-            })
+            fenced("FENCED -"),
+            Some(IndexedStorageError::Fenced { actual: None, .. })
         ));
         // An error raised by a command inside the script is not a fence.
         assert!(

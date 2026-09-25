@@ -244,7 +244,7 @@ impl Oplog for RateLimitedOplog {
         self.inner.last_added_non_hint_entry().await
     }
 
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError> {
         self.inner.wait_for_replicas(replicas, timeout).await
     }
 
@@ -556,6 +556,17 @@ impl OplogService for RateLimitedOplogService {
         agent_mode: AgentMode,
     ) -> OplogIndex {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
+    }
+
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+            .await
     }
 
     async fn delete(

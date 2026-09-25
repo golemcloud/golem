@@ -789,6 +789,16 @@ where
         }
     };
 
+    // Recording the request body was refused: the send failed because this agent's shard has a
+    // new owner, which traps as the lost shard instead of reaching the guest as a request error.
+    if send_result.is_err()
+        && let Some(fence) = physical.body.recording_fence()
+    {
+        return Err(HttpError::trap(WorkerExecutorError::from(
+            crate::services::oplog::OplogError::Fenced(fence),
+        )));
+    }
+
     match send_result {
         Ok((http_response, io)) => {
             let response_status = http_response.status().as_u16();

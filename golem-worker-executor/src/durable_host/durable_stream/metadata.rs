@@ -2157,7 +2157,7 @@ mod tests {
                         .await
                         .expect("oplog write");
                     if let Some(published) = published {
-                        let _ = published.send(());
+                        let _ = published.send(Ok(()));
                     }
                 })
             });

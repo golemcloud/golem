@@ -50,18 +50,6 @@ message RegisterRequest {
   // the same address refreshes the existing lease rather than creating a second
   // one. An empty or non-UUID value is rejected before any state is touched.
   string executor_id = 3;
-  // The shards, with their epochs, this executor held under an earlier
-  // executor_id that the manager answered ShardLeaseNotFound for; empty on a
-  // process's first registration. Evidence only: it never assigns a shard. An
-  // epoch ahead of the manager's record means the manager's state lost history
-  // - a wiped or replaced store no longer lists the earlier executor_id, so the
-  // renewal that would have repaired it was refused - and the manager raises
-  // its record so that the epochs it mints next clear the oplog rows written at
-  // the old ones. Believed only for shards that are this executor's own or
-  // unassigned: on a shard another executor owns it moves nothing, and that
-  // owner's fenced_shard_epochs repair it instead. A malformed entry is
-  // rejected before any state is touched.
-  repeated golem.shardmanager.ShardEpochEntry previous_shard_epochs = 4;
 }
 
 message RegisterResponse {
@@ -97,8 +85,7 @@ message RegisterSuccess {
   // follows the process that answered its latest request - a different id here
   // or on ShardLease starts its revisions over - and ignores an AssignShards or
   // RevokeShards from any other, renewing at once to hear from the one in
-  // charge. Empty from a manager that does not send one, and then deliveries
-  // are ordered by revision alone.
+  // charge. Always a UUID: a delivery without one is malformed.
   string incarnation_id = 5;
 }
 
@@ -117,23 +104,14 @@ message ShardLease {
 
 // Extends the executor's shard lease before it expires. shard_epochs is the
 // set the executor believes it holds. It is what the executor is proving it is
-// alive for, not a condition of the renewal: a set that does not match the
+// alive for, not a condition of the renewal: a claim that does not match the
 // manager's view is renewed all the same, and the response carries the set the
 // manager holds for this executor, which the executor adopts. That makes the
 // renewal a guaranteed second delivery path for a push that was lost, and it
-// means a renewal never advances an epoch against a record that kept its
-// history.
+// means a renewal never advances an epoch.
 message RenewShardLeaseRequest {
   string executor_id = 1;
   repeated golem.shardmanager.ShardEpochEntry shard_epochs = 2;
-  // Epochs recorded on oplogs this executor was refused writes to, keyed by
-  // the shard each agent routes to. Evidence only: never an assignment. Above
-  // the manager's record they mean its state lost history, and every owner of
-  // the shard, this executor included, is minted one past them; at or below
-  // the record they move nothing. Applied before this request's shard_epochs.
-  // Reported on every renewal until one is granted. A malformed entry is
-  // rejected before any state is touched.
-  repeated golem.shardmanager.ShardEpochEntry fenced_shard_epochs = 3;
 }
 
 message RenewShardLeaseResponse {

@@ -2699,9 +2699,14 @@ impl DeleteReply {
 ///
 /// Which is why the routing refusals are singled out rather than just passed
 /// through. `delete_worker_internal` checks it owns the agent *before* it looks
-/// up metadata and before it touches anything, so a dispatch answered with
-/// `InvalidShardId` or `ShardingNotReady` is one that provably deleted nothing.
-/// It is retried, and if it still counted, the honest not-found that came back
+/// up metadata, and the storage refuses the oplog delete of an executor that has
+/// lost the shard, so a dispatch answered with `InvalidShardId` or
+/// `ShardingNotReady` removed no oplog. It confirms its epoch before removing
+/// anything else, so the only other state it can have removed is what the new
+/// owner rebuilds from that oplog. It may still have stopped the agent's runtime,
+/// recorded `ConsumerDeleting` and sent `finalize_attachment` RPCs, which the new
+/// owner's deletion repeats. It is retried, and if it still counted, the honest
+/// not-found that came back
 /// from the real owner would be reported to the caller as a successful delete —
 /// which for an ordinary rebalance over an agent that never existed needs no
 /// crash at all to happen.
@@ -3353,10 +3358,6 @@ mod rejection_mapping_tests {
             _port: u16,
             _pod_name: Option<String>,
             _executor_id: uuid::Uuid,
-            _previous_shard_epochs: std::collections::BTreeMap<
-                golem_common::model::ShardId,
-                ShardEpoch,
-            >,
         ) -> Result<ShardRegistration, ShardManagerError> {
             unreachable!()
         }
@@ -3365,10 +3366,6 @@ mod rejection_mapping_tests {
             &self,
             _executor_id: uuid::Uuid,
             _shard_epochs: std::collections::BTreeMap<golem_common::model::ShardId, ShardEpoch>,
-            _fenced_shard_epochs: std::collections::BTreeMap<
-                golem_common::model::ShardId,
-                ShardEpoch,
-            >,
         ) -> Result<ShardLease, ShardLeaseError> {
             unreachable!()
         }

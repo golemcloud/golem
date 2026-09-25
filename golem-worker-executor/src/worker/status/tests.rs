@@ -2973,6 +2973,15 @@ impl OplogService for TestCase {
         OplogIndex::from_u64(self.entries.len() as u64)
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _expected_epoch: golem_common::model::ShardEpoch,
+    ) -> Result<(), crate::services::oplog::OplogError> {
+        Ok(())
+    }
+
     async fn delete(
         &self,
         _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,

@@ -23,7 +23,6 @@ use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    WriterId,
 };
 use assert2::check;
 use bytes::Bytes;
@@ -550,7 +549,6 @@ impl InjectedAppendFailure {
                 key: key.to_string(),
                 expected: shard_epoch.unwrap_or_default(),
                 actual: shard_epoch.map(|epoch| ShardEpoch(epoch.0 + 1)),
-                writer_conflict: false,
             }),
             _ => None,
         }
@@ -2447,7 +2445,12 @@ async fn wait_for_replicas_does_not_consume_explicit_commit_report(_tracing: &Tr
         expected.insert(index, entry);
     }
 
-    assert!(oplog.wait_for_replicas(1, Duration::from_secs(1)).await);
+    assert!(
+        oplog
+            .wait_for_replicas(1, Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
 
     assert_eq!(oplog.commit(CommitLevel::Always).await.unwrap(), expected);
     assert!(oplog.commit(CommitLevel::Always).await.unwrap().is_empty());
@@ -2782,7 +2785,6 @@ async fn a_delete_that_outlived_the_shard_leaves_the_oplog_to_its_new_owner(_tra
     // The shard moves on and another executor takes the oplog over at the next epoch, while this
     // one is still working through a deletion it accepted at epoch 5.
     indexed_storage
-        .for_writer(WriterId(Uuid::new_v4()))
         .set_key_epoch(
             "oplog",
             "set_key_epoch",
@@ -9231,7 +9233,10 @@ async fn wait_for_replicas_does_not_report_a_fenced_flush_as_durable(_tracing: &
     // wait for, so a count taken after the refusal would read as a successful commit.
     loser.add(OplogEntry::exited().rounded()).await.unwrap();
     assert!(
-        !loser.wait_for_replicas(1, Duration::from_secs(1)).await,
+        matches!(
+            loser.wait_for_replicas(1, Duration::from_secs(1)).await,
+            Err(OplogError::Fenced(_))
+        ),
         "a flush the storage refused must not be reported as durable"
     );
     match loser.fence() {
@@ -9796,320 +9801,4 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
         2,
         "the stale create must not have appended to the owner's oplog"
     );
-}
-
-/// Keeps every fence it is told of, in order.
-#[derive(Default)]
-struct RecordingFenceObserver {
-    fences: StdMutex<Vec<OplogFence>>,
-}
-
-impl RecordingFenceObserver {
-    fn fences(&self) -> Vec<OplogFence> {
-        self.fences.lock().unwrap().clone()
-    }
-}
-
-impl OplogFenceObserver for RecordingFenceObserver {
-    fn fenced(&self, fence: &OplogFence) {
-        self.fences.lock().unwrap().push(fence.clone());
-    }
-}
-
-fn initial_create_entry(
-    agent_id: &AgentId,
-    environment_id: EnvironmentId,
-    account_id: AccountId,
-) -> OplogEntry {
-    OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
-        agent_id: agent_id.clone(),
-        owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
-        agent_mode: AgentMode::Durable,
-        component_revision: ComponentRevision::new(1).unwrap(),
-        env: Vec::new(),
-        environment_id,
-        created_by: account_id,
-        parent: None,
-        component_size: 100,
-        initial_total_linear_memory_size: 100,
-        initial_active_plugins: HashSet::new(),
-        local_agent_config: Vec::new(),
-        original_phantom_id: None,
-        instance_id: Uuid::new_v4(),
-    }))
-    .rounded()
-}
-
-#[test]
-async fn a_refused_open_or_create_reports_the_stored_epoch_to_the_fence_observer(
-    _tracing: &Tracing,
-) {
-    let tempdir = tempfile::TempDir::new().unwrap();
-    let account_id = AccountId::new();
-    let environment_id = EnvironmentId::new();
-    let recorder = Arc::new(RecordingFenceObserver::default());
-    let owning_executor = fencing_oplog_service(&tempdir, "shared").await;
-    let losing_executor = fencing_oplog_service(&tempdir, "shared")
-        .await
-        .with_fence_observer(recorder.clone());
-    let opened = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "opened-by-the-loser".into(),
-    };
-    let created = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "created-by-the-loser".into(),
-    };
-    let expected_fence = |agent_id: &AgentId| OplogFence {
-        agent_id: agent_id.clone(),
-        expected_epoch: ShardEpoch(5),
-        actual_epoch: Some(ShardEpoch(6)),
-        writer_conflict: false,
-    };
-
-    for agent_id in [&opened, &created] {
-        let owner = owning_executor
-            .create(
-                &mut owning_executor
-                    .lock_lifecycle(&OwnedAgentId::new(environment_id, agent_id).agent_id)
-                    .await,
-                &OwnedAgentId::new(environment_id, agent_id),
-                AgentMode::Durable,
-                initial_create_entry(agent_id, environment_id, account_id),
-                make_agent_metadata(agent_id.clone(), account_id, environment_id),
-                default_last_known_status(),
-                default_execution_status(AgentMode::Durable),
-                Some(ShardEpoch(6)),
-            )
-            .await;
-        owner.add(OplogEntry::suspend().rounded()).await.unwrap();
-        owner.commit(CommitLevel::Always).await.unwrap();
-    }
-
-    let stale = losing_executor
-        .open(
-            &mut losing_executor
-                .lock_lifecycle(&OwnedAgentId::new(environment_id, &opened).agent_id)
-                .await,
-            &OwnedAgentId::new(environment_id, &opened),
-            AgentMode::Durable,
-            None,
-            make_agent_metadata(opened.clone(), account_id, environment_id),
-            default_last_known_status(),
-            default_execution_status(AgentMode::Durable),
-            Some(ShardEpoch(5)),
-        )
-        .await;
-    assert!(stale.fence().is_some(), "the stale open was not refused");
-    let reported = recorder.fences();
-    assert!(
-        !reported.is_empty(),
-        "the refused open reported nothing to the observer"
-    );
-    for fence in &reported {
-        assert_eq!(fence, &expected_fence(&opened));
-    }
-
-    // Born fenced, so its writes fail on the latch without asking the storage again.
-    let write = async {
-        stale.add(OplogEntry::exited().rounded()).await?;
-        stale.commit(CommitLevel::Always).await?;
-        Ok::<_, OplogError>(())
-    }
-    .await;
-    assert!(
-        matches!(write, Err(OplogError::Fenced(_))),
-        "expected the stale open's write to be fenced, got {write:?}"
-    );
-    assert_eq!(
-        recorder.fences().len(),
-        reported.len(),
-        "a write refused by the latch reported a refusal the storage never made"
-    );
-
-    // On a cache miss a refused create is reported twice, by `create` and by the open behind it,
-    // and the observer merges. So what is asserted is what was learned, not how often.
-    let reported_before_create = recorder.fences().len();
-    let stale_create = losing_executor
-        .create(
-            &mut losing_executor
-                .lock_lifecycle(&OwnedAgentId::new(environment_id, &created).agent_id)
-                .await,
-            &OwnedAgentId::new(environment_id, &created),
-            AgentMode::Durable,
-            initial_create_entry(&created, environment_id, account_id),
-            make_agent_metadata(created.clone(), account_id, environment_id),
-            default_last_known_status(),
-            default_execution_status(AgentMode::Durable),
-            Some(ShardEpoch(5)),
-        )
-        .await;
-    assert!(
-        stale_create.fence().is_some(),
-        "the stale create was not refused"
-    );
-    let reported = recorder.fences().split_off(reported_before_create);
-    assert!(
-        !reported.is_empty(),
-        "the refused create reported nothing to the observer"
-    );
-    for fence in &reported {
-        assert_eq!(fence, &expected_fence(&created));
-    }
-}
-
-#[test]
-async fn a_create_refused_behind_a_cached_handle_still_reports_the_stored_epoch(
-    _tracing: &Tracing,
-) {
-    let tempdir = tempfile::TempDir::new().unwrap();
-    let account_id = AccountId::new();
-    let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "created-again-while-held".into(),
-    };
-    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let recorder = Arc::new(RecordingFenceObserver::default());
-    let owning_executor = fencing_oplog_service(&tempdir, "shared").await;
-    let losing_executor = fencing_oplog_service(&tempdir, "shared")
-        .await
-        .with_fence_observer(recorder.clone());
-    let create_at_5 = || async {
-        losing_executor
-            .create(
-                &mut losing_executor
-                    .lock_lifecycle(&owned_agent_id.agent_id)
-                    .await,
-                &owned_agent_id,
-                AgentMode::Durable,
-                initial_create_entry(&agent_id, environment_id, account_id),
-                make_agent_metadata(agent_id.clone(), account_id, environment_id),
-                default_last_known_status(),
-                default_execution_status(AgentMode::Durable),
-                Some(ShardEpoch(5)),
-            )
-            .await
-    };
-
-    // Created while this executor owned the shard, and held without a write.
-    let held = create_at_5().await;
-    assert!(held.fence().is_none());
-    assert!(recorder.fences().is_empty());
-
-    // The shard moves, and its new owner claims the oplog.
-    let owner = owning_executor
-        .open(
-            &mut owning_executor
-                .lock_lifecycle(&owned_agent_id.agent_id)
-                .await,
-            &owned_agent_id,
-            AgentMode::Durable,
-            None,
-            make_agent_metadata(agent_id.clone(), account_id, environment_id),
-            default_last_known_status(),
-            default_execution_status(AgentMode::Durable),
-            Some(ShardEpoch(6)),
-        )
-        .await;
-    assert!(owner.fence().is_none());
-
-    // The claim is refused, and the open behind it hands back the held handle without asking the
-    // storage, so the refusal `create` reports is the only one before a write.
-    let again = create_at_5().await;
-    assert!(
-        Arc::ptr_eq(&again, &held),
-        "the held handle was not handed back, so this is not the cache hit under test"
-    );
-    assert_eq!(
-        recorder.fences(),
-        vec![OplogFence {
-            agent_id: agent_id.clone(),
-            expected_epoch: ShardEpoch(5),
-            actual_epoch: Some(ShardEpoch(6)),
-            writer_conflict: false,
-        }]
-    );
-}
-
-#[test]
-async fn a_refused_append_reports_the_stored_epoch_and_the_latch_does_not_report_again(
-    _tracing: &Tracing,
-) {
-    let tempdir = tempfile::TempDir::new().unwrap();
-    let account_id = AccountId::new();
-    let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "appended-by-the-loser".into(),
-    };
-    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let recorder = Arc::new(RecordingFenceObserver::default());
-    let owning_executor = fencing_oplog_service(&tempdir, "shared").await;
-    let losing_executor = fencing_oplog_service(&tempdir, "shared")
-        .await
-        .with_fence_observer(recorder.clone());
-    let open = |service: &PrimaryOplogService, epoch: u64| {
-        let service = service.clone();
-        let agent_id = agent_id.clone();
-        let owned_agent_id = owned_agent_id.clone();
-        async move {
-            service
-                .open(
-                    &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
-                    &owned_agent_id,
-                    AgentMode::Durable,
-                    None,
-                    make_agent_metadata(agent_id, account_id, environment_id),
-                    default_last_known_status(),
-                    default_execution_status(AgentMode::Durable),
-                    Some(ShardEpoch(epoch)),
-                )
-                .await
-        }
-    };
-
-    let stale = open(&losing_executor, 5).await;
-    assert!(stale.fence().is_none());
-    assert!(recorder.fences().is_empty());
-    let owner = open(&owning_executor, 6).await;
-
-    let write = async {
-        stale.add(OplogEntry::exited().rounded()).await?;
-        stale.commit(CommitLevel::Always).await?;
-        Ok::<_, OplogError>(())
-    };
-    let refused = write.await;
-    assert!(
-        matches!(refused, Err(OplogError::Fenced(_))),
-        "expected the losing executor's write to be fenced, got {refused:?}"
-    );
-    let expected = OplogFence {
-        agent_id: agent_id.clone(),
-        expected_epoch: ShardEpoch(5),
-        actual_epoch: Some(ShardEpoch(6)),
-        writer_conflict: false,
-    };
-    assert_eq!(
-        recorder.fences(),
-        vec![expected.clone()],
-        "one refused append is one report"
-    );
-
-    let again = async {
-        stale.add(OplogEntry::exited().rounded()).await?;
-        stale.commit(CommitLevel::Always).await?;
-        Ok::<_, OplogError>(())
-    }
-    .await;
-    assert!(matches!(again, Err(OplogError::Fenced(_))));
-    assert_eq!(
-        recorder.fences(),
-        vec![expected],
-        "the latched fast-fail asked the storage nothing, so it must report nothing"
-    );
-
-    // The owner, with no observer, writes as before.
-    owner.add(OplogEntry::suspend().rounded()).await.unwrap();
-    owner.commit(CommitLevel::Always).await.unwrap();
 }

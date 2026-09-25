@@ -957,10 +957,14 @@ impl Oplog for EphemeralOplog {
             .await
     }
 
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+    async fn wait_for_replicas(
+        &self,
+        _replicas: u8,
+        _timeout: Duration,
+    ) -> Result<bool, OplogError> {
         record_oplog_call("wait_for_replicas");
         // Not supported
-        false
+        Ok(false)
     }
 
     async fn read_exact(

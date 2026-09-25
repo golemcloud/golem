@@ -438,8 +438,12 @@ impl Oplog for TestOplog {
             .find_map(|(index, entry)| (!entry.is_hint()).then_some(*index))
     }
 
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
-        true
+    async fn wait_for_replicas(
+        &self,
+        _replicas: u8,
+        _timeout: Duration,
+    ) -> Result<bool, crate::services::oplog::OplogError> {
+        Ok(true)
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
@@ -891,7 +895,7 @@ async fn session_finish_holds_its_lock_and_reserves_terminal_batch_bytes() {
                 reached.notify_one();
                 release.notified().await;
                 if let Some(published) = published {
-                    published.send(()).unwrap();
+                    published.send(Ok(())).unwrap();
                 }
             })
         }
@@ -3550,7 +3554,7 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
                 .unwrap()
                 .push(committed_entries.into_values().collect());
             if let Some(committed) = committed {
-                let _ = committed.send(());
+                let _ = committed.send(Ok(()));
             }
         })
     });
@@ -4143,7 +4147,7 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
                         "injected failure before durability receipt"
                     );
                     if let Some(receipt) = receipt {
-                        let _ = receipt.send(());
+                        let _ = receipt.send(Ok(()));
                     }
                     assert!(
                         !fail.load(Ordering::Acquire),
@@ -4292,7 +4296,7 @@ async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
             Box::pin(async move {
                 oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(published) = published {
-                    let _ = published.send(());
+                    let _ = published.send(Ok(()));
                 }
                 if block_commit.load(Ordering::SeqCst) {
                     committed.notify_waiters();
@@ -4374,7 +4378,7 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
             Box::pin(async move {
                 oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(published) = published {
-                    let _ = published.send(());
+                    let _ = published.send(Ok(()));
                 }
                 if block_commit.load(Ordering::SeqCst) {
                     committed.notify_waiters();
@@ -4480,7 +4484,7 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
                     release.notified().await;
                 }
                 if let Some(published) = published {
-                    let _ = published.send(());
+                    let _ = published.send(Ok(()));
                 }
             })
         }
@@ -5474,7 +5478,7 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
             Box::pin(async move {
                 oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(committed) = committed {
-                    let _ = committed.send(());
+                    let _ = committed.send(Ok(()));
                 }
                 commit_reached.wait().await;
                 std::future::pending::<()>().await;
@@ -5648,7 +5652,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
             let commit_reached = commit_reached.clone();
             Box::pin(async move {
                 oplog.commit(CommitLevel::Always).await.unwrap();
-                let _ = committed.unwrap().send(());
+                let _ = committed.unwrap().send(Ok(()));
                 commit_reached.wait().await;
                 std::future::pending::<()>().await;
             })
@@ -7005,7 +7009,6 @@ pub(crate) fn test_fence() -> crate::services::oplog::OplogFence {
         agent_id: identity().agent_id,
         expected_epoch: golem_common::model::ShardEpoch(3),
         actual_epoch: Some(golem_common::model::ShardEpoch(4)),
-        writer_conflict: false,
     }
 }
 
@@ -7022,12 +7025,12 @@ fn a_fenced_oplog_error_keeps_its_type_through_the_producer() {
         WorkerExecutorError::OplogFenced { .. }
     ));
 
-    let storage = StreamStoreError::from(crate::services::oplog::OplogError::Storage(
-        "connection reset".to_string(),
+    let payload = StreamStoreError::from(crate::services::oplog::OplogError::Payload(
+        "payload too large".to_string(),
     ));
-    assert!(matches!(storage, StreamStoreError::Oplog(_)));
+    assert!(matches!(payload, StreamStoreError::Oplog(_)));
     assert!(matches!(
-        storage.into_worker_executor_error(WorkerExecutorError::invalid_request),
+        payload.into_worker_executor_error(WorkerExecutorError::invalid_request),
         WorkerExecutorError::InvalidRequest { .. }
     ));
 }
@@ -7058,9 +7061,9 @@ async fn a_fenced_session_record_append_is_reported_as_fenced() {
     );
 }
 
-/// A producer committing the way the worker does: a commit refused by a fence is swallowed,
-/// and only the oplog's latch records it.
-async fn producer_swallowing_fenced_commits(
+/// A producer committing the way the worker does: a commit the storage refuses is answered with
+/// the fence on its receipt.
+async fn producer_answering_fenced_commits(
     oplog: Arc<TestOplog>,
     identity: &TestIdentity,
 ) -> Arc<DurableStreamStore> {
@@ -7068,7 +7071,10 @@ async fn producer_swallowing_fenced_commits(
     let commit: DurableStreamCommit = Arc::new(move |committed| {
         let oplog = commit_oplog.clone();
         Box::pin(async move {
-            if oplog.fence().is_some() {
+            if let Some(fence) = oplog.fence() {
+                if let Some(committed) = committed {
+                    let _ = committed.send(Err(fence));
+                }
                 return;
             }
             oplog
@@ -7076,7 +7082,7 @@ async fn producer_swallowing_fenced_commits(
                 .await
                 .expect("oplog write");
             if let Some(committed) = committed {
-                let _ = committed.send(());
+                let _ = committed.send(Ok(()));
             }
         })
     });
@@ -7098,7 +7104,7 @@ async fn producer_swallowing_fenced_commits(
 async fn a_fenced_commit_neither_publishes_nor_indexes_stream_items() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
-    let producer = producer_swallowing_fenced_commits(oplog.clone(), &identity).await;
+    let producer = producer_answering_fenced_commits(oplog.clone(), &identity).await;
     let handle = producer
         .register(None, root_registration(&identity))
         .await
@@ -7154,7 +7160,7 @@ async fn a_fenced_commit_neither_publishes_nor_indexes_stream_items() {
 async fn a_fenced_commit_does_not_record_an_attachment_in_the_index() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
-    let producer = producer_swallowing_fenced_commits(oplog.clone(), &identity).await;
+    let producer = producer_answering_fenced_commits(oplog.clone(), &identity).await;
     let handle = producer
         .register(None, root_registration(&identity))
         .await
@@ -7397,7 +7403,7 @@ async fn restart_recovers_registration_committed_before_caller_observation() {
             Box::pin(async move {
                 oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(committed) = committed {
-                    let _ = committed.send(());
+                    let _ = committed.send(Ok(()));
                 }
                 commit_reached.wait().await;
                 std::future::pending::<()>().await;
@@ -7523,7 +7529,7 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
             let release = release.clone();
             let folded = folded.clone();
             Box::pin(async move {
-                receipt.unwrap().send(()).unwrap();
+                receipt.unwrap().send(Ok(())).unwrap();
                 release.notified().await;
                 folded.store(true, Ordering::Release);
             })
@@ -7588,7 +7594,7 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
                 Box::pin(async move {
                     oplog.commit(CommitLevel::Always).await.unwrap();
                     if let Some(receipt) = receipt {
-                        let _ = receipt.send(());
+                        let _ = receipt.send(Ok(()));
                     }
                     if block.swap(false, Ordering::AcqRel) {
                         committed.notify_one();
