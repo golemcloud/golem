@@ -1,0 +1,83 @@
+import { Callout } from "nextra/components"
+
+# Permissions and cards
+
+Golem uses **permission cards** to carry authority between accounts, environments, and agents. A card is a durable capability: it describes which operations its holder may perform, who the authority belongs to, which recipients may use it, and which resources it covers.
+
+Cards are different from [API tokens](/next/cli/permissions#api-tokens). An API token authenticates a client to Golem's management API. A permission card authorizes an operation inside Golem's permission model.
+
+## Cards, permissions, and wallets
+
+A card contains permission patterns. Each pattern has five parts:
+
+- a permission class, such as an account, environment, agent, or filesystem operation
+- the **owner** whose resource is being accessed
+- the **recipient** allowed to exercise or receive the authority
+- a verb describing the operation
+- a resource pattern restricting what the operation applies to
+
+Positive and negative grants form the card's lower and upper bounds. Derivation may narrow authority, but cannot create authority outside its parents' bounds.
+
+A **wallet** is the set of cards currently held by an account, application, or agent. For an agent invocation, Golem pins the wallet version and card IDs used by that invocation. This gives durable execution a stable authority snapshot even if the live wallet changes later.
+
+<Callout type="info">
+  For resources exposed through deployment bindings, such as tools, exposure and permission are
+  separate requirements. A binding does not grant permission, and permission does not create a
+  missing binding.
+</Callout>
+
+## Ownership and recipients
+
+The **holder** identifies a wallet: supported holder kinds are accounts, applications, and agents. Wallet membership is separate from ownership of a guest handle; deriving a card returns a handle without installing the card in a wallet. The holder and the permission owner are also different concepts: an agent can hold a card granting access to a resource owned by another account.
+
+Recipient patterns restrict where authority can flow. They can identify:
+
+- an account
+- all environments or agents in an account
+- all environments in an application, or one environment
+- all agents in an application, environment, or component
+- a particular agent type
+- a component's external-tool owner
+- any recipient (`*`)
+
+For installation, at least one lower-positive, upper-positive, or upper-negative grant must cover the target agent. Only grants whose recipient pattern covers the holder contribute to that holder's effective permissions; matching lower-negative grants alone do not make a card installable.
+
+## Where cards come from
+
+Golem manages several kinds of cards:
+
+- **account root cards** establish an account's root authority
+- **permission-share cards** represent authority shared with another account
+- **environment-default cards** supply default authority for an environment
+- **component or agent-initial cards** are produced from deployment and agent-type configuration
+- **runtime-derived cards** are created durably by an agent from authority already available to it
+
+The CLI can filter account root, permission-share, environment-default, and initial cards when listing an account. Runtime-derived cards retain their parent IDs, so their authority and revocation lineage remain auditable, but account card listing does not enumerate them.
+
+## Derivation, transfer, and installation
+
+Agents use the `golem:permissions` guest interfaces to work with cards:
+
+1. **Derive** a persistent child with `derive` from one explicit parent, or with `derive-from-wallet` from one compatible card selected from the active wallet. `derive-scope` instead creates an invocation-local, in-memory card from one or more persistent or scope parents. Every child must be no more permissive than its parent authority.
+2. **Transfer** the resulting owned card handle through a component-model call. Permission-card handles are affine: transferring a handle consumes the sender's handle, so it cannot be copied and reused.
+3. **Install** a persistent card into a target agent's wallet. Installation currently supports agent targets only and consumes the supplied handle.
+
+Deriving a card does not install it. Transfer moves an owned handle between components; installation changes the target agent's wallet. Installing a concrete card that is already in the caller's wallet removes it from that source wallet before delivery. Installing a polymorphic card materializes a child and retains the template in the source wallet.
+
+Scope cards cannot be persisted, installed, or transferred as ordinary persistent card snapshots. A persistent derivation is recorded by Golem before the guest receives its handle.
+
+## Revocation and expiry
+
+Cards may expire, and expired cards fail validation. Revoking a card revokes its descendants as well, because a child cannot outlive the authority from which it was derived. You can revoke eligible cards from an agent through the guest API or administratively with [`golem card revoke`](/next/cli/permissions#inspect-and-revoke-cards). System cards and cards managed by permission shares or environment defaults cannot be revoked directly; change their managing resource instead.
+
+A new attempt to revoke an already or concurrently revoked card returns `card-revoked`, even though the desired state already holds. Replaying a completed revocation reproduces its recorded result. An invocation already pinned to a wallet still revalidates card status where the permission operation requires it; revocation is not a way to rewrite previously recorded execution.
+
+## Replay and failures
+
+Persistent derivation, installation, and revocation participate in Golem's durable execution protocol: mutation results and audit events are written to the operation log. During replay, Golem reproduces the recorded result instead of performing the external mutation again, and verifies that the replayed card and wallet generation match the recorded event. Ordinary handle transfer travels in the surrounding durable call's value; it is not a separate audited card mutation.
+
+Permission operations return typed failures for conditions such as invalid grants or recipients, insufficient parent authority, a missing or changed wallet parent, unsupported installation targets, recipient mismatch, and expired, missing, or revoked cards. A failed installation does not partially add a card to the target wallet. Runtime and infrastructure failures can still fail the invocation according to the normal [durability and retry model](/next/concepts/reliability).
+
+## Administration
+
+Use the [permissions CLI guide](/next/cli/permissions) to manage API tokens and account permission shares, inspect account or agent cards, and revoke a card. Card derivation, transfer, and installation are application operations exposed through the guest permission APIs, not card-creation CLI commands.

@@ -14,7 +14,8 @@
 
 use super::*;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
-use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
+use crate::durable_host::{ActiveAtomicRegion, commit_replay_jumps, register_atomic_region_call};
+use crate::workerctx::ReplayAdmissionStage;
 use golem_common::model::entity::{
     AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
     ToolInvocationClaimIdentity,
@@ -345,6 +346,14 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
 }
 
 impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<Pair, P, Ctx> {
+    /// Whether this Store itself already continued live locally: an incomplete entity that
+    /// switched to live while the shared cursor may still replay other owners' records. Such a
+    /// Store still claims while unclaimed retained `Start`s exist (see
+    /// [`ReplayState::claim_start_for_store`]).
+    fn store_continued_live(&self) -> bool {
+        self.replaying_incomplete_entity && self.local_live_tail.load(Ordering::Acquire)
+    }
+
     fn replay_to_live_role(&self) -> ReplayToLiveRole {
         if self.primary_runtime {
             ReplayToLiveRole::PrimaryAgent
@@ -1115,7 +1124,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 "p3 accessor durable call path currently supports only ReadLocal/WriteLocal/ReadRemote/WriteRemote/WriteRemoteBatched, got {function_type:?}"
             )));
         }
-        let is_live = store.with(|mut access| get_ctx(access.data_mut()).state.is_live());
+        let is_live =
+            store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live());
         if !is_live {
             process_pending_replay_events_access(store, get_ctx).await?;
         }
@@ -1182,6 +1192,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         }
         let (
             is_live,
+            primary_runtime,
             replaying_incomplete_entity,
             replay_state,
             linear_memory,
@@ -1192,7 +1203,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
-                ctx.state.is_live(),
+                ctx.state.durable_call_is_live(),
+                ctx.runtime == OwnerRuntime::Agent,
                 ctx.entity_invocation_scope().is_some_and(|scope| {
                     scope.mode() == InvocationExecutionMode::ReplayingIncomplete
                 }),
@@ -1233,10 +1245,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 };
                 pending.finish().await?.require_live()?;
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
+            } else if primary_runtime {
+                // The primary Store dispatched this call while a retained recorded `Start` could
+                // still have been its own; another Store claimed the last such `Start` (or the
+                // live transition settled) in between, so there is nothing left to replay and
+                // the caller dispatches live.
+                Ok(ReplayAccessStartOutcome::ReplayEnded)
             } else {
                 Err(WorkerExecutorError::unexpected_oplog_entry(
                     format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                    "replay ended before a primary or completed-entity reconstruction claim",
+                    "replay ended before a completed-entity reconstruction claim",
                 ))
             };
         }
@@ -1258,12 +1276,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 )
             });
             start_guard.disarm();
-            return if prepared.replaying_incomplete_entity {
+            return if prepared.replaying_incomplete_entity || prepared.primary_runtime {
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
             } else {
                 Err(WorkerExecutorError::unexpected_oplog_entry(
                     format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
-                    "replay ended before a primary or completed-entity reconstruction claim",
+                    "replay ended before a completed-entity reconstruction claim",
                 ))
             };
         }
@@ -1286,10 +1304,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let tool_operation = prepared.tool_operation.clone();
         let public_state = prepared.public_state.clone();
         let linear_memory = prepared.linear_memory.clone();
+        let store_continued_live = prepared.store_continued_live();
         let execution_scope = prepared.execution_scope;
         let retry = prepared.retry;
         let claim = Self::replay_start_claim(&prepared.claim_options, &execution_scope, &retry)?;
-        match replay_state.claim_start_or_replay_end(claim).await? {
+        match replay_state
+            .claim_start_for_store(claim, store_continued_live)
+            .await?
+        {
             ReplayStartClaimOutcome::Claimed { handle, .. } => {
                 let start_idx = handle.start_idx();
                 let atomic_lease = unregistered_atomic_lease(
@@ -1321,7 +1343,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 Ok(ReplayAccessStartOutcome::Claimed(handle))
             }
             outcome @ (ReplayStartClaimOutcome::ReplayEnded
-            | ReplayStartClaimOutcome::DeletedRegion) => {
+            | ReplayStartClaimOutcome::DeletedRegion
+            | ReplayStartClaimOutcome::StoreAlreadyLive) => {
                 let primary_replay_tail = prepared.primary_runtime
                     && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
                 if !prepared.replaying_incomplete_entity && !primary_replay_tail {
@@ -1671,11 +1694,24 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             prepared.retry.durable_execution_state().assume_idempotence,
             prepared.unpersisted,
         );
+        let admission_hook = if prepared.is_live {
+            None
+        } else {
+            store.with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
+        };
+        if let Some(hook) = &admission_hook {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::BeforeScope)
+                .await;
+        }
         let scope_start = if starts_scope {
             Some(Self::execute_access_scope_start(store, get_ctx, &mut prepared).await?)
         } else {
             None
         };
+        if let Some(hook) = &admission_hook {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::AfterScope)
+                .await;
+        }
 
         let replay_state = prepared.replay_state.clone();
         let linear_memory = prepared.linear_memory.clone();
@@ -1688,6 +1724,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let tool_entity = prepared.tool_entity;
         let tool_operation = prepared.tool_operation.clone();
         let public_state = prepared.public_state.clone();
+        let store_continued_live = prepared.store_continued_live();
         let mut execution_scope = prepared.execution_scope;
         let mut retry = prepared.retry;
         let mut is_live = prepared.is_live;
@@ -1730,7 +1767,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         })?;
                 let outcome = prepared
                     .replay_state
-                    .claim_start_or_replay_end(claim)
+                    .claim_start_for_store(claim, store_continued_live)
                     .await
                     .map_err(|err| {
                         (
@@ -1743,7 +1780,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 match outcome {
                     ReplayStartClaimOutcome::Claimed { handle, .. } => break Some(handle),
                     outcome @ (ReplayStartClaimOutcome::ReplayEnded
-                    | ReplayStartClaimOutcome::DeletedRegion) => {
+                    | ReplayStartClaimOutcome::DeletedRegion
+                    | ReplayStartClaimOutcome::StoreAlreadyLive) => {
                         let primary_replay_tail = prepared.primary_runtime
                             && matches!(outcome, ReplayStartClaimOutcome::ReplayEnded);
                         if !prepared.replaying_incomplete_entity && !primary_replay_tail {
@@ -2009,12 +2047,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // siblings, so the replay claim below pairs the call with exactly its own recorded scope
         // (and with it the correct incomplete-scope detection). Without one, concurrent scopes of
         // the same durable function type are interchangeable at claim time.
-        let scope_name = match &prepared.claim_options.scope_discriminator {
-            Some(discriminator) => {
-                HostFunctionName::Custom(format!("<scope:batched-write:{discriminator}>"))
-            }
-            None => HostFunctionName::Custom("<scope:batched-write>".to_string()),
-        };
+        let scope_name = crate::durable_host::batched_write_scope_name(
+            prepared.claim_options.scope_discriminator.as_deref(),
+        );
         if prepared.is_live {
             match &mut prepared.claim_options.scope_replay_recovery {
                 ScopeReplayRecovery::Forbidden => {
@@ -2229,13 +2264,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             } else {
                 let claim_outcome = prepared
                     .replay_state
-                    .claim_start_or_replay_end(
+                    .claim_start_for_store(
                         StartClaim::scope(
                             &scope_name,
                             &function_type,
                             prepared.entity_parent_start_index,
                         )
                         .with_observational_owner(prepared.execution_scope.observational_owner),
+                        prepared.store_continued_live(),
                     )
                     .await
                     .map_err(|error| {
@@ -2251,7 +2287,8 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         Some((handle.start_idx(), handle))
                     }
                     outcome @ (ReplayStartClaimOutcome::ReplayEnded
-                    | ReplayStartClaimOutcome::DeletedRegion) => {
+                    | ReplayStartClaimOutcome::DeletedRegion
+                    | ReplayStartClaimOutcome::StoreAlreadyLive) => {
                         if !prepared.replaying_incomplete_entity && !prepared.primary_runtime {
                             return Err((
                                 WorkerExecutorError::unexpected_oplog_entry(
@@ -2434,19 +2471,21 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             start: begin_index.next(),
                             end: pending.replay_target().next(),
                         };
-                        prepared
-                            .public_state
-                            .worker()
-                            .add_and_commit_oplog(OplogEntry::jump(
-                                prepared.entity_parent_start_index,
-                                deleted_region,
-                            ))
-                            .await;
-                        prepared
-                            .public_state
-                            .worker()
-                            .reattach_worker_status()
-                            .await;
+                        commit_replay_jumps(
+                            &prepared.public_state.worker(),
+                            &prepared.replay_state,
+                            prepared.entity_parent_start_index,
+                            vec![deleted_region],
+                        )
+                        .await
+                        .map_err(|error| {
+                            (
+                                error,
+                                AccessStartCleanup {
+                                    atomic_lease: prepared.atomic_lease.clone(),
+                                },
+                            )
+                        })?;
                         finish_prepared_access_to_live(
                             pending,
                             prepared.primary_runtime,
@@ -3533,6 +3572,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             .replay
             .take()
             .expect("replay() called on a live handle");
+        if let Some(hook) = ctx.replay_admission_hook() {
+            hook.before_direct_replay_wait(Pair::FQFN, self.start_idx);
+        }
         let outcome = ctx
             .state
             .replay_state
@@ -4990,7 +5032,10 @@ where
     });
 
     while !is_live {
-        match replay_state.get_oplog_entry_or_replay_end_owned().await? {
+        match replay_state
+            .get_oplog_entry_or_replay_end_owned(parent_start_index)
+            .await?
+        {
             crate::durable_host::PositionalRead::Entry(_, entry) => {
                 if !matches!(entry, OplogEntry::FinishSpan { .. }) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -5241,17 +5286,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             return Ok(ResolvedCall::Live(self));
         }
         loop {
+            let store_continued_live = ctx.state.store_continued_live();
             let outcome = ctx
                 .state
                 .replay_state
-                .claim_start_or_replay_end(self.replay_claim())
+                .claim_start_for_store(self.replay_claim(), store_continued_live)
                 .await?;
             match outcome {
                 ReplayStartClaimOutcome::Claimed { handle, .. } => {
                     return Ok(ResolvedCall::Replay(self.finish_replay(ctx, handle)));
                 }
                 outcome @ (ReplayStartClaimOutcome::ReplayEnded
-                | ReplayStartClaimOutcome::DeletedRegion) => {
+                | ReplayStartClaimOutcome::DeletedRegion
+                | ReplayStartClaimOutcome::StoreAlreadyLive) => {
                     if !ctx
                         .continue_live_at_replay_tail(
                             matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),

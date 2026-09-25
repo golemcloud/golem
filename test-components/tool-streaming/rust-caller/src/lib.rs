@@ -279,6 +279,8 @@ pub trait ToolStreamingCaller {
         second: Vec<u8>,
     ) -> ClockedStreamEvidence;
     async fn hold_completed_reconstruction_before_incomplete_custom(&self);
+    async fn hold_completed_reconstruction_overlapping_custom(&self);
+    async fn single_store_http_atomic_probe(&self);
     async fn principal_context(&self, principal: Principal) -> Vec<String>;
 }
 
@@ -572,6 +574,39 @@ async fn wait_at_crash_checkpoint(name: &str) {
         .expect("finish checkpoint response");
     drop(body);
     drop(trailers);
+
+    if name == "single-store-http-atomic" {
+        // Give the host-side response body scope time to record while the guest keeps running,
+        // then issue direct (non-accessor) durable calls from the same Store: a plain
+        // idempotency key followed by nested atomic regions containing more keys and oplog index
+        // reads.
+        let yields: u32 = std::env::var("GOL581_YIELDS")
+            .unwrap_or_else(|_| "1000".to_string())
+            .parse()
+            .expect("GOL581_YIELDS is a number");
+        for _ in 0..yields {
+            golem_rust::wasip3::wit_bindgen::yield_async().await;
+        }
+        // `GOL581_ATOMIC_FIRST` makes the positional atomic-region marker the first direct call
+        // after the body read; otherwise a strictly matched idempotency key comes first.
+        let atomic_first = std::env::var_os("GOL581_ATOMIC_FIRST").is_some();
+        let outside = if atomic_first {
+            None
+        } else {
+            Some(golem_rust::generate_idempotency_key())
+        };
+        let outer = golem_rust::atomically(|| {
+            let first = golem_rust::generate_idempotency_key();
+            let before = golem_rust::get_oplog_index();
+            let inner = golem_rust::atomically(golem_rust::generate_idempotency_key);
+            let after = golem_rust::get_oplog_index();
+            assert!(before < after);
+            assert_ne!(first, inner);
+            first
+        });
+        let outside = outside.unwrap_or_else(golem_rust::generate_idempotency_key);
+        assert_ne!(outside, outer);
+    }
 
     golem_rust::atomically_async(|| async {
         let socket =
@@ -2463,6 +2498,55 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await;
         };
         (tool, incomplete_custom).join().await;
+    }
+
+    async fn hold_completed_reconstruction_overlapping_custom(&self) {
+        // The provider body waits at a crash checkpoint in its own entity Store while this
+        // caller Store performs its own checkpoint HTTP request and atomic TCP gate, so the two
+        // Stores record interleaved positional entries against the same oplog.
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_stdout();
+        let result = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("historical-reconstruction-gate"),
+            Some(raw_stdin(vec![
+                b"reconstruction-left".to_vec(),
+                b"reconstruction-right".to_vec(),
+            ])),
+            Some(stdout_target),
+        );
+        assert!(read_all(stdout).await.is_empty());
+        let tool = async {
+            raw_result(&result)
+                .await
+                .expect("completed reconstruction result before custom effect");
+        };
+        let incomplete_custom = async {
+            wait_at_crash_checkpoint("before-reconstruction-custom-effect").await;
+            Durability::<(), String>::new(
+                "golem-it",
+                "reconstruction-barrier-custom-effect",
+                DurableFunctionType::WriteRemote,
+                &(),
+            )
+            .run_infallible_async(|| async {
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/reconstruction-custom-order.log")
+                    .and_then(|mut file| file.write_all(b"C"))
+                    .expect("append the first live custom effect after the reconstruction barrier");
+                wait_at_crash_checkpoint("reconstruction-custom-effect").await;
+            })
+            .await;
+        };
+        (tool, incomplete_custom).join().await;
+    }
+
+    async fn single_store_http_atomic_probe(&self) {
+        for _ in 0..8 {
+            wait_at_crash_checkpoint("single-store-http-atomic").await;
+        }
     }
 
     async fn principal_context(&self, principal: Principal) -> Vec<String> {

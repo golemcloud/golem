@@ -1,0 +1,16 @@
+# Permission cards in Scala
+
+The carrier is `golem.schema.GuestPermissionCardHandle`. Because the handle is opaque, choose its
+schema explicitly with `GuestPermissionCardHandle.intoSchema(PermissionCardSpec(...))`:
+
+```scala
+import golem.schema.{GuestPermissionCardHandle, IntoSchema, PermissionCardSpec}
+
+given IntoSchema[GuestPermissionCardHandle] =
+  GuestPermissionCardHandle.intoSchema(PermissionCardSpec(polymorphic = false))
+```
+
+Use the handle in an agent or tool input/output only where that `IntoSchema` is in scope. Decoding
+uses the SDK's provided `FromSchema`. Guest code cannot construct or re-wrap a raw card through the
+public Scala API; it receives one from the runtime or another call. Encoding transfers ownership,
+so never serialize, persist, duplicate, or reuse a transferred handle.

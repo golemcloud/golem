@@ -2,7 +2,7 @@ import { Callout, Tabs } from "nextra/components"
 
 # HTTP requests
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
     HTTP requests can be made with the standard `fetch` function.
 
@@ -24,6 +24,36 @@ import { Callout, Tabs } from "nextra/components"
     const data = await response.json();
     console.log("Body:", data);
     ```
+</Tabs.Tab>
+
+<Tabs.Tab>
+    Effect TypeScript agents can use the standard `fetch` function and wrap its Promise in an Effect:
+
+    ```typescript
+    import { Effect } from "effect"
+
+    const request = Effect.tryPromise({
+      try: () => fetch(`http://localhost:${port}/todos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "foo",
+          body: "bar",
+          userId: 1,
+        }),
+      }),
+      catch: (cause) => new Error("HTTP request failed", { cause }),
+    }).pipe(
+      Effect.flatMap((response) =>
+        Effect.tryPromise({
+          try: () => response.json(),
+          catch: (cause) => new Error("Invalid JSON response", { cause }),
+        }),
+      ),
+    )
+    ```
+
+    This constructs a lazy Effect. Return it from an agent method, or evaluate it with `yield* request` inside `Effect.gen`.
 </Tabs.Tab>
 
 <Tabs.Tab>
@@ -127,7 +157,7 @@ import { Callout, Tabs } from "nextra/components"
     http = "1.4"
     progenitor = { git = "https://github.com/golemcloud/progenitor-wasi-http" }
     serde = { version = "1.0", features = ["derive"] }
-    wstd = "=0.6.5"
+    wstd = "=0.5.4"
     ```
 
     Then expand the client directly into your source file:
@@ -175,7 +205,7 @@ import { Callout, Tabs } from "nextra/components"
     http = "1.4"
     progenitor-client = { git = "https://github.com/golemcloud/progenitor-wasi-http" }
     serde = { version = "1.0", features = ["derive"] }
-    wstd = "=0.6.5"
+    wstd = "=0.5.4"
 
     [build-dependencies]
     prettyplease = "0.2"
@@ -223,8 +253,15 @@ import { Callout, Tabs } from "nextra/components"
     To generate a self-contained client crate that can be committed and reused independently, use the `cargo-progenitor` CLI:
 
     ```bash
-    cargo install cargo-progenitor
+    cargo install --git https://github.com/golemcloud/progenitor-wasi-http cargo-progenitor
     cargo progenitor -i openapi/my-api.json -o ./my-api-client -n my-api-client -v 0.1.0
+    ```
+
+    In the generated crate's `Cargo.toml`, use the WASI fork of the runtime client and add the `http` dependency used by generated methods:
+
+    ```toml
+    progenitor-client = { git = "https://github.com/golemcloud/progenitor-wasi-http" }
+    http = "1.4"
     ```
 
     See the [`progenitor-wasi-http` README](https://github.com/golemcloud/progenitor-wasi-http) and the [`example-build`](https://github.com/golemcloud/progenitor-wasi-http/tree/main/example-build) and [`example-macro`](https://github.com/golemcloud/progenitor-wasi-http/tree/main/example-macro) directories for complete worked examples, including pagination and customizing the generated builder API.
@@ -267,72 +304,15 @@ import { Callout, Tabs } from "nextra/components"
 </Tabs.Tab>
 
 <Tabs.Tab>
-    HTTP requests can be made using generated `wasi:http` bindings. Assuming your generated `wasi:http/types` bindings are imported as `@http`, your `wasi:http/outgoingHandler` bindings are imported as `@outgoingHandler`, and `moonbitlang/core/json` is imported as `@json`:
+    The current MoonBit SDK provides an async wrapper around Preview 3 `wasi:http`. Import `golemcloud/golem_sdk/http` as `@http`, construct an `@http.Request` with its generated accessors, and pass it to `@http.send`:
 
     ```moonbit
-    struct ExampleRequest {
-      title : String
-      body : String
-      userId : Int
-    } derive(ToJson)
-
-    fn string_to_bytes(value : String) -> FixedArray[Byte] {
-      let chars = value.to_array()
-      let bytes = FixedArray::make(chars.length(), b'\x00')
-      for i in 0..<chars.length() {
-        bytes[i] = chars[i].to_int().to_byte()
-      }
-      bytes
+    async fn send(request : @http.Request) -> Result[@http.Response, @http.ErrorCode] {
+      @http.send(request)
     }
-
-    fn bytes_to_string(bytes : FixedArray[Byte]) -> String {
-      let chars : Array[Char] = []
-      for i in 0..<bytes.length() {
-        chars.push(Int::unsafe_to_char(bytes[i].to_int()))
-      }
-      String::from_array(chars)
-    }
-
-    let request_body = ExampleRequest::{
-      title: "foo",
-      body: "bar",
-      userId: 1,
-    }
-
-    let headers = @http.Fields::from_list(
-      [("Content-Type", string_to_bytes("application/json"))],
-    ).unwrap()
-
-    let request = @http.OutgoingRequest::outgoing_request(headers)
-    let _ = request.set_method(@http.Post)
-    let _ = request.set_scheme(Some(@http.Http))
-    let _ = request.set_authority(Some("localhost:\{port}"))
-    let _ = request.set_path_with_query(Some("/todos"))
-
-    let body = request.body().unwrap()
-    let output_stream = body.write().unwrap()
-    output_stream.blocking_write_and_flush(
-      string_to_bytes(request_body.to_json().stringify()),
-    ).unwrap()
-    output_stream.drop()
-    @http.OutgoingBody::finish(body, None).unwrap()
-
-    let future_response = @outgoingHandler.handle(request, None).unwrap()
-    let pollable = future_response.subscribe()
-    pollable.block()
-    let response = future_response.get().unwrap().unwrap().unwrap()
-
-    let incoming_body = response.consume().unwrap()
-    let stream = incoming_body.stream().unwrap()
-    let bytes = stream.blocking_read(1048576UL).unwrap()
-    stream.drop()
-    ignore(@http.IncomingBody::finish(incoming_body))
-
-    let data = @json.parse(bytes_to_string(bytes)) catch {
-      _ => panic()
-    }
-    println("Body: \{data.stringify()}")
     ```
+
+    This is the exact SDK wrapper signature. Request bodies and response bodies are async byte streams; consume the full response stream before decoding JSON, and use `moonbitlang/core/encoding/utf8` rather than character-to-byte casts.
 
 </Tabs.Tab>
 </Tabs>

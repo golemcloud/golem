@@ -1,53 +1,42 @@
-# Scheduling a Future Agent Invocation (Rust)
+# Schedule a future agent invocation (Rust)
 
-## Overview
-
-A **scheduled invocation** enqueues a method call on the target agent to be executed at a specific future time. The call returns immediately; the target agent processes it when the scheduled time arrives.
-
-## Usage
-
-Every method on the generated `<AgentName>Client` has a corresponding `schedule_` variant that takes a `Datetime` as the first argument:
+Generated agent clients expose `schedule_<method>` and `schedule_cancelable_<method>`. Pass the
+method arguments first and a `golem_rust::ScheduledTime` last:
 
 ```rust
-use golem_rust::wasip2::clocks::wall_clock::Datetime;
+use golem_rust::ScheduledTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-let mut counter = CounterAgentClient::get("my-counter".to_string());
+let at = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .expect("time went backwards")
+    + Duration::from_secs(60);
+let scheduled_time = ScheduledTime {
+    seconds: at.as_secs() as i64,
+    nanoseconds: at.subsec_nanos(),
+};
 
-// Schedule increment to run 60 seconds from now
-let now_secs = std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .unwrap()
-    .as_secs();
-
-counter.schedule_increment(Datetime {
-    seconds: now_secs + 60,
-    nanoseconds: 0,
-});
-
-// Schedule with arguments
 let reporter = ReportAgentClient::get("daily".to_string());
-reporter.schedule_generate_report( 
-    "summary".to_string(),
-    Datetime { seconds: tomorrow_midnight, nanoseconds: 0 }
-);
+reporter
+    .schedule_generate_report("summary".to_string(), scheduled_time)
+    .expect("failed to schedule report");
 ```
 
-## Datetime Type
+`ScheduledTime` is an absolute Unix timestamp with signed seconds and nanosecond precision. Do not
+use the removed `wasip2::clocks::wall_clock::Datetime` path.
 
-The `Datetime` struct represents a point in time as seconds + nanoseconds since the Unix epoch:
+For durable agents, `schedule_<method>` returns `Result<(), RpcError>`, where `RpcError` is
+`golem_rust::golem_agentic::golem::agent::host::RpcError`. The cancelable
+variant returns a cancellation token:
 
 ```rust
-use golem_rust::wasip2::clocks::wall_clock::Datetime;
+let token = reporter
+    .schedule_cancelable_generate_report("summary".to_string(), scheduled_time)
+    .expect("failed to schedule report");
 
-Datetime {
-    seconds: 1700000000,  // Unix timestamp in seconds
-    nanoseconds: 0,       // Sub-second precision
-}
+// Cancel before the invocation starts.
+token.cancel();
 ```
 
-## Use Cases
-
-- **Periodic tasks**: Schedule the next run at the end of each invocation
-- **Delayed processing**: Process an order after a cooling-off period
-- **Reminders and notifications**: Send a reminder at a specific time
-- **Retry with backoff**: Schedule a retry after a delay on failure
+Scheduling is fire-and-forget: it confirms that the invocation was enqueued, not that the future
+method succeeded. Keep the target method idempotent when retries or recovery may repeat effects.
