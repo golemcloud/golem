@@ -1122,6 +1122,9 @@ impl DeploymentContext {
                 .agents
                 .keys()
                 .filter_map(|agent_name| self.registered_agent_types.get(agent_name))
+                .filter(|agent| {
+                    agent.agent_type.kind != golem_common::schema::AgentTypeKind::HttpRouter
+                })
                 .flat_map(|agent| {
                     agent.agent_type.methods.iter().filter_map(|method| {
                         let has_user_input = method.input_schema.fields().iter().any(|field| {

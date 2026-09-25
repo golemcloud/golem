@@ -150,6 +150,66 @@ fn provider_method(name: &str) -> golem_common::schema::AgentMethodSchema {
 }
 
 #[test]
+fn tooling_corpus_keeps_router_provisioning_and_secret_config() {
+    use golem_common::model::agent::FileMapping;
+    use golem_common::schema::schema_type::SecretSpec;
+
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+    ))
+    .unwrap();
+    for id in ["tooling-router-provisioning", "tooling-router-config"] {
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap();
+        assert!(case["expect"]["included"].as_bool().unwrap(), "{id}");
+    }
+
+    let mut router = router_agent("site", "/");
+    router.config[0].value_type = SchemaType::secret(SecretSpec {
+        inner: Box::new(SchemaType::string()),
+        category: None,
+    });
+    router.http_mount.as_mut().unwrap().static_bindings =
+        vec![FileMapping::compile("/", "/index.html").unwrap()];
+    let context = http_context(vec![router]);
+
+    let mut route_errors = vec![];
+    let routes =
+        context.compile_http_api_routes(&HashMap::new(), &mut route_errors, &mut Vec::new());
+    assert!(
+        route_errors.is_empty(),
+        "tooling-router-provisioning: {route_errors:?}"
+    );
+    assert!(
+        routes.iter().any(|route| matches!(
+            &route.behaviour,
+            golem_service_base::custom_api::RouteBehaviour::HttpRouter(router)
+                if router.static_bindings.len() == 1
+        )),
+        "tooling-router-provisioning"
+    );
+
+    let mut secret_errors = vec![];
+    let (creations, updates, replacements) = context.deployment_agent_secret_creations_and_updates(
+        Vec::new(),
+        Vec::new(),
+        false,
+        &mut secret_errors,
+    );
+    assert!(
+        secret_errors.is_empty(),
+        "tooling-router-config: {secret_errors:?}"
+    );
+    assert_eq!(creations.len(), 1, "tooling-router-config");
+    assert!(updates.is_empty(), "tooling-router-config");
+    assert!(replacements.is_empty(), "tooling-router-config");
+}
+
+#[test]
 fn http_mount_compilation_loads_metadata_corpus() {
     use golem_common::model::agent::FileMapping;
     use golem_service_base::custom_api::RouteBehaviour;
@@ -1126,6 +1186,59 @@ fn compiled_mcp_blob_round_trip_preserves_registered_agent_types() {
     .unwrap();
 
     assert_eq!(restored.registered_agent_types, expected);
+}
+
+#[test]
+fn hidden_router_methods_do_not_reserve_mcp_native_tool_names() {
+    let environment = test_environment();
+    let mut router = router_agent("foo", "/");
+    router.methods = vec![provider_method("bar_baz")];
+    let router_name = router.type_name.clone();
+    let router = InProgressDeployedRegisteredAgentType {
+        agent_type: router,
+        implemented_by: test_implementer(),
+        webhook_domain_and_segments: None,
+    };
+    let definition = executable_test_tool("foo-bar", "baz");
+    let component = native_tool_component("owner", "foo-bar", definition);
+    let deployment = mcp_deployment(
+        environment.id,
+        "mixed.example.com",
+        BTreeMap::from([(router_name.clone(), McpDeploymentAgentOptions::default())]),
+        BTreeMap::from([(
+            ToolName::try_from("foo-bar").unwrap(),
+            McpDeploymentToolOptions {
+                owner_component: component.component_name.clone(),
+                security_scheme: None,
+                include: None,
+                exclude: None,
+            },
+        )]),
+    );
+    let context = DeploymentContext {
+        environment,
+        components: BTreeMap::from([(component.component_name.clone(), component)]),
+        http_api_deployments: BTreeMap::new(),
+        mcp_deployments: BTreeMap::from([(deployment.domain.clone(), deployment)]),
+        registered_agent_types: HashMap::from([(router_name, router)]),
+    };
+    let mut errors = Vec::new();
+    let tools = context.compile_tools(
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &mut errors,
+        &mut Vec::new(),
+    );
+    let compiled = context.compile_mcp_deployments(
+        AccountId::new(),
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &HashMap::new(),
+        &tools,
+        &[],
+        &mut errors,
+    );
+
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(compiled[0].tools[0].mcp_name, "foo_bar_baz");
 }
 
 #[test]
