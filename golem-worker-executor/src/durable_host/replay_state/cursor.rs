@@ -2442,6 +2442,7 @@ impl ReplayState {
             == ReplayTransitionPhase::Settling as u8
     }
 
+    #[cfg(test)]
     pub(crate) async fn switch_to_live(
         &self,
         linear_memory: &crate::services::linear_memory::LinearMemoryTracker,

@@ -165,7 +165,7 @@ fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         component_revision_for_replay: status.component_revision_for_replay,
         component_revision_epoch: status.component_revision_epoch,
         current_retry_state: status.current_retry_state.clone(),
-        authoritative_snapshot: status.authoritative_snapshot.clone(),
+        authoritative_snapshot: status.authoritative_snapshot,
         last_automatic_snapshot_index: status.last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp: status.last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision: status

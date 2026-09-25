@@ -327,7 +327,7 @@ where
         &region_entries,
     );
 
-    if baseline_is_invalidated(&baseline, &skipped_regions) {
+    if baseline_is_invalidated(&baseline, &deleted_regions, &skipped_regions) {
         return Ok(None);
     }
     baseline.deleted_regions = deleted_regions;
@@ -523,7 +523,8 @@ fn update_status_with_new_entries_internal(
     // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
     // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
     // the revert is applied)
-    if validate_baseline && baseline_is_invalidated(&last_known, &skipped_regions) {
+    if validate_baseline && baseline_is_invalidated(&last_known, &deleted_regions, &skipped_regions)
+    {
         return Ok(None);
     }
 
@@ -538,7 +539,18 @@ fn update_status_with_new_entries_internal(
     )?))
 }
 
-fn baseline_is_invalidated(baseline: &AgentStatusRecord, skipped_regions: &DeletedRegions) -> bool {
+fn baseline_is_invalidated(
+    baseline: &AgentStatusRecord,
+    deleted_regions: &DeletedRegions,
+    skipped_regions: &DeletedRegions,
+) -> bool {
+    // A baseline taken inside a region a later revert deleted still carries folded state from
+    // entries that no longer exist, even when the baseline's own skipped coverage hides that
+    // region in the comparison below.
+    if deleted_regions.is_in_deleted_region(baseline.oplog_idx) {
+        return true;
+    }
+
     let baseline_without_overrides = if baseline.skipped_regions.is_overridden() {
         let mut cloned = baseline.skipped_regions.clone();
         cloned.merge_override();

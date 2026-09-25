@@ -1565,6 +1565,10 @@ async fn old_settler_cannot_publish_a_grown_target() {
         .unwrap();
     assert_eq!(current_publication, LivePublicationOutcome::Published);
     assert_eq!(current_memory.reconciliation_grant_bytes(1), 1);
+    replay
+        .publish_primary_live(second_target)
+        .await
+        .expect("current settler must be able to publish the grown target");
     assert!(replay.is_live_published());
 }
 
@@ -7646,6 +7650,9 @@ async fn missing_scope_recovery_settles_then_switches_live_over_benign_suffix() 
         ReplayToLiveOutcome::Live { .. }
     ));
     assert!(rs.is_live());
+    rs.publish_primary_live(replay_target)
+        .await
+        .expect("settled missing-scope recovery must publish live");
     assert!(rs.is_live_published());
 }
 

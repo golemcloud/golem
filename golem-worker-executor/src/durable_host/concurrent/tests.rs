@@ -827,7 +827,7 @@ async fn assisted_markerless_tail_requests_store_owner_finalization() {
         .is_err(),
         "an unconsumed positional suffix must not authorize finalization"
     );
-    let (index, entry) = replay_state.get_oplog_entry().await.unwrap();
+    let (index, entry) = replay_state.get_oplog_entry(None).await.unwrap();
     assert_eq!(index, idx(4));
     assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
 
