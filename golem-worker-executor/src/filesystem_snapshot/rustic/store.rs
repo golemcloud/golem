@@ -697,10 +697,13 @@ fn snapshot_info(snapshot: &SnapshotFile) -> Option<SnapshotInfo> {
 }
 
 /// Tells whether a later prune removes packs that this prune leaves marked: unused packs, repacked
-/// packs, and packs of an earlier prune whose grace period is not over. The report does not count a
-/// marked pack that no index lists, so the next due prune removes it.
+/// packs, packs that no index lists, and packs of an earlier prune whose grace period is not over.
+/// A marked pack is in an index after the prune, so a later prune does not count it as unindexed.
 fn leaves_marked_packs(report: &PruneReport) -> bool {
-    report.packs_unused > 0 || report.packs_repacked > 0 || report.marked_packs_kept > 0
+    report.packs_unused > 0
+        || report.packs_repacked > 0
+        || report.packs_unindexed > 0
+        || report.marked_packs_kept > 0
 }
 
 /// Gives the packed bytes that the save of the snapshot added to the repository.

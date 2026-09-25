@@ -293,6 +293,8 @@ pub(super) struct PruneReport {
     pub(super) marked_bytes_deleted: u64,
     /// The packs that an earlier prune marked and that stay marked.
     pub(super) marked_packs_kept: u64,
+    /// The packs that no index lists. The prune marks each of them.
+    pub(super) packs_unindexed: u64,
     /// The bytes of the blobs that snapshots use.
     pub(super) bytes_used: u64,
     /// The bytes of the blobs that no snapshot uses.
@@ -772,6 +774,7 @@ fn prune_report(stats: &PruneStats) -> PruneReport {
         marked_packs_deleted: stats.packs_to_delete.remove,
         marked_bytes_deleted: stats.size_to_delete.remove,
         marked_packs_kept: stats.packs_to_delete.keep,
+        packs_unindexed: stats.packs_unref,
         bytes_used: blobs.used,
         bytes_unused: blobs.unused,
         bytes_removed: blobs.remove,

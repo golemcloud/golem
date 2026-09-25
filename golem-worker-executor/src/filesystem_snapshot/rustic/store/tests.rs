@@ -1607,6 +1607,61 @@ async fn a_delete_that_frees_nothing_writes_no_ledger() {
 }
 
 #[test]
+fn a_prune_that_marks_only_a_pack_that_no_index_lists_leaves_marked_packs() {
+    assert!(leaves_marked_packs(&PruneReport {
+        packs_used: 3,
+        packs_unindexed: 1,
+        ..PruneReport::default()
+    }));
+}
+
+#[test]
+async fn a_due_prune_that_marks_a_pack_that_no_index_lists_records_the_marked_pack() {
+    // The pack of the kept snapshot stays in use, so the pack that no index lists is the only pack
+    // that the prune marks. The ledger holds freed bytes from an earlier delete, so a delete of an
+    // unknown name prunes.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = one_file_tree("kept");
+    store
+        .save(&scope, &name("p-kept"), tree.path(), None)
+        .await
+        .unwrap();
+    let unindexed = format!("data/ab/{}", "ab".repeat(32));
+    storage
+        .put_raw(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new(&unindexed),
+            b"a pack that no index lists",
+        )
+        .await
+        .unwrap();
+    set_last_prune(&storage, &scope, golem_common::model::Timestamp::from(0)).await;
+
+    store.delete(&scope, &name("p-unknown")).await.unwrap();
+    let after = ledger(&storage, &scope).await;
+
+    assert_eq!(
+        (
+            after.freed_bytes,
+            after.last_prune.is_some_and(|last| last.to_millis() > 0),
+            after.awaiting_removal,
+            blobs(&*storage, &scope.0, "data/")
+                .await
+                .contains(&unindexed),
+            restored_listing(&store, &scope, &name("p-kept")).await.ok(),
+        ),
+        (0, true, true, true, Some(listing(tree.path())))
+    );
+}
+
+#[test]
 fn a_prune_leaves_marked_packs_when_it_marks_repacks_or_keeps_marked_packs() {
     let report = |packs_unused, packs_repacked, marked_packs_kept| PruneReport {
         packs_unused,
