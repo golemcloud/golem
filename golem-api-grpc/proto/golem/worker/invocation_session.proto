@@ -226,6 +226,9 @@ message InvocationAccepted {
   bool joined_origin_observer = 13;
   optional string tool_name = 11;
   repeated string command_path = 12;
+  // Requested output cursors verified against durable history to already name a terminal.
+  // No suffix or repeated terminal is sent for these streams on this attachment.
+  repeated golem.common.UUID terminal_cursor_stream_ids = 14;
 }
 
 message InvocationSessionResult {
