@@ -116,7 +116,10 @@ impl RedisKeyValueStorage {
             KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
                 agent_id,
                 fingerprint,
-            } => Some(agent_id.durable_stream_session_index_namespace(*fingerprint)),
+            } => Some(format!(
+                "agent:durable_stream_session_index:{}:{fingerprint}",
+                agent_id.to_redis_key()
+            )),
             KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => Some(format!(
                 "agent:rejected_periodic_snapshots:{}",
                 agent_id.to_redis_key()

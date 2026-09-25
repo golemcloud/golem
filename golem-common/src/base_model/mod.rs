@@ -278,18 +278,6 @@ impl AgentId {
         format!("{}:{}", self.component_id.0, self.agent_id)
     }
 
-    /// Logical key-value namespace prefix shared by every durable stream-session index backend.
-    pub fn durable_stream_session_index_namespace_prefix(&self) -> String {
-        format!("agent:durable_stream_session_index:{}", self.to_redis_key())
-    }
-
-    pub fn durable_stream_session_index_namespace(&self, fingerprint: AgentFingerprint) -> String {
-        format!(
-            "{}:{fingerprint}",
-            self.durable_stream_session_index_namespace_prefix()
-        )
-    }
-
     pub fn to_agent_urn(&self) -> String {
         format!("urn:worker:{}/{}", self.component_id, self.agent_id)
     }

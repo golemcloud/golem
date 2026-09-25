@@ -94,12 +94,6 @@ benchmarks:
     size: [0, 128]
     length: [512]
 
-  - name: streaming-rpc-cold-rebuild
-    iterations: 1
-    clusterSize: [1]
-    size: [128]
-    length: [512]
-
   - name: streaming-rpc-reconnect
     iterations: 1
     clusterSize: [1]

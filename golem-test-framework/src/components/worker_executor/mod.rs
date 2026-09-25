@@ -33,8 +33,6 @@ pub trait WorkerExecutor: Send + Sync {
 
     fn grpc_port(&self) -> u16;
 
-    async fn kill(&self);
-
     /// Hard kill and reap the owned child before the deadline. Unsupported
     /// executors fail closed; absence of a child handle is not proof of exit.
     async fn kill_and_wait(&self, _deadline: tokio::time::Instant) -> anyhow::Result<()> {

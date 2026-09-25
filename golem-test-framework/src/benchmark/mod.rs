@@ -14,7 +14,6 @@
 
 mod config;
 mod results;
-pub mod session_index;
 pub mod storage_metrics;
 #[cfg(test)]
 mod tests;

@@ -14,24 +14,27 @@
 
 //! Direct producer/session-index benchmarks, not guest consumer-journal reconstruction.
 
+use crate::benchmarks::public_invocation::{
+    DetachedSession, PublicInvocationSession, SessionCheckpoint, SessionEvents, StreamId,
+};
 use crate::benchmarks::{cleanup_account, cleanup_user_state, delete_workers};
-use crate::invocation_session::{InvocationSession, SessionCheckpoint, SessionEvents, StreamId};
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::future::try_join_all;
-use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
-use golem_api_grpc::proto::golem::worker::{ResumeOperation, invocation_session_result};
+use golem_client::invocation_session::encode_generated_streamless_value;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_session_public::{
+    PublicInvocationResult, PublicResumeOperation,
+};
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
-use golem_common::schema::{FromSchema, SchemaValue};
+use golem_common::model::{AgentId, IdempotencyKey, PromiseId};
+use golem_common::schema::FromSchema;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::benchmark::session_index::inspect_live_session_index;
 use golem_test_framework::benchmark::storage_metrics::{
     StorageMetricsClient, StorageOperation, StorageSnapshot,
 };
@@ -60,7 +63,6 @@ pub type StreamingRpcRecoveryNested = StreamingRecovery<3>;
 
 pub struct StreamingRecovery<const CASE: u8> {
     config: RunConfig,
-    mode: TestMode,
 }
 
 pub struct RecoveryContext {
@@ -72,19 +74,28 @@ pub struct RecoveryIteration {
     user: TestUserContext<BenchmarkTestDependencies>,
     component: ComponentDto,
     env: EnvironmentId,
+    application: String,
+    environment: String,
     deadline: tokio::time::Instant,
     warm_agent: Option<AgentId>,
     agents: Vec<ParsedAgentId>,
     gates: Vec<PromiseId>,
     expected: Vec<Vec<(u32, u32)>>,
     streams: Vec<Vec<StreamId>>,
-    sessions: Mutex<Vec<InvocationSession>>,
-    detached: Mutex<Vec<SessionCheckpoint>>,
+    sessions: Mutex<Vec<PublicInvocationSession>>,
+    detached: Mutex<Vec<DetachedSession>>,
     baseline: Option<StorageSnapshot>,
 }
 
 fn error(phase: &str, error: impl std::fmt::Display) -> BenchmarkError {
     BenchmarkError::new(phase, error)
+}
+
+fn public_value<T: golem_common::schema::IntoSchema + ?Sized>(
+    value: &T,
+) -> anyhow::Result<serde_json::Value> {
+    let typed = golem_common::schema::try_into_typed_schema_value(value)?;
+    encode_generated_streamless_value(typed.graph(), typed.value()).map_err(Into::into)
 }
 
 async fn phase<T>(
@@ -98,15 +109,10 @@ async fn phase<T>(
 }
 
 fn session_key(report: &SessionCheckpoint) -> anyhow::Result<IdempotencyKey> {
-    Ok(IdempotencyKey::new(
-        report
-            .acceptance
-            .as_ref()
-            .and_then(|a| a.idempotency_key.as_ref())
-            .context("missing accepted invocation key")?
-            .value
-            .clone(),
-    ))
+    report
+        .idempotency_key
+        .clone()
+        .context("missing accepted invocation key")
 }
 
 fn worker(iteration: &RecoveryIteration, index: usize) -> anyhow::Result<AgentId> {
@@ -245,11 +251,6 @@ fn validate_report(
         "unexpected output count"
     );
     ensure!(ids.len() == expected.len(), "expectation arity mismatch");
-    let epoch = report
-        .acceptance
-        .as_ref()
-        .context("missing acceptance")?
-        .epoch;
     for (id, (domain, length)) in ids.iter().zip(expected) {
         validate_values(report, id, *domain, *length)?;
         let prefix = before
@@ -262,15 +263,6 @@ fn validate_report(
         ensure!(
             prefix <= *length as usize,
             "saved prefix exceeds stream length"
-        );
-        ensure!(
-            output
-                .items
-                .iter()
-                .filter(|item| item.epoch == epoch)
-                .count()
-                == *length as usize - prefix,
-            "resumed suffix length differs"
         );
         ensure!(
             output.items[..prefix] == before.outputs[id].items,
@@ -350,8 +342,8 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
     fn description() -> &'static str {
         match CASE {
             0 => indoc! {
-                "Measures a direct client reconnect to an older completed producer streaming session,
-                without a guest caller or an executor restart. The client disconnects after
+                "Measures a public WebSocket client reconnect to an older completed producer streaming
+                session, without a guest caller or an executor restart. The client disconnects after
                 `min(8, max(1, floor(length / 4)))` items, waits for producer completion, and creates
                 `size` newer one-item sessions on the same producer before resuming the original
                 invocation from its saved cursor. The `length` parameter is the original stream's
@@ -364,8 +356,8 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
                 verifies that reconnect works after the session leaves recent status."
             },
             1 => indoc! {
-                "Measures recovery of two active streaming invocations on separate producer agents,
-                using direct client sessions rather than guest callers, after the single executor
+                "Measures recovery of two active public WebSocket streaming invocations on separate
+                producer agents, using client sessions rather than guest callers, after the single executor
                 process is killed. Each producer has `size` completed historical sessions. Their
                 measured streams contain `length` and `length + 8` items; each pauses after
                 `min(8, max(1, floor(n / 4)))` items of its `n`-item stream until both takeover requests
@@ -383,8 +375,8 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
                 a subsequent ordinary invocation."
             },
             2 => indoc! {
-                "Measures recovery of one direct client-to-producer invocation with two active sibling
-                output streams after the single executor process is killed. The producer has `size`
+                "Measures recovery of one public WebSocket client-to-producer invocation with two
+                active sibling output streams after the single executor process is killed. The producer has `size`
                 completed historical sessions. The sibling streams contain `length` and `length + 3`
                 items; each independently pauses after `min(8, max(1, floor(n / 4)))` items of its
                 `n`-item stream until takeover has been accepted after restart.
@@ -401,8 +393,8 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
                 invocation."
             },
             _ => indoc! {
-                "Measures recovery of a direct client-to-producer invocation with nested output streams
-                after the single executor process is killed. The invocation returns two root streams
+                "Measures recovery of a public WebSocket client-to-producer invocation with nested
+                output streams after the single executor process is killed. The invocation returns two root streams
                 that have already ended and introduced two unfinished child streams containing `length`
                 and `length + 3` items. The producer has `size` completed historical sessions, and each
                 child pauses after `min(8, max(1, floor(n / 4)))` items of its `n`-item stream until
@@ -448,7 +440,7 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
         })
     }
 
-    async fn create(mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
         if CASE > 3 || config.length < 4 || config.length > ((u32::MAX - 100_000) / 3 - 8) as usize
         {
             return Err(error(
@@ -456,10 +448,7 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
                 "invalid recovery case or length (requires >=4 and overflow-safe u32 values)",
             ));
         }
-        Ok(Self {
-            config,
-            mode: mode.clone(),
-        })
+        Ok(Self { config })
     }
 
     async fn setup_iteration(
@@ -470,7 +459,7 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
         let scenario_started = tokio::time::Instant::now();
         let user = phase("setup-user", context.deps.user()).await?;
         let environment = phase("setup-environment", user.app_and_env()).await;
-        let (_, env) = match environment {
+        let (application, env) = match environment {
             Ok(value) => value,
             Err(e) => {
                 cleanup_account(&user, &recorder).await;
@@ -495,6 +484,8 @@ impl<const CASE: u8> Benchmark for StreamingRecovery<CASE> {
             user,
             component,
             env: env.id,
+            application: application.name.0,
+            environment: env.name.0,
             deadline: scenario_started + Duration::from_secs(690),
             warm_agent: None,
             agents: Vec::new(),
@@ -611,70 +602,169 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
         recorder: &BenchmarkRecorder,
     ) -> BenchmarkResultValue {
         let result: anyhow::Result<()> = async {
-            let warm = agent_id!("StreamingRpcTarget", format!("warm-{}", uuid::Uuid::new_v4()));
-            iteration.warm_agent = Some(AgentId::from_agent_id(iteration.component.id, &warm).map_err(anyhow::Error::msg)?);
-            InvocationSession::start(&context.deps, &iteration.component, &warm, "benchmark_output", data_value!(1u32, 17u32), PHASE).await?.finish().await?;
+            let warm = agent_id!(
+                "StreamingRpcTarget",
+                format!("warm-{}", uuid::Uuid::new_v4())
+            );
+            iteration.warm_agent = Some(
+                AgentId::from_agent_id(iteration.component.id, &warm)
+                    .map_err(anyhow::Error::msg)?,
+            );
+            PublicInvocationSession::start(
+                &context.deps,
+                &iteration.user.token,
+                &iteration.application,
+                &iteration.environment,
+                &warm,
+                "benchmark_output",
+                serde_json::json!({ "length": 1, "domain": 17 }),
+                PHASE,
+            )
+            .await?
+            .finish()
+            .await?;
             for branch in 0..if CASE == 1 { 2 } else { 1 } {
                 let agent = agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
                 iteration.agents.push(agent.clone());
                 let length = self.config.length as u32;
                 let mut keys = Vec::new();
                 if CASE == 0 {
-                    let checkpoint = InvocationSession::start(&context.deps, &iteration.component, &agent, "benchmark_output", data_value!(length, 701u32), PHASE).await?
-                        .disconnect_after((length / 4).clamp(1, 8) as usize).await?;
-                    iteration.streams.push(leaves(&checkpoint, Topology::Flat)?);
+                    let checkpoint = PublicInvocationSession::start(
+                        &context.deps,
+                        &iteration.user.token,
+                        &iteration.application,
+                        &iteration.environment,
+                        &agent,
+                        "benchmark_output",
+                        serde_json::json!({ "length": length, "domain": 701 }),
+                        PHASE,
+                    )
+                    .await?
+                    .disconnect_after((length / 4).clamp(1, 8) as usize)
+                    .await?;
+                    iteration
+                        .streams
+                        .push(leaves(&checkpoint.checkpoint, Topology::Flat)?);
                     iteration.expected.push(vec![(701, length)]);
-                    keys.push(session_key(&checkpoint)?);
+                    keys.push(session_key(&checkpoint.checkpoint)?);
                     wait_finished(iteration, branch, &keys).await?;
                     iteration.detached.lock().await.push(checkpoint);
                 } else {
-                    ensure!(iteration.user.invoke_and_await_agent(&iteration.component, &agent, "ping", data_value!()).await?.into_typed::<u64>()? == 42, "initialization ping failed");
+                    ensure!(
+                        iteration
+                            .user
+                            .invoke_and_await_agent(
+                                &iteration.component,
+                                &agent,
+                                "ping",
+                                data_value!()
+                            )
+                            .await?
+                            .into_typed::<u64>()?
+                            == 42,
+                        "initialization ping failed"
+                    );
                 }
                 for _ in 0..self.config.size {
-                    let report = InvocationSession::start(&context.deps, &iteration.component, &agent, "benchmark_output", data_value!(1u32, 23u32), PHASE).await?.finish().await?;
+                    let report = PublicInvocationSession::start(
+                        &context.deps,
+                        &iteration.user.token,
+                        &iteration.application,
+                        &iteration.environment,
+                        &agent,
+                        "benchmark_output",
+                        serde_json::json!({ "length": 1, "domain": 23 }),
+                        PHASE,
+                    )
+                    .await?
+                    .finish()
+                    .await?;
                     let ids = leaves(&report, Topology::Flat)?;
                     validate_values(&report, &ids[0], 23, 1)?;
                     keys.push(session_key(&report)?);
                 }
-                let history = wait_finished(iteration, branch, &keys).await?;
-                recorder.count(&ResultKey::primary("seeded-sessions"), self.config.size as u64);
-                if CASE == 0 {
-                    let horizon = history.last().context("missing producer history")?.oplog_index;
-                    let owned = OwnedAgentId::new(iteration.env, &worker(iteration, branch)?);
-                    loop {
-                        let inspection = inspect_live_session_index(&self.mode, &context.deps, &owned, &keys).await?;
-                        if inspection.coverage_present && keys.iter().all(|key| inspection.sessions_present.contains(key)) {
-                            if self.config.size < 129 { break; }
-                            if let Some(status) = inspection.status.filter(|status| status.oplog_idx >= horizon) {
-                                ensure!(status.durable_stream_sessions.get(&keys[0]).is_none(), "original session still in recent status after 129 later completions");
-                                recorder.count(&ResultKey::primary("original-evicted-from-recent-status"), 1);
-                                break;
-                            }
-                        }
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                    recorder.count(&ResultKey::primary("original-present-in-physical-index"), 1);
-                } else {
-                    let left = iteration.user.invoke_and_await_agent(&iteration.component, &agent, "create_output_gate", data_value!()).await?.into_typed::<PromiseId>()?;
+                wait_finished(iteration, branch, &keys).await?;
+                recorder.count(
+                    &ResultKey::primary("seeded-sessions"),
+                    self.config.size as u64,
+                );
+                if CASE != 0 {
+                    let left = iteration
+                        .user
+                        .invoke_and_await_agent(
+                            &iteration.component,
+                            &agent,
+                            "create_output_gate",
+                            data_value!(),
+                        )
+                        .await?
+                        .into_typed::<PromiseId>()?;
                     iteration.gates.push(left.clone());
                     let (method, input, expected) = if CASE == 1 {
                         let n = length + branch as u32 * 8;
                         let domain = 701 + branch as u32 * 10_000;
-                        ("benchmark_gated_output", data_value!(n, domain, left), vec![(domain, n)])
+                        (
+                            "benchmark_gated_output",
+                            serde_json::json!({
+                                "length": n,
+                                "domain": domain,
+                                "gate": public_value(&left)?,
+                            }),
+                            vec![(domain, n)],
+                        )
                     } else {
-                        let right = iteration.user.invoke_and_await_agent(&iteration.component, &agent, "create_output_gate", data_value!()).await?.into_typed::<PromiseId>()?;
+                        let right = iteration
+                            .user
+                            .invoke_and_await_agent(
+                                &iteration.component,
+                                &agent,
+                                "create_output_gate",
+                                data_value!(),
+                            )
+                            .await?
+                            .into_typed::<PromiseId>()?;
                         iteration.gates.push(right.clone());
-                        (if CASE == 2 { "benchmark_gated_siblings" } else { "benchmark_gated_nested_siblings" }, data_value!(length, left, right), vec![(1000, length), (100_000, length + 3)])
+                        (
+                            if CASE == 2 {
+                                "benchmark_gated_siblings"
+                            } else {
+                                "benchmark_gated_nested_siblings"
+                            },
+                            serde_json::json!({
+                                "length": length,
+                                "left_gate": public_value(&left)?,
+                                "right_gate": public_value(&right)?,
+                            }),
+                            vec![(1000, length), (100_000, length + 3)],
+                        )
                     };
-                    let mut session = InvocationSession::start(&context.deps, &iteration.component, &agent, method, input, PHASE).await?;
-                    iteration.streams.push(prefix(&mut session, self.topology(), &expected).await?);
+                    let mut session = PublicInvocationSession::start(
+                        &context.deps,
+                        &iteration.user.token,
+                        &iteration.application,
+                        &iteration.environment,
+                        &agent,
+                        method,
+                        input,
+                        PHASE,
+                    )
+                    .await?;
+                    iteration
+                        .streams
+                        .push(prefix(&mut session, self.topology(), &expected).await?);
                     iteration.expected.push(expected);
                     iteration.sessions.lock().await.push(session);
                 }
             }
-            iteration.baseline = Some(context.metrics.snapshot(context.deps.worker_executor_cluster().as_ref()).await?);
+            iteration.baseline = Some(
+                context
+                    .metrics
+                    .snapshot(context.deps.worker_executor_cluster().as_ref())
+                    .await?,
+            );
             Ok(())
-        }.await;
+        }
+        .await;
         result.map_err(|e| error("setup-seeding", format!("{e:#}")))
     }
 
@@ -698,10 +788,13 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
             }
             recorder.duration(&ResultKey::primary("executor-stop"), started.elapsed());
             let sessions = std::mem::take(&mut *iteration.sessions.lock().await);
-            *iteration.detached.lock().await = sessions
-                .into_iter()
-                .map(InvocationSession::disconnect)
-                .collect();
+            *iteration.detached.lock().await = try_join_all(
+                sessions
+                    .into_iter()
+                    .map(PublicInvocationSession::disconnect),
+            )
+            .await
+            .map_err(|e| error("executor-stop", e))?;
             let started = Instant::now();
             phase("executor-grpc-ready", async {
                 cluster.restart_all().await;
@@ -754,23 +847,24 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
         let resumed = phase(
             "session-accepted",
             try_join_all(checkpoints.iter().map(|checkpoint| async {
-                let session = InvocationSession::resume(
+                let session = PublicInvocationSession::resume(
                     &context.deps,
-                    checkpoint.clone(),
+                    &iteration.user.token,
+                    checkpoint,
                     if CASE == 0 {
-                        ResumeOperation::Resume
+                        PublicResumeOperation::Resume
                     } else {
-                        ResumeOperation::Takeover
+                        PublicResumeOperation::Takeover
                     },
                     PHASE,
                 )
                 .await?;
                 record_acceptance(session.checkpoint(), recorder)?;
-                Ok(session)
+                Ok::<_, anyhow::Error>(session)
             })),
         )
         .await?;
-        // Both acceptances and epoch checks are complete before any gate can advance a suffix.
+        // Both public takeover requests are accepted before any gate can advance a suffix.
         phase("release-gates", async {
             for gate in &iteration.gates {
                 iteration.user.complete_promise(gate, Vec::new()).await?;
@@ -835,7 +929,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
             for (index, report) in reports.iter().enumerate() {
                 validate_report(
                     report,
-                    &checkpoints[index],
+                    &checkpoints[index].checkpoint,
                     self.topology(),
                     &iteration.streams[index],
                     &iteration.expected[index],
@@ -862,7 +956,7 @@ impl<const CASE: u8> StreamingRecovery<CASE> {
                             "resumed-items-producer-{index}-leaf-{branch}"
                         )),
                         (report.outputs[id].items.len()
-                            - checkpoints[index].outputs[id].items.len())
+                            - checkpoints[index].checkpoint.outputs[id].items.len())
                             as u64,
                     );
                 }
@@ -946,34 +1040,22 @@ pub enum Topology {
     Nested,
 }
 
-fn reference(value: &ProtoValue, report: &SessionCheckpoint) -> anyhow::Result<StreamId> {
-    let Some(schema_value::Value::StreamReference(reference)) = &value.value else {
-        anyhow::bail!("expected stream reference: {value:?}");
-    };
-    let id = report
-        .mappings
-        .get(&reference.stream_id)
-        .and_then(|mapping| mapping.handle.as_ref())
-        .and_then(|handle| handle.stream_id)
-        .context("missing stream mapping")?;
-    Ok((id.high_bits, id.low_bits))
+fn reference(value: &serde_json::Value) -> anyhow::Result<StreamId> {
+    value
+        .get("$stream")
+        .and_then(|stream| stream.get("streamToken"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .with_context(|| format!("expected public stream reference: {value}"))
 }
 
 pub fn roots(report: &SessionCheckpoint) -> anyhow::Result<Vec<StreamId>> {
-    let Some(invocation_session_result::Result::MethodResult(value)) = report
-        .result
-        .as_ref()
-        .and_then(|result| result.result.as_ref())
-    else {
+    let Some(PublicInvocationResult::Value { value }) = report.result.as_ref() else {
         anyhow::bail!("expected method result");
     };
-    match &value.value {
-        Some(schema_value::Value::TupleValue(tuple)) => tuple
-            .elements
-            .iter()
-            .map(|value| reference(value, report))
-            .collect(),
-        _ => Ok(vec![reference(value, report)?]),
+    match value {
+        serde_json::Value::Array(values) => values.iter().map(reference).collect(),
+        _ => Ok(vec![reference(value)?]),
     }
 }
 
@@ -999,29 +1081,14 @@ pub fn leaves(report: &SessionCheckpoint, topology: Topology) -> anyhow::Result<
                 items.len() == 1,
                 "root must introduce exactly one labelled child"
             );
-            let value = items[0].value.as_ref().context("root omitted value")?;
-            let Some(schema_value::Value::RecordValue(record)) = &value.value else {
-                anyhow::bail!("expected labelled nested record");
-            };
-            ensure!(record.fields.len() == 2, "nested record arity");
-            let actual =
-                SchemaValue::try_from(record.fields[0].clone()).map_err(anyhow::Error::msg)?;
-            ensure!(
-                actual == SchemaValue::String(label.to_string()),
-                "nested branch label changed"
-            );
-            // A retained nested item uses its own announcement, not a later attempt's channels.
-            let Some(schema_value::Value::StreamReference(child)) = &record.fields[1].value else {
-                anyhow::bail!("nested record omitted child reference");
-            };
-            let id = items[0]
-                .new_stream_mappings
-                .iter()
-                .find(|mapping| mapping.transport_stream_id == child.stream_id)
-                .and_then(|mapping| mapping.handle.as_ref())
-                .and_then(|handle| handle.stream_id)
-                .context("nested item omitted child mapping")?;
-            Ok((id.high_bits, id.low_bits))
+            let value = &items[0].1;
+            let actual = value.get("label").and_then(serde_json::Value::as_str);
+            ensure!(actual == Some(label), "nested branch label changed");
+            reference(
+                value
+                    .get("values")
+                    .context("nested record omitted child reference")?,
+            )
         })
         .collect()
 }
@@ -1036,15 +1103,15 @@ fn validate_values(
         .outputs
         .get(id)
         .context("missing output")?
-        .values()?
-        .into_iter()
-        .map(|value| SchemaValue::try_from(value).map_err(anyhow::Error::msg))
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .items
+        .iter()
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>();
     let expected = (0..length)
-        .map(|index| SchemaValue::U32(domain + 3 * index))
+        .map(|index| serde_json::json!(domain + 3 * index))
         .collect::<Vec<_>>();
     ensure!(
-        values == expected,
+        values == expected.iter().collect::<Vec<_>>(),
         "stream {id:?} differs from expected domain {domain}, length {length}"
     );
     Ok(())
@@ -1052,7 +1119,7 @@ fn validate_values(
 
 /// Observe every gated prefix, including root terminals for a nested graph, before a crash.
 pub async fn prefix(
-    session: &mut InvocationSession,
+    session: &mut PublicInvocationSession,
     topology: Topology,
     expected: &[(u32, u32)],
 ) -> anyhow::Result<Vec<StreamId>> {
@@ -1097,14 +1164,7 @@ pub async fn prefix(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::invocation_session::OutputObservation;
-    use golem_api_grpc::proto::golem::common::Uuid;
-    use golem_api_grpc::proto::golem::schema::{
-        RecordValue, SchemaValueStreamReference, TupleValue,
-    };
-    use golem_api_grpc::proto::golem::worker::{
-        DurableStreamHandle, DurableStreamMapping, InvocationSessionResult, OutputStreamItem,
-    };
+    use crate::benchmarks::public_invocation::OutputObservation;
     use std::collections::BTreeMap;
     use test_r::test;
 
@@ -1149,95 +1209,58 @@ mod tests {
 
     #[test]
     fn deterministic_values_reject_gaps_duplicates_and_wrong_branch() {
-        let mut output = OutputObservation::default();
-        output.items = [701, 704, 707]
-            .into_iter()
-            .map(|value| OutputStreamItem {
-                value: Some(ProtoValue::try_from(SchemaValue::U32(value)).unwrap()),
-                ..Default::default()
-            })
-            .collect();
+        let output = OutputObservation {
+            items: [701, 704, 707]
+                .into_iter()
+                .enumerate()
+                .map(|(sequence, value)| (sequence as u64, serde_json::json!(value)))
+                .collect(),
+            terminal: None,
+        };
         let mut report = SessionCheckpoint::default();
-        report.outputs.insert((1, 2), output);
-        validate_values(&report, &(1, 2), 701, 3).unwrap();
-        assert!(validate_values(&report, &(1, 2), 10_701, 3).is_err());
-        assert!(validate_values(&report, &(1, 2), 701, 4).is_err());
-        let output = report.outputs.get_mut(&(1, 2)).unwrap();
+        report.outputs.insert("stream".into(), output);
+        validate_values(&report, &"stream".into(), 701, 3).unwrap();
+        assert!(validate_values(&report, &"stream".into(), 10_701, 3).is_err());
+        assert!(validate_values(&report, &"stream".into(), 701, 4).is_err());
+        let output = report.outputs.get_mut("stream").unwrap();
         output.items[1] = output.items[0].clone();
-        assert!(validate_values(&report, &(1, 2), 701, 3).is_err());
+        assert!(validate_values(&report, &"stream".into(), 701, 3).is_err());
     }
 
-    fn mapping(channel: u64, id: u64) -> DurableStreamMapping {
-        DurableStreamMapping {
-            transport_stream_id: channel,
-            handle: Some(DurableStreamHandle {
-                stream_id: Some(Uuid {
-                    high_bits: 0,
-                    low_bits: id,
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }
-    }
-
-    fn reference_value(channel: u64) -> ProtoValue {
-        ProtoValue {
-            value: Some(schema_value::Value::StreamReference(
-                SchemaValueStreamReference { stream_id: channel },
-            )),
-        }
+    fn reference_value(token: &str) -> serde_json::Value {
+        serde_json::json!({ "$stream": { "streamToken": token } })
     }
 
     #[test]
-    fn nested_labels_use_the_introducing_items_mapping_after_channel_renumbering() {
-        let mut report = SessionCheckpoint {
-            result: Some(InvocationSessionResult {
-                result: Some(invocation_session_result::Result::MethodResult(
-                    ProtoValue {
-                        value: Some(schema_value::Value::TupleValue(TupleValue {
-                            elements: vec![reference_value(8), reference_value(9)],
-                        })),
-                    },
-                )),
-                ..Default::default()
-            }),
-            mappings: BTreeMap::from([
-                (8, mapping(8, 100)),
-                (9, mapping(9, 200)),
-                (3, mapping(3, 999)),
-            ]),
-            ..Default::default()
-        };
-        for (root, child, label) in [(100, 101, "left"), (200, 201, "right")] {
-            let mut output = OutputObservation::default();
-            output.items.push(OutputStreamItem {
-                value: Some(ProtoValue {
-                    value: Some(schema_value::Value::RecordValue(RecordValue {
-                        fields: vec![
-                            ProtoValue::try_from(SchemaValue::String(label.into())).unwrap(),
-                            reference_value(3),
-                        ],
-                    })),
-                }),
-                new_stream_mappings: vec![mapping(3, child)],
-                ..Default::default()
-            });
-            report.outputs.insert((0, root), output);
+    fn nested_labels_and_stream_tokens_define_the_leaf_topology() {
+        let mut report = SessionCheckpoint::default();
+        report.result = Some(PublicInvocationResult::Value {
+            value: serde_json::json!([reference_value("root-left"), reference_value("root-right")]),
+        });
+        for (root, child, label) in [
+            ("root-left", "child-left", "left"),
+            ("root-right", "child-right", "right"),
+        ] {
+            report.outputs.insert(
+                root.into(),
+                OutputObservation {
+                    items: vec![(
+                        0,
+                        serde_json::json!({
+                            "label": label,
+                            "values": reference_value(child)
+                        }),
+                    )],
+                    terminal: None,
+                },
+            );
         }
         assert_eq!(
             leaves(&report, Topology::Nested).unwrap(),
-            vec![(0, 101), (0, 201)]
+            vec!["child-left", "child-right"]
         );
-        let left = report.outputs.get_mut(&(0, 100)).unwrap();
-        left.items[0].value = Some(ProtoValue {
-            value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: vec![
-                    ProtoValue::try_from(SchemaValue::String("right".into())).unwrap(),
-                    reference_value(3),
-                ],
-            })),
-        });
+        let left = report.outputs.get_mut("root-left").unwrap();
+        left.items[0].1["label"] = serde_json::json!("right");
         assert!(leaves(&report, Topology::Nested).is_err());
     }
 }

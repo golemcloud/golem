@@ -23,7 +23,6 @@ pub mod unavailable;
 #[async_trait]
 pub trait WorkerExecutorCluster: Send + Sync {
     fn size(&self) -> usize;
-    async fn kill_all(&self);
     /// Signal and reap every member, sharing one absolute deadline. All
     /// members are attempted even if another member fails.
     async fn kill_all_and_wait(&self, deadline: tokio::time::Instant) -> anyhow::Result<()> {

@@ -16,8 +16,9 @@ test_r::enable!();
 
 #[test_r::sequential]
 mod tests {
-    use anyhow::ensure;
-    use golem_api_grpc::proto::golem::worker::ResumeOperation;
+    use anyhow::{Context, ensure};
+    use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
+    use golem_api_grpc::proto::golem::worker::{ResumeOperation, invocation_session_result};
     use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
     use golem_common::model::{AgentId, PromiseId};
     use golem_common::schema::SchemaValue;
@@ -27,8 +28,8 @@ mod tests {
         DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-    use integration_tests::benchmarks::streaming_recovery::{Topology, leaves, prefix};
-    use integration_tests::invocation_session::InvocationSession;
+    use integration_tests::benchmarks::streaming_recovery::Topology;
+    use integration_tests::invocation_session::{InvocationSession, SessionCheckpoint, StreamId};
     use std::sync::Once;
     use std::time::Duration;
     use test_r::{test, timeout};
@@ -84,6 +85,110 @@ mod tests {
         })
         .await??;
         Ok(())
+    }
+
+    fn reference(value: &ProtoValue, report: &SessionCheckpoint) -> anyhow::Result<StreamId> {
+        let Some(schema_value::Value::StreamReference(reference)) = &value.value else {
+            anyhow::bail!("expected stream reference: {value:?}");
+        };
+        let id = report
+            .mappings
+            .get(&reference.stream_id)
+            .and_then(|mapping| mapping.handle.as_ref())
+            .and_then(|handle| handle.stream_id)
+            .context("missing stream mapping")?;
+        Ok((id.high_bits, id.low_bits))
+    }
+
+    fn roots(report: &SessionCheckpoint) -> anyhow::Result<Vec<StreamId>> {
+        let Some(invocation_session_result::Result::MethodResult(value)) = report
+            .result
+            .as_ref()
+            .and_then(|result| result.result.as_ref())
+        else {
+            anyhow::bail!("expected method result");
+        };
+        match &value.value {
+            Some(schema_value::Value::TupleValue(tuple)) => tuple
+                .elements
+                .iter()
+                .map(|value| reference(value, report))
+                .collect(),
+            _ => Ok(vec![reference(value, report)?]),
+        }
+    }
+
+    fn leaves(report: &SessionCheckpoint, topology: Topology) -> anyhow::Result<Vec<StreamId>> {
+        let roots = roots(report)?;
+        ensure!(
+            roots.len() == if topology == Topology::Flat { 1 } else { 2 },
+            "unexpected root count"
+        );
+        if topology != Topology::Nested {
+            return Ok(roots);
+        }
+        roots
+            .iter()
+            .zip(["left", "right"])
+            .map(|(root, label)| {
+                let items = &report
+                    .outputs
+                    .get(root)
+                    .context("missing root output")?
+                    .items;
+                ensure!(items.len() == 1, "root must introduce one labelled child");
+                let value = items[0].value.as_ref().context("root omitted value")?;
+                let Some(schema_value::Value::RecordValue(record)) = &value.value else {
+                    anyhow::bail!("expected labelled nested record");
+                };
+                let actual =
+                    SchemaValue::try_from(record.fields[0].clone()).map_err(anyhow::Error::msg)?;
+                ensure!(
+                    actual == SchemaValue::String(label.into()),
+                    "branch label changed"
+                );
+                let Some(schema_value::Value::StreamReference(child)) = &record.fields[1].value
+                else {
+                    anyhow::bail!("nested record omitted child reference");
+                };
+                let id = items[0]
+                    .new_stream_mappings
+                    .iter()
+                    .find(|mapping| mapping.transport_stream_id == child.stream_id)
+                    .and_then(|mapping| mapping.handle.as_ref())
+                    .and_then(|handle| handle.stream_id)
+                    .context("nested item omitted child mapping")?;
+                Ok((id.high_bits, id.low_bits))
+            })
+            .collect()
+    }
+
+    async fn prefix(
+        session: &mut InvocationSession,
+        topology: Topology,
+        expected: &[(u32, u32)],
+    ) -> anyhow::Result<Vec<StreamId>> {
+        loop {
+            let report = session.checkpoint();
+            let ready = report.result.is_some()
+                && (topology != Topology::Nested
+                    || roots(report)?.iter().all(|root| {
+                        report.outputs.get(root).is_some_and(|output| {
+                            !output.items.is_empty() && output.terminal.is_some()
+                        })
+                    }));
+            if ready {
+                let ids = leaves(report, topology)?;
+                if ids.iter().zip(expected).all(|(id, (_, length))| {
+                    report.outputs.get(id).is_some_and(|output| {
+                        output.items.len() == (length / 4).clamp(1, 8) as usize
+                    })
+                }) {
+                    return Ok(ids);
+                }
+            }
+            session.receive().await?;
+        }
     }
 
     async fn scenario(topology: Topology, second_restart: bool) -> anyhow::Result<()> {

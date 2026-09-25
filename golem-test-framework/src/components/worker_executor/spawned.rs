@@ -203,11 +203,6 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         self.grpc_port
     }
 
-    async fn kill(&self) {
-        let _guard = self.lifecycle.lock().await;
-        self.blocking_kill();
-    }
-
     async fn kill_and_wait(&self, deadline: tokio::time::Instant) -> anyhow::Result<()> {
         let _guard = tokio::time::timeout_at(deadline, self.lifecycle.lock()).await?;
         {

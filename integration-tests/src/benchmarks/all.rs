@@ -20,21 +20,35 @@ use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{
-    BenchmarkArtifacts, BenchmarkConfig, BenchmarkRecorder, BenchmarkRunner, BenchmarkSource,
-    BenchmarkSuite, BenchmarkSuiteItem, BenchmarkSuiteResult,
+    Benchmark, BenchmarkApi, BenchmarkArtifacts, BenchmarkConfig, BenchmarkRecorder,
+    BenchmarkResult, BenchmarkRunner, BenchmarkSource, BenchmarkSuite, BenchmarkSuiteItem,
+    BenchmarkSuiteResult,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
     BenchmarkCliParameters, BenchmarkTestDependencies, TestDependencies,
 };
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use integration_tests::benchmarks::registry::{BenchmarkRegistry, benchmark_registry};
 use integration_tests::benchmarks::{
-    cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
+    self, cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use tracing::{Level, debug, info, warn};
+
+type BenchmarkRunFn = Box<
+    dyn for<'a> Fn(
+        &'a TestMode,
+        Level,
+        &'a BenchmarkSuiteItem,
+        bool,
+        bool,
+    ) -> Pin<Box<dyn Future<Output = BenchmarkResult> + 'a>>,
+>;
+
+type BenchmarkRegistry = BTreeMap<&'static str, BenchmarkRunFn>;
 
 #[tokio::main]
 async fn main() {
@@ -213,6 +227,195 @@ async fn main() {
         );
         std::process::exit(1);
     }
+}
+
+fn benchmark_registry() -> BenchmarkRegistry {
+    let mut benchmarks_by_name: BenchmarkRegistry = BTreeMap::new();
+    benchmarks_by_name.insert(
+        "cold-start-unknown-small",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::cold_start_unknown::ColdStartUnknownSmall,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "cold-start-unknown-medium",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::cold_start_unknown::ColdStartUnknownMedium,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "latency-small",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::latency::LatencySmall>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "latency-medium",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::latency::LatencyMedium>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "sleep",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::sleep::Sleep>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "durability-overhead",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::durability_overhead::DurabilityOverhead,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "idempotency-key-lookup",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::idempotency_key::IdempotencyKeyLookup,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-echo",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::throughput::ThroughputEcho>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-large-input",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(
+                run_benchmark::<benchmarks::throughput::ThroughputLargeInput>(
+                    mode,
+                    verbosity,
+                    item,
+                    primary_only,
+                    otlp,
+                ),
+            )
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-cpu-intensive",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::throughput::ThroughputCpuIntensive,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-tool",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::streaming::Streaming<true>>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<benchmarks::streaming::Streaming<false>>(
+                mode,
+                verbosity,
+                item,
+                primary_only,
+                otlp,
+            ))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-history",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_history::StreamingRpcHistory,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-cold-indexed",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_history::StreamingRpcColdIndexed,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-reconnect",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcReconnect,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-recovery",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcRecovery,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-recovery-siblings",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcRecoverySiblings,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "streaming-rpc-recovery-nested",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::streaming_recovery::StreamingRpcRecoveryNested,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name
+}
+
+async fn run_benchmark<B: Benchmark>(
+    mode: &TestMode,
+    verbosity: Level,
+    item: &BenchmarkSuiteItem,
+    primary_only: bool,
+    otlp: bool,
+) -> BenchmarkResult {
+    B::run_benchmark(mode, verbosity, item, primary_only, true, true, otlp).await
 }
 
 fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<BenchmarkArtifacts> {
