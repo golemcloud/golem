@@ -2855,11 +2855,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if instance.ensure_not_deleting().is_err() || self.oplog.is_retired() {
             return Ok(None);
         }
-        // An agent given up here is archived by the shard's new owner. Moving its entries or
-        // dropping its cached status from this executor would write to state it no longer owns.
-        if self.is_given_up() {
-            return Err(self.give_up_error());
-        }
         if !self.active_agents().contains_worker_generation(self).await {
             return Err(WorkerExecutorError::runtime(
                 "Archival worker left the active cache; retry with the current owner",
