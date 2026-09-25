@@ -218,11 +218,29 @@ object SchemaRefSpec extends ZIOSpecDefault {
           )
         )
       )
-      val absent = RecordValue(List(OptionValue(None), OptionValue(None)))
+      val absent        = RecordValue(List(OptionValue(None), OptionValue(None)))
+      val malformedRefs = SchemaRef(
+        SchemaGraph(
+          ListMap(
+            "cycle-a" -> SchemaTypeDef(SchemaType(RefType("cycle-b"))),
+            "cycle-b" -> SchemaTypeDef(SchemaType(RefType("cycle-a")))
+          ),
+          SchemaType(
+            RecordType(
+              List(
+                NamedFieldType("dangling", SchemaType(RefType("missing"))),
+                NamedFieldType("cycle", SchemaType(RefType("cycle-a")))
+              )
+            )
+          )
+        )
+      )
       assertTrue(
         optional.packJson(Json.Object()) == Right(absent),
         optional.packJson(Json.Object("maybe" -> Json.Null, "referenced" -> Json.Null)) == Right(absent),
-        optional.toJsonSchema().get("required").one == Right(Json.Array())
+        optional.toJsonSchema().get("required").one == Right(Json.Array()),
+        malformedRefs.toJsonSchema().get("required").one ==
+          Right(Json.Array(Json.String("dangling"), Json.String("cycle")))
       )
     },
     test("uses lossless canonical JSON for wide integers, durations, and quantities") {

@@ -597,6 +597,21 @@ class StreamRuntimeTest extends munit.FunSuite {
       Vector(configExpected, Json.parse("""{"path":["optional"],"value":"west"}""").toOption.get)
     )
     assertEquals(Json.requireField(config.head, "value").toOption.get, Json.string(Long.MaxValue.toString))
+
+    val floatCodec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"f64","value":{}}}"""
+    )
+    val call = scala.util.Try(
+      Bridge.createAgent(
+        Configuration(GolemServer.Custom("http://127.0.0.1:1", "token"), "app", "env", global),
+        "ConfigAgent",
+        SchemaValue.TupleValue(List.empty),
+        None,
+        List(AgentConfigEntry(List("float"), SchemaValue.F64Value(Double.NaN), floatCodec))
+      )
+    )
+    assert(call.isSuccess)
+    intercept[BridgeException](Await.result(call.get, 1.second))
   }
 
   test("public codec enforces quantity bounds restrictions unions and integer boundaries") {

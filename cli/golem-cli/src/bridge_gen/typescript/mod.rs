@@ -1965,6 +1965,16 @@ impl TypeScriptBridgeGenerator {
         typ: &SchemaType,
         stream: &str,
     ) -> anyhow::Result<String> {
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.tag === 'inline') return {{ $case: 'inline', value: {{ text: v.val, ...(v.languageCode !== undefined ? {{ language: v.languageCode }} : {{}}) }} }}; if(v.tag === 'url') return {{ $case: 'url', value: v.val }}; throw new Error('unknown unstructured text variant'); }})({value})"
+            ));
+        }
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.tag === 'inline') return {{ $case: 'inline', value: {{ bytes: Buffer.from(v.val).toString('base64url'), ...(v.mimeType !== undefined ? {{ mimeType: v.mimeType }} : {{}}) }} }}; if(v.tag === 'url') return {{ $case: 'url', value: v.val }}; throw new Error('unknown unstructured binary variant'); }})({value})"
+            ));
+        }
         Ok(match typ {
             SchemaType::S64 { .. } | SchemaType::U64 { .. } => format!("({value}).toString()"),
             SchemaType::Bool { .. }
@@ -2137,6 +2147,16 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn encode_canonical_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.tag === 'inline') return {{ inline: {{ text: v.val, ...(v.languageCode !== undefined ? {{ language: v.languageCode }} : {{}}) }} }}; if(v.tag === 'url') return {{ url: v.val }}; throw new Error('unknown unstructured text variant'); }})({value})"
+            ));
+        }
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.tag === 'inline') return {{ inline: {{ bytes: Buffer.from(v.val).toString('base64url'), ...(v.mimeType !== undefined ? {{ mimeType: v.mimeType }} : {{}}) }} }}; if(v.tag === 'url') return {{ url: v.val }}; throw new Error('unknown unstructured binary variant'); }})({value})"
+            ));
+        }
         Ok(match typ {
             SchemaType::S64 { .. } | SchemaType::U64 { .. } => format!("({value}).toString()"),
             SchemaType::Bool { .. }

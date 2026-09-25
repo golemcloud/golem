@@ -51,6 +51,9 @@ describe("SchemaRef", () => {
     })
     expect(schema.validateJson({ bounded: 15 }).success).toBe(true)
     expect(schema.validateJson({ bounded: 15, nullable: null }).success).toBe(true)
+    expect(
+      ref(t.record([field("constructor", t.option(t.string()))])).validateJson({}).success,
+    ).toBe(true)
     for (const numeric of [t.f32, t.f64]) {
       expect(
         ref(
@@ -61,6 +64,13 @@ describe("SchemaRef", () => {
         ).toJsonSchema(),
       ).toMatchObject({ type: "number", minimum: -1, maximum: 0.5 })
     }
+  })
+
+  it("rejects native values outside declared restrictions before unpacking", () => {
+    const schema = ref(t.u32({ min: { tag: "unsigned", val: 10n } }))
+    expect(() =>
+      schema.unpackJson({ root: 0, valueNodes: [{ tag: "u32-value", val: 1 }] }),
+    ).toThrow(/does not conform/)
   })
 
   it("renders enforceable rich-value allowlists and canonical base64url bytes", () => {
@@ -120,6 +130,17 @@ describe("SchemaRef", () => {
     ).toBe(false)
     expect(schema.validateJson({ ...valid, duration: { nanoseconds: "-0" } }).success).toBe(false)
     expect(schema.unpackJson(schema.packJson(valid))).toEqual(valid)
+    expect(() =>
+      ref(t.binary()).unpackJson({
+        root: 0,
+        valueNodes: [
+          {
+            tag: "binary-value",
+            val: { bytes: new Uint8Array([1]), mimeType: "not a mime" },
+          },
+        ],
+      }),
+    ).toThrow(/invalid MIME type/)
   })
 
   it("validates nested native capabilities without consuming or rewriting them", () => {

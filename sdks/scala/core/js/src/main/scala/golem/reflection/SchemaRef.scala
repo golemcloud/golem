@@ -129,9 +129,11 @@ private object CanonicalJson {
         )
       )
     }
-    def isOption(schema: SchemaType): Boolean = resolve(graph, schema).body match {
-      case OptionType(_) => true
-      case _             => false
+    def isOption(schema: SchemaType, seen: Set[String] = Set.empty): Boolean = schema.body match {
+      case OptionType(_)           => true
+      case RefType(id) if seen(id) => false
+      case RefType(id)             => graph.defs.get(id).exists(definition => isOption(definition.body, seen + id))
+      case _                       => false
     }
     schema.body match {
       case RefType(id)              => Json.Object("$ref" -> Json.String(s"#/$$defs/${id.replace("~", "~0").replace("/", "~1")}"))
@@ -233,7 +235,8 @@ private object CanonicalJson {
           restrictions.minBytes.map(value => "minLength" -> number(base64UrlLength(value))).toList ++
             restrictions.maxBytes.map(value => "maxLength" -> number(base64UrlLength(value))).toList
         val mimeType = restrictions.mimeTypes match {
-          case Some(values) => typed(
+          case Some(values) =>
+            typed(
               "string",
               "pattern" -> Json.String(MimeTypePattern.regex),
               "enum"    -> Json.Array(values.map(Json.String): _*)

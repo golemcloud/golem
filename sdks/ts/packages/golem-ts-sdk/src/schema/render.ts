@@ -101,7 +101,7 @@ export function fromCanonicalJson(
       return {
         tag: 'record',
         fields: body.fields.map((field) => {
-          if (!(field.name in object)) {
+          if (!Object.prototype.hasOwnProperty.call(object, field.name)) {
             if (resolve(graph, field.body).body.tag === 'option') return { tag: 'option' };
             fail([...path, field.name], 'missing field');
           }
@@ -263,11 +263,14 @@ export function toCanonicalJson(
         text: value.text,
         ...(value.language === undefined ? {} : { language: value.language }),
       };
-    case 'binary':
+    case 'binary': {
+      if (value.mimeType !== undefined && !MIME_TYPE_PATTERN.test(value.mimeType))
+        fail([...path, 'mimeType'], 'invalid MIME type');
       return {
         bytes: bytesToBase64(value.bytes),
         ...(value.mimeType === undefined ? {} : { mimeType: value.mimeType }),
       };
+    }
     case 'datetime':
       return datetimeToISOString(value.value);
     case 'duration':

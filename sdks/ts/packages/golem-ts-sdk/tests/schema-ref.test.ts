@@ -32,12 +32,20 @@ describe('SchemaRef canonical JSON', () => {
     const ref = schema(t.record([field('maybe', t.option(t.string()))]));
     expect(ref.packJson({})).toEqual(v.record([v.option()]));
     expect(ref.packJson({ maybe: null })).toEqual(v.record([v.option()]));
+
+    const inheritedName = schema(t.record([field('constructor', t.option(t.string()))]));
+    expect(inheritedName.packJson({})).toEqual(v.record([v.option()]));
   });
 
   it('rejects finite JSON numbers that overflow f32 after narrowing', () => {
     expect(schema(t.f32()).validateJson(1e100).success).toBe(false);
     expect(() => schema(t.f32()).unpackJson(v.f32(Infinity))).toThrow(/finite JSON number/);
     expect(() => schema(t.f64()).unpackJson(v.f64(-Infinity))).toThrow(/finite JSON number/);
+  });
+
+  it('rejects native values outside declared restrictions before unpacking', () => {
+    const ref = schema(t.u32({ min: { tag: 'unsigned', val: 10n } }));
+    expect(() => ref.unpackJson(v.u32(1))).toThrow(/does not conform/);
   });
 
   it('uses the canonical object representation for text', () => {
@@ -74,6 +82,11 @@ describe('SchemaRef canonical JSON', () => {
       issues: [{ path: ['bytes'], message: 'invalid base64url without padding' }],
     });
     expect(ref.validateJson({ bytes: 'AQI', mimeType: 'not a mime' }).success).toBe(false);
+    expect(() =>
+      schema(schemaType({ tag: 'binary', restrictions: {} })).unpackJson(
+        v.binary(Uint8Array.from([1]), 'not a mime'),
+      ),
+    ).toThrow(/invalid MIME type/);
   });
 
   it('uses a canonical signed decimal nanosecond string for durations', () => {
@@ -88,7 +101,7 @@ describe('SchemaRef canonical JSON', () => {
   });
 
   it('uses canonical signed decimal strings for quantity mantissas', () => {
-    const ref = schema(t.quantity({ baseUnit: 'm', allowedUnits: [] }));
+    const ref = schema(t.quantity({ baseUnit: 'm', allowedSuffixes: [] }));
     const json = { mantissa: '123', scale: -2, unit: 'm' } as const;
 
     expect(ref.packJson(json)).toEqual(v.quantity({ mantissa: 123n, scale: -2, unit: 'm' }));
@@ -173,7 +186,7 @@ describe('SchemaRef JSON Schema', () => {
     const root = t.record([
       field('text', schemaType({ tag: 'text', restrictions: {} })),
       field('duration', t.duration()),
-      field('quantity', t.quantity({ baseUnit: 'm', allowedUnits: [] })),
+      field('quantity', t.quantity({ baseUnit: 'm', allowedSuffixes: [] })),
     ]);
 
     expect(schema(root).toJsonSchema()).toMatchObject({

@@ -344,6 +344,14 @@ fn external_rest_config_uses_canonical_json_for_named_non_streaming_values() {
                         }],
                     }),
                 ),
+                named_field(
+                    "document",
+                    unstructured_text_schema_type(TextRestrictions::default()),
+                ),
+                named_field(
+                    "attachment",
+                    unstructured_binary_schema_type(BinaryRestrictions::default()),
+                ),
             ]),
         )],
         AgentMode::Durable,
@@ -376,6 +384,16 @@ fn external_rest_config_uses_canonical_json_for_named_non_streaming_values() {
     assert!(canonical.contains("'ok' in v ? { ok:"));
     assert!(canonical.contains("unknown variant"));
     assert!(canonical.contains("if(v.tag === \"command\") return"));
+    assert!(canonical.contains("if(v.tag === 'inline') return { inline: { text: v.val"));
+    assert!(canonical.contains(
+        "if(v.tag === 'inline') return { inline: { bytes: Buffer.from(v.val).toString('base64url')"
+    ));
+    assert!(
+        source.contains("if(v.tag === 'inline') return { $case: 'inline', value: { text: v.val")
+    );
+    assert!(source.contains(
+        "if(v.tag === 'inline') return { $case: 'inline', value: { bytes: Buffer.from(v.val).toString('base64url')"
+    ));
     assert!(source.contains("void ("));
     install_and_build(&package_dir);
 }
