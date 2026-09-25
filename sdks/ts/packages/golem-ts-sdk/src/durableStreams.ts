@@ -13,13 +13,12 @@ import {
   type DurableStreamReadRequest,
 } from 'golem:agent/durable-streams@2.0.0';
 import type { Secret as SecretHandle } from 'golem:core/types@2.0.0';
-import { Secret } from './secret';
+import { Secret, withConfigSecretHandle } from './secret';
 import { AgentStream } from './schema/agentStream';
 import { compileSchema } from './schema/adapter';
 import { SchemaRef } from './schema/ref';
 import type { StandardSchemaV1 } from './schema/standardSchema';
 import { decodeUtf8 } from './internal/utf8';
-import { SECRET_INTERNAL } from './internal/schema-model/secretInternal';
 
 export type { DurableStreamAppendReceipt, DurableStreamErrorKind };
 
@@ -333,7 +332,7 @@ function createWriter<T>(
 const MAX_PRODUCER_INTEGER = 9007199254740991n;
 
 function withAuth<R>(auth: Secret<string> | undefined, use: (handle?: SecretHandle) => R): R {
-  return auth === undefined ? use() : auth[SECRET_INTERNAL](use);
+  return auth === undefined ? use() : withConfigSecretHandle(auth, use);
 }
 
 function boundedInteger(value: number, min: number, max: number, name: string): number {

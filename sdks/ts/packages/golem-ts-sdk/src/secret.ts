@@ -29,6 +29,8 @@ import {
 } from './internal/schema-model/secretHandle';
 import type { ConfigDeclaration } from './config';
 
+const declarations = new WeakMap<Secret<unknown>, ConfigDeclaration>();
+
 /**
  * A lazy, log-safe handle over a `secret<inner>` config field. Obtained from
  * `this.config.<field>` (and `InitContext.config.<field>`) for any field
@@ -41,24 +43,8 @@ import type { ConfigDeclaration } from './config';
  *   the whole config object) can never leak the plaintext.
  */
 export class Secret<T> {
-  constructor(private readonly declaration: ConfigDeclaration) {}
-
-  [SECRET_INTERNAL]<R>(use: (handle: RawSecret) => R): R {
-    const d = this.declaration;
-    const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
-    const sv = schemaValueFromWit(tree);
-    if (sv.tag !== 'secret') {
-      throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
-    }
-    const raw = releaseGuestSecretHandle(SECRET_INTERNAL, sv.handle);
-    if (raw === undefined) {
-      throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
-    }
-    try {
-      return use(raw);
-    } finally {
-      (raw as unknown as { [Symbol.dispose](): void })[Symbol.dispose]();
-    }
+  constructor(declaration: ConfigDeclaration) {
+    declarations.set(this, declaration);
   }
 
   /**
@@ -72,7 +58,7 @@ export class Secret<T> {
    * plain Node), so it is exercised at invocation time, never at import time.
    */
   get(): T {
-    const d = this.declaration;
+    const d = declarationOf(this);
     const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
     const sv = schemaValueFromWit(tree);
     if (sv.tag !== 'secret') {
@@ -92,5 +78,34 @@ export class Secret<T> {
     throw new Error(
       'Secret values are not serializable; call .get() to read the plaintext (and avoid logging it)',
     );
+  }
+}
+
+function declarationOf(secret: Secret<unknown>): ConfigDeclaration {
+  const declaration = declarations.get(secret);
+  if (declaration === undefined) {
+    throw new TypeError('Invalid config Secret');
+  }
+  return declaration;
+}
+
+export function withConfigSecretHandle<R>(
+  secret: Secret<unknown>,
+  use: (handle: RawSecret) => R,
+): R {
+  const d = declarationOf(secret);
+  const tree = getConfigValue(d.path, schemaGraphToWit(d.graph));
+  const sv = schemaValueFromWit(tree);
+  if (sv.tag !== 'secret') {
+    throw new Error(`Expected a secret config value at '${d.path.join('.')}', got '${sv.tag}'`);
+  }
+  const raw = releaseGuestSecretHandle(SECRET_INTERNAL, sv.handle);
+  if (raw === undefined) {
+    throw new Error(`Secret config handle at '${d.path.join('.')}' was already transferred`);
+  }
+  try {
+    return use(raw);
+  } finally {
+    (raw as unknown as { [Symbol.dispose](): void })[Symbol.dispose]();
   }
 }

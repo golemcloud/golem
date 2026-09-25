@@ -74,6 +74,11 @@ async fn typescript_streaming_template_builds() {
 }
 
 #[test]
+async fn effect_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Effect).await;
+}
+
+#[test]
 async fn scala_streaming_template_builds() {
     streaming_template_builds_for_lang(GuestLanguage::Scala).await;
 }

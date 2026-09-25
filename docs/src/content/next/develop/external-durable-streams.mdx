@@ -8,7 +8,7 @@ Resource construction records the immutable URL, mode or producer identity, time
 
 ## SDK examples
 
-<Tabs items={["Rust", "TypeScript", "Scala", "MoonBit"]} storageKey="external-durable-streams-language">
+<Tabs items={["Rust", "TypeScript", "Effect", "Scala", "MoonBit"]} storageKey="external-durable-streams-language">
 <Tabs.Tab>
 ```rust
 use golem_rust::durable_streams::{
@@ -56,6 +56,29 @@ await output.close();
 ```
 
 Use `readDurableByteStream` and `createDurableByteWriter` for bytes. Readers are ordinary affine `AgentStream<T>` values and can be forwarded directly.
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import { Effect, Schema, Stream } from "effect";
+import { DurableStreams } from "@golemcloud/effect-golem";
+
+const copy = Effect.gen(function* () {
+  const input = DurableStreams.readJson(Schema.Number, {
+    url: "https://streams.example/source",
+    offset: "-1",
+    live: "sse",
+  });
+  const output = yield* DurableStreams.makeJsonWriter(Schema.Number, {
+    url: "https://streams.example/target",
+    producerId: "copy-agent",
+  });
+
+  yield* input.pipe(Stream.runForEach(value => output.append([value])));
+  yield* output.close;
+}).pipe(Effect.scoped);
+```
+
+Use `readBytes` and `makeByteWriter` for bytes. Readers are native Effect `Stream` values, and writers remain valid while their acquisition scope is open.
 </Tabs.Tab>
 <Tabs.Tab>
 ```scala
@@ -131,7 +154,8 @@ The worker executor's `[durable_stream].external_batch_max_size` limits each com
 Pass a secret **capability**, not plaintext. The host pins its identity when the resource is constructed, checks reveal and network permissions, resolves the value only for a live request, and sends a string secret as a Bearer token. Do not reveal it in guest code or place credentials in the URL.
 
 - Rust uses the raw secret handle from a configured `Secret<String>`.
-- TypeScript accepts a raw `golem:core/types` secret capability; its configuration wrapper is not the raw handle.
+- TypeScript accepts its public config `Secret<string>` wrapper and borrows a fresh raw capability internally without calling `get()`.
+- Effect yields the `borrow` Effect from a `Schema.Redacted(Schema.String)` config field and passes the resulting opaque capability as `auth`.
 - Scala accepts `auth = Some(config.token)` for a declared `golem.config.Secret[String]`.
 - MoonBit constructors borrow `auth : @types.Secret?` directly.
 

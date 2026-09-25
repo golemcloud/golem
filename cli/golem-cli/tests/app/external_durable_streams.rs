@@ -374,6 +374,7 @@ async fn generated_streaming_templates_execute_durable_streams_walkthrough() {
     for (language, append, read) in [
         ("rust", "append_external", "read_external"),
         ("ts", "appendExternal", "readExternal"),
+        ("effect", "appendExternal", "readExternal"),
         ("scala", "appendExternal", "readExternal"),
         ("moonbit", "append_external", "read_external"),
     ] {

@@ -1,6 +1,4 @@
 name: "durable-streams"
-skip_if:
-  language: "effect"
 settings:
   golem_server:
     custom_request_port: 9006
@@ -26,15 +24,15 @@ steps:
 
         Add `DurableConsumer`, also with one string identity, mounted at
         `/durable-consumer/{name}`. Its normal, externally invokable method `consume_url` in Rust
-        and MoonBit or `consumeUrl` in TypeScript and Scala accepts a protocol-compatible Durable
-        Streams URL string. Do not expose that method as an HTTP endpoint. It must use this
+        and MoonBit or `consumeUrl` in TypeScript, Effect, and Scala accepts a protocol-compatible
+        Durable Streams URL string. Do not expose that method as an HTTP endpoint. It must use this
         language SDK's external Durable Streams JSON reader, consume string messages incrementally
         until closure, and return them as a list/array. Do not parse this URL with a generic HTTP
         client and do not use typed agent RPC for the consumer. Keep generic agent-to-agent
         streaming separate. Make the project build and deploy successfully. Do not run bug_finder
         or delegate review; the harness performs external verification.
       ts: *durable-stream-prompt
-      effect: "This scenario is skipped for Effect because GOL-109 covers Rust, TypeScript, Scala, and MoonBit."
+      effect: *durable-stream-prompt
       scala: *durable-stream-prompt
       moonbit: *durable-stream-prompt
     expectedSkills:
@@ -42,7 +40,8 @@ steps:
         - "golem-durable-streams-rust"
       ts:
         - "golem-durable-streams-ts"
-      effect: []
+      effect:
+        - "golem-durable-streams-effect"
       scala:
         - "golem-durable-streams-scala"
       moonbit:
