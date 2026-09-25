@@ -881,12 +881,13 @@ impl ReplayState {
         expected_request: &HostRequest,
     ) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
         match self
-            .claim_custom_start_or_replay_end(
+            .claim_custom_start_for_store(
                 expected_function_name,
                 expected_function_type,
                 expected_parent_start_index,
                 expected_invocation_id,
                 expected_request,
+                false,
             )
             .await?
         {
@@ -898,23 +899,34 @@ impl ReplayState {
                         .to_string(),
                 ))
             }
+            CustomStartClaimOutcome::StoreAlreadyLive => {
+                unreachable!("strict custom claims are never issued on behalf of a live Store")
+            }
         }
     }
 
     /// Like [`Self::claim_custom_start_matching_invocation_id`], but reports
     /// [`CustomStartClaimOutcome::ReplayEnded`] instead of failing when no `Start` carries the
-    /// invocation id and the cursor has already reached the replay target. A custom invocation
-    /// admitted after the live transition while unclaimed retained `Start`s exist (see
-    /// `WorkerState::durable_call_is_live`) uses this to fall back to recording a new `Start`.
-    /// A missing id while replay is still positioned before the target remains strict divergence.
-    pub(crate) async fn claim_custom_start_or_replay_end(
+    /// invocation id and the cursor has already reached the replay target, and
+    /// [`CustomStartClaimOutcome::StoreAlreadyLive`] when no `Start` carries it and the claiming
+    /// Store's own liveness `store_live` already holds. A custom invocation admitted after the
+    /// live transition while unclaimed retained `Start`s exist (see
+    /// `WorkerState::durable_call_is_live`) uses this to adopt its retained `Start` or fall back
+    /// to recording a new one. A missing id while replay is still positioned before the target
+    /// and the Store is not live remains strict divergence.
+    pub(crate) async fn claim_custom_start_for_store(
         &self,
         expected_function_name: &HostFunctionName,
         expected_function_type: &DurableFunctionType,
         expected_parent_start_index: Option<OplogIndex>,
         expected_invocation_id: uuid::Uuid,
         expected_request: &HostRequest,
+        store_live: bool,
     ) -> Result<CustomStartClaimOutcome, WorkerExecutorError> {
+        enum Missing {
+            ReplayEnded,
+            StoreAlreadyLive,
+        }
         let (handle, entry) = loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
@@ -923,7 +935,7 @@ impl ReplayState {
             let expected_function_name = expected_function_name.clone();
             let expected_function_type = expected_function_type.clone();
             let expected_request = expected_request.clone();
-            let (claimed, blocked_on_completion_delivery, replay_ended) = self
+            let (claimed, blocked_on_completion_delivery, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| {
@@ -1094,7 +1106,10 @@ impl ReplayState {
                                 }
                             }
                             OplogEntryLookupResult::NotFound { .. } if tx.cursor.is_live() => {
-                                return Ok((None, false, true));
+                                return Ok((None, false, Some(Missing::ReplayEnded)));
+                            }
+                            OplogEntryLookupResult::NotFound { .. } if store_live => {
+                                return Ok((None, false, Some(Missing::StoreAlreadyLive)));
                             }
                             OplogEntryLookupResult::NotFound { .. } => {
                                 return Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -1113,7 +1128,7 @@ impl ReplayState {
                             let root = result.0.start_idx();
                             tx.register_custom_subtree_root(root);
                         }
-                        Ok((result, tx.blocked_on_completion_delivery, false))
+                        Ok((result, tx.blocked_on_completion_delivery, None))
                     })
                     .await
             })
@@ -1121,8 +1136,12 @@ impl ReplayState {
             if let Some(claimed) = claimed {
                 break claimed;
             }
-            if replay_ended {
-                return Ok(CustomStartClaimOutcome::ReplayEnded);
+            match missing {
+                Some(Missing::ReplayEnded) => return Ok(CustomStartClaimOutcome::ReplayEnded),
+                Some(Missing::StoreAlreadyLive) => {
+                    return Ok(CustomStartClaimOutcome::StoreAlreadyLive);
+                }
+                None => {}
             }
             debug_assert!(blocked_on_completion_delivery);
             progress.await;
@@ -1145,12 +1164,15 @@ impl ReplayState {
     }
 }
 
-/// Outcome of [`ReplayState::claim_custom_start_or_replay_end`].
+/// Outcome of [`ReplayState::claim_custom_start_for_store`].
 pub(crate) enum CustomStartClaimOutcome {
     Claimed(ClaimedConcurrentStart),
     /// No `Start` carries the requested invocation id and the cursor is at the replay target: the
     /// invocation is new and must be recorded live.
     ReplayEnded,
+    /// No `Start` carries the requested invocation id before the replay target, but the claiming
+    /// Store already continued live locally, so the invocation is new for that Store.
+    StoreAlreadyLive,
 }
 
 /// The `parent_start_index` a durable call's `Start` entry is recorded with when the caller does
