@@ -281,8 +281,8 @@ fn parse_claim(content: &[u8]) -> Option<Timestamp> {
 mod tests {
     use super::super::files::SnapshotFiles;
     use super::{
-        ClaimChoice, LEDGER_PATH, ListedClaim, Percent, PruneLedger, needs_repository_size,
-        next_claim, prune_due, read_ledger, write_ledger,
+        ClaimChoice, LEDGER_PATH, ListedClaim, Percent, PruneLedger, claims_directory, list_claims,
+        needs_repository_size, next_claim, prune_due, read_ledger, take_claim, write_ledger,
     };
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
@@ -450,6 +450,32 @@ mod tests {
                 ClaimChoice::Claim(5),
                 ClaimChoice::Claim(4),
             ]
+        );
+    }
+
+    #[test]
+    async fn a_claim_is_taken_one_time_and_listed_with_its_time() {
+        let files = new_files();
+        let directory = claims_directory(&ledger(1, Some(42), false));
+        let now = at(10_000_000);
+
+        let first = take_claim(&files, &directory, 0, now).await.unwrap();
+        let again = take_claim(&files, &directory, 0, at(20_000_000))
+            .await
+            .unwrap();
+        let listed = list_claims(&files, &directory).await.unwrap();
+
+        assert_eq!(
+            (directory.display().to_string(), first, again, listed),
+            (
+                "golem/prune-claims/42".to_string(),
+                true,
+                false,
+                vec![ListedClaim {
+                    number: 0,
+                    claimed_at: Some(now)
+                }]
+            )
         );
     }
 
