@@ -548,6 +548,10 @@ impl ReplayCallHandle {
         self.start_idx
     }
 
+    pub(crate) fn resolution_ready(&self) -> bool {
+        !self.receiver.is_empty() || self.receiver.is_terminated()
+    }
+
     pub(crate) fn attach_historical_reconstruction(
         &mut self,
         reconstruction: HistoricalReconstruction,

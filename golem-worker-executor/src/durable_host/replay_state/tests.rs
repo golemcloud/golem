@@ -1782,6 +1782,60 @@ async fn seen_log_tracks_multiplicity_of_identical_entries() {
 }
 
 #[test]
+async fn resolution_readiness_preserves_positional_entries_and_retained_tails() {
+    for with_span in [false, true] {
+        for completed in [false, true] {
+            let mut entries = vec![noop(), start_now()];
+            if with_span {
+                entries.push(OplogEntry::StartSpan {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    span_id: golem_common::model::invocation_context::SpanId::generate(),
+                    parent: None,
+                    linked_context_id: None,
+                    attributes: HashMap::new().into(),
+                });
+            }
+            if completed {
+                entries.push(end_for(2, 37));
+                entries.push(noop()); // Ready terminal need not be the replay tail.
+            }
+            let rs = replay_state_over(entries).await;
+            let handle = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            assert_eq!(rs.resolution_ready(&handle).await.unwrap(), !with_span);
+            if with_span {
+                assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
+                assert!(!rs.resolution_ready(&handle).await.unwrap());
+                let (index, entry) = rs.get_oplog_entry().await.unwrap();
+                assert_eq!(index, OplogIndex::from_u64(3));
+                assert!(matches!(entry, OplogEntry::StartSpan { .. }));
+                assert!(rs.resolution_ready(&handle).await.unwrap());
+            }
+            let outcome = rs.await_resolution_outcome(handle).await.unwrap();
+            match outcome {
+                ResolutionOutcome::Incomplete => assert!(!completed),
+                ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+                    assert!(completed);
+                    assert!(matches!(response, Some(OplogPayload::Inline(payload))
+                        if matches!(*payload, HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp { nanos: 37 }))));
+                    assert!(matches!(
+                        rs.get_oplog_entry().await.unwrap().1,
+                        OplogEntry::NoOp { .. }
+                    ));
+                }
+                other => panic!("unexpected resolution: {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
 async fn claim_and_await_resolves_completed() {
     // [NoOp, Start, End]
     let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 42)]).await;

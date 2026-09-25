@@ -6,23 +6,25 @@ The Golem Worker Executor uses a set of storage layers for persisting agent stat
 
 ## Storage types
 
-The worker executor requires three types of storage backends:
+The worker executor requires four types of storage backends:
 
 - A **blob storage** for storing and retrieving arbitrary sized binary blobs
-- A **key-value storge** with some extra requirements for set/sorted-set-like operations
+- A **key-value storage** with some extra requirements for set/sorted-set-like operations
 - An **indexed storage** for an append-only, indexable store for agent's operation log (oplog)
+- A **scheduler storage** for durable scheduled actions
 
 Currently Golem provides the following implementations, configurable through the worker executor's config file:
 
-| Storage type       | Implementations            |
-| ------------------ | -------------------------- |
-| Blob storage       | S3, file system, in-memory |
-| Key-values storage | Redis, in-memory           |
-| Indexed storage    | PostgreSQL, SQLite, Redis (streams), in-memory |
+| Storage type | Implementations |
+| --- | --- |
+| Blob storage | S3, file system, SQLite, in-memory |
+| Key-value storage | Redis, PostgreSQL, SQLite, multi-SQLite, namespace-routed, in-memory |
+| Indexed storage | Redis, PostgreSQL, SQLite, multi-SQLite, in-memory |
+| Scheduler storage | PostgreSQL, SQLite, in-memory |
 
 ## Compilation cache
 
-The Golem **component service** stores the component WASM files in its own storage layer (configured to be either S3 or a persistent volume) and exposes them through its [download API](/next/rest-api/component) for the worker executor. The WASM files need to be **compiled** to native code before execution, which is a time-consuming task. To reduce the time required for instantiating agents, these compiled binaries are cached in the worker executor's **blob storage**.
+The Golem **registry service** stores original component Wasm files in its configured blob storage, which supports S3, local filesystem, SQLite, and in-memory backends. It exposes them through its [download API](/next/rest-api/component) for the worker executor. The Wasm files must be **compiled** to native code before execution, which is time-consuming. To reduce agent startup time, these compiled binaries are cached in the worker executor's **blob storage**.
 
 The **component compilation service** is a special, horizontally scalable component of the Golem system which shares this storage with worker executors and is capable of precompiling components before they are being used by any of the executors.
 
@@ -35,7 +37,7 @@ The oplog is stored in multiple configurable layers. The default configuration i
 - There is a **secondary layer** that is also persisted to the **indexed storage**, but on this level each entry holds a compressed set of oplog entries.
 - A **tertiary layer** holds even larger chunks of compressed oplog entries and stores them in the **blob storage**.
 
-Oplogs are continuously moved towards the lower layers to prevent the primary oplog storage (Redis) from getting full. Agents that were not active for a while are fully stored in the blob storage only.
+Oplogs are moved toward lower layers to prevent the primary indexed storage from filling up. With the default layers, inactive agents' oplog entries eventually reach blob storage. A small creation-fence key remains in primary storage.
 
 In addition to the above, there are oplog entries holding user-defined data (such as invocation parameters). As these user-defined payloads can have an arbitrary size, the worker executor has to protect its storage layer against putting too large entries into the primary oplog. For this reason large payloads are written to the **blob storage** and the corresponding oplog entry only stores a reference to them. Payloads below a configurable limit are stored inline in the oplog entry.
 
@@ -59,7 +61,7 @@ These options have the following meaning:
 
 | Option                         | Description                                                                                             |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `archive_interval`             | The period after the old sections of the oplog get moved to one layer down in the layered oplog storage |
+| `archive_interval`             | The delay between scheduled archival steps that move oplog sections down one layer                      |
 | `blob_storage_layers`          | The number of archive layers using the **blob storage**                                                 |
 | `indexed_storage_layers`       | The total number of layers (one primary + archives) using the **indexed storage**                       |
 | `entry_count_limit`            | The number of oplog entries triggering the archivation of a chunk to the lower oplog layer              |
@@ -68,11 +70,11 @@ These options have the following meaning:
 
 ## Agent metadata
 
-The **oplog** is the primary source of truth for everything we need to store about an agent, but for performance reasons the **key value store** is also used to store aggregated agent metadata for agents. This metadata is not always completely up-to-date; it store the last oplog index it was calculated from, and its latest version can be reproduced by reading and processing the newer oplog entries. For agents which has no longer data in the primary oplog, we don't store agent metadata either. When these agents have to be recovered, their metadata is reconstructed by reading the whole archived oplog.
+The **oplog** is the primary source of truth for agent state, but the **key-value store** also caches aggregated agent metadata for performance. This metadata records the oplog index from which it was calculated, and Golem can refresh it by processing newer entries. Once archival is complete, Golem clears the cached status and its checkpoint. If the agent is recovered later, Golem reconstructs the metadata from the archived oplog.
 
 ## Promises and schedules
 
-The worker executor also stores **promise information** in its **key-value storage**. This is simply an entry for each created Golem promise, storing it's completion state. Internally Golem also uses scheduled promise completion (for example for waking up agents after long sleeps). These scheduled events are also stored in the **key-value storage**.
+The worker executor stores **promise information** in its **key-value storage**, with one entry for each promise's completion state. Scheduled actions, including promise completion used to wake agents after long sleeps, use the separate **scheduler storage**.
 
 ## WASI Blob store and Key Value store
 
@@ -80,8 +82,9 @@ Golem implements (partially) the [WASI Blob Store](https://github.com/WebAssembl
 
 ## Adding new storage implementations
 
-The open-source version of Golem can be easily extended to support alternative databases than the built-in Redis and S3 implementations. Take a look at the following traits:
+The open-source version of Golem can be extended with additional storage backends beyond the built-in implementations. See these traits:
 
-- [`BlobStorage`](https://github.com/golemcloud/golem/blob/main/golem-worker-executor-base/src/storage/blob/mod.rs)
-- [`KeyValueStorage`](https://github.com/golemcloud/golem/blob/main/golem-worker-executor-base/src/storage/keyvalue/mod.rs)
-- [`IndexedStorage`](https://github.com/golemcloud/golem/blob/main/golem-worker-executor-base/src/storage/indexed/mod.rs)
+- [`BlobStorage`](https://github.com/golemcloud/golem/blob/main/golem-service-base/src/storage/blob/mod.rs)
+- [`KeyValueStorage`](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/src/storage/keyvalue/mod.rs)
+- [`IndexedStorage`](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/src/storage/indexed/mod.rs)
+- [`SchedulerStorage`](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/src/storage/scheduler/mod.rs)

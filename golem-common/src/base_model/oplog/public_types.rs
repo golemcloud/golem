@@ -1080,6 +1080,11 @@ impl From<crate::model::retry_policy::RetryPolicyState> for PublicRetryPolicySta
                     inner: Box::new((*inner).into()),
                 })
             }
+            RetryPolicyState::TimeBox { inner, .. } => {
+                PublicRetryPolicyState::Wrapper(PublicRetryPolicyStateWrapper {
+                    inner: Box::new((*inner).into()),
+                })
+            }
             RetryPolicyState::AndThen {
                 left,
                 right,

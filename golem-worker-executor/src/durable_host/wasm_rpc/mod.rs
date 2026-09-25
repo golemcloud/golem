@@ -907,25 +907,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
                 Either::Left(begun)
             }
-            ResolvedCall::Replay(handle) => match handle.replay(self).await? {
-                CallReplayOutcome::Replayed(persisted) => {
-                    let idempotency_key = self.derive_idempotency_key(begin_index);
-                    let remote_agent_id = invocation_target_agent_id(
-                        &prepared.logical_remote_agent_id,
-                        prepared.ephemeral_logical_agent_id.as_ref(),
-                        &idempotency_key,
-                    )?;
-                    let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-                    return match persisted.result {
-                        Ok(value) => Ok(Ok(InvocationResultWithMetadata {
-                            metadata,
-                            result: schema_value_to_wire_output(&value, self)?,
-                        })),
-                        Err(err) => Ok(Err(InternalRpcError::from(err).into())),
-                    };
-                }
-                CallReplayOutcome::Incomplete(live) => Either::Right(live),
-            },
+            ResolvedCall::Replay(handle) => Either::Right(handle),
         };
 
         let idempotency_key = self.derive_idempotency_key(begin_index);
@@ -946,6 +928,26 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             Either::Left(begun) => begun.start_live(self, request).await?,
             Either::Right(handle) => handle,
         };
+        // Local denials have no span. A retained Start alone must pass incomplete-call
+        // recovery before creating its missing span. Otherwise reconstruct StartSpan before
+        // awaiting End: the terminal cannot pass this call's own positional entry.
+        if !handle.is_live() && handle.replay_ready(self).await? {
+            handle = match handle.replay(self).await? {
+                CallReplayOutcome::Incomplete(live) => live,
+                CallReplayOutcome::Replayed(persisted) => {
+                    return match persisted.result {
+                        Err(SerializableRpcError::Denied { details }) => {
+                            Ok(Err(RpcError::Denied(details)))
+                        }
+                        other => Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "local RPC denial before invocation span",
+                            format!("{other:?}"),
+                        )
+                        .into()),
+                    };
+                }
+            };
+        }
         let span = match create_invocation_span(
             self,
             &prepared.connection_span_id,

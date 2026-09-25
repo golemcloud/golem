@@ -2885,6 +2885,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         mark_durable_call_trap_context(err, context)
     }
 
+    pub fn trap_semantic_retry_override(
+        &mut self,
+        payload: SemanticTrapRetryOverride,
+        kind: HostFailureKind,
+        message: impl Into<String>,
+    ) -> anyhow::Error {
+        self.trap(semantic_trap_retry_override_error(payload, kind, message))
+    }
+
     /// Retry wrapper around [`InFunctionRetryController::try_trigger_retry`]. On the `Err` branch
     /// (a trap is being raised to trigger an oplog-level retry) it automatically
     /// [`abandon_for_trap`](Self::abandon_for_trap)s, so `?`-style call sites stay correct without
@@ -3523,6 +3532,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         );
         guard.wait_terminal().await?;
         Ok(response)
+    }
+
+    /// Checks for a terminal or replay tail without waiting on positional entries owned by this
+    /// call's continuation. A ready call still needs `replay` to validate and settle its outcome.
+    pub(crate) async fn replay_ready<Ctx: WorkerCtx>(
+        &self,
+        ctx: &DurableWorkerCtx<Ctx>,
+    ) -> Result<bool, WorkerExecutorError> {
+        ctx.state
+            .replay_state
+            .resolution_ready(self.replay.as_ref().expect("replay_ready on a live handle"))
+            .await
     }
 
     /// Replays a call: drive the cursor until the call resolves, decode its response, then close the
