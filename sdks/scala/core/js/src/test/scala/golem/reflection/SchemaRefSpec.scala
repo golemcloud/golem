@@ -143,9 +143,11 @@ object SchemaRefSpec extends ZIOSpecDefault {
       val rendered         = restricted.toJsonSchema()
       val properties       = rendered.get("properties").one.toOption.get
       val count            = properties.get("count").one.toOption.get
-      val textProperties   = properties.get("message").one.toOption.get.get("properties").one.toOption.get
+      val textSchema       = properties.get("message").one.toOption.get
+      val textProperties   = textSchema.get("properties").one.toOption.get
       val text             = textProperties.get("text").one
-      val binaryProperties = properties.get("content").one.toOption.get.get("properties").one.toOption.get
+      val binarySchema     = properties.get("content").one.toOption.get
+      val binaryProperties = binarySchema.get("properties").one.toOption.get
       val bytes            = binaryProperties.get("bytes").one
       val mimeType         = binaryProperties.get("mimeType").one
       val pattern          = bytes.flatMap(_.get("pattern").one) match {
@@ -160,6 +162,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
         text.flatMap(_.get("pattern").one) == Right(Json.String("^https://")),
         textProperties.get("language").one.flatMap(_.get("enum").one) ==
           Right(Json.Array(Json.String("en"), Json.String("de"))),
+        textSchema.get("description").one.isLeft,
         bytes.flatMap(_.get("minLength").one) == Right(Json.Number(BigDecimal(4))),
         bytes.flatMap(_.get("maxLength").one) == Right(Json.Number(BigDecimal(8))),
         pattern == "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
@@ -167,7 +170,8 @@ object SchemaRefSpec extends ZIOSpecDefault {
         nonCanonical,
         mimeType.flatMap(_.get("pattern").one) ==
           Right(Json.String("^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$")),
-        mimeType.flatMap(_.get("enum").one) == Right(Json.Array(Json.String("image/png")))
+        mimeType.flatMap(_.get("enum").one) == Right(Json.Array(Json.String("image/png"))),
+        binarySchema.get("description").one.isLeft
       )
     },
     test("union export keeps discriminator and branch body while packing enforces the rule") {

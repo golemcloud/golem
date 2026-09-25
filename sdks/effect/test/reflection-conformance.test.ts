@@ -249,54 +249,55 @@ function assertSemantic(testCase: ConformanceCase): void {
   }
 }
 
-describe("reflection conformance corpus", () => {
-  it("executes the complete declared case-ID set", () => {
-    expect(corpus.version).toBe("1.0.0")
-    const executed = new Set<string>()
-    for (const testCase of corpus.cases) {
-      expect(executed.has(testCase.id), `duplicate case ID ${testCase.id}`).toBe(false)
-      executed.add(testCase.id)
-      switch (testCase.operation) {
-        case "roundtrip": {
-          const schema = fixture(testCase.fixture)
-          expect(schema.unpackJson(schema.packJson(testCase.input!)), testCase.id).toEqual(
-            testCase.expected,
-          )
-          break
-        }
-        case "reject": {
-          for (const input of testCase.inputs ?? [testCase.input!]) {
-            const schema = fixture(testCase.fixture)
-            let packed: ReturnType<typeof schema.packJson>
-            try {
-              packed = schema.packJson(input)
-            } catch {
-              expect("invalid-json", testCase.id).toBe(
-                (testCase.expected as { readonly kind: string }).kind,
-              )
-              continue
-            }
-            if (schema.validateValue(packed).success)
-              throw new Error(`${testCase.id} accepted ${JSON.stringify(input)}`)
-            expect("constraint-violation", testCase.id).toBe(
-              (testCase.expected as { readonly kind: string }).kind,
-            )
-          }
-          break
-        }
-        case "json-schema":
-          expectSubset(
-            atPointer(fixture(testCase.fixture).toJsonSchema(), testCase.path ?? ""),
-            testCase.expected,
-          )
-          break
-        case "semantic":
-          assertSemantic(testCase)
-          break
-        default:
-          throw new Error(`unknown conformance operation for ${testCase.id}`)
-      }
+function executeCase(testCase: ConformanceCase): void {
+  switch (testCase.operation) {
+    case "roundtrip": {
+      const schema = fixture(testCase.fixture)
+      expect(schema.unpackJson(schema.packJson(testCase.input!))).toEqual(testCase.expected)
+      break
     }
-    expect([...executed].sort()).toEqual([...corpus.caseIds].sort())
+    case "reject": {
+      for (const input of testCase.inputs ?? [testCase.input!]) {
+        const schema = fixture(testCase.fixture)
+        let packed: ReturnType<typeof schema.packJson>
+        try {
+          packed = schema.packJson(input)
+        } catch {
+          expect("invalid-json").toBe((testCase.expected as { readonly kind: string }).kind)
+          continue
+        }
+        if (schema.validateValue(packed).success)
+          throw new Error(`accepted ${JSON.stringify(input)}`)
+        expect("constraint-violation").toBe((testCase.expected as { readonly kind: string }).kind)
+      }
+      break
+    }
+    case "json-schema":
+      expectSubset(
+        atPointer(fixture(testCase.fixture).toJsonSchema(), testCase.path ?? ""),
+        testCase.expected,
+      )
+      break
+    case "semantic":
+      assertSemantic(testCase)
+      break
+    default:
+      throw new Error(`unknown conformance operation ${String(testCase.operation)}`)
+  }
+}
+
+describe("reflection conformance corpus", () => {
+  it("has a valid version, unique declared case IDs, and recognized operations", () => {
+    expect(corpus.version).toBe("1.0.0")
+    const ids = corpus.cases.map((testCase) => testCase.id)
+    expect(new Set(ids).size, "duplicate corpus case ID").toBe(ids.length)
+    expect(new Set(corpus.caseIds).size, "duplicate declared case ID").toBe(corpus.caseIds.length)
+    expect([...ids].sort()).toEqual([...corpus.caseIds].sort())
+    const operations = new Set(["roundtrip", "reject", "json-schema", "semantic"])
+    for (const testCase of corpus.cases) {
+      expect(operations.has(testCase.operation), testCase.id).toBe(true)
+    }
   })
+
+  for (const testCase of corpus.cases) it(testCase.id, () => executeCase(testCase))
 })

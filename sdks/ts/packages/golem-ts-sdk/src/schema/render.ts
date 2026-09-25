@@ -698,12 +698,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
     if (bounds?.min !== undefined)
       rendered.minimum = Math.max(
         bounds.min.tag === 'float-bits' ? floatFromBits(bounds.min.val)! : Number(bounds.min.val),
-        (rendered.minimum as number | undefined) ?? -Infinity,
+        body.tag === 'f32' ? -F32_MAX : ((rendered.minimum as number | undefined) ?? -Infinity),
       );
     if (bounds?.max !== undefined)
       rendered.maximum = Math.min(
         bounds.max.tag === 'float-bits' ? floatFromBits(bounds.max.val)! : Number(bounds.max.val),
-        (rendered.maximum as number | undefined) ?? Infinity,
+        body.tag === 'f32' ? F32_MAX : ((rendered.maximum as number | undefined) ?? Infinity),
       );
   }
   return attachMetadata(rendered, type.metadata);
@@ -866,6 +866,7 @@ function decodeQuantity(value: JsonValue, path: Path): SchemaValue {
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
 const U64_MAX = 2n ** 64n - 1n;
+const F32_MAX = 3.4028234663852886e38;
 const CANONICAL_SIGNED_PATTERN = '^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$';
 const CANONICAL_UNSIGNED_PATTERN = '^(?:0|[1-9][0-9]*)$';
 

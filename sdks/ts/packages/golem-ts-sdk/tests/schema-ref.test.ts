@@ -27,6 +27,12 @@ function schema(root: SchemaGraph['root']): SchemaRef {
   return new SchemaRef({ defs: new Map(), root });
 }
 
+function floatBits(value: number): bigint {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  return view.getBigUint64(0);
+}
+
 describe('SchemaRef canonical JSON', () => {
   it('decodes omitted and explicit-null option fields as absent', () => {
     const ref = schema(t.record([field('maybe', t.option(t.string()))]));
@@ -241,32 +247,70 @@ describe('SchemaRef JSON Schema', () => {
   });
 
   it('renders declared bounds for every narrow integer and float family', () => {
-    for (const type of [
-      t.s8({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
-      t.s16({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
-      t.s32({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
-      t.u8({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
-      t.u16({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
-      t.u32({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
-    ]) {
+    for (const [type, minimum, maximum] of [
+      [
+        t.s8({
+          min: { tag: 'signed', val: -(2n ** 63n) },
+          max: { tag: 'signed', val: 2n ** 63n - 1n },
+        }),
+        -128,
+        127,
+      ],
+      [
+        t.s16({
+          min: { tag: 'signed', val: -(2n ** 63n) },
+          max: { tag: 'signed', val: 2n ** 63n - 1n },
+        }),
+        -32768,
+        32767,
+      ],
+      [
+        t.s32({
+          min: { tag: 'signed', val: -(2n ** 63n) },
+          max: { tag: 'signed', val: 2n ** 63n - 1n },
+        }),
+        -(2 ** 31),
+        2 ** 31 - 1,
+      ],
+      [
+        t.u8({ min: { tag: 'unsigned', val: 0n }, max: { tag: 'unsigned', val: 2n ** 64n - 1n } }),
+        0,
+        255,
+      ],
+      [
+        t.u16({ min: { tag: 'unsigned', val: 0n }, max: { tag: 'unsigned', val: 2n ** 64n - 1n } }),
+        0,
+        65535,
+      ],
+      [
+        t.u32({ min: { tag: 'unsigned', val: 0n }, max: { tag: 'unsigned', val: 2n ** 64n - 1n } }),
+        0,
+        2 ** 32 - 1,
+      ],
+    ] as const) {
       expect(schema(type).toJsonSchema()).toMatchObject({
-        minimum: type.body.tag.startsWith('s') ? -12 : 2,
-        maximum: 12,
+        minimum,
+        maximum,
       });
     }
 
-    for (const type of [
-      t.f32({
-        min: { tag: 'float-bits', val: 0xbff0000000000000n },
-        max: { tag: 'float-bits', val: 0x3fe0000000000000n },
-      }),
-      t.f64({
-        min: { tag: 'float-bits', val: 0xbff0000000000000n },
-        max: { tag: 'float-bits', val: 0x3fe0000000000000n },
-      }),
-    ]) {
-      expect(schema(type).toJsonSchema()).toMatchObject({ minimum: -1, maximum: 0.5 });
-    }
+    expect(
+      schema(
+        t.f32({
+          min: { tag: 'float-bits', val: floatBits(-1e100) },
+          max: { tag: 'float-bits', val: floatBits(1e100) },
+        }),
+      ).toJsonSchema(),
+    ).toMatchObject({ minimum: -3.4028234663852886e38, maximum: 3.4028234663852886e38 });
+
+    expect(
+      schema(
+        t.f64({
+          min: { tag: 'float-bits', val: 0xbff0000000000000n },
+          max: { tag: 'float-bits', val: 0x3fe0000000000000n },
+        }),
+      ).toJsonSchema(),
+    ).toMatchObject({ minimum: -1, maximum: 0.5 });
   });
 
   it('renders enforceable rich-value allowlists and canonical base64url bytes', () => {
@@ -282,6 +326,13 @@ describe('SchemaRef JSON Schema', () => {
         binary: { properties: { mimeType: { enum: ['image/png'] } } },
       },
     });
+    const properties = (
+      rendered as {
+        properties: { text: Record<string, unknown>; binary: Record<string, unknown> };
+      }
+    ).properties;
+    expect(properties.text).not.toHaveProperty('description');
+    expect(properties.binary).not.toHaveProperty('description');
     const pattern = (
       rendered as {
         properties: { binary: { properties: { bytes: { pattern: string } } } };

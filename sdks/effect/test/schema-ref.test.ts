@@ -86,6 +86,13 @@ describe("SchemaRef", () => {
         binary: { properties: { mimeType: { enum: ["image/png"] } } },
       },
     })
+    const properties = (
+      rendered as {
+        properties: { text: Record<string, unknown>; binary: Record<string, unknown> }
+      }
+    ).properties
+    expect(properties.text).not.toHaveProperty("description")
+    expect(properties.binary).not.toHaveProperty("description")
     const pattern = (
       rendered as {
         properties: { binary: { properties: { bytes: { pattern: string } } } }

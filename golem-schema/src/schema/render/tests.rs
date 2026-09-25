@@ -364,37 +364,37 @@ fn numeric_json_schemas_apply_every_narrow_and_float_bound() {
     };
     let cases = [
         SchemaType::S8 {
-            restrictions: signed(-12, 12),
+            restrictions: signed(i64::MIN, i64::MAX),
             metadata: MetadataEnvelope::default(),
         },
         SchemaType::S16 {
-            restrictions: signed(-1_200, 1_200),
+            restrictions: signed(i64::MIN, i64::MAX),
             metadata: MetadataEnvelope::default(),
         },
         SchemaType::S32 {
-            restrictions: signed(-120_000, 120_000),
+            restrictions: signed(i64::MIN, i64::MAX),
             metadata: MetadataEnvelope::default(),
         },
         SchemaType::U8 {
-            restrictions: unsigned(12, 120),
+            restrictions: unsigned(0, u64::MAX),
             metadata: MetadataEnvelope::default(),
         },
         SchemaType::U16 {
-            restrictions: unsigned(1_200, 12_000),
+            restrictions: unsigned(0, u64::MAX),
             metadata: MetadataEnvelope::default(),
         },
         SchemaType::U32 {
-            restrictions: unsigned(120_000, 1_200_000),
+            restrictions: unsigned(0, u64::MAX),
             metadata: MetadataEnvelope::default(),
         },
     ];
     let expected = [
-        (-12, 12),
-        (-1_200, 1_200),
-        (-120_000, 120_000),
-        (12, 120),
-        (1_200, 12_000),
-        (120_000, 1_200_000),
+        (i8::MIN as i64, i8::MAX as i64),
+        (i16::MIN as i64, i16::MAX as i64),
+        (i32::MIN as i64, i32::MAX as i64),
+        (u8::MIN as i64, u8::MAX as i64),
+        (u16::MIN as i64, u16::MAX as i64),
+        (u32::MIN as i64, u32::MAX as i64),
     ];
     for (ty, (min, max)) in cases.into_iter().zip(expected) {
         let schema = to_json_schema(&SchemaGraph::anonymous(ty.clone()), &ty);
@@ -406,14 +406,14 @@ fn numeric_json_schemas_apply_every_narrow_and_float_bound() {
         (
             SchemaType::F32 {
                 restrictions: Some(NumericRestrictions {
-                    min: Some(NumericBound::float(-1.5).unwrap()),
-                    max: Some(NumericBound::float(2.5).unwrap()),
+                    min: Some(NumericBound::float(-f64::MAX).unwrap()),
+                    max: Some(NumericBound::float(f64::MAX).unwrap()),
                     unit: None,
                 }),
                 metadata: MetadataEnvelope::default(),
             },
-            -1.5,
-            2.5,
+            -(f32::MAX as f64),
+            f32::MAX as f64,
         ),
         (
             SchemaType::F64 {
@@ -445,6 +445,7 @@ fn rich_json_schemas_enforce_allowlists_and_canonical_base64url() {
         text_schema["properties"]["language"]["enum"],
         json!(["en", "de"])
     );
+    assert!(text_schema.get("description").is_none());
 
     let binary = SchemaType::binary(BinaryRestrictions {
         mime_types: Some(vec!["image/png".to_string()]),
@@ -455,6 +456,7 @@ fn rich_json_schemas_enforce_allowlists_and_canonical_base64url() {
         binary_schema["properties"]["mimeType"]["enum"],
         json!(["image/png"])
     );
+    assert!(binary_schema.get("description").is_none());
     let pattern = binary_schema["properties"]["bytes"]["pattern"]
         .as_str()
         .expect("binary bytes pattern");
@@ -489,7 +491,7 @@ fn malformed_json_and_schema_values_are_typed_errors() {
     assert!(matches!(mismatch, RenderError::ValueMismatch { .. }));
 }
 
-fn conformance_fixture(name: &str) -> SchemaGraph {
+fn conformance_fixture(name: &str, id: &str) -> SchemaGraph {
     let root = match name {
         "s64" => SchemaType::s64(),
         "constrained-s64" => SchemaType::S64 {
@@ -573,7 +575,7 @@ fn conformance_fixture(name: &str) -> SchemaGraph {
                 ]),
             };
         }
-        other => panic!("unknown conformance fixture {other}"),
+        other => panic!("{id}: unknown conformance fixture {other}"),
     };
     SchemaGraph::anonymous(root)
 }
@@ -586,34 +588,34 @@ fn field(name: &str, body: SchemaType) -> NamedFieldType {
     }
 }
 
-fn assert_json_subset(actual: &Value, expected: &Value) {
+fn assert_json_subset(actual: &Value, expected: &Value, id: &str) {
     match expected {
         Value::Object(expected) => {
             let actual = actual
                 .as_object()
-                .unwrap_or_else(|| panic!("expected object {expected:?}, got {actual}"));
+                .unwrap_or_else(|| panic!("{id}: expected object {expected:?}, got {actual}"));
             for (key, expected) in expected {
                 let actual = actual
                     .get(key)
-                    .unwrap_or_else(|| panic!("missing key {key} in {actual:?}"));
-                assert_json_subset(actual, expected);
+                    .unwrap_or_else(|| panic!("{id}: missing key {key} in {actual:?}"));
+                assert_json_subset(actual, expected, id);
             }
         }
-        _ => assert_eq!(actual, expected),
+        _ => assert_eq!(actual, expected, "{id}"),
     }
 }
 
-fn json_pointer<'a>(value: &'a Value, pointer: &str) -> &'a Value {
+fn json_pointer<'a>(value: &'a Value, pointer: &str, id: &str) -> &'a Value {
     if pointer.is_empty() {
         value
     } else {
         value
             .pointer(pointer)
-            .unwrap_or_else(|| panic!("missing JSON pointer {pointer} in {value}"))
+            .unwrap_or_else(|| panic!("{id}: missing JSON pointer {pointer} in {value}"))
     }
 }
 
-fn assert_semantic_conformance(fixture: &str, expected: &Value) {
+fn assert_semantic_conformance(fixture: &str, expected: &Value, id: &str) {
     match fixture {
         "unsupported-leaves" => {
             let types = [
@@ -623,12 +625,17 @@ fn assert_semantic_conformance(fixture: &str, expected: &Value) {
                 SchemaType::future(None),
                 SchemaType::stream(None),
             ];
-            assert_eq!(types.len(), expected["count"].as_u64().unwrap() as usize);
+            assert_eq!(
+                types.len(),
+                expected["count"].as_u64().unwrap() as usize,
+                "{id}"
+            );
             for ty in types {
                 let graph = SchemaGraph::anonymous(ty.clone());
                 assert_json_subset(
                     &to_reflection_json_schema(&graph, &ty, false),
                     &expected["schema"],
+                    id,
                 );
             }
         }
@@ -672,7 +679,11 @@ fn assert_semantic_conformance(fixture: &str, expected: &Value) {
                 "future",
                 "stream",
             ];
-            assert_eq!(serde_json::to_value(KINDS).unwrap(), expected["names"]);
+            assert_eq!(
+                serde_json::to_value(KINDS).unwrap(),
+                expected["names"],
+                "{id}"
+            );
         }
         "all-restrictions" => {
             const RESTRICTIONS: &[&str] = &[
@@ -703,45 +714,51 @@ fn assert_semantic_conformance(fixture: &str, expected: &Value) {
             ];
             assert_eq!(
                 serde_json::to_value(RESTRICTIONS).unwrap(),
-                expected["names"]
+                expected["names"],
+                "{id}"
             );
         }
         "graph" => {
-            let referenced = conformance_fixture("optional-record");
+            let referenced = conformance_fixture("optional-record", id);
             let inline = SchemaGraph::anonymous(SchemaType::record(vec![
                 field("direct", SchemaType::option(SchemaType::string())),
                 field("referenced", SchemaType::option(SchemaType::string())),
             ]));
-            assert!(validate_graph(&referenced).is_ok());
-            assert!(is_equivalent_cross_graph(
-                &referenced,
-                &referenced.root,
-                &inline,
-                &inline.root,
-            ));
+            assert!(validate_graph(&referenced).is_ok(), "{id}");
+            assert!(
+                is_equivalent_cross_graph(&referenced, &referenced.root, &inline, &inline.root,),
+                "{id}"
+            );
         }
-        other => panic!("unknown semantic conformance fixture {other}"),
+        other => panic!("{id}: unknown semantic conformance fixture {other}"),
     }
 }
 
-#[test]
-fn reflection_conformance_corpus() {
-    let corpus: Value = serde_json::from_str(include_str!(
+fn conformance_corpus() -> Value {
+    serde_json::from_str(include_str!(
         "../../../../test-data/reflection-conformance/v1.json"
     ))
-    .expect("valid reflection conformance corpus");
-    assert_eq!(corpus["version"], "1.0.0");
+    .expect("valid reflection conformance corpus")
+}
 
+fn run_conformance_cases(operation: &str) {
+    let corpus = conformance_corpus();
     let cases = corpus["cases"].as_array().expect("cases array");
-    let mut executed = HashSet::new();
     for case in cases {
         let id = case["id"].as_str().expect("case id");
-        assert!(executed.insert(id), "duplicate case ID {id}");
-        let fixture = case["fixture"].as_str().expect("fixture");
+        let case_operation = case["operation"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{id}: missing operation"));
+        if case_operation != operation {
+            continue;
+        }
+        let fixture = case["fixture"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{id}: missing fixture"));
         let expected = &case["expected"];
-        match case["operation"].as_str().expect("operation") {
+        match operation {
             "roundtrip" => {
-                let graph = conformance_fixture(fixture);
+                let graph = conformance_fixture(fixture, id);
                 let packed = from_json_value(&graph, &graph.root, &case["input"])
                     .unwrap_or_else(|error| panic!("{id}: {error}"));
                 let rendered = to_json_value(&graph, &graph.root, &packed)
@@ -749,7 +766,7 @@ fn reflection_conformance_corpus() {
                 assert_eq!(&rendered, expected, "{id}");
             }
             "reject" => {
-                let graph = conformance_fixture(fixture);
+                let graph = conformance_fixture(fixture, id);
                 let inputs = case["inputs"]
                     .as_array()
                     .cloned()
@@ -764,26 +781,75 @@ fn reflection_conformance_corpus() {
                     };
                     assert_eq!(
                         actual,
-                        expected["kind"].as_str().expect("reject kind"),
+                        expected["kind"]
+                            .as_str()
+                            .unwrap_or_else(|| panic!("{id}: missing reject kind")),
                         "{id}"
                     );
                 }
             }
             "json-schema" => {
-                let graph = conformance_fixture(fixture);
+                let graph = conformance_fixture(fixture, id);
                 let rendered = to_reflection_json_schema(&graph, &graph.root, false);
-                let selected = json_pointer(&rendered, case["path"].as_str().expect("path"));
-                assert_json_subset(selected, expected);
+                let path = case["path"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{id}: missing path"));
+                let selected = json_pointer(&rendered, path, id);
+                assert_json_subset(selected, expected, id);
             }
-            "semantic" => assert_semantic_conformance(fixture, expected),
-            operation => panic!("unknown conformance operation {operation} for {id}"),
+            "semantic" => assert_semantic_conformance(fixture, expected, id),
+            operation => panic!("unknown requested conformance operation {operation}"),
         }
     }
-    let declared: HashSet<_> = corpus["caseIds"]
-        .as_array()
-        .expect("declared case IDs")
+}
+
+#[test]
+fn reflection_conformance_corpus_integrity() {
+    let corpus = conformance_corpus();
+    assert_eq!(corpus["version"], "1.0.0");
+    let cases = corpus["cases"].as_array().expect("cases array");
+    let recognized = HashSet::from(["roundtrip", "reject", "json-schema", "semantic"]);
+    let mut case_ids = HashSet::new();
+    for case in cases {
+        let id = case["id"].as_str().expect("case id");
+        assert!(case_ids.insert(id), "duplicate case ID {id}");
+        let operation = case["operation"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{id}: missing operation"));
+        assert!(
+            recognized.contains(operation),
+            "{id}: unknown operation {operation}"
+        );
+    }
+    let declared_ids = corpus["caseIds"].as_array().expect("declared case IDs");
+    let declared: HashSet<_> = declared_ids
         .iter()
         .map(|id| id.as_str().expect("declared case ID"))
         .collect();
-    assert_eq!(executed, declared, "missing or unknown conformance cases");
+    assert_eq!(
+        declared.len(),
+        declared_ids.len(),
+        "duplicate declared case ID"
+    );
+    assert_eq!(case_ids, declared, "missing or unknown conformance cases");
+}
+
+#[test]
+fn reflection_conformance_roundtrip_cases() {
+    run_conformance_cases("roundtrip");
+}
+
+#[test]
+fn reflection_conformance_reject_cases() {
+    run_conformance_cases("reject");
+}
+
+#[test]
+fn reflection_conformance_json_schema_cases() {
+    run_conformance_cases("json-schema");
+}
+
+#[test]
+fn reflection_conformance_semantic_cases() {
+    run_conformance_cases("semantic");
 }

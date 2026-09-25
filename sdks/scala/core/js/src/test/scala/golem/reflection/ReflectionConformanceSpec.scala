@@ -17,7 +17,6 @@ import zio.blocks.schema.json.Json
 import zio.test.*
 
 import scala.collection.immutable.ListMap
-import scala.collection.mutable
 
 object ReflectionConformanceSpec extends ZIOSpecDefault {
   private def fields(value: Json): ListMap[String, Json] = value match {
@@ -302,45 +301,56 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
     case other => throw new AssertionError(s"unknown semantic conformance fixture $other")
   }
 
-  override def spec = suite("reflection conformance corpus")(
-    test("executes the complete declared case-ID set") {
-      val corpus = Json.parse(ReflectionConformanceCorpus.json).fold(throw _, identity)
-      val root   = fields(corpus)
-      Predef.assert(string(root("version")) == "1.0.0")
-      val executed = mutable.Set.empty[String]
-      elements(root("cases")).foreach { testCaseJson =>
-        val testCase = fields(testCaseJson)
-        val id       = string(testCase("id"))
-        Predef.assert(executed.add(id), s"duplicate case ID $id")
-        val name = string(testCase("fixture"))
-        string(testCase("operation")) match {
-          case "roundtrip" =>
+  private val corpus      = Json.parse(ReflectionConformanceCorpus.json).fold(throw _, identity)
+  private val corpusRoot  = fields(corpus)
+  private val corpusCases = elements(corpusRoot("cases"))
+
+  private def conformanceTest(testCaseJson: Json) = {
+    val testCase = fields(testCaseJson)
+    val id       = string(testCase("id"))
+    test(id) {
+      val name = string(testCase("fixture"))
+      string(testCase("operation")) match {
+        case "roundtrip" =>
+          val schema = fixture(name)
+          val packed =
+            schema.packJson(testCase("input")).fold(error => throw new AssertionError(s"$id: $error"), identity)
+          Predef.assert(schema.unpackJson(packed) == Right(testCase("expected")), id)
+        case "reject" =>
+          val inputs = testCase.get("inputs").map(elements).getOrElse(List(testCase("input")))
+          inputs.foreach { input =>
             val schema = fixture(name)
-            val packed =
-              schema.packJson(testCase("input")).fold(error => throw new AssertionError(s"$id: $error"), identity)
-            Predef.assert(schema.unpackJson(packed) == Right(testCase("expected")), id)
-          case "reject" =>
-            val inputs = testCase.get("inputs").map(elements).getOrElse(List(testCase("input")))
-            inputs.foreach { input =>
-              val schema = fixture(name)
-              val actual = schema.packJson(input) match {
-                case Left(_)                                            => "invalid-json"
-                case Right(value) if schema.validateValue(value).isLeft => "constraint-violation"
-                case Right(value)                                       => throw new AssertionError(s"$id accepted $input as $value")
-              }
-              Predef.assert(actual == string(fields(testCase("expected"))("kind")), id)
+            val actual = schema.packJson(input) match {
+              case Left(_)                                            => "invalid-json"
+              case Right(value) if schema.validateValue(value).isLeft => "constraint-violation"
+              case Right(value)                                       => throw new AssertionError(s"$id accepted $input as $value")
             }
-          case "json-schema" =>
-            assertSubset(
-              atPointer(fixture(name).toJsonSchema(false), string(testCase("path"))),
-              testCase("expected")
-            )
-          case "semantic" => assertSemantic(name, testCase("expected"), corpus)
-          case operation  => throw new AssertionError(s"unknown conformance operation $operation for $id")
-        }
+            Predef.assert(actual == string(fields(testCase("expected"))("kind")), id)
+          }
+        case "json-schema" =>
+          assertSubset(
+            atPointer(fixture(name).toJsonSchema(false), string(testCase("path"))),
+            testCase("expected")
+          )
+        case "semantic" => assertSemantic(name, testCase("expected"), corpus)
+        case operation  => throw new AssertionError(s"unknown conformance operation $operation for $id")
       }
-      val declared = elements(root("caseIds")).map(string).toSet
-      assertTrue(executed.toSet == declared)
+      assertTrue(true)
     }
+  }
+
+  override def spec = suite("reflection conformance corpus")(
+    (test("has a valid version, unique declared case IDs, and recognized operations") {
+      val ids        = corpusCases.map(testCase => string(fields(testCase)("id")))
+      val declared   = elements(corpusRoot("caseIds")).map(string)
+      val operations = Set("roundtrip", "reject", "json-schema", "semantic")
+      assertTrue(
+        string(corpusRoot("version")) == "1.0.0",
+        ids.distinct.size == ids.size,
+        declared.distinct.size == declared.size,
+        ids.toSet == declared.toSet,
+        corpusCases.forall(testCase => operations.contains(string(fields(testCase)("operation"))))
+      )
+    } :: corpusCases.map(conformanceTest))*
   )
 }
