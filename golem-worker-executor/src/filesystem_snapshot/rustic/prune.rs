@@ -18,16 +18,25 @@
 //! packed bytes that deleted snapshots added since the last prune, the time of the last prune, and
 //! whether that prune marked packs that a later prune removes. Two deletes at the same time can
 //! lose a count. A lost count only delays a prune.
+//!
+//! A delete whose prune is due takes a claim before it prunes, so two deletes that read the same
+//! ledger make one prune. The claims of a ledger are in one directory, named by the time of the last
+//! prune in that ledger.
 
 use super::files::SnapshotFiles;
+use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::model::Timestamp;
+use golem_service_base::storage::blob::PutIfAbsent;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
 
 /// The path of the ledger blob, relative to the root of the namespace of the scope.
 pub(super) const LEDGER_PATH: &str = "golem/prune-ledger";
+
+/// The directory of the prune claims, relative to the root of the namespace of the scope.
+const CLAIMS_PATH: &str = "golem/prune-claims";
 
 /// What the scope did since its last prune.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,12 +84,17 @@ impl Percent {
 
 /// Tells whether the grace period passed at `now` since the last prune.
 fn grace_passed(ledger: &PruneLedger, now: Timestamp, grace: Duration) -> bool {
-    ledger.last_prune.is_none_or(|last| {
-        now.to_millis()
-            >= last
-                .to_millis()
-                .saturating_add(u64::try_from(grace.as_millis()).unwrap_or(u64::MAX))
-    })
+    ledger
+        .last_prune
+        .is_none_or(|last| passed_since(last, now, grace))
+}
+
+/// Tells whether the grace period passed at `now` since the time.
+fn passed_since(time: Timestamp, now: Timestamp, grace: Duration) -> bool {
+    now.to_millis()
+        >= time
+            .to_millis()
+            .saturating_add(u64::try_from(grace.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Tells whether [`prune_due`] needs the size of the repository at `now`. Only freed bytes after
@@ -142,12 +156,132 @@ pub(super) async fn write_ledger(
         .await
 }
 
+/// A claim of a prune that a listing found: its number, and its time when its content parses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ListedClaim {
+    pub(super) number: u64,
+    pub(super) claimed_at: Option<Timestamp>,
+}
+
+/// What a delete whose prune is due does with the claims of its ledger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ClaimChoice {
+    /// Take the claim with the number, and prune when the write of the claim succeeds.
+    Claim(u64),
+    /// Another prune holds the claims of the ledger, so do not prune.
+    Held,
+}
+
+/// Chooses the claim of a delete from the claims of its ledger. The newest claim holds the ledger
+/// until the grace period passed since its time. A claim whose content does not parse is old.
+pub(super) fn next_claim(claims: &[ListedClaim], now: Timestamp, grace: Duration) -> ClaimChoice {
+    match claims.iter().max_by_key(|claim| claim.number) {
+        None => ClaimChoice::Claim(0),
+        Some(newest)
+            if newest
+                .claimed_at
+                .is_some_and(|at| !passed_since(at, now, grace)) =>
+        {
+            ClaimChoice::Held
+        }
+        Some(newest) => ClaimChoice::Claim(newest.number.saturating_add(1)),
+    }
+}
+
+/// Gives the directory of the claims of the ledger: the time of its last prune in milliseconds, or
+/// `none`.
+pub(super) fn claims_directory(ledger: &PruneLedger) -> PathBuf {
+    let generation = ledger
+        .last_prune
+        .map_or_else(|| "none".to_string(), |last| last.to_millis().to_string());
+    Path::new(CLAIMS_PATH).join(generation)
+}
+
+/// Lists the claims in the directory. A name that is not a number is not a claim, and a claim
+/// that a delete removed after the listing counts as old.
+pub(super) async fn list_claims(
+    files: &SnapshotFiles,
+    directory: &Path,
+) -> anyhow::Result<Vec<ListedClaim>> {
+    let listed = files.list_below("list_claims", directory).await?;
+    let numbered = listed
+        .iter()
+        .filter_map(|blob| {
+            let number = blob.path.file_name()?.to_str()?.parse::<u64>().ok()?;
+            Some((number, blob.path.clone()))
+        })
+        .collect::<Vec<_>>();
+    stream::iter(numbered)
+        .then(|(number, path)| async move {
+            let content = files.get("read_claim", &path).await?;
+            Ok::<_, anyhow::Error>(ListedClaim {
+                number,
+                claimed_at: content.as_deref().and_then(parse_claim),
+            })
+        })
+        .try_collect()
+        .await
+}
+
+/// Writes the claim with the number, and tells whether this call wrote it.
+pub(super) async fn take_claim(
+    files: &SnapshotFiles,
+    directory: &Path,
+    number: u64,
+    now: Timestamp,
+) -> anyhow::Result<bool> {
+    let content = now.to_millis().to_string();
+    let written = files
+        .put_if_absent(
+            "write_claim",
+            &directory.join(number.to_string()),
+            content.as_bytes(),
+        )
+        .await?;
+    Ok(written == PutIfAbsent::Written)
+}
+
+/// Deletes the claim with the number. A failure gives a warning, because a claim only delays a
+/// prune until its grace period passed.
+pub(super) async fn release_claim(files: &SnapshotFiles, directory: &Path, number: u64) {
+    if let Err(error) = files
+        .delete("delete_claim", &directory.join(number.to_string()))
+        .await
+    {
+        warn!(
+            error = %format!("{error:#}"),
+            "Failed to delete the prune claim of a filesystem snapshot scope"
+        );
+    }
+}
+
+/// Deletes the claims of a ledger after its prune. A failure gives a warning, because a claim only
+/// delays a prune until its grace period passed.
+pub(super) async fn end_claims(files: &SnapshotFiles, directory: &Path) {
+    if let Err(error) = files.delete_dir("delete_claims", directory).await {
+        warn!(
+            error = %format!("{error:#}"),
+            "Failed to delete the prune claims of a filesystem snapshot scope"
+        );
+    }
+}
+
+/// Reads the time of a claim, in milliseconds.
+fn parse_claim(content: &[u8]) -> Option<Timestamp> {
+    std::str::from_utf8(content)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Timestamp::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::files::SnapshotFiles;
     use super::{
-        LEDGER_PATH, Percent, PruneLedger, needs_repository_size, prune_due, read_ledger,
-        write_ledger,
+        ClaimChoice, LEDGER_PATH, ListedClaim, Percent, PruneLedger, needs_repository_size,
+        next_claim, prune_due, read_ledger, write_ledger,
     };
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
@@ -288,6 +422,33 @@ mod tests {
                 needs(1, true, last + GRACE_MILLIS),
             ],
             [true, false, false, false]
+        );
+    }
+
+    #[test]
+    fn the_newest_claim_holds_a_ledger_until_the_grace_period_passed_since_its_time() {
+        let now = 10_000_000;
+        let claim = |number, claimed_at: Option<u64>| ListedClaim {
+            number,
+            claimed_at: claimed_at.map(Timestamp::from),
+        };
+        let choose = |claims: &[ListedClaim]| next_claim(claims, at(now), GRACE);
+
+        assert_eq!(
+            [
+                choose(&[]),
+                choose(&[claim(0, Some(now - GRACE_MILLIS)), claim(1, Some(now - 1))]),
+                choose(&[claim(1, Some(now)), claim(2, Some(now - GRACE_MILLIS))]),
+                choose(&[claim(4, None)]),
+                choose(&[claim(0, Some(now - 1)), claim(3, None)]),
+            ],
+            [
+                ClaimChoice::Claim(0),
+                ClaimChoice::Held,
+                ClaimChoice::Claim(3),
+                ClaimChoice::Claim(5),
+                ClaimChoice::Claim(4),
+            ]
         );
     }
 

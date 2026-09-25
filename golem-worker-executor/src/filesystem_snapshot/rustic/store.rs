@@ -25,8 +25,9 @@ use super::fault::{Operation, classify, is_file_missing, is_storage_failure, sto
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
-    Percent, PruneLedger, needs_repository_size, prune_due, read_ledger, repository_bytes,
-    write_ledger,
+    ClaimChoice, Percent, PruneLedger, claims_directory, end_claims, list_claims,
+    needs_repository_size, next_claim, prune_due, read_ledger, release_claim, repository_bytes,
+    take_claim, write_ledger,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -291,6 +292,8 @@ impl RusticSnapshotStore {
     /// Adds the freed bytes to the ledger of the scope, and prunes the repository when a prune is
     /// due. The ledger keeps the freed bytes before the prune starts, so a delete that runs again
     /// after a failed prune prunes again. It lists the packs only when their size can make a prune due.
+    /// A due prune runs only after the delete takes a claim of its ledger. A failed prune deletes
+    /// the claim, and a prune that succeeds deletes each claim of its ledger.
     async fn prune_when_due(
         &self,
         scope: &SnapshotScope,
@@ -317,19 +320,41 @@ impl RusticSnapshotStore {
         if !prune_due(&ledger, now, size, self.policy.prune_threshold, grace) {
             return Ok(());
         }
+        let claims = claims_directory(&ledger);
+        let listed = list_claims(&files, &claims)
+            .await
+            .map_err(storage_failure)?;
+        let ClaimChoice::Claim(number) = next_claim(&listed, now, grace) else {
+            return Ok(());
+        };
+        if !take_claim(&files, &claims, number, now)
+            .await
+            .map_err(storage_failure)?
+        {
+            return Ok(());
+        }
         let backend = Arc::new(self.backend(scope, token)?);
         let key = self.key.clone();
         let settings = self.policy.prune;
         let low_priority = self.low_priority;
-        let report = self
+        let pruned = self
             .blocking(Operation::Prune, move || {
                 low_priority.run("fs-snap-prune", move || prune(backend, &key, &settings))
             })
-            .await?;
+            .await;
+        let report = match pruned {
+            Ok(report) => report,
+            Err(error) => {
+                release_claim(&files, &claims, number).await;
+                return Err(error);
+            }
+        };
         let marked_packs = report.as_ref().is_some_and(leaves_marked_packs);
         write_ledger(&files, &PruneLedger::after_prune(now, marked_packs))
             .await
-            .map_err(storage_failure)
+            .map_err(storage_failure)?;
+        end_claims(&files, &claims).await;
+        Ok(())
     }
 }
 

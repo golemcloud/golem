@@ -907,6 +907,177 @@ async fn a_failed_listing_of_the_packs_gives_storage_and_records_no_prune() {
     assert_eq!((after.freed_bytes > 0, after.last_prune), (true, None));
 }
 
+/// Counts the prunes among the recorded calls. A prune lists the packs, and no other step of a
+/// delete makes that call.
+fn prunes(calls: &[(&'static str, String)]) -> usize {
+    calls
+        .iter()
+        .filter(|(op_label, path)| *op_label == "list" && path == "data")
+        .count()
+}
+
+/// Saves a tree of one file with the content under each name.
+async fn save_each(store: &RusticSnapshotStore, scope: &SnapshotScope, names: &[&str]) {
+    futures::stream::iter(names)
+        .for_each(|text| async move {
+            let tree = one_file_tree(text);
+            store
+                .save(scope, &name(text), tree.path(), None)
+                .await
+                .unwrap();
+        })
+        .await;
+}
+
+#[test]
+#[timeout("60s")]
+async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
+    // The first read after the first claim is the start of the first prune. The gate holds it,
+    // so the second delete reads the ledger that the first delete read.
+    let claimed = Arc::new(AtomicBool::new(false));
+    let held = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let (claimed, held) = (claimed.clone(), held.clone());
+        move |op_label, _| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "read"
+                && claimed.load(Ordering::SeqCst)
+                && !held.swap(true, Ordering::SeqCst)
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let first = tokio::spawn({
+        let store = store.clone();
+        let scope = scope.clone();
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let first_held = eventually(|| held.load(Ordering::SeqCst)).await;
+
+    let second = store.delete(&scope, &name("p-2")).await;
+    storage.open_gate();
+    let first = tokio::time::timeout(LIMIT, first).await;
+    let calls = storage.calls();
+
+    assert!(matches!(first, Ok(Ok(Ok(())))), "{first:?}");
+    assert!(second.is_ok(), "{second:?}");
+    assert_eq!(
+        (
+            first_held,
+            prunes(&calls),
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, 1, Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_that_fails_deletes_its_claim_and_a_retry_of_the_delete_prunes() {
+    // The first call after the first claim is the start of the first prune, and it fails before
+    // the prune lists the packs. So only the retry counts as a prune.
+    let claimed = Arc::new(AtomicBool::new(false));
+    let refused = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let (claimed, refused) = (claimed.clone(), refused.clone());
+        move |op_label, _| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+                Script::Pass
+            } else if claimed.load(Ordering::SeqCst) && !refused.swap(true, Ordering::SeqCst) {
+                Script::Refuse
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let failed = store.delete(&scope, &name("p-1")).await;
+    let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
+    let retried = store.delete(&scope, &name("p-1")).await;
+    let after = ledger(&storage, &scope).await;
+
+    assert!(
+        failed.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{failed:?}"
+    );
+    assert!(retried.is_ok(), "{retried:?}");
+    assert_eq!(
+        (
+            claims_after_failure,
+            after.last_prune.is_some(),
+            prunes(&storage.calls())
+        ),
+        (Vec::<String>::new(), true, 1)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_claim_older_than_the_grace_period_does_not_block_a_prune() {
+    let grace = Duration::from_secs(3600);
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(storage.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let old = golem_common::model::Timestamp::now_utc()
+        .to_millis()
+        .saturating_sub(2 * 3_600_000);
+    storage
+        .put_raw(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new("golem/prune-claims/none/0"),
+            old.to_string().as_bytes(),
+        )
+        .await
+        .unwrap();
+
+    store.delete(&scope, &name("p-1")).await.unwrap();
+
+    assert!(ledger(&storage, &scope).await.last_prune.is_some());
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_that_succeeds_deletes_the_claims_of_its_ledger() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    store.delete(&scope, &name("p-1")).await.unwrap();
+
+    assert_eq!(
+        (
+            ledger(&storage, &scope).await.last_prune.is_some(),
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, Vec::<String>::new())
+    );
+}
+
 #[test]
 async fn a_delete_below_the_threshold_does_not_prune() {
     let storage = Arc::new(InMemoryBlobStorage::new());
@@ -2133,8 +2304,8 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
 #[cfg(target_os = "linux")]
 #[test]
 async fn the_storage_calls_of_a_prune_run_at_nice_19() {
-    // The forget of a delete runs before the ledger read at the normal priority. The ledger calls
-    // and the listing of the packs run on the async runtime, and the prune runs after them.
+    // The forget of a delete runs before the ledger read at the normal priority. The ledger calls,
+    // the listing of the packs and the claim calls run on the async runtime.
     let (storage, calls) = nice_recording_storage();
     let store = store(storage, policy(LONG_DEADLINE, ALWAYS, Duration::ZERO));
     let scope = new_scope();
@@ -2154,7 +2325,16 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
         .into_iter()
         .skip_while(|(op_label, _, _)| op_label != "read_ledger")
         .filter(|(op_label, _, _)| {
-            !["read_ledger", "write_ledger", "list_data"].contains(&op_label.as_str())
+            ![
+                "read_ledger",
+                "write_ledger",
+                "list_data",
+                "list_claims",
+                "read_claim",
+                "write_claim",
+                "delete_claims",
+            ]
+            .contains(&op_label.as_str())
         })
         .collect::<Vec<_>>();
 
