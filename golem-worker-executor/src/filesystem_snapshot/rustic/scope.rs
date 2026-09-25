@@ -19,7 +19,7 @@
 
 use super::backend::CONFIG_PATH;
 use super::files::SnapshotFiles;
-use super::prune::LEDGER_PATH;
+use super::prune::LEDGERS_PATH;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_service_base::storage::blob::PutIfAbsent;
 use std::path::Path;
@@ -67,7 +67,7 @@ pub(super) async fn delete_scope(files: &SnapshotFiles) -> anyhow::Result<()> {
         LISTING_ORDER
             .iter()
             .map(Path::new)
-            .chain(Path::new(LEDGER_PATH).parent())
+            .chain(Path::new(LEDGERS_PATH).parent())
             .map(Ok),
     )
     .try_for_each(|directory| async move {

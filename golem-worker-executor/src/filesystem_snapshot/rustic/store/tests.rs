@@ -18,7 +18,7 @@
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
 use super::super::files::SnapshotFiles;
-use super::super::prune::{Percent, PruneLedger, count_freed, read_ledger, write_ledger};
+use super::super::prune::{LEDGERS_PATH, Percent, PruneLedger, count_freed, read_ledger};
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
@@ -822,8 +822,8 @@ fn data_listings(calls: &[(&'static str, String)]) -> usize {
         .count()
 }
 
-/// Writes a ledger with no marked packs and a last prune at the time, and a record of one freed
-/// byte.
+/// Makes the ledger one entry with no marked packs and a last prune at the time, and writes a
+/// record of one freed byte.
 async fn set_last_prune<S: BlobStorage + 'static>(
     storage: &Arc<S>,
     scope: &SnapshotScope,
@@ -839,21 +839,34 @@ async fn set_last_prune<S: BlobStorage + 'static>(
         )
         .await
         .unwrap();
-    let ledger = PruneLedger {
-        last_prune: Some(last_prune),
-        awaiting_removal: false,
-    };
-    write_ledger(
-        &SnapshotFiles {
-            storage: storage.clone(),
-            namespace: scope.0.clone(),
-            deadline: Duration::from_secs(2),
-            cancel: tokio_util::sync::CancellationToken::new(),
-        },
-        &ledger,
+    storage
+        .delete_dir("test", "test", scope.0.clone(), Path::new(LEDGERS_PATH))
+        .await
+        .unwrap();
+    put_ledger_entry(
+        storage,
+        scope,
+        &format!("{}-0-test", last_prune.to_millis()),
     )
-    .await
-    .unwrap();
+    .await;
+}
+
+/// Writes a ledger entry with the name.
+async fn put_ledger_entry<S: BlobStorage + 'static>(
+    storage: &Arc<S>,
+    scope: &SnapshotScope,
+    name: &str,
+) {
+    storage
+        .put_raw(
+            "test",
+            "test",
+            scope.0.clone(),
+            &Path::new(LEDGERS_PATH).join(name),
+            b"",
+        )
+        .await
+        .unwrap();
 }
 
 #[test]
@@ -1061,6 +1074,99 @@ async fn a_record_that_a_delete_adds_during_a_prune_stays_for_the_next_prune() {
             freed(&storage, &scope).await,
         ),
         (true, vec!["golem/prune-freed/7-late".to_string()], 7)
+    );
+}
+
+#[test]
+async fn a_late_older_ledger_entry_does_not_win() {
+    // The newer entry is inside the grace period, so a delete does not prune.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let now = golem_common::model::Timestamp::now_utc().to_millis();
+    let newer = now.saturating_sub(60_000);
+    put_ledger_entry(&storage, &scope, &format!("{newer}-0-newer")).await;
+    put_ledger_entry(
+        &storage,
+        &scope,
+        &format!("{}-1-older", now.saturating_sub(2 * 3_600_000)),
+    )
+    .await;
+
+    let read = ledger(&storage, &scope).await;
+    store.delete(&scope, &name("p-1")).await.unwrap();
+
+    assert_eq!(
+        (
+            read.last_prune.map(|last| last.to_millis()),
+            read.awaiting_removal,
+            prunes(&storage.calls()),
+        ),
+        (Some(newer), false, 0)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_deletes_the_older_ledger_entries_and_keeps_a_newer_one() {
+    // The gate holds the prune at its listing of the packs. An older and a newer entry come in
+    // meanwhile.
+    let claimed = Arc::new(AtomicBool::new(false));
+    let held = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let (claimed, held) = (claimed.clone(), held.clone());
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "list"
+                && path == Path::new("data")
+                && claimed.load(Ordering::SeqCst)
+                && !held.swap(true, Ordering::SeqCst)
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let pruning = tokio::spawn({
+        let store = store.clone();
+        let scope = scope.clone();
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let prune_held = eventually(|| held.load(Ordering::SeqCst)).await;
+
+    let newer = format!(
+        "{}-0-newer",
+        golem_common::model::Timestamp::now_utc().to_millis() + 60_000
+    );
+    put_ledger_entry(&storage, &scope, "1000-0-older").await;
+    put_ledger_entry(&storage, &scope, &newer).await;
+    storage.open_gate();
+    let pruned = tokio::time::timeout(LIMIT, pruning).await;
+    let entries = blobs(&*storage, &scope.0, "golem/prune-ledgers/").await;
+
+    assert!(matches!(pruned, Ok(Ok(Ok(())))), "{pruned:?}");
+    assert_eq!(
+        (
+            prune_held,
+            entries.len(),
+            entries.contains(&format!("golem/prune-ledgers/{newer}")),
+            entries.contains(&"golem/prune-ledgers/1000-0-older".to_string()),
+        ),
+        (true, 2, true, false)
     );
 }
 
@@ -1461,7 +1567,9 @@ async fn a_deleted_scope_holds_no_blob() {
 
     assert_eq!(
         (
-            before.contains(&"golem/prune-ledger".to_string()),
+            before
+                .iter()
+                .any(|path| path.starts_with("golem/prune-ledgers/")),
             blobs(&*storage, &scope.0, "").await
         ),
         (true, Vec::<String>::new())
@@ -2571,6 +2679,8 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
                 "write_freed",
                 "list_freed",
                 "delete_freed",
+                "list_ledgers",
+                "delete_ledger",
             ]
             .contains(&op_label.as_str())
         })

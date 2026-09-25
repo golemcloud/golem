@@ -25,9 +25,9 @@ use super::fault::{Operation, classify, is_file_missing, is_storage_failure, sto
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
-    ClaimChoice, Percent, PruneLedger, claims_directory, end_claims, list_claims, list_freed,
+    ClaimChoice, Percent, claims_directory, end_claims, list_claims, list_freed,
     needs_repository_size, next_claim, prune_due, read_ledger, record_freed, release_claim,
-    remove_freed, repository_bytes, take_claim, write_ledger,
+    remove_freed, remove_older_ledgers, repository_bytes, take_claim, write_ledger,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -367,9 +367,11 @@ impl RusticSnapshotStore {
             }
         };
         let marked_packs = report.as_ref().is_some_and(leaves_marked_packs);
-        write_ledger(&files, &PruneLedger::after_prune(now, marked_packs))
+        let ended = Timestamp::now_utc();
+        write_ledger(&files, ended, marked_packs)
             .await
             .map_err(storage_failure)?;
+        remove_older_ledgers(&files, ended).await;
         remove_freed(&files, &records).await;
         end_claims(&files, &claims).await;
         Ok(())

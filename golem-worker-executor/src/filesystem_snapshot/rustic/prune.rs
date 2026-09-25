@@ -14,9 +14,10 @@
 
 //! When a delete of the store prunes the repository of its scope.
 //!
-//! The scope keeps a small ledger blob next to the files of the repository. The ledger holds the
-//! time of the last prune, and whether that prune marked packs that a later prune removes. Only the
-//! delete that holds the claim of a prune writes it. Each delete that freed bytes writes a record
+//! The scope keeps a ledger next to the files of the repository: an entry for each prune, whose
+//! name holds the time at which the prune ended and whether it marked packs that a later prune
+//! removes. The newest entry is the ledger. Only the delete that holds the claim of a prune writes
+//! an entry, and an entry is never written over. Each delete that freed bytes writes a record
 //! of its own, with the count in the name, and a prune that succeeds deletes the records it counted.
 //!
 //! A delete whose prune is due takes a claim before it prunes, so two deletes that read the same
@@ -27,13 +28,16 @@ use super::files::SnapshotFiles;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
 
-/// The path of the ledger blob, relative to the root of the namespace of the scope.
-pub(super) const LEDGER_PATH: &str = "golem/prune-ledger";
+/// The directory of the ledger entries, relative to the root of the namespace of the scope.
+pub(super) const LEDGERS_PATH: &str = "golem/prune-ledgers";
+
+/// How far the clock of another host can be ahead of the local clock. A time that is further
+/// ahead counts as missing.
+pub(super) const CLOCK_SKEW_MARGIN: Duration = Duration::from_secs(2 * 60);
 
 /// The directory of the prune claims, relative to the root of the namespace of the scope.
 const CLAIMS_PATH: &str = "golem/prune-claims";
@@ -42,22 +46,12 @@ const CLAIMS_PATH: &str = "golem/prune-claims";
 const FREED_PATH: &str = "golem/prune-freed";
 
 /// What the scope did since its last prune.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct PruneLedger {
     /// The time of the last prune.
     pub(super) last_prune: Option<Timestamp>,
     /// Whether the last prune marked packs that a later prune removes.
     pub(super) awaiting_removal: bool,
-}
-
-impl PruneLedger {
-    /// Gives the ledger after a prune at `now` that marked packs or not.
-    pub(super) fn after_prune(now: Timestamp, marked_packs: bool) -> Self {
-        Self {
-            last_prune: Some(now),
-            awaiting_removal: marked_packs,
-        }
-    }
 }
 
 /// The path of the packs of a repository, relative to the root of the namespace of the scope.
@@ -128,30 +122,115 @@ pub(super) async fn repository_bytes(files: &SnapshotFiles) -> anyhow::Result<u6
         .fold(0, u64::saturating_add))
 }
 
-/// Reads the ledger of the scope. A scope without a ledger, or with a ledger that does not parse,
-/// gives an empty ledger, which only delays a prune.
-pub(super) async fn read_ledger(files: &SnapshotFiles) -> anyhow::Result<PruneLedger> {
-    let content = files.get("read_ledger", Path::new(LEDGER_PATH)).await?;
-    Ok(content.map_or_else(PruneLedger::default, |content| {
-        serde_json::from_slice(&content).unwrap_or_else(|error| {
-            warn!(
-                error = %error,
-                "The prune ledger of a filesystem snapshot scope does not parse, so it starts again"
-            );
-            PruneLedger::default()
-        })
-    }))
+/// Reads a ledger entry name, `<end ms>-<0|1>-<unique part>`, as the time of the prune and whether
+/// it marked packs.
+pub(super) fn parse_ledger_entry(name: &str) -> Option<PruneLedger> {
+    let mut parts = name.splitn(3, '-');
+    let ended = parts.next()?.parse::<u64>().ok()?;
+    let awaiting_removal = match parts.next()? {
+        "0" => false,
+        "1" => true,
+        _ => return None,
+    };
+    parts.next().filter(|unique| !unique.is_empty())?;
+    Some(PruneLedger {
+        last_prune: Some(Timestamp::from(ended)),
+        awaiting_removal,
+    })
 }
 
-/// Writes the ledger of the scope over the ledger that was there.
+/// Tells whether the time is more than [`CLOCK_SKEW_MARGIN`] after `now`.
+fn beyond_margin(time: Timestamp, now: Timestamp) -> bool {
+    time.to_millis()
+        > now
+            .to_millis()
+            .saturating_add(u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// Gives the ledger from the listed entries: the entry with the greatest time. A name that does not
+/// parse and a time more than the margin after `now` are left out. No entry gives the default.
+pub(super) fn newest_ledger(listed: &[ListedBlob], now: Timestamp) -> PruneLedger {
+    listed
+        .iter()
+        .filter_map(|blob| parse_ledger_entry(blob.path.file_name()?.to_str()?))
+        .filter(|entry| {
+            entry
+                .last_prune
+                .is_some_and(|ended| !beyond_margin(ended, now))
+        })
+        .max_by_key(|entry| (entry.last_prune, entry.awaiting_removal))
+        .unwrap_or_default()
+}
+
+/// Gives the paths of the listed entries whose time is before `ended`, in whole milliseconds as
+/// an entry name holds it.
+pub(super) fn older_entries(listed: &[ListedBlob], ended: Timestamp) -> Vec<Box<Path>> {
+    listed
+        .iter()
+        .filter(|blob| {
+            blob.path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(parse_ledger_entry)
+                .and_then(|entry| entry.last_prune)
+                .is_some_and(|time| time.to_millis() < ended.to_millis())
+        })
+        .map(|blob| blob.path.clone())
+        .collect()
+}
+
+/// Reads the ledger of the scope from one listing of its entries. No read of content is needed.
+pub(super) async fn read_ledger(files: &SnapshotFiles) -> anyhow::Result<PruneLedger> {
+    let listed = files
+        .list_below("read_ledger", Path::new(LEDGERS_PATH))
+        .await?;
+    Ok(newest_ledger(&listed, Timestamp::now_utc()))
+}
+
+/// Writes a new ledger entry for a prune that ended at `ended`.
 pub(super) async fn write_ledger(
     files: &SnapshotFiles,
-    ledger: &PruneLedger,
+    ended: Timestamp,
+    awaiting_removal: bool,
 ) -> anyhow::Result<()> {
-    let content = serde_json::to_vec(ledger)?;
+    let name = format!(
+        "{}-{}-{}",
+        ended.to_millis(),
+        u8::from(awaiting_removal),
+        uuid::Uuid::new_v4()
+    );
     files
-        .put("write_ledger", Path::new(LEDGER_PATH), &content)
+        .put_if_absent("write_ledger", &Path::new(LEDGERS_PATH).join(name), &[])
         .await
+        .map(|_| ())
+}
+
+/// Deletes each ledger entry that is older than the entry of the prune that ended at `ended`. A
+/// failure gives a warning, because an older entry is never the newest.
+pub(super) async fn remove_older_ledgers(files: &SnapshotFiles, ended: Timestamp) {
+    let listed = match files
+        .list_below("list_ledgers", Path::new(LEDGERS_PATH))
+        .await
+    {
+        Ok(listed) => listed,
+        Err(error) => {
+            warn!(
+                error = %format!("{error:#}"),
+                "Failed to list the prune ledger entries of a filesystem snapshot scope"
+            );
+            return;
+        }
+    };
+    stream::iter(older_entries(&listed, ended))
+        .for_each(|path| async move {
+            if let Err(error) = files.delete("delete_ledger", &path).await {
+                warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to delete an old prune ledger entry of a filesystem snapshot scope"
+                );
+            }
+        })
+        .await;
 }
 
 /// The freed bytes of the records that a listing found, and the paths of the records it counted.
@@ -343,9 +422,10 @@ fn parse_claim(content: &[u8]) -> Option<Timestamp> {
 mod tests {
     use super::super::files::SnapshotFiles;
     use super::{
-        ClaimChoice, FREED_PATH, FreedRecords, LEDGER_PATH, ListedClaim, Percent, PruneLedger,
-        claims_directory, count_freed, list_claims, list_freed, needs_repository_size, next_claim,
-        parse_freed, prune_due, read_ledger, record_freed, take_claim, write_ledger,
+        CLOCK_SKEW_MARGIN, ClaimChoice, FREED_PATH, FreedRecords, LEDGERS_PATH, ListedClaim,
+        Percent, PruneLedger, claims_directory, count_freed, list_claims, list_freed,
+        needs_repository_size, newest_ledger, next_claim, older_entries, parse_freed,
+        parse_ledger_entry, prune_due, read_ledger, record_freed, take_claim, write_ledger,
     };
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
@@ -542,13 +622,79 @@ mod tests {
     }
 
     #[test]
-    fn a_prune_starts_the_ledger_again() {
+    fn a_ledger_entry_name_gives_the_end_time_and_the_marked_packs() {
         assert_eq!(
-            (
-                PruneLedger::after_prune(at(42), true),
-                PruneLedger::after_prune(at(43), false)
+            [
+                parse_ledger_entry("42-1-a"),
+                parse_ledger_entry("43-0-a-b"),
+                parse_ledger_entry("42-2-a"),
+                parse_ledger_entry("42-1-"),
+                parse_ledger_entry("42-1"),
+                parse_ledger_entry("x-1-a"),
+            ],
+            [
+                Some(ledger(Some(42), true)),
+                Some(ledger(Some(43), false)),
+                None,
+                None,
+                None,
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn the_newest_entry_within_the_margin_is_the_ledger() {
+        let now = 10_000_000;
+        let margin = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap();
+        let entry = |name: &str| ListedBlob {
+            path: Path::new(LEDGERS_PATH).join(name).into(),
+            size: 0,
+        };
+        let newest = |names: &[&str]| {
+            newest_ledger(
+                &names.iter().map(|name| entry(name)).collect::<Vec<_>>(),
+                at(now),
+            )
+        };
+
+        assert_eq!(
+            [
+                newest(&[]),
+                newest(&["5-0-a", "9-1-b", "7-0-c"]),
+                newest(&["5-0-a", "not-an-entry"]),
+                newest(&["5-0-a", &format!("{}-1-b", now + margin)]),
+                newest(&["5-0-a", &format!("{}-1-b", now + margin + 1)]),
+            ],
+            [
+                PruneLedger::default(),
+                ledger(Some(9), true),
+                ledger(Some(5), false),
+                ledger(Some(now + margin), true),
+                ledger(Some(5), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_entries_before_the_end_of_a_prune_are_older() {
+        let entry = |name: &str| ListedBlob {
+            path: Path::new(LEDGERS_PATH).join(name).into(),
+            size: 0,
+        };
+
+        assert_eq!(
+            older_entries(
+                &[
+                    entry("5-0-a"),
+                    entry("9-1-own"),
+                    entry("9-0-same-time"),
+                    entry("12-0-newer"),
+                    entry("bad"),
+                ],
+                at(9)
             ),
-            (ledger(Some(42), true), ledger(Some(43), false))
+            vec![Path::new(LEDGERS_PATH).join("5-0-a").into_boxed_path()]
         );
     }
 
@@ -605,36 +751,23 @@ mod tests {
     }
 
     #[test]
-    async fn the_ledger_is_written_and_read_back_with_the_time_in_milliseconds() {
-        // The ledger keeps the time of the last prune as ISO 8601 text with milliseconds.
+    async fn a_written_entry_is_the_ledger_that_a_read_gives() {
         let files = new_files();
-        let written = PruneLedger {
-            last_prune: Some(Timestamp::from(Timestamp::now_utc().to_millis())),
-            awaiting_removal: true,
-        };
+        let ended = Timestamp::from(Timestamp::now_utc().to_millis());
 
         let before = read_ledger(&files).await.unwrap();
-        write_ledger(&files, &written).await.unwrap();
+        write_ledger(&files, ended, true).await.unwrap();
         let after = read_ledger(&files).await.unwrap();
 
-        assert_eq!((before, after), (PruneLedger::default(), written));
-    }
-
-    #[test]
-    async fn a_ledger_that_does_not_parse_reads_as_an_empty_ledger() {
-        let files = new_files();
-        files
-            .storage
-            .put_raw(
-                "test",
-                "test",
-                files.namespace.clone(),
-                Path::new(LEDGER_PATH),
-                b"not json",
+        assert_eq!(
+            (before, after),
+            (
+                PruneLedger::default(),
+                PruneLedger {
+                    last_prune: Some(ended),
+                    awaiting_removal: true
+                }
             )
-            .await
-            .unwrap();
-
-        assert_eq!(read_ledger(&files).await.unwrap(), PruneLedger::default());
+        );
     }
 }
