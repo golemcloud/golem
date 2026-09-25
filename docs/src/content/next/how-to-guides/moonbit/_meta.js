@@ -19,6 +19,7 @@ export default {
   "golem-stateless-agent-moonbit": "Creating Ephemeral (Stateless) Agents (MoonBit)",
   "golem-custom-snapshot-moonbit": "Custom Snapshots in MoonBit",
   "golem-define-tool-moonbit": "Define a Golem tool in MoonBit",
+  "golem-durable-streams-moonbit": "Durable Streams in MoonBit",
   "golem-add-http-auth-moonbit": "Enabling Authentication on MoonBit HTTP Endpoints",
   "golem-enable-otlp-moonbit": "Enabling OpenTelemetry for a MoonBit Agent",
   "golem-file-io-moonbit": "File I/O in MoonBit Golem Agents",
