@@ -8025,12 +8025,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         let Some(worker) = worker.upgrade() else {
                             break;
                         };
-                        // Given up here: the shard's new owner recovers and reconciles the
-                        // agent's streams, and a session record appended from this executor
-                        // would land in an oplog that is no longer its to write.
-                        if worker.is_given_up() {
-                            break;
-                        }
                         if worker.cache_retirement_in_progress() {
                             drop(worker);
                             if !wait_for_durable_stream_retry(&shutdown, interval_duration).await {

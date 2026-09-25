@@ -1744,13 +1744,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             break self.interrupt(interrupt).await;
                         }
 
-                        // Given up by a path that queues no interrupt, such as a write refused
-                        // outside the guest. Nothing more is taken from the queue: the shard's
-                        // new owner runs it.
-                        if self.parent.is_given_up() {
-                            break CommandOutcome::BreakInnerLoop(RetryDecision::None);
-                        }
-
                         let result = match self.select_next_work().await {
                             SelectedWork::Resident(message) => {
                                 self.internal_invocation(message).await

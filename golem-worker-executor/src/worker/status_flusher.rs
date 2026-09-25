@@ -233,7 +233,7 @@ impl AgentStatusFlusher {
     /// flag is the source of truth; the queue entry is just a wakeup, so we only enqueue on the
     /// clean→dirty transition.
     fn mark_dirty(&self) {
-        if self.is_ephemeral || self.writes_stopped() {
+        if self.is_ephemeral || self.delete_started.load(Ordering::Acquire) {
             return;
         }
         if !self.dirty.swap(true, Ordering::AcqRel) {
