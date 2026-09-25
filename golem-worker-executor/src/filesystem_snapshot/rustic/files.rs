@@ -14,36 +14,55 @@
 
 //! The blobs of the repository of one scope, and the blob storage calls of the store on them.
 //!
-//! Each call waits for at most the deadline of the scope.
+//! Each call waits for at most the deadline of the scope, and a cancel of its operation ends it.
 
 use super::backend::answer_within;
+use super::fault::OperationCancelled;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageNamespace, ListedBlob, PutIfAbsent,
 };
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 /// The target label of each blob storage call of the rustic store.
 pub(super) const TARGET_LABEL: &str = "filesystem_snapshot";
 
-/// The blobs of one scope: the storage, the namespace of the scope, and the deadline of each call.
+/// The blobs of one scope: the storage, the namespace of the scope, the deadline of each call, and
+/// the token of the operation.
 #[derive(Clone, Debug)]
 pub(super) struct SnapshotFiles {
     pub(super) storage: Arc<dyn BlobStorage>,
     pub(super) namespace: BlobStorageNamespace,
     pub(super) deadline: Duration,
+    pub(super) cancel: CancellationToken,
 }
 
 impl SnapshotFiles {
+    /// Waits for one call within the deadline. A call of a cancelled operation does not start, and
+    /// a cancel ends a running call. Both give an error.
+    async fn answer<T>(
+        &self,
+        future: impl Future<Output = anyhow::Result<T>>,
+    ) -> anyhow::Result<T> {
+        if self.cancel.is_cancelled() {
+            return Err(anyhow::Error::new(OperationCancelled));
+        }
+        tokio::select! {
+            biased;
+            answer = answer_within(self.deadline, future) => answer,
+            () = self.cancel.cancelled() => Err(anyhow::Error::new(OperationCancelled)),
+        }
+    }
+
     /// Gives the content of the blob at the path, or `None` when the path has no blob.
     pub(super) async fn get(
         &self,
         op_label: &'static str,
         path: &Path,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        answer_within(
-            self.deadline,
+        self.answer(
             self.storage
                 .get_raw(TARGET_LABEL, op_label, self.namespace.clone(), path),
         )
@@ -57,16 +76,13 @@ impl SnapshotFiles {
         path: &Path,
         content: &[u8],
     ) -> anyhow::Result<()> {
-        answer_within(
-            self.deadline,
-            self.storage.put_raw(
-                TARGET_LABEL,
-                op_label,
-                self.namespace.clone(),
-                path,
-                content,
-            ),
-        )
+        self.answer(self.storage.put_raw(
+            TARGET_LABEL,
+            op_label,
+            self.namespace.clone(),
+            path,
+            content,
+        ))
         .await
     }
 
@@ -77,23 +93,19 @@ impl SnapshotFiles {
         path: &Path,
         content: &[u8],
     ) -> anyhow::Result<PutIfAbsent> {
-        answer_within(
-            self.deadline,
-            self.storage.put_raw_if_absent(
-                TARGET_LABEL,
-                op_label,
-                self.namespace.clone(),
-                path,
-                content,
-            ),
-        )
+        self.answer(self.storage.put_raw_if_absent(
+            TARGET_LABEL,
+            op_label,
+            self.namespace.clone(),
+            path,
+            content,
+        ))
         .await
     }
 
     /// Deletes the blob at the path. A path without a blob gives success.
     pub(super) async fn delete(&self, op_label: &'static str, path: &Path) -> anyhow::Result<()> {
-        answer_within(
-            self.deadline,
+        self.answer(
             self.storage
                 .delete(TARGET_LABEL, op_label, self.namespace.clone(), path),
         )
@@ -106,8 +118,7 @@ impl SnapshotFiles {
         op_label: &'static str,
         path: &Path,
     ) -> anyhow::Result<bool> {
-        answer_within(
-            self.deadline,
+        self.answer(
             self.storage
                 .delete_dir(TARGET_LABEL, op_label, self.namespace.clone(), path),
         )
@@ -120,11 +131,12 @@ impl SnapshotFiles {
         op_label: &'static str,
         path: &Path,
     ) -> anyhow::Result<Box<[ListedBlob]>> {
-        answer_within(
-            self.deadline,
-            self.storage
-                .list_blobs_below(TARGET_LABEL, op_label, self.namespace.clone(), path),
-        )
+        self.answer(self.storage.list_blobs_below(
+            TARGET_LABEL,
+            op_label,
+            self.namespace.clone(),
+            path,
+        ))
         .await
     }
 }

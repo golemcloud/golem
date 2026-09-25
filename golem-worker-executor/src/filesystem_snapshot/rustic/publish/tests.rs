@@ -66,6 +66,7 @@ fn files(
                 environment_id: EnvironmentId(Uuid::new_v4()),
             },
             deadline,
+            cancel: tokio_util::sync::CancellationToken::new(),
         },
         storage,
         inner,

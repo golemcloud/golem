@@ -188,6 +188,7 @@ mod tests {
                 environment_id: EnvironmentId(Uuid::new_v4()),
             },
             deadline: DEADLINE,
+            cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
 

@@ -191,9 +191,10 @@ impl RusticSnapshotStore {
         }
     }
 
-    /// Stops each operation at its next storage call, and waits until no blocking task and no
-    /// backend of the store remains; later operations give `Storage`. The runtime must not drop
-    /// before it returns, because a storage call after its time driver stops aborts the process.
+    /// Cancels each operation, so each running storage call ends and no new call starts, and later
+    /// operations give `Storage`. A publish is not cancelled. The call waits until no blocking task,
+    /// backend, publish or delete of a dropped publish remains. The runtime must not drop before it
+    /// returns, because a storage call after its time driver stops aborts the process.
     pub(crate) async fn shut_down(&self) {
         self.root.cancel();
         self.tracker.close();
@@ -255,11 +256,13 @@ impl RusticSnapshotStore {
         .map_err(|error| classify(operation, error))
     }
 
-    fn files(&self, scope: &SnapshotScope) -> SnapshotFiles {
+    /// Gives the blobs of the scope for the operation with the token.
+    fn files(&self, scope: &SnapshotScope, token: &CancellationToken) -> SnapshotFiles {
         SnapshotFiles {
             storage: self.storage.clone(),
             namespace: scope.0.clone(),
             deadline: self.policy.deadline,
+            cancel: token.clone(),
         }
     }
 
@@ -272,7 +275,7 @@ impl RusticSnapshotStore {
         token: &CancellationToken,
         freed: u64,
     ) -> Result<(), SnapshotStoreError> {
-        let files = self.files(scope);
+        let files = self.files(scope, token);
         let ledger = read_ledger(&files)
             .await
             .map_err(storage_failure)?
@@ -335,7 +338,11 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             })
             .await?;
         let (staged, info) = staged.ok_or(SnapshotStoreError::AlreadyExists)?;
-        publish(&self.files(scope), &staged, &self.tracker)
+        // The publish is the commit point, so no cancel ends it. The tracker counts it, so
+        // `shut_down` waits for it, and the deadline limits that wait.
+        let files = self.files(scope, &CancellationToken::new());
+        self.tracker
+            .track_future(publish(&files, &staged, &self.tracker))
             .await
             .map_err(storage_failure)?;
         Ok(info)
@@ -440,8 +447,8 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
     }
 
     async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError> {
-        let _operation = self.start()?;
-        delete_scope(&self.files(scope))
+        let (token, _guard) = self.start()?;
+        delete_scope(&self.files(scope, &token))
             .await
             .map_err(storage_failure)
     }
@@ -451,8 +458,8 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         from: &SnapshotScope,
         to: &SnapshotScope,
     ) -> Result<(), SnapshotStoreError> {
-        let _operation = self.start()?;
-        copy_scope(&self.files(from), &self.files(to))
+        let (token, _guard) = self.start()?;
+        copy_scope(&self.files(from, &token), &self.files(to, &token))
             .await
             .map_err(storage_failure)
     }

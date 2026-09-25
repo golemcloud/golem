@@ -160,6 +160,7 @@ async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScop
         storage: storage.clone(),
         namespace: scope.0.clone(),
         deadline: Duration::from_secs(2),
+        cancel: tokio_util::sync::CancellationToken::new(),
     })
     .await
     .unwrap()
@@ -819,6 +820,7 @@ async fn set_last_prune<S: BlobStorage + 'static>(
             storage: storage.clone(),
             namespace: scope.0.clone(),
             deadline: Duration::from_secs(2),
+            cancel: tokio_util::sync::CancellationToken::new(),
         },
         &ledger,
     )
@@ -1133,6 +1135,122 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
                 bool,
                 bool
             )>>()
+    );
+}
+
+#[test]
+async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_call() {
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+        if op_label == "copy_list" {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let (from, to) = (new_scope(), new_scope());
+    let tree = one_file_tree("copied");
+    store
+        .save(&from, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+    let copying = tokio::spawn({
+        let store = store.clone();
+        let (from, to) = (from.clone(), to.clone());
+        async move { store.copy_scope(&from, &to).await }
+    });
+    let held = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, _)| *op_label == "copy_list")
+    })
+    .await;
+
+    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
+    let calls_at_stop = storage.calls().len();
+    storage.open_gate();
+    let copied = tokio::time::timeout(LIMIT, copying).await;
+
+    assert!(
+        matches!(&copied, Ok(Ok(Err(error))) if is_storage(error, true)),
+        "{copied:?}"
+    );
+    assert_eq!(
+        (held, stopped, storage.calls().len()),
+        (true, true, calls_at_stop)
+    );
+}
+
+#[test]
+async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_ends() {
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+        if op_label == "publish" {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = one_file_tree("published");
+    let saving = tokio::spawn({
+        let store = store.clone();
+        let scope = scope.clone();
+        let path = tree.path().to_path_buf();
+        async move { store.save(&scope, &name("p-held"), &path, None).await }
+    });
+    let held = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, _)| *op_label == "publish")
+    })
+    .await;
+
+    let shutting = store.shut_down();
+    tokio::pin!(shutting);
+    let waited = tokio::time::timeout(Duration::from_millis(200), &mut shutting)
+        .await
+        .is_err();
+    storage.open_gate();
+    let stopped = tokio::time::timeout(LIMIT, &mut shutting).await.is_ok();
+    let saved = tokio::time::timeout(LIMIT, saving).await;
+
+    assert!(matches!(&saved, Ok(Ok(Ok(_)))), "{saved:?}");
+    assert_eq!((held, waited, stopped), (true, true, true));
+}
+
+#[test]
+async fn delete_scope_and_copy_scope_after_shut_down_give_storage() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
+    let (scope, other) = (new_scope(), new_scope());
+    let tree = one_file_tree("kept");
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+    store.shut_down().await;
+
+    let deleted = store.delete_scope(&scope).await;
+    let copied = store.copy_scope(&scope, &other).await;
+
+    assert!(
+        deleted
+            .as_ref()
+            .is_err_and(|error| is_storage(error, false)),
+        "{deleted:?}"
+    );
+    assert!(
+        copied.as_ref().is_err_and(|error| is_storage(error, false)),
+        "{copied:?}"
     );
 }
 

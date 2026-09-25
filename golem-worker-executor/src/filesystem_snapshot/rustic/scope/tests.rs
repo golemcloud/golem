@@ -45,6 +45,7 @@ fn files<S: BlobStorage + 'static>(
         storage: storage.clone(),
         namespace: namespace.clone(),
         deadline: DEADLINE,
+        cancel: tokio_util::sync::CancellationToken::new(),
     }
 }
 
