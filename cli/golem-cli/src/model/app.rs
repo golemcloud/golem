@@ -4147,8 +4147,6 @@ mod app_builder {
                     }
 
                     for (agent_type_name, agent_properties) in app.application.agents {
-                        // TODO: atl: resolve and store effective agent properties here using
-                        // agent templates/presets and flattened component fallback layers.
                         let unique_key = UniqueSourceCheckedEntityKey::Agent(agent_type_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
                             self.record_selectable_presets(agent_properties.presets.keys());
