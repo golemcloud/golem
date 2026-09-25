@@ -7736,11 +7736,11 @@ async fn a_stop_through_a_given_up_generation_leaves_the_next_generation_cached(
 
 /// A retry scheduled before the shard moved must not resume the agent afterwards.
 ///
-/// A crash schedules the loop's own restart. If the shard is revoked in that window, the agent has
-/// been given up, and the loop's backstop (`is_given_up()` ahead of the retry decision,
-/// invocation_loop.rs) has to take the given-up exit instead: no restart here, no `Resumed` written
-/// to an oplog the new owner is taking over, and the caller told to reroute. Without the backstop
-/// the retry would win the race and resume an agent this executor no longer owns.
+/// A crash schedules the loop's own restart. If the shard is revoked in that window, the agent is
+/// retired, and the loop's gate on the retirement token (invocation_loop.rs, ahead of any new
+/// generation) has to stop it instead: no restart here, no `Resumed` written to an oplog the new
+/// owner is taking over, and the caller told to reroute. Without the gate the retry would win the
+/// race and resume an agent this executor no longer owns.
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]

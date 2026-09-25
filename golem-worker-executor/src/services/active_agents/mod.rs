@@ -1186,19 +1186,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .and_then(|active_agent| active_agent.resolved_primary())
     }
 
-    /// Whether `worker` is the generation cached for its agent right now.
-    pub(crate) async fn is_cached_generation(&self, worker: &Worker<Ctx>) -> bool {
-        self.try_get_cached(worker.owned_agent_id())
-            .await
-            .is_some_and(|cached| std::ptr::eq(Arc::as_ptr(&cached), worker))
-    }
-
     /// [`Self::remove_worker_with`] for a caller holding the generation by reference: tears the
     /// entry down and drops it only while it still holds `worker`. Returns whether it did.
     ///
-    /// A given-up agent reaches its removal more than once - from its own loop's stop, again
-    /// from the give-up that waited for it, or from a stop through a handle kept past its
-    /// generation - and by then a newer generation may be cached under the same id. Keyed by id
+    /// A retiring generation can reach its removal after a newer one is cached under the same id -
+    /// its retirement started from a stop through a handle kept past its generation. Keyed by id
     /// alone, such a pass evicts that generation and fences its entity bodies while its loop keeps
     /// running.
     ///

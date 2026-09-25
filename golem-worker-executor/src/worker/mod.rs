@@ -671,9 +671,6 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Prevents weak-reference background work from starting while an unloaded
     /// worker is being conditionally removed from `ActiveAgents`.
     cache_retirement_in_progress: AtomicBool,
-    /// Set once this executor has given the agent up. One-shot: the first reason wins, and the
-    /// agent is never revived here.
-    retirement_kind: std::sync::OnceLock<InterruptKind>,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
@@ -711,11 +708,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     export_fork_receipt: tokio::sync::OnceCell<
         Option<golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotSuccess>,
     >,
-    owner_retirement: tokio::sync::OnceCell<
-        futures::future::Shared<
-            futures::future::BoxFuture<'static, Result<(), WorkerExecutorError>>,
-        >,
-    >,
+    owner_retirement: std::sync::OnceLock<OwnerRetirement>,
     owner_cleanup: Mutex<OwnerCleanupState>,
     owner_retirement_requested: CancellationToken,
     durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler,
@@ -727,6 +720,20 @@ enum OwnerCleanupState {
     #[default]
     PreRemoval,
     Retired,
+}
+
+/// Why this worker retires as its owner, recorded once (the first kind wins), and the shared stop
+/// that carries it out. A fence found under the worker lifecycle lock records the kind there; the
+/// stop starts once `interrupt_and_retire` runs. A lost shard is recorded on top of any kind: an
+/// API interrupt or an environment unload may already be retiring the agent when its shard moves.
+struct OwnerRetirement {
+    kind: InterruptKind,
+    lost_shard: AtomicBool,
+    stop: tokio::sync::OnceCell<
+        futures::future::Shared<
+            futures::future::BoxFuture<'static, Result<(), WorkerExecutorError>>,
+        >,
+    >,
 }
 
 impl<Ctx: WorkerCtx> std::ops::Deref for Worker<Ctx> {
@@ -1227,16 +1234,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap_or_else(|| "-".to_string())
     }
 
-    /// Records that this worker is being retired as its owner for `kind`; the first kind recorded
-    /// wins. A lost shard shuts every owner write at once: the `owner_retirement_requested` token
-    /// the owner's write paths check, the durable stream producer, and the status flusher and
-    /// checkpointer, whose writes carry no epoch.
+    /// Records in the owner retirement why this worker retires; the first kind recorded wins,
+    /// except that a lost shard is recorded on top of any kind. A lost shard shuts every owner
+    /// write at once: the `owner_retirement_requested` token the owner's write paths check, the
+    /// durable stream producer, and the status flusher and checkpointer, whose writes carry no
+    /// epoch.
     ///
     /// Synchronous and lock-free, so a write path that meets a fence under the worker lifecycle
     /// lock can record it there; the stop itself - [`Self::interrupt_and_retire`], or the stop the
     /// invocation loop unwinds to - runs once that lock is released.
     pub(crate) fn record_retirement(&self, kind: InterruptKind) -> bool {
-        let first = self.retirement_kind.set(kind).is_ok();
+        let mut first = false;
+        let retirement = self.owner_retirement.get_or_init(|| {
+            first = true;
+            OwnerRetirement {
+                kind,
+                lost_shard: AtomicBool::new(false),
+                stop: tokio::sync::OnceCell::new(),
+            }
+        });
+        if matches!(kind, InterruptKind::ShardLost) {
+            first = !retirement.lost_shard.swap(true, Ordering::AcqRel);
+        }
         if self.retired_for_lost_shard() {
             self.owner_retirement_requested.cancel();
             self.durable_stream_producer.fence();
@@ -1256,7 +1275,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Whether this worker is retired because its shard moved to another executor.
     pub(crate) fn retired_for_lost_shard(&self) -> bool {
-        matches!(self.retirement_kind.get(), Some(InterruptKind::ShardLost))
+        self.owner_retirement
+            .get()
+            .is_some_and(|retirement| retirement.lost_shard.load(Ordering::Acquire))
+    }
+
+    /// Starts the lost-shard retirement in a task of its own, for a caller the retirement's stop
+    /// would wait for. Not async, so the retirement's future is not part of the caller's.
+    pub(crate) fn spawn_lost_shard_retirement(self: Arc<Self>) {
+        tokio::spawn(async move {
+            let _ = self.interrupt_and_retire(InterruptKind::ShardLost).await;
+        });
     }
 
     /// Records a lost-shard retirement when `error` is one, per [`is_shard_lost`]. Returns whether
@@ -1356,26 +1385,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         interrupt: InterruptKind,
     ) -> Result<(), WorkerExecutorError> {
+        self.record_retirement(interrupt);
         if matches!(interrupt, InterruptKind::ShardLost) {
-            self.record_retirement(InterruptKind::ShardLost);
             // Signalled first, so a running guest leaves wasmtime even when a deletion owns the
             // stop or this generation is no longer the cached one. The ack is not awaited: a
             // caller blocking on it would panic if the worker was already stopping.
             self.set_interrupting_for(InterruptKind::ShardLost, UnloadReason::ShardLost)
                 .await;
         }
-        self.owner_retirement
+        // A deletion that already failed on the lost shard holds the cache entry with nothing
+        // running, and nothing here can finish it any more. Checked on every call rather than in
+        // the shared stop below: a stop started while that deletion was still running returned
+        // early, and its result is what every later call receives.
+        if self.retired_for_lost_shard()
+            && self.deletion_owns_retirement().await
+            && self.deletion_failed().await
+        {
+            self.evict_failed_deletion().await;
+        }
+        let retirement = self
+            .owner_retirement
+            .get()
+            .expect("the retirement was recorded above");
+        let interrupt = retirement.kind;
+        retirement
+            .stop
             .get_or_init(|| {
                 std::future::ready({
                     let worker = self.clone();
                     let task = tokio::spawn(async move {
                         let mut cleanup = worker.owner_cleanup.lock().await;
                         if worker.deletion_owns_retirement().await {
-                            // A deletion that already failed on the lost shard holds the cache entry
-                            // with nothing running: nothing here can finish it any more.
-                            if worker.retired_for_lost_shard() && worker.deletion_failed().await {
-                                worker.evict_failed_deletion().await;
-                            }
                             return worker.retirement_result();
                         }
                         if *cleanup == OwnerCleanupState::Retired
@@ -2316,7 +2356,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             cache_retirement_in_progress: AtomicBool::new(false),
-            retirement_kind: std::sync::OnceLock::new(),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
@@ -2348,7 +2387,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             read_only_cache_epoch: Arc::new(AtomicU64::new(0)),
             durable_stream_producer: Arc::default(),
             export_fork_receipt: tokio::sync::OnceCell::new(),
-            owner_retirement: tokio::sync::OnceCell::new(),
+            owner_retirement: std::sync::OnceLock::new(),
             owner_cleanup: Mutex::new(OwnerCleanupState::PreRemoval),
             owner_retirement_requested: CancellationToken::new(),
             durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler::new(
@@ -3414,11 +3453,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
     }
 
-    /// A start of an agent this executor has given up is never a success, and however it failed,
+    /// A start of an agent retired for a lost shard is never a success, and however it failed,
     /// its waiters are told to retry on the shard's new owner. Without this a stop that reports a
     /// generic "stopped before startup completed", or the recovery error a lost shard caused,
     /// would hand them a failure they surface instead of retrying.
-    fn given_up_startup_result(
+    fn retiring_startup_result(
         &self,
         result: Result<(), WorkerExecutorError>,
     ) -> Result<(), WorkerExecutorError> {
@@ -3430,7 +3469,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     fn publish_startup_result(&self, start_attempt: Uuid, result: Result<(), WorkerExecutorError>) {
-        let result = self.given_up_startup_result(result);
+        let result = self.retiring_startup_result(result);
         if !self.startup_attempt.complete(start_attempt, &result) {
             return;
         }
@@ -3471,12 +3510,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Worker stopped before startup completed",
             ))
         };
-        // The success marker is skipped for an agent this executor has given up: its oplog belongs
-        // to the shard's new owner, which clears the recovery error itself when it starts the
-        // agent. Under a fence the append is refused anyway; this also covers a shard revoked or
+        // The success marker is skipped for a retiring owner: for a lost shard its oplog belongs
+        // to the new owner, which clears the recovery error itself when it starts the agent.
+        // Under a fence the append is refused anyway; this also covers a shard revoked or
         // reassigned without one.
         if is_active
-            && !self.retired_for_lost_shard()
+            && !self.owner_retirement_requested.is_cancelled()
             && self
                 .get_non_detached_last_known_status()
                 .await
@@ -3497,7 +3536,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 result = Err(WorkerExecutorError::ShardingNotReady);
             }
         }
-        let result = self.given_up_startup_result(result);
+        let result = self.retiring_startup_result(result);
 
         let completed = match &result {
             Ok(()) => self
@@ -3515,11 +3554,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
-        // A recovery that failed because the shard moved is recorded by nobody: the agent is given
-        // up here and recovered by the shard's new owner. The caller stops the worker right after
-        // this, and that stop is where the agent is dropped. An agent given up for a reason that
-        // never reached this error - a revoked or reassigned shard - is not recorded either: the
-        // oplog would still accept the entry, at the epoch the agent no longer owns in spirit.
+        // A recovery that failed because the shard moved is recorded by nobody: the agent retires
+        // here and is recovered by the shard's new owner. The caller stops the worker right after
+        // this, and that stop is where the agent is dropped. An owner already retiring for a
+        // reason that never reached this error - a revoked or reassigned shard - records nothing
+        // either: the oplog would still accept the entry, at an epoch it no longer owns in spirit.
         if self.retire_if_shard_lost(error) {
             return;
         }
@@ -4703,13 +4742,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Whether the runtime is stopping - on its own or inside a deletion, which wraps the runtime
-    /// it stops - or the agent has been given up. Checked under the worker lifecycle lock by the
+    /// it stops - or the owner is retiring. Checked under the worker lifecycle lock by the
     /// loop-side operations, which must not wait for a stop that waits for the loop.
     fn stopping_or_retired(&self, instance_guard: &MutexGuard<'_, WorkerInstance>) -> bool {
         matches!(
             instance_guard.deletion_runtime(),
             WorkerInstance::Stopping(_)
-        ) || self.retired_for_lost_shard()
+        ) || self.owner_retirement_requested.is_cancelled()
     }
 
     async fn enqueue_update_locked(
@@ -7371,8 +7410,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .commit_and_update_state(CommitLevel::Always)
                         .await
                 };
-                // A refusal reaches the producer through the receipt; the actor has spawned the
-                // give-up.
+                // A refusal reaches the producer through the receipt; the actor has started the
+                // retirement.
                 if let Ok((_, true)) = committed {
                     state_actor.notify_status_changed();
                 }
@@ -8052,12 +8091,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         }
         let interval_duration = this.deps.config().durable_stream.reconciliation_interval;
-        // Retirement stops this task and waits for it, so it runs in a task of its own.
-        let retire_lost_shard = |worker: Arc<Self>| {
-            tokio::spawn(async move {
-                let _ = worker.interrupt_and_retire(InterruptKind::ShardLost).await;
-            });
-        };
         let handle = tokio::spawn(async move {
             scope
                 .run(async move {
@@ -8096,8 +8129,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 if slot.is_retired() {
                                     break;
                                 }
-                                if worker.retire_if_shard_lost(&error) {
-                                    retire_lost_shard(worker);
+                                if is_shard_lost(&error) {
+                                    worker.spawn_lost_shard_retirement();
                                     break;
                                 }
                                 warn!(
@@ -8122,7 +8155,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         // to us. Only run this after local construction has published readiness.
                         let needs_retry = worker.run_durable_stream_maintenance(&producer).await;
                         if worker.retired_for_lost_shard() {
-                            retire_lost_shard(worker);
+                            worker.spawn_lost_shard_retirement();
                             break;
                         }
                         drop(worker);
@@ -8189,8 +8222,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// given up. It has to be reported rather than folded into "nothing changed": below the
     /// commit threshold an add only buffers, so this commit is where a takeover is found, and a
     /// caller about to run a side effect, publish a result or acknowledge a request must not do
-    /// it for entries that never reached the storage. The status actor has already spawned the
-    /// give-up that drops the agent from this executor.
+    /// it for entries that never reached the storage. The status actor has already started the
+    /// retirement that drops the agent from this executor.
     pub async fn commit_oplog_and_update_state(
         &self,
         commit_level: CommitLevel,
@@ -8936,8 +8969,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         loop {
             match self.lookup_invocation_result(key).await {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
-                // Given up here, so no result for the key will be published on this executor. The
-                // retry answer is published when the agent is given up but not cached, and a
+                // Retired for a lost shard, so no result for the key will be published on this
+                // executor. The retry answer is published to waiters but not cached, and a
                 // receiver that lagged past it, or subscribed after it, finds it here instead.
                 LookupResult::New | LookupResult::Pending if self.retired_for_lost_shard() => {
                     break Ok(LookupResult::Complete(Err(self.retirement_error())));
@@ -8974,9 +9007,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             next_ownership_check = tokio::time::Instant::now()
                                 + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
 
-                            // A key the give-up did not know about yet (enqueued, not yet folded
-                            // into the status it failed from) gets no retry answer published.
-                            // The lookup at the top of the loop answers it.
+                            // A key the retirement did not know about yet (enqueued, not yet folded
+                            // into the status it failed from) gets no retry answer published. The
+                            // lookup at the top of the loop answers it.
                             if self.retired_for_lost_shard() {
                                 continue;
                             }
@@ -9218,27 +9251,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         self.handle_stop_result(stop_result).await;
 
-        // The removal point. Every loop exit and every external stop passes through here, so a
-        // given-up agent arrives more than once: from its own loop, again from the give-up
-        // that waited for that loop, and from any stop that arrives through a handle kept past its
-        // generation. Everything below is scoped to this generation; a pass that finds the entry
-        // gone or holding a newer generation does nothing. It runs only after the loop has gone, so
-        // the new owner cannot recover the agent while it is still running here.
-        //
-        // Waiters are failed here as well, in memory only. An agent given up from inside its own
-        // loop - a fence refused in a host call traps with `ShardLost` - stops without failing
-        // anyone, and while this executor's assignment still names the shard their ownership
-        // re-check keeps passing. The give-up spawned by the loop's exit commit answers them
-        // only if it still finds this generation cached, and the loop's own removal can get there
-        // first. Failing them before the removal, while this generation still holds the entry,
-        // keeps the failure away from a newer generation's waiters, which match by agent id. Keys
-        // that already have a result keep it. A generation that left the cache some other way
-        // first (an idle expiry, an environment unload) is not reached here.
+        // A lost shard found inside the loop - a fence refused in a host call traps with
+        // `ShardLost` - is only recorded there; its retirement starts here, once the loop has gone,
+        // so the new owner cannot recover the agent while it still runs on this executor. The
+        // retirement fails the waiters while this generation still holds the cache entry, then
+        // drops it. It is shared, so the passes its own stop and other stops make here join it,
+        // and it is spawned because its stop comes back through here.
         if self.retired_for_lost_shard()
-            && self.deps.active_agents().is_cached_generation(self).await
+            && let Some(worker) = self
+                .deps
+                .active_agents()
+                .try_get_cached(&self.owned_agent_id)
+                .await
+            && std::ptr::eq(worker.as_ref(), self)
         {
-            self.fail_pending_invocations(self.retirement_error()).await;
-            self.remove_from_active_agents().await;
+            worker.spawn_lost_shard_retirement();
         }
 
         if !called_from_invocation_loop && let Some(startup_attempt) = startup_attempt {

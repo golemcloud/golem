@@ -261,13 +261,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .await
                 .retain(|invocation| !invocation.is_abandoned());
             self.release_terminal_interrupt().await;
-            // Never a new instance for an agent given up here, whichever path led back to this
-            // point: it would reopen the oplog at an epoch this executor no longer holds.
-            if self.parent.retired_for_lost_shard() {
-                self.release_concurrent_agent_permit();
-                self.stop_startup_retired().await;
-                break;
-            }
             // ADMISSION: gates the start of a generation, so
             // fencing refuses new generations and never interrupts a running one.
             if let Err(error) = self.parent.shard_service().check_admission(&agent_id) {
@@ -726,13 +719,24 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .try_get_active_agent(&self.owned_agent_id)
                 .await
             {
-                let owner_failure = exit_owner_failure(
-                    self.parent
-                        .retired_for_lost_shard()
-                        .then_some(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)),
-                    final_interrupt,
-                    recovery_failure.as_ref(),
-                );
+                // A lost shard wins: the bodies must not report an API interrupt or a fault for an
+                // agent that simply has a new owner.
+                let owner_failure = self
+                    .parent
+                    .retired_for_lost_shard()
+                    .then_some(InterruptKind::ShardLost)
+                    .or(final_interrupt)
+                    .map(OwnerFailureWinner::Lifecycle)
+                    .or_else(|| {
+                        recovery_failure
+                            .clone()
+                            .map(OwnerFailureWinner::Infrastructure)
+                    })
+                    .unwrap_or_else(|| {
+                        OwnerFailureWinner::Lifecycle(
+                            InterruptKind::Interrupt(Timestamp::now_utc()),
+                        )
+                    });
                 active_agent.fence_entity_bodies(owner_failure).await;
             }
             // Tests can shorten the deadline and pause filesystem cleanup to exercise late
@@ -758,21 +762,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             *self.parent.unload_cleanup.lock().unwrap() = Some(unloading.cleanup.clone());
             if let Some(error) = unloading.await {
                 self.stop_cleanup_failed(error).await;
-                break;
-            }
-
-            // Whatever was decided, an agent given up here is not restarted, retried later or
-            // parked for a resume on this executor: the shard's new owner resumes it.
-            if self.parent.retired_for_lost_shard() {
-                debug!(
-                    %agent_id,
-                    ?final_decision,
-                    "Invocation queue loop stopping an agent this executor has given up"
-                );
-                self.stop_startup_retired().await;
-                if cleanup_ephemeral_worker {
-                    self.archive_ephemeral_oplog();
-                }
                 break;
             }
 
@@ -855,9 +844,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .await
                                             .current_idempotency_key
                                             .clone();
-                                        // Given up, before or by this interrupt: the oplog is
+                                        // A lost shard, before or by this interrupt: the oplog is
                                         // the new owner's to write, so no lifecycle entry and no
-                                        // failure is recorded for an invocation it runs.
+                                        // failure is recorded for an invocation it runs. A pending
+                                        // suspend or interrupt is not displaced by `ShardLost`, so
+                                        // the kind alone does not say so.
                                         if matches!(kind, InterruptKind::ShardLost)
                                             || self.parent.retired_for_lost_shard()
                                         {
@@ -980,13 +971,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         self.permit_state.release();
     }
 
-    /// Stops a generation this executor has given up, because its shard was lost or its oplog
-    /// refused a lifecycle entry: the waiters are told to look for the shard's new owner.
+    /// Stops a generation whose shard was lost, found by an interrupt or by its oplog refusing a
+    /// lifecycle entry: the waiters are told to look for the shard's new owner.
     ///
-    /// A fence found by a host call during instantiation arrives without `give_up()` having
-    /// run, so the agent is marked given up here: the stop then tears its entity bodies down as
-    /// `ShardLost`, fails its waiters and removes only this generation. A reason already recorded
-    /// is kept.
+    /// A refused entry is the first this executor learns of the fence, so the retirement is
+    /// recorded here: the stop then tears the entity bodies down as `ShardLost`, fails the waiters
+    /// and removes only this generation. A kind already recorded is kept.
     async fn stop_startup_retired(&self) {
         self.parent.record_retirement(InterruptKind::ShardLost);
         self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
@@ -1006,9 +996,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             ?decision,
             "Invocation queue loop interrupted while unloaded"
         );
-        // Given up, before or by this interrupt: the oplog is the new owner's to write, so no
+        // A lost shard, before or by this interrupt: the oplog is the new owner's to write, so no
         // lifecycle entry and no failure is recorded for an invocation it runs, and nothing waits
-        // on here for a permit to restart it.
+        // on here for a permit to restart it. A pending suspend or interrupt is not displaced by
+        // `ShardLost`, so the kind alone does not say so.
         if matches!(kind, InterruptKind::ShardLost) || self.parent.retired_for_lost_shard() {
             self.stop_startup_retired().await;
             return true;
@@ -1084,14 +1075,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         startup_failure: Option<WorkerExecutorError>,
         pending_live_invocations: PendingLiveInvocationDisposition,
     ) {
-        // A generation retired for its lost shard keeps the retry answer as its startup failure,
-        // whichever exit stopped it: otherwise a readiness waiter
-        // resolved by the stop, or a handle kept past this generation, is told it may proceed.
-        let startup_failure = if self.parent.retired_for_lost_shard() {
-            Some(self.parent.retirement_error())
-        } else {
-            startup_failure
-        };
         self.parent.complete_startup(
             self.start_attempt,
             Err(startup_failure.clone().unwrap_or_else(|| {
@@ -1104,13 +1087,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .try_get_active_agent(&self.owned_agent_id)
             .await
         {
-            let failure = exit_owner_failure(
-                self.parent
-                    .retired_for_lost_shard()
-                    .then_some(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)),
-                None,
-                startup_failure.as_ref(),
-            );
+            let failure = if self.parent.retired_for_lost_shard() {
+                OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
+            } else {
+                startup_failure.clone().map_or_else(
+                    || {
+                        OwnerFailureWinner::Lifecycle(
+                            InterruptKind::Interrupt(Timestamp::now_utc()),
+                        )
+                    },
+                    OwnerFailureWinner::Infrastructure,
+                )
+            };
             active_agent.fence_entity_bodies(failure).await;
         }
         self.parent
@@ -1312,13 +1300,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         err
                     } else {
                         self.parent.record_recovery_failure(&err).await;
-                        err
-                    };
-                    // A generation given up keeps the error that sends its callers to the shard's
-                    // new owner, whatever failed on the way out.
-                    let err = if self.parent.retired_for_lost_shard() {
-                        self.parent.retirement_error()
-                    } else {
                         err
                     };
                     self.parent
@@ -2565,8 +2546,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// it is a special case of the exported function invocation).
     async fn external_invocation(&mut self, inner: TimestampedAgentInvocation) -> CommandOutcome {
         // Rechecked here as well as where the invocation was taken: hydrating it and waiting for
-        // the store both leave room for the agent to be given up in between.
-        if self.parent.retired_for_lost_shard() {
+        // the store both leave room for the owner to start retiring in between.
+        if self.parent.owner_retirement_requested.is_cancelled() {
             return CommandOutcome::BreakInnerLoop(RetryDecision::None);
         }
         match inner.invocation {
@@ -2593,7 +2574,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             Ok(true) => CommandOutcome::Continue,
                             // A stop is waiting for this loop to exit.
                             Ok(false) => CommandOutcome::BreakInnerLoop(RetryDecision::None),
-                            Err(_) if self.parent.retired_for_lost_shard() => {
+                            Err(error) if self.parent.retire_if_shard_lost(&error) => {
                                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
                             }
                             Err(error) => {
@@ -2947,10 +2928,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
     }
 
-    /// The outcome of an invocation that failed on an agent this executor has given up, `None`
-    /// while the agent is still its own. Checked after `on_invocation_failure`, which marks a lost
-    /// shard. Nothing more is written: a terminal streaming-session failure, like any other
-    /// terminal record, would end an invocation the shard's new owner resumes.
+    /// The outcome of an invocation that failed on an agent retired for a lost shard, `None`
+    /// otherwise. Checked after `on_invocation_failure`, which records a lost shard. Nothing more
+    /// is written: a terminal streaming-session failure, like any other terminal record, would end
+    /// an invocation the shard's new owner resumes.
     fn retired_outcome(&self) -> Option<CommandOutcome> {
         self.parent
             .retired_for_lost_shard()
@@ -3543,30 +3524,6 @@ fn successful_agent_invocation_outcome(
     }
 }
 
-/// The failure a loop's exit tears the agent's entity bodies down with.
-///
-/// A given-up agent's shard moved, and that wins over any lifecycle interrupt still queued and
-/// over a recovery failure: the bodies must not report an API interrupt or a fault for an agent
-/// that simply has a new owner. A give-up first discovered by the stop's own commit, which
-/// runs after this choice, cannot be reflected, because by then the bodies are already torn down;
-/// the fence still holds, and that stop still fails the waiters and removes the generation.
-fn exit_owner_failure(
-    given_up: Option<OwnerFailureWinner>,
-    final_interrupt: Option<InterruptKind>,
-    recovery_failure: Option<&WorkerExecutorError>,
-) -> OwnerFailureWinner {
-    given_up
-        .or_else(|| final_interrupt.map(OwnerFailureWinner::Lifecycle))
-        .or_else(|| {
-            recovery_failure
-                .cloned()
-                .map(OwnerFailureWinner::Infrastructure)
-        })
-        .unwrap_or_else(|| {
-            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc()))
-        })
-}
-
 fn failed_agent_invocation_outcome(
     agent_mode: AgentMode,
     decision: RetryDecision,
@@ -3637,14 +3594,13 @@ mod tests {
     use super::{
         CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, PeriodicSnapshotAction,
         ResidentAgentOwnership, ResidentWakeup, catch_invocation_loop_panic,
-        close_usage_before_delete, coalesce_filesystem_limit_update, exit_owner_failure,
+        close_usage_before_delete, coalesce_filesystem_limit_update,
         failed_agent_invocation_outcome, finish_filesystem_limit_unload,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
         snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
         successful_agent_invocation_outcome, unload_resident_agent_ownership,
         wait_for_resident_wakeup,
     };
-    use crate::durable_host::tool::operation::OwnerFailureWinner;
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
     use crate::services::agent_filesystem::{
@@ -3665,7 +3621,7 @@ mod tests {
     use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
-    use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -3855,46 +3811,6 @@ mod tests {
         close(node).await.unwrap();
         control.push_delete_and_verify(Ok(()));
         delete(seal(filesystem)).await.unwrap();
-    }
-
-    #[test]
-    fn exit_owner_failure_prefers_giving_up() {
-        let shard_lost = || Some(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost));
-        let recovery_failure = WorkerExecutorError::unknown("recovery failed");
-
-        assert!(matches!(
-            exit_owner_failure(shard_lost(), None, None),
-            OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
-        ));
-        // A shard that moved outranks both a queued lifecycle interrupt and a recovery failure:
-        // the agent was neither suspended through the API nor broken, it has a new owner.
-        assert!(matches!(
-            exit_owner_failure(
-                shard_lost(),
-                Some(InterruptKind::Suspend(Timestamp::now_utc())),
-                Some(&recovery_failure),
-            ),
-            OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
-        ));
-
-        // Without a give-up the previous order stands: the queued interrupt, then the
-        // recovery failure, then an interrupt stamped now.
-        assert!(matches!(
-            exit_owner_failure(
-                None,
-                Some(InterruptKind::Suspend(Timestamp::now_utc())),
-                Some(&recovery_failure),
-            ),
-            OwnerFailureWinner::Lifecycle(InterruptKind::Suspend(_))
-        ));
-        assert!(matches!(
-            exit_owner_failure(None, None, Some(&recovery_failure)),
-            OwnerFailureWinner::Infrastructure(_)
-        ));
-        assert!(matches!(
-            exit_owner_failure(None, None, None),
-            OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(_))
-        ));
     }
 
     impl Drop for TestStoreOwner {

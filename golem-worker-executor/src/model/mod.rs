@@ -515,7 +515,7 @@ impl TrapType {
                                 // A bare `?` on an oplog write inside an anyhow host function
                                 // carries the `OplogError` itself, not its `WorkerExecutorError`
                                 // form, so the fence is looked for along the chain as well. A
-                                // storage error stays a retriable `Unknown`. After that, search
+                                // payload error stays a retriable `Unknown`. After that, search
                                 // the full error chain for ClassifiedHostError.
                                 if error.chain().any(|cause| {
                                     matches!(

@@ -1458,9 +1458,9 @@ impl OpenOplogs {
 /// and is replaced, when:
 /// - it is fenced: the storage refused one of its writes, so every later one is refused too;
 /// - or it belongs to an older ownership generation: `requested` is newer than the epoch it was
-///   opened with (`None`, opened without a claim, is older than any epoch) and it really asserts
-///   that epoch. An ephemeral handle opened with an epoch asserts none, so it is reused at any
-///   epoch; one opened without a claim is replaced by any open that makes one.
+///   opened with (`None`, an ephemeral open, is older than any epoch) and it really asserts that
+///   epoch. An ephemeral handle opened with an epoch asserts none, so it is reused at any epoch;
+///   one opened with `None` is replaced by any open that asserts an epoch.
 ///
 /// A replaced handle may still be held by a worker that is stopping, so nobody waits for it to
 /// close; it keeps any background work, such as an archive transfer, until its holder drops it.

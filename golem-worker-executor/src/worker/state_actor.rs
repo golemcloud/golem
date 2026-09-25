@@ -577,7 +577,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 
     /// Commits the oplog and folds the new entries into the published status. Returns the
     /// current oplog index after the commit and whether the status changed, or the fence when the
-    /// storage refused the commit; the refusal has already spawned the agent's give-up.
+    /// storage refused the commit; the refusal has already started the agent's retirement.
     ///
     /// If the caller's future is dropped while awaiting the reply, the commit still runs to
     /// completion on the status task (the same semantics as the oplog actor's own jobs).

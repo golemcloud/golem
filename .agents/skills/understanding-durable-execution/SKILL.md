@@ -368,8 +368,10 @@ owner leaves by:
   stored epoch). This protects an assignment change this executor has not yet heard about, and a
   revoked lease it is still trying to renew. Once one write is refused the fence *latches*: every
   later add or commit on that handle is refused without a second round trip to storage. A write
-  path that meets the refusal under the worker lifecycle lock records the retirement synchronously
-  (`Worker::record_retirement`); the stop follows once that lock is released.
+  path that meets the refusal under the worker lifecycle lock records the kind in the owner
+  retirement synchronously (`Worker::record_retirement`); the stop follows once that lock is
+  released, and `stop_internal` hands the generation to `interrupt_and_retire(ShardLost)`, the
+  one retirement that fails the waiters and drops it.
 
 Recording a `ShardLost` retirement cancels `owner_retirement_requested`, so every owner write gate
 refuses at once, fences the durable stream producer, and stops the `AgentStatusFlusher` and

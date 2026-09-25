@@ -2706,8 +2706,8 @@ impl DeleteReply {
 /// owner rebuilds from that oplog. It may still have stopped the agent's runtime,
 /// recorded `ConsumerDeleting` and sent `finalize_attachment` RPCs, which the new
 /// owner's deletion repeats. It is retried, and if it still counted, the honest
-/// not-found that came back
-/// from the real owner would be reported to the caller as a successful delete —
+/// not-found that came back from the real owner would be reported to the caller
+/// as a successful delete —
 /// which for an ordinary rebalance over an agent that never existed needs no
 /// crash at all to happen.
 ///
