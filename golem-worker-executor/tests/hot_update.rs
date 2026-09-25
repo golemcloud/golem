@@ -19,7 +19,12 @@ use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
-use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{
+    OplogErrorKind, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
+};
+use golem_common::model::worker::{
+    AgentUpdateMode, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
+};
 use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId, ScanCursor};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{TestDsl, update_counts};
@@ -154,6 +159,42 @@ impl TestHttpServer {
             resume: resume_tx,
         }
     }
+}
+
+async fn wait_for_snapshot_after(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+    after: OplogIndex,
+) -> anyhow::Result<OplogIndex> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+            if let Some(snapshot) = oplog.iter().find(|entry| {
+                entry.oplog_index > after && matches!(entry.entry, PublicOplogEntry::Snapshot(_))
+            }) {
+                break anyhow::Ok(snapshot.oplog_index);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?
+}
+
+async fn wait_for_update_counts(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+    expected: (usize, usize, usize),
+) -> anyhow::Result<golem_common::model::worker::AgentMetadataDto> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let metadata = executor.get_worker_metadata(worker_id).await?;
+            if update_counts(&metadata) == expected {
+                break anyhow::Ok(metadata);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?
 }
 
 #[test]
@@ -292,7 +333,7 @@ async fn auto_update_on_idle(
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn auto_update_invalidates_snapshot_from_previous_revision(
+async fn automatic_update_promotes_snapshot_from_previous_revision(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
@@ -373,7 +414,7 @@ async fn auto_update_invalidates_snapshot_from_previous_revision(
         .await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    assert_eq!(loaded_snapshot_revision.into_typed::<u32>()?, 0);
+    assert_eq!(loaded_snapshot_revision.into_typed::<u32>()?, 1);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -482,6 +523,1136 @@ async fn snapshot_after_auto_update_recovers_with_updated_component_context(
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn snapshot_assisted_update_skips_pre_snapshot_history_and_replays_in_flight_tail(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = crate::fork::start_with_local_resume_and_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let mut http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "pre_snapshot_value", data_value!())
+        .await?;
+    assert_eq!(result.into_typed::<u32>()?, 1);
+    let snapshot_index =
+        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    let post_snapshot = executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    assert_eq!(post_snapshot.into_typed::<u32>()?, 7);
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    let mut control = http_server.f1_control(900).await;
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let invocation = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(
+                    &component_clone,
+                    &agent_id_clone,
+                    "blocking_stable",
+                    data_value!(900u64),
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+    control.await_reached().await;
+
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    let pending_index = executor
+        .get_oplog(&worker_id, snapshot_index.next())
+        .await?
+        .into_iter()
+        .find_map(|entry| {
+            matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)).then_some(entry.oplog_index)
+        })
+        .expect("assisted update must append PendingUpdate before source work completes");
+
+    assert!(!invocation.is_finished());
+    control.resume();
+    assert_eq!(invocation.await??.into_typed::<u32>()?, 111);
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation_start = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params)
+                if matches!(
+                    &params.invocation,
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == "blocking_stable"
+                ) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("blocking agent invocation must have a start");
+    let success_index = oplog
+        .iter()
+        .find_map(|entry| {
+            matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_))
+                .then_some(entry.oplog_index)
+        })
+        .expect("assisted update must record SuccessfulUpdate");
+    let invocation_end = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationFinished(params)
+                if params.method_name.as_deref() == Some("blocking_stable") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("blocking invocation must finish after the update handoff");
+    assert!(
+        invocation_start < pending_index
+            && pending_index < success_index
+            && success_index < invocation_end,
+        "blocking invocation must span P and finish only after U: start={invocation_start}, P={pending_index}, U={success_index}, end={invocation_end}"
+    );
+    drop(executor);
+
+    let executor = crate::fork::start_with_local_resume_and_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let loaded = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(loaded.into_typed::<u32>()?, 1);
+    let accumulated = executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?;
+    assert_eq!(accumulated.into_typed::<u32>()?, 111);
+
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 1, 0)).await?;
+    let success = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::SuccessfulUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("assisted update must record a successful terminal outcome");
+    assert_eq!(success.mode, AgentUpdateMode::Automatic);
+    let details = success
+        .snapshot_assisted_details
+        .as_ref()
+        .expect("assisted success must expose snapshot provenance");
+    assert_eq!(details.snapshot_index, Some(snapshot_index));
+    let replay_range = details
+        .replay_range
+        .as_ref()
+        .expect("assisted success must expose the replayed suffix");
+    assert_eq!(replay_range.start, snapshot_index.next());
+    assert!(
+        replay_range.end >= pending_index,
+        "the replayed suffix must reach the admitted update before the in-flight continuation"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_)))
+            .count(),
+        1
+    );
+    assert!(!oplog.iter().any(|entry| matches!(
+        entry.entry,
+        PublicOplogEntry::FailedUpdate(_) | PublicOplogEntry::Error(_)
+    )));
+
+    let fork = phantom_agent_id!("SnapshotUpdateTest", uuid::Uuid::new_v4());
+    executor
+        .fork_worker(&worker_id, &fork.to_string(), success_index)
+        .await?;
+    let fork_value = executor
+        .invoke_and_await_agent(&component, &fork, "accumulated_value", data_value!())
+        .await?;
+    assert_eq!(fork_value.into_typed::<u32>()?, 111);
+
+    let later_snapshot = wait_for_snapshot_after(&executor, &worker_id, success_index).await?;
+    executor
+        .return_empty_snapshot_payload(&worker_id, later_snapshot)
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !executor.stop_worker_if_idle(&owned).await? {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    let mut events = executor.capture_output(&worker_id).await?;
+    let recovered = executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?;
+    assert_eq!(recovered.into_typed::<u32>()?, 111);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut rejected_later_snapshot = false;
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoveryFailed {
+                    snapshot_index,
+                    error,
+                    ..
+                }) if snapshot_index == later_snapshot => {
+                    assert!(error.contains("Snapshot is empty"), "{error}");
+                    rejected_later_snapshot = true;
+                }
+                Ok(AgentEvent::SnapshotRecoverySucceeded {
+                    snapshot_index: recovered_index,
+                    ..
+                }) if rejected_later_snapshot && recovered_index == snapshot_index => break,
+                _ => {}
+            }
+        }
+        assert!(rejected_later_snapshot);
+    })
+    .await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn automatic_update_without_snapshot_falls_back_to_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let stable = executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    assert_eq!(stable.into_typed::<u32>()?, 7);
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 1, 0)).await?;
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(metadata.retry_count, 0);
+    assert_eq!(metadata.last_error, None);
+    let success = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::SuccessfulUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("automatic fallback must record a successful terminal outcome");
+    assert_eq!(success.mode, AgentUpdateMode::Automatic);
+    assert!(success.snapshot_assisted_details.is_none());
+
+    let source = executor
+        .invoke_and_await_agent(&component, &agent_id, "pre_snapshot_value", data_value!())
+        .await?;
+    assert_eq!(source.into_typed::<u32>()?, 2);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+async fn assert_automatic_update_rejects_agent_mode_change(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_update_v1: &PrecompiledComponent,
+    snapshot_policy: SnapshotPolicy,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let expect_snapshot = !matches!(snapshot_policy, SnapshotPolicy::Disabled);
+    let executor = start_with_snapshot_policy(deps, &context, snapshot_policy).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let source_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "replay_revision", data_value!())
+        .await?;
+    assert_eq!(source_value.into_typed::<u32>()?, 0);
+    if expect_snapshot {
+        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    }
+
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v3_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    let failure = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("mode-changing automatic update must fail");
+    assert!(
+        failure
+            .details
+            .as_deref()
+            .is_some_and(|details| details.contains("mode Ephemeral"))
+    );
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(metadata.status, AgentStatus::Idle);
+    assert_eq!(metadata.last_error, None);
+    if expect_snapshot {
+        assert!(
+            failure
+                .snapshot_assisted_details
+                .as_ref()
+                .and_then(|details| details.snapshot_index)
+                .is_some(),
+            "snapshot-assisted mode rejection must preserve selected snapshot provenance"
+        );
+    } else {
+        assert!(failure.snapshot_assisted_details.is_none());
+    }
+    let source_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "replay_revision", data_value!())
+        .await?;
+    assert_eq!(source_value.into_typed::<u32>()?, 0);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::FailedUpdate(_)))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn automatic_full_replay_rejects_agent_mode_change(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_automatic_update_rejects_agent_mode_change(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        SnapshotPolicy::Disabled,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn automatic_snapshot_assisted_rejects_agent_mode_change(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_automatic_update_rejects_agent_mode_change(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn snapshot_assisted_replay_mismatch_fails_once_and_preserves_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 3 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for _ in 0..2 {
+        let stable = executor
+            .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+            .await?;
+        assert_eq!(stable.into_typed::<u32>()?, 7);
+    }
+    let snapshot_index =
+        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    let source_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "pre_snapshot_value", data_value!())
+        .await?;
+    assert_eq!(source_value.into_typed::<u32>()?, 1);
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(metadata.retry_count, 0);
+    assert_eq!(metadata.last_error, None);
+    let failure = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("suffix mismatch must record one failed update");
+    assert_eq!(failure.mode, AgentUpdateMode::Automatic);
+    let details = failure
+        .snapshot_assisted_details
+        .as_ref()
+        .expect("suffix replay failure must expose attempted provenance");
+    assert_eq!(details.snapshot_index, Some(snapshot_index));
+    assert_eq!(
+        details
+            .replay_range
+            .as_ref()
+            .expect("suffix replay failure must retain its replay range")
+            .start,
+        snapshot_index.next()
+    );
+
+    let source = executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    assert_eq!(source.into_typed::<u32>()?, 7);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::FailedUpdate(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum SnapshotAssistedSuffixFailure {
+    HostCallDivergence,
+    Trap,
+    Exit,
+}
+
+async fn assert_snapshot_assisted_suffix_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_update_v1: &PrecompiledComponent,
+    failure: SnapshotAssistedSuffixFailure,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    let snapshot_index =
+        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+
+    let (function, input, expected_cause) = match failure {
+        SnapshotAssistedSuffixFailure::HostCallDivergence => {
+            ("suffix_host_value", data_value!(), "unexpected oplog entry")
+        }
+        SnapshotAssistedSuffixFailure::Trap => ("suffix_trap", data_value!(), "component trapped"),
+        SnapshotAssistedSuffixFailure::Exit => ("suffix_exit", data_value!(), "exit"),
+    };
+    let source_result = executor
+        .invoke_and_await_agent(&component, &agent_id, function, input)
+        .await?;
+    assert_eq!(source_result.into_typed::<u32>()?, 7);
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(metadata.retry_count, 0);
+    assert_eq!(metadata.last_error, None);
+    let failed = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("assisted suffix failure must record FailedUpdate");
+    let details = failed
+        .details
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    assert!(
+        details.contains(expected_cause),
+        "unexpected assisted failure: {details}"
+    );
+    assert_eq!(
+        failed
+            .snapshot_assisted_details
+            .as_ref()
+            .and_then(|details| details.snapshot_index),
+        Some(snapshot_index)
+    );
+
+    let healthy = executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    assert_eq!(healthy.into_typed::<u32>()?, 7);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::FailedUpdate(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+    );
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_host_call_divergence_preserves_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_snapshot_assisted_suffix_failure(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        SnapshotAssistedSuffixFailure::HostCallDivergence,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_guest_trap_preserves_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_snapshot_assisted_suffix_failure(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        SnapshotAssistedSuffixFailure::Trap,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_guest_exit_preserves_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_snapshot_assisted_suffix_failure(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        SnapshotAssistedSuffixFailure::Exit,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_schema_rejection_fails_once_and_allows_later_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+
+    let rejecting = executor
+        .update_component(&component.id, "it_agent_update_v4_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, rejecting.revision, false)
+        .await?;
+    let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    assert_eq!(failed.component_revision, component.revision);
+    let cause = failed
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.as_deref(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(
+        cause.contains("Invalid snapshot - simulating failure"),
+        "{cause}"
+    );
+
+    let compatible = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, compatible.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, compatible.revision, Duration::from_secs(30))
+        .await?;
+    let revision = executor
+        .invoke_and_await_agent(&component, &agent_id, "revision_two_only", data_value!())
+        .await?;
+    assert_eq!(revision.into_typed::<u32>()?, 2);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_payload_download_failure_fails_once_and_preserves_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let config = OplogConfig {
+        max_payload_size: 0,
+        default_snapshotting: SnapshotPolicy::EveryNInvocation { count: 2 },
+        ..Default::default()
+    };
+    let executor = start_customized(deps, &context, None, None, None, None, Some(config)).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("ExternalSnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let snapshot_index =
+        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    executor.fail_snapshot_download_once(&worker_id, snapshot_index);
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(metadata.retry_count, 0);
+    assert_eq!(metadata.last_error, None);
+    let cause = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.as_deref(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(
+        cause.contains("Failed to download snapshot payload"),
+        "{cause}"
+    );
+    let healthy = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(healthy.into_typed::<u32>()?, 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn automatic_and_manual_update_contracts_remain_distinct(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let strict_context = TestContext::new(last_unique_id);
+    let strict = start_with_snapshot_policy(
+        deps,
+        &strict_context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let strict_component = strict
+        .component_dep(&strict_context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let strict_worker = strict
+        .start_agent(&strict_component.id, agent_id.clone())
+        .await?;
+    strict
+        .invoke_and_await_agent(
+            &strict_component,
+            &agent_id,
+            "pre_snapshot_value",
+            data_value!(),
+        )
+        .await?;
+    wait_for_snapshot_after(&strict, &strict_worker, OplogIndex::INITIAL).await?;
+    let strict_target = strict
+        .update_component(&strict_component.id, "it_agent_update_v2_release")
+        .await?;
+    strict
+        .auto_update_worker(&strict_worker, strict_target.revision, false)
+        .await?;
+    let automatic_metadata = wait_for_update_counts(&strict, &strict_worker, (0, 1, 0)).await?;
+    assert_eq!(
+        automatic_metadata.component_revision,
+        strict_target.revision
+    );
+    let automatic_success = automatic_metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::SuccessfulUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("automatic update must complete");
+    assert!(automatic_success.snapshot_assisted_details.is_some());
+    drop(strict);
+
+    let manual_context = TestContext::new(last_unique_id);
+    let manual = start(deps, &manual_context).await?;
+    let mut http_server = TestHttpServer::start().await;
+    let manual_component = manual
+        .component_dep(&manual_context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let manual_worker = manual
+        .start_agent_with(
+            &manual_component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let manual_target = manual
+        .update_component(&manual_component.id, "it_agent_update_v2_release")
+        .await?;
+    let mut control = http_server.f1_control(700).await;
+    let manual_clone = manual.clone();
+    let component_clone = manual_component.clone();
+    let agent_clone = agent_id.clone();
+    let invocation = spawn(async move {
+        manual_clone
+            .invoke_and_await_agent(
+                &component_clone,
+                &agent_clone,
+                "blocking_stable",
+                data_value!(700u64),
+            )
+            .await
+    });
+    control.await_reached().await;
+    manual
+        .manual_update_worker(&manual_worker, manual_target.revision, false)
+        .await?;
+    let pending = wait_for_update_counts(&manual, &manual_worker, (1, 0, 0)).await?;
+    assert_eq!(pending.component_revision, manual_component.revision);
+    assert!(!invocation.is_finished());
+    control.resume();
+    assert_eq!(invocation.await??.into_typed::<u32>()?, 100);
+    manual
+        .wait_for_component_revision(
+            &manual_worker,
+            manual_target.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+    assert_eq!(
+        update_counts(&manual.get_worker_metadata(&manual_worker).await?),
+        (0, 1, 0)
+    );
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let mut http_server = TestHttpServer::start().await;
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+
+    let mut control = http_server.f1_control(901).await;
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let invocation = spawn(async move {
+        executor_clone
+            .invoke_and_await_agent(
+                &component_clone,
+                &agent_id_clone,
+                "blocking_stable",
+                data_value!(901u64),
+            )
+            .await
+    });
+    control.await_reached().await;
+    let executor_clone = executor.clone();
+    let worker_id_clone = worker_id.clone();
+    let interrupt = spawn(async move { executor_clone.interrupt(&worker_id_clone).await });
+    control.resume();
+    interrupt.await??;
+    let _ = invocation.await?;
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+    let assisted = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, assisted.revision, true)
+        .await?;
+    let pending = wait_for_update_counts(&executor, &worker_id, (1, 0, 0)).await?;
+    assert_eq!(pending.component_revision, component.revision);
+    drop(executor);
+
+    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
+    executor.resume(&worker_id, true).await?;
+    executor
+        .wait_for_component_revision(&worker_id, assisted.revision, Duration::from_secs(30))
+        .await?;
+    assert_eq!(
+        update_counts(&executor.get_worker_metadata(&worker_id).await?),
+        (0, 1, 0)
+    );
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+
+    let automatic_without_new_snapshot = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, automatic_without_new_snapshot.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            automatic_without_new_snapshot.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+
+    let manual = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, manual.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, manual.revision, Duration::from_secs(30))
+        .await?;
+    let before_snapshot = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .unwrap()
+        .oplog_index;
+    for _ in 0..2 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+            .await?;
+    }
+    wait_for_snapshot_after(&executor, &worker_id, before_snapshot).await?;
+
+    let assisted_again = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, assisted_again.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, assisted_again.revision, Duration::from_secs(30))
+        .await?;
+    assert_eq!(
+        update_counts(&executor.get_worker_metadata(&worker_id).await?),
+        (0, 4, 0)
+    );
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_revert_retries_retained_successful_and_failed_requests(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for succeeds in [true, false] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_snapshot_policy(
+            deps,
+            &context,
+            SnapshotPolicy::EveryNInvocation { count: 3 },
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_update_v1)
+            .store()
+            .await?;
+        let agent_id = agent_id!("SnapshotUpdateTest");
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+        for _ in 0..2 {
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+                .await?;
+        }
+        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+        if !succeeds {
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "pre_snapshot_value", data_value!())
+                .await?;
+        }
+        let target = executor
+            .update_component(&component.id, "it_agent_update_v2_release")
+            .await?;
+        executor
+            .auto_update_worker(&worker_id, target.revision, false)
+            .await?;
+        let expected = if succeeds { (0, 1, 0) } else { (0, 0, 1) };
+        wait_for_update_counts(&executor, &worker_id, expected).await?;
+        let pending_index = executor
+            .get_oplog(&worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .find_map(|entry| {
+                matches!(entry.entry, PublicOplogEntry::PendingUpdate(_))
+                    .then_some(entry.oplog_index)
+            })
+            .unwrap();
+        executor
+            .revert(
+                &worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: pending_index,
+                }),
+            )
+            .await?;
+        executor.resume(&worker_id, true).await?;
+        let retried = wait_for_update_counts(&executor, &worker_id, expected).await?;
+        assert_eq!(
+            retried.component_revision,
+            if succeeds {
+                target.revision
+            } else {
+                component.revision
+            }
+        );
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                .count(),
+            0
+        );
+    }
     Ok(())
 }
 
@@ -1070,7 +2241,7 @@ async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cac
     Ok(())
 }
 
-async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
+async fn assert_promoted_automatic_snapshot_load_failure_retries_required_baseline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     agent_update_v1: &PrecompiledComponent,
@@ -1173,7 +2344,7 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
         .await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    assert_eq!(replay_revision.into_typed::<u32>()?, 0);
+    assert_eq!(replay_revision.into_typed::<u32>()?, 1);
     assert_eq!(revision_two_only.into_typed::<u32>()?, 2);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
@@ -1184,13 +2355,13 @@ async fn assert_automatic_snapshot_load_failure_recreates_replay_context(
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn automatic_snapshot_invalid_entry_fallback_recreates_replay_context(
+async fn automatic_snapshot_invalid_entry_retries_promoted_baseline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    assert_automatic_snapshot_load_failure_recreates_replay_context(
+    assert_promoted_automatic_snapshot_load_failure_retries_required_baseline(
         last_unique_id,
         deps,
         agent_update_v1,
@@ -1202,13 +2373,13 @@ async fn automatic_snapshot_invalid_entry_fallback_recreates_replay_context(
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn automatic_snapshot_download_failure_recreates_replay_context(
+async fn automatic_snapshot_download_failure_retries_promoted_baseline(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    assert_automatic_snapshot_load_failure_recreates_replay_context(
+    assert_promoted_automatic_snapshot_load_failure_retries_required_baseline(
         last_unique_id,
         deps,
         agent_update_v1,
@@ -1220,7 +2391,7 @@ async fn automatic_snapshot_download_failure_recreates_replay_context(
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn failed_snapshot_load_during_auto_update_reuses_healthy_periodic_snapshot(
+async fn automatic_update_does_not_fallback_after_selected_snapshot_is_rejected(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
@@ -1288,11 +2459,23 @@ async fn failed_snapshot_load_during_auto_update_reuses_healthy_periodic_snapsho
     let revision_four = executor
         .update_component(&component.id, "it_agent_update_v4_release")
         .await?;
-    let mut events = executor.capture_output(&worker_id).await?;
     executor
         .auto_update_worker(&worker_id, revision_four.revision, false)
         .await?;
-    assert_snapshot_recovery_failed(&mut events, "Invalid snapshot - simulating failure").await;
+    let failed = wait_for_update_counts(&executor, &worker_id, (0, 1, 1)).await?;
+    let assisted_failure = failed
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update)
+                if update.target_revision == revision_four.revision =>
+            {
+                update.snapshot_assisted_details.as_ref()
+            }
+            _ => None,
+        })
+        .expect("selected snapshot rejection must record assisted failure provenance");
+    assert!(assisted_failure.ineligibility_reason.is_none());
 
     let loaded_snapshot_revision = executor
         .invoke_and_await_agent(
@@ -1304,7 +2487,8 @@ async fn failed_snapshot_load_during_auto_update_reuses_healthy_periodic_snapsho
         .await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    // The target's rejection of the manual baseline does not invalidate the old revision's snapshot.
+    // Once Automatic selects the periodic snapshot, target rejection fails that update without
+    // falling back to full replay or an older snapshot. The source remains healthy.
     assert_eq!(loaded_snapshot_revision.into_typed::<u32>()?, 2);
     assert_eq!(metadata.component_revision, revision_two.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 1));

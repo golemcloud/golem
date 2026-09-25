@@ -519,6 +519,9 @@ async fn cancellation_during_capable_attachment_activation_rolls_back_the_batch(
             crate::durable_host::PendingReplayToLive {
                 replay_target: OplogIndex::from_u64(9),
                 role: crate::durable_host::replay_state::ReplayToLiveRole::NonPrimary,
+                local_continuation: true,
+                replay_state: None,
+                snapshot_assisted_finalization: None,
                 replaying_incomplete_entity: true,
                 tool_entity: true,
                 tool_operation: Some(operation),

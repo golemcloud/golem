@@ -544,6 +544,7 @@ message UpdateDescription {
   oneof description {
     golem.common.Empty auto_update = 1;
     SnapshotBasedUpdateParameters snapshot_based = 2;
+    golem.common.Empty snapshot_assisted_automatic = 3;
   }
 }
 
@@ -558,12 +559,33 @@ message SuccessfulUpdateParameters {
   uint64 target_revision = 2;
   uint64 new_component_size = 3;
   repeated PluginInstallationDescription new_active_plugins = 10;
+  optional SnapshotAssistedUpdateDetails snapshot_assisted_details = 11;
+}
+
+message SnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_update_epoch = 3;
+  uint64 snapshot_index = 4;
+  uint64 replay_start = 5;
+  uint64 replay_end = 6;
 }
 
 message FailedUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 target_revision = 2;
   optional string details = 3;
+  optional FailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 4;
+}
+
+message FailedSnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_update_epoch = 3;
+  optional uint64 snapshot_index = 4;
+  optional uint64 replay_start = 5;
+  optional uint64 replay_end = 6;
+  optional string ineligibility_reason = 7;
 }
 
 message GrowMemoryParameters {

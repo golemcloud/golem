@@ -1288,6 +1288,78 @@ async fn replay_finished_is_withheld_while_reconstruction_settles() {
 }
 
 #[test]
+async fn prepared_primary_transition_withholds_tail_delivery_until_publication() {
+    let replay = replay_state_over(vec![noop(), noop()]).await;
+    let linear_memory = replay_linear_memory();
+
+    let outcome = replay
+        .prepare_replay_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+        .await
+        .unwrap();
+    let ReplayToLiveOutcome::Live { replay_target } = outcome else {
+        panic!("fixed replay target unexpectedly resumed");
+    };
+    assert!(replay.is_live());
+    assert!(!replay.is_live_published());
+
+    let tail_delivery = replay.await_live_publication(None);
+    tokio::pin!(tail_delivery);
+    assert!(
+        futures::poll!(tail_delivery.as_mut()).is_pending(),
+        "markerless delivery must not resume at an unpublished replay tail"
+    );
+
+    replay.publish_primary_live(replay_target).await.unwrap();
+    tail_delivery.await.unwrap();
+    assert!(replay.is_live_published());
+}
+
+#[test]
+async fn assisted_primary_transition_waits_for_success_before_publication() {
+    let replay = replay_state_over(vec![noop(), noop()]).await;
+    let linear_memory = replay_linear_memory();
+    let ReplayToLiveOutcome::Live { replay_target } = replay
+        .prepare_replay_to_live(&linear_memory, ReplayToLiveRole::PrimaryAgent)
+        .await
+        .unwrap()
+    else {
+        panic!("fixed replay target unexpectedly resumed");
+    };
+    let gate = Arc::new(crate::durable_host::SnapshotAssistedFinalizationGate::new());
+    gate.begin_finalization();
+    let publication = tokio::spawn({
+        let replay = replay.clone();
+        let gate = gate.clone();
+        async move {
+            crate::durable_host::PendingReplayToLive {
+                replay_target,
+                role: ReplayToLiveRole::PrimaryAgent,
+                local_continuation: false,
+                replay_state: Some(replay),
+                snapshot_assisted_finalization: Some(gate),
+                replaying_incomplete_entity: false,
+                tool_entity: false,
+                tool_operation: None,
+                local_live_tail: Arc::new(AtomicBool::new(false)),
+            }
+            .finish()
+            .await
+        }
+    });
+
+    tokio::task::yield_now().await;
+    assert!(!publication.is_finished());
+    assert!(!replay.is_live_published());
+
+    gate.finish_finalization();
+    assert_eq!(
+        publication.await.unwrap().unwrap(),
+        crate::durable_host::FinishReplayToLive::Live
+    );
+    assert!(replay.is_live_published());
+}
+
+#[test]
 async fn primary_transition_releases_an_incomplete_reconstruction_fence() {
     let parent = OplogIndex::from_u64(1);
     let (start, identity) = rejected_tool_reconstruction_start(parent);
@@ -1493,6 +1565,10 @@ async fn old_settler_cannot_publish_a_grown_target() {
         .unwrap();
     assert_eq!(current_publication, LivePublicationOutcome::Published);
     assert_eq!(current_memory.reconciliation_grant_bytes(1), 1);
+    replay
+        .publish_primary_live(second_target)
+        .await
+        .expect("current settler must be able to publish the grown target");
     assert!(replay.is_live_published());
 }
 
@@ -7574,6 +7650,9 @@ async fn missing_scope_recovery_settles_then_switches_live_over_benign_suffix() 
         ReplayToLiveOutcome::Live { .. }
     ));
     assert!(rs.is_live());
+    rs.publish_primary_live(replay_target)
+        .await
+        .expect("settled missing-scope recovery must publish live");
     assert!(rs.is_live_published());
 }
 

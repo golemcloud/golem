@@ -2240,16 +2240,36 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 mime_type: "application/octet-stream".to_string(),
             }),
         }),
+        PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            description: PublicUpdateDescription::Automatic(Empty {}),
+        }),
+        PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            description: PublicUpdateDescription::SnapshotAssistedAutomatic(
+                SnapshotAssistedAutomaticUpdateParameters {},
+            ),
+        }),
         PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
             new_component_size: 30,
             new_active_plugins: BTreeSet::from_iter([plugin(1)]),
+            snapshot_assisted_details: Some(PublicSnapshotAssistedUpdateDetails {
+                pending_update_index: OplogIndex::from_u64(3),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_update_epoch: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(2),
+                replay_range: OplogRegion::from_range(3..=4),
+            }),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(3).unwrap(),
             details: None,
+            snapshot_assisted_details: None,
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
             timestamp: timestamp(),
@@ -3635,6 +3655,9 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         target_revision,
                     )
                     .expect("generated revision should be valid"),
+                    pending_update_index: None,
+                    mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                    snapshot_assisted_details: None,
                 },
             )
         }),
@@ -3646,6 +3669,9 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         target_revision,
                     )
                     .expect("generated revision should be valid"),
+                    pending_update_index: None,
+                    mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                    snapshot_assisted_details: None,
                 },
             )
         }),
@@ -3663,6 +3689,9 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         )
                         .expect("generated revision should be valid"),
                         details,
+                        pending_update_index: None,
+                        mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                        snapshot_assisted_details: None,
                     },
                 )
             }),

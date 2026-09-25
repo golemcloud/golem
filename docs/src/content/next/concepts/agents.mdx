@@ -183,21 +183,27 @@ When a new version of a **component** is created (by deploying a new version of 
 
 Newly created agents are created using the latest version of the component. This also means that for **ephemeral agents** each invocation always runs using the latest version of the component.
 
-There are two ways to update an existing agents to a new version of a component, and the update operation (triggered through the REST API, CLI, Console or host interface) can choose from either of them. These are the following:
+There are two ways to update an existing agent to a new version of a component, and the update operation (triggered through the REST API, CLI, Console or host interface) can choose between them:
 
-- **Automatic update**. Golem tries to automatically update the agent to the new version, and may fail to do so.
+- **Automatic update**. Golem automatically uses the latest eligible periodic snapshot when one is available, otherwise it replays from the authoritative recovery baseline. Either path may fail if the target diverges.
 - **Manual update**. For manual update the component author must provide a pair of save/load functions that are used to migrate the state of the agent from the old version to the new version.
 
 #### Automatic update details
 
-Automatic update can be initiated any time, even while the agent is processing an invocation. The executor interrupts the agent, reloads it using the new component version and then replays the agent's oplog from the beginning of time. If the replay succeeds with the new codebase, the agent continues running from where it was interrupted, but now on the new component version. If the replay fails, the agent gets reverted to the original component version and continues running with that.
+Automatic update can be initiated any time, even while the agent is processing an invocation. When the request is folded from the operation log, Golem selects the newest eligible periodic snapshot recorded before it in the active source revision's current update epoch. If one is selected, the target loads it and replays the surviving history after it. If none is eligible, the target instead replays all retained history from the authoritative recovery baseline. Work committed after the request and an in-flight invocation are preserved because replay continues through the history committed before source execution stops.
+
+If replay succeeds with the new codebase, the agent continues running from where it was interrupted, but now on the new component version. If replay fails, the agent gets reverted to the original component version and continues running with that.
 
 How can the replay fail? Golem performs **divergence detection** during replay. The following situations are considered divergences:
 
 - **Invocation result divergence**. If the new component produces a different result value for a past invocation than the old one
 - **Side effect divergence**. If the new component would perform different side effects (such as HTTP requests, generating random numbers, accessing the current time, etc) than the ones that have been recorded.
 
-Because of these strict requirements, automatic update is only useful when the changed code is minor or it affects code paths that haven't run yet or did not exist at all before.
+Because of these strict requirements, automatic update is useful when the target remains compatible with the history it must replay. Periodic snapshots can reduce that history to a recent suffix, but do not weaken validation. Once a snapshot has been selected, a snapshot load or suffix-replay failure records a failed update and restores the healthy source revision; Golem does not try an older snapshot or switch to full replay after the failure.
+
+After assisted success, the selected snapshot becomes the authoritative recovery baseline. Later recovery may use a newer periodic snapshot, but if that optimization is rejected it falls back to the promoted snapshot and never to history before it. This bounds the **historical replay window**, not wall-clock update time: an old latest snapshot, a long suffix, loading, or target compilation can still take time.
+
+Waiting for the update waits for a terminal success or failure, not merely for the request to be queued. Reverting away an outcome while retaining its request makes the same request pending and retryable again.
 
 #### Manual update details
 

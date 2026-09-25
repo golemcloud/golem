@@ -74,7 +74,9 @@ where
         | OplogEntry::BeginAtomicRegion { .. }
         | OplogEntry::EndAtomicRegion { .. }
         | OplogEntry::PendingUpdate {
-            description: UpdateDescription::Automatic { .. },
+            description:
+                UpdateDescription::Automatic { .. }
+                | UpdateDescription::SnapshotAssistedAutomatic { .. },
             ..
         }
         | OplogEntry::SuccessfulUpdate { .. }
@@ -203,6 +205,13 @@ mod tests {
             }
         }
         let mut entries = vec![
+            OplogEntry::Snapshot {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                data: external(),
+                mime_type: "application/octet-stream".to_string(),
+                active_cards: Vec::new(),
+                wallet_generation: 0,
+            },
             OplogEntry::stream_registered(None, external()),
             OplogEntry::stream_items(None, external()),
             OplogEntry::stream_end(None, external()),

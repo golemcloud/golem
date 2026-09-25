@@ -18,6 +18,7 @@ use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
+use crate::base_model::regions::OplogRegion;
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::tool::{SerializableToolInvocationResult, SerializableToolRpcError};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
@@ -661,12 +662,42 @@ pub struct SnapshotBasedUpdateParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+pub struct SnapshotAssistedAutomaticUpdateParameters {}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicUpdateDescription {
     Automatic(Empty),
+    SnapshotAssistedAutomatic(SnapshotAssistedAutomaticUpdateParameters),
     SnapshotBased(SnapshotBasedUpdateParameters),
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_update_epoch: OplogIndex,
+    pub snapshot_index: OplogIndex,
+    pub replay_range: OplogRegion,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicFailedSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_update_epoch: OplogIndex,
+    pub snapshot_index: Option<OplogIndex>,
+    pub replay_range: Option<OplogRegion>,
+    pub ineligibility_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]

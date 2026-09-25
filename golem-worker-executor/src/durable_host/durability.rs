@@ -19,7 +19,9 @@ use crate::durable_host::concurrent::{
     self, DropEvent, Resolution, ResolutionOutcome, finish_prepared_access_to_live,
 };
 use crate::durable_host::replay_state::{CustomStartClaimOutcome, ReplayState, ReplayToLiveRole};
-use crate::durable_host::{BeginReplayToLive, DurableWorkerCtx, PublicDurableWorkerState};
+use crate::durable_host::{
+    BeginReplayToLive, DurableWorkerCtx, PublicDurableWorkerState, SnapshotAssistedFinalizationGate,
+};
 use crate::metrics::wasm::{
     record_custom_invocation_scope_open, record_host_function_call, record_in_function_retry,
 };
@@ -87,6 +89,7 @@ struct CustomStoreAdmission<Ctx: WorkerCtx> {
     tool_operation: Option<crate::durable_host::tool::operation::OwnerToolOperation>,
     local_live_tail: Arc<AtomicBool>,
     public_state: PublicDurableWorkerState<Ctx>,
+    snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
 }
 
 impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
@@ -117,6 +120,7 @@ impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
                     replay_state,
                     self.role(),
                     self.local_live_tail.clone(),
+                    self.snapshot_assisted_finalization.clone(),
                 )
                 .await?
                 {
@@ -135,6 +139,7 @@ impl<Ctx: WorkerCtx> CustomStoreAdmission<Ctx> {
                     self.tool_operation.clone(),
                     &self.public_state,
                     linear_memory,
+                    replay_state,
                     self.role(),
                     self.local_live_tail.clone(),
                     replay_state.replay_target(),
@@ -1795,6 +1800,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                     tool_operation: ctx.entity_tool_operation(),
                     local_live_tail: ctx.state.local_live_tail(),
                     public_state: ctx.public_state.clone(),
+                    snapshot_assisted_finalization: ctx
+                        .state
+                        .snapshot_assisted_finalization
+                        .clone(),
                 },
                 ctx.state.oplog.clone(),
                 ctx.public_state.worker(),

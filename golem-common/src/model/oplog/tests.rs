@@ -45,11 +45,12 @@ use crate::model::oplog::{
     OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
-    PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicLocalSpanData,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
-    PublicQueuedCardEvent, PublicSnapshotData, PublicSpanData, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue,
+    PublicEntityInvocationContext, PublicEntityInvocationOperation,
+    PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicQueuedCardEvent,
+    PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanData,
+    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
+    QueuedCardEvent, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -929,6 +930,13 @@ fn successful_update_serialization_poem_serde_equivalence() {
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
         }]),
+        snapshot_assisted_details: Some(PublicSnapshotAssistedUpdateDetails {
+            pending_update_index: OplogIndex::from_u64(5),
+            source_component_revision: ComponentRevision::new(1).unwrap(),
+            source_update_epoch: OplogIndex::INITIAL,
+            snapshot_index: OplogIndex::from_u64(3),
+            replay_range: OplogRegion::from_range(4..=8),
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -943,6 +951,14 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: Some("test".to_string()),
+        snapshot_assisted_details: Some(PublicFailedSnapshotAssistedUpdateDetails {
+            pending_update_index: OplogIndex::from_u64(5),
+            source_component_revision: ComponentRevision::new(1).unwrap(),
+            source_update_epoch: OplogIndex::INITIAL,
+            snapshot_index: Some(OplogIndex::from_u64(3)),
+            replay_range: Some(OplogRegion::from_range(4..=8)),
+            ineligibility_reason: None,
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -957,6 +973,7 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: None,
+        snapshot_assisted_details: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

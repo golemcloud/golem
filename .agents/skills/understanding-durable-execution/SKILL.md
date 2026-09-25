@@ -284,8 +284,9 @@ underlying classification. Infrastructure failures do not advance the agent's se
 they remain `Retrying` without a limit and retry on the next demand (invoke, resume, scheduler
 activation, or shard reassignment), rather than keeping an executor resident for a scheduled retry.
 Invalid components, exports, snapshot baselines, replay divergence, and other permanent failures are terminal.
-An authoritative manual-update snapshot that cannot be loaded is terminal even when the immediate
-cause is a payload download failure, because recovery has no compatible replay fallback. The
+An authoritative manual-update or promoted snapshot-assisted baseline that cannot be loaded is
+terminal even when the immediate cause is a payload download failure, because recovery has no
+compatible replay fallback. The
 ordinary invocation trap path commits `Error { kind: Invocation, .. }`. The status fold exposes the
 kind with the failed/retrying status, so metadata and invocation admission agree after unload or
 reassignment. A later startup appends `RecoverySucceeded` only when it fully completes
@@ -611,7 +612,9 @@ oplog entries (`DurableCallSession` created with `persisted: false`; `durability
 is exactly `snapshotting_mode`).
 
 Which history the new instance replays is decided in `Worker` construction (`worker/mod.rs`,
-`component_version_for_replay`): the last manual-update snapshot is the baseline; a
+`component_version_for_replay`): the last authoritative snapshot is the baseline. It is either a
+manual-update payload or the periodic snapshot promoted by a successful snapshot-assisted
+automatic update. A
 revision-matching automatic snapshot overrides it and skips `INITIAL+1..=snapshot_idx`, but only
 while no update is pending and its index is newer than the fingerprint-scoped persistent
 `rejected_periodic_snapshot_through` watermark and the startup attempt's temporary unavailable
@@ -620,14 +623,24 @@ watermark. `prepare_instance`
 
 - `SnapshotBased` — the save hook already ran and the payload is already recorded; the store must
   already be live, and `finalize_pending_snapshot_update` loads it into the new revision.
-- `Automatic` — `try_load_snapshot` loads the baseline, then `resume_replay` replays the remaining
-  old history against the new component; success is recorded during that replay. If replay fails
-  while the update is still pending, `on_worker_update_failed` appends `FailedUpdate` and returns
-  `RetryDecision::Immediate` so the worker rebuilds on the old revision.
+- Public `Automatic` admission records an internal snapshot-assisted candidate plus the current
+  rejection/unavailability watermark. While folding that exact `PendingUpdate` (`P`), the reducer
+  selects the newest eligible periodic snapshot `S` strictly before `P` in the active source
+  revision `R` and source update epoch `E`. If none is eligible, the derived pending kind is
+  `Automatic`: `try_load_snapshot` loads the authoritative baseline, then `resume_replay` replays
+  the remaining old history against the new component. If `S` is eligible, the derived internal
+  kind is `SnapshotAssistedAutomatic`: the target loads required `S`, skips only through `S`, and replays the surviving
+  committed stopped-source suffix; that tail is not fixed at `P`. Missing selection, stale `R/E`,
+  load failure, replay divergence, trap/exit, or final-result mismatch
+  commits one `FailedUpdate` and reconstructs the healthy source without periodic-snapshot
+  quarantine, an application `Error`, or retry-budget charge. It never tries another snapshot or
+  switches to full target replay after selection. Genuine interruption retains `P`. Both strategies
+  are reported publicly as `Automatic`; assisted provenance identifies the selected strategy.
 - No pending update — `try_load_snapshot`; an automatic snapshot load failure or divergent replay
   suffix rejects that snapshot through its index and returns `RetryDecision::Immediate`. The outer
   loop recreates the entire Store, component metadata, revision, and plugin context from the
-  authoritative manual-update baseline, never replaying pre-migration history. Only after this
+  authoritative manual-update or promoted assisted baseline, never replaying pre-migration
+  history. Only after this
   fallback succeeds, and before readiness is published, is the monotonic rejection watermark
   persisted under the worker's `AgentFingerprint`.
 
@@ -635,6 +648,17 @@ An automatic snapshot payload-download failure instead records an in-memory unav
 for that startup attempt, so the retry skips the payload without permanently rejecting it; a
 successful preparation clears the temporary watermark. A manual-update snapshot cannot be skipped:
 its load failure is terminal, wrapped as failure to resume while retaining the underlying cause.
+The same is true of a periodic `S` promoted by an assisted `SuccessfulUpdate`: optional later
+snapshot rejection falls back to promoted `S`, never to history before it.
+
+Assisted success is finalized through the existing replay-to-live settlement boundary. `U` is
+committed after historical invocation results and entity reconstruction validate but before target
+live effects or a target periodic snapshot can run. A mutable invocation may therefore span
+`Started < P < U < Finished`: the update completes without waiting for that invocation to finish,
+and the invocation continues on the target. `U` carries `P/R/E/S` and the actual replay range, so
+both status and skipped-region folds derive promotion from the outcome itself. Promotion skips only
+`INITIAL.next()..=S`, preserves the suffix, switches active Wasm metadata to the target, and keeps
+source revision `R` as the historical replay metadata used when reconstructing the suffix.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
 open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are
@@ -643,18 +667,20 @@ revision-scoped and ignored once the revision changes.
 Resetting a cursor is not recreating an instance: component metadata, revision and plugin context
 come from instance creation. When history or provenance changes, go through the outer loop.
 
-A revert may cross a completed snapshot-based update only when its cut is before that update's
-`PendingUpdate`, so both the pending record and its `SuccessfulUpdate` are deleted together. The
-status fold then removes that migration's skipped-history contribution and derives the surviving
-component revision and snapshot baseline normally. A cut that keeps `PendingUpdate` but deletes
-its outcome is rejected. A pending update without an outcome may be either retained or removed
-entirely; when retained, its component and snapshot payload are included in preflight. Revert
+A revert may cross a completed manual snapshot-based update only when its cut is before that
+update's `PendingUpdate`, so both the pending record and its `SuccessfulUpdate` are deleted
+together. Assisted automatic updates follow automatic-update semantics instead: deleting a
+successful or failed outcome while retaining `P` leaves the same frozen request pending and
+retryable. A cut retaining assisted `U` retains promoted `S`; removing `U` removes only that
+promotion contribution. A pending update without an outcome may be either retained or removed
+entirely; when retained, its component and required snapshot payload are included in preflight.
+Revert
 validation reconstructs skip provenance: removing a migration
 baseline must not remove overlapping `Jump` or earlier `Revert` regions, and the resulting mask is
 also used to detect durable constructs spanning the cut. Before committing, the executor verifies
-that the restored component, retained manual snapshot payload, replay metadata and initial files
-are available. This is input preflight, not speculative replay; a later replay failure does not
-undo the committed `Revert`.
+that the restored component, retained manual or promoted periodic snapshot payload, replay metadata
+and initial files are available. This is input preflight, not speculative replay; a later replay
+failure does not undo the committed `Revert`.
 
 ## Concurrency and guest completion delivery
 

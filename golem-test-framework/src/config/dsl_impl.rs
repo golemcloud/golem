@@ -794,6 +794,31 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(())
     }
 
+    async fn snapshot_assisted_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .update_worker(
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
+                &UpdateWorkerRequest {
+                    mode: AgentUpdateMode::Automatic,
+                    target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn manual_update_worker(
         &self,
         agent_id: &AgentId,

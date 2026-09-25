@@ -116,6 +116,18 @@ fn update_decision(status: &AgentStatus, mode: UpdateMode, disable_wakeup: bool)
     }
 }
 
+fn has_duplicate_pending_update(
+    status: &golem_common::model::AgentStatusRecord,
+    target_revision: ComponentRevision,
+) -> bool {
+    status.pending_updates.iter().any(|update| {
+        matches!(
+            update.kind,
+            PendingUpdateKind::Automatic | PendingUpdateKind::SnapshotAssistedAutomatic { .. }
+        ) && update.target_revision == target_revision
+    })
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(super) async fn get_existing_suspended<T>(
         deps: &T,
@@ -314,11 +326,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // A worker's durable agent mode selects its oplog namespace and cannot change across
         // component revisions. Unknown revisions are still queued so the update loop records the
-        // canonical FailedUpdate entry.
-        if let Ok(target_component_metadata) = deps
-            .component_service()
-            .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
-            .await
+        // canonical FailedUpdate entry. Automatic updates defer every target lookup until their
+        // reducer-selected replay strategy has passed queue-head validation.
+        if mode != UpdateMode::Automatic
+            && let Ok(target_component_metadata) = deps
+                .component_service()
+                .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
+                .await
             && let Ok(agent_id) = ParsedAgentId::parse(
                 &owned_agent_id.agent_id.agent_id,
                 &target_component_metadata.metadata,
@@ -345,15 +359,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         match mode {
             UpdateMode::Automatic => {
-                if metadata
-                    .last_known_status
-                    .pending_updates
-                    .iter()
-                    .any(|update| {
-                        update.kind == PendingUpdateKind::Automatic
-                            && update.target_revision == target_revision
-                    })
-                {
+                if has_duplicate_pending_update(&metadata.last_known_status, target_revision) {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
                     ));
@@ -382,9 +388,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             (UpdateMode::Automatic, decision) => {
                 debug!("Enqueuing update");
-                worker
-                    .enqueue_update(UpdateDescription::Automatic { target_revision })
-                    .await?;
+                let description = UpdateDescription::SnapshotAssistedAutomatic {
+                    target_revision,
+                    snapshot_exclusion_through: worker
+                        .snapshot_exclusion_through_at_admission()
+                        .await?,
+                };
+                worker.enqueue_update(description).await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -576,6 +586,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::{
+        AgentStatusRecord, PendingUpdateRef, SnapshotAssistedUpdateSelection,
+    };
     use test_r::test;
 
     const STATUSES: [AgentStatus; 7] = [
@@ -587,6 +600,35 @@ mod tests {
         AgentStatus::Failed,
         AgentStatus::Exited,
     ];
+
+    #[test]
+    fn automatic_update_duplicates_are_kind_scoped() {
+        let target_revision = ComponentRevision::new(3).unwrap();
+        let mut status = AgentStatusRecord::default();
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(5),
+            target_revision,
+            kind: PendingUpdateKind::Automatic,
+        });
+
+        assert!(has_duplicate_pending_update(&status, target_revision));
+
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(6),
+            target_revision,
+            kind: PendingUpdateKind::SnapshotAssistedAutomatic {
+                source_component_revision: ComponentRevision::new(2).unwrap(),
+                source_update_epoch: OplogIndex::INITIAL,
+                selection: SnapshotAssistedUpdateSelection::Selected {
+                    snapshot_index: OplogIndex::from_u64(4),
+                    snapshot_revision: ComponentRevision::new(2).unwrap(),
+                },
+            },
+        });
+        assert!(has_duplicate_pending_update(&status, target_revision));
+    }
 
     #[test]
     fn interrupt_policy_covers_every_status() {

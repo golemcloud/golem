@@ -295,10 +295,20 @@ pub(all) struct ExternalToolResultParameters {
   result : Result[ToolInvocationResult, @types.ToolRpcError]
 } derive(Eq, @debug.Debug)
 
+pub(all) struct FailedSnapshotAssistedUpdateDetails {
+  pending_update_index : UInt64
+  source_component_revision : UInt64
+  source_update_epoch : UInt64
+  snapshot_index : UInt64?
+  replay_range : OplogRegion?
+  ineligibility_reason : String?
+} derive(Eq, @debug.Debug)
+
 pub(all) struct FailedUpdateParameters {
   timestamp : @system-clock.Instant
   target_revision : UInt64
   details : String?
+  snapshot_assisted_details : FailedSnapshotAssistedUpdateDetails?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct FallibleResultParameters {
@@ -720,6 +730,11 @@ pub(all) struct RawPendingUpdateParameters {
   description : RawUpdateDescription
 } derive(Eq, @debug.Debug)
 
+pub(all) struct RawSnapshotAssistedAutomaticUpdate {
+  target_revision : UInt64
+  snapshot_exclusion_through : UInt64
+} derive(Eq, @debug.Debug)
+
 pub(all) struct RawSnapshotBasedUpdate {
   target_revision : UInt64
   payload : OplogPayload
@@ -749,10 +764,12 @@ pub(all) struct RawSuccessfulUpdateParameters {
   target_revision : UInt64
   new_component_size : UInt64
   new_active_plugins : Array[EnvironmentPluginGrantId]
+  snapshot_assisted_details : SnapshotAssistedUpdateDetails?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum RawUpdateDescription {
   Automatic(UInt64)
+  SnapshotAssistedAutomatic(RawSnapshotAssistedAutomaticUpdate)
   SnapshotBased(RawSnapshotBasedUpdate)
 } derive(Eq, @debug.Debug)
 
@@ -806,6 +823,14 @@ pub(all) struct SetSpanAttributeParameters {
   value : @context.AttributeValue
 } derive(Eq, @debug.Debug)
 
+pub(all) struct SnapshotAssistedUpdateDetails {
+  pending_update_index : UInt64
+  source_component_revision : UInt64
+  source_update_epoch : UInt64
+  snapshot_index : UInt64
+  replay_range : OplogRegion
+} derive(Eq, @debug.Debug)
+
 pub(all) struct SnapshotData {
   data : FixedArray[Byte]
   mime_type : String
@@ -853,6 +878,7 @@ pub(all) struct SuccessfulUpdateParameters {
   target_revision : UInt64
   new_component_size : UInt64
   new_active_plugins : Array[PluginInstallationDescription]
+  snapshot_assisted_details : SnapshotAssistedUpdateDetails?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct Timestamp {
@@ -865,6 +891,7 @@ pub(all) struct ToolInvocationResult {
 
 pub(all) enum UpdateDescription {
   AutoUpdate
+  SnapshotAssistedAutomatic
   SnapshotBased(@host.Snapshot)
 } derive(Eq, @debug.Debug)
 

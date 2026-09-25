@@ -446,6 +446,8 @@ interface oplog {
     variant update-description {
         /// Automatic update by replaying the oplog on the new version
         auto-update,
+        /// Automatic update assisted by the latest eligible periodic snapshot
+        snapshot-assisted-automatic,
         /// Custom update by loading a given snapshot on the new version
         snapshot-based(snapshot)
     }
@@ -460,13 +462,32 @@ interface oplog {
         timestamp: datetime,
         target-revision: component-revision,
         new-component-size: u64,
-        new-active-plugins: list<plugin-installation-description>
+        new-active-plugins: list<plugin-installation-description>,
+        snapshot-assisted-details: option<snapshot-assisted-update-details>
+    }
+
+    record snapshot-assisted-update-details {
+        pending-update-index: oplog-index,
+        source-component-revision: component-revision,
+        source-update-epoch: oplog-index,
+        snapshot-index: oplog-index,
+        replay-range: oplog-region,
     }
 
     record failed-update-parameters {
         timestamp: datetime,
         target-revision: component-revision,
-        details: option<string>
+        details: option<string>,
+        snapshot-assisted-details: option<failed-snapshot-assisted-update-details>,
+    }
+
+    record failed-snapshot-assisted-update-details {
+        pending-update-index: oplog-index,
+        source-component-revision: component-revision,
+        source-update-epoch: oplog-index,
+        snapshot-index: option<oplog-index>,
+        replay-range: option<oplog-region>,
+        ineligibility-reason: option<string>,
     }
 
     record grow-memory-parameters {
@@ -743,8 +764,15 @@ interface oplog {
     variant raw-update-description {
         /// Automatic update by replaying the oplog on the new version
         automatic(component-revision),
+        /// Automatic update assisted by the latest eligible periodic snapshot
+        snapshot-assisted-automatic(raw-snapshot-assisted-automatic-update),
         /// Custom update by loading a given snapshot on the new version
         snapshot-based(raw-snapshot-based-update)
+    }
+
+    record raw-snapshot-assisted-automatic-update {
+        target-revision: component-revision,
+        snapshot-exclusion-through: oplog-index
     }
 
     record raw-snapshot-based-update {
@@ -762,7 +790,8 @@ interface oplog {
         timestamp: datetime,
         target-revision: component-revision,
         new-component-size: u64,
-        new-active-plugins: list<environment-plugin-grant-id>
+        new-active-plugins: list<environment-plugin-grant-id>,
+        snapshot-assisted-details: option<snapshot-assisted-update-details>
     }
 
     record resource-type-id {

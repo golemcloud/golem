@@ -2091,7 +2091,6 @@ impl CursorTx<'_> {
         if owner_tool_operations.commit_if_owner_open(|| {
             self.switch_to_live();
             linear_memory.switch_to_live();
-            self.cursor.publish_live();
         }) {
             LivePublicationOutcome::Published
         } else {
@@ -2443,7 +2442,22 @@ impl ReplayState {
             == ReplayTransitionPhase::Settling as u8
     }
 
+    #[cfg(test)]
     pub(crate) async fn switch_to_live(
+        &self,
+        linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
+        role: ReplayToLiveRole,
+    ) -> Result<ReplayToLiveOutcome, WorkerExecutorError> {
+        let outcome = self.prepare_replay_to_live(linear_memory, role).await?;
+        if role == ReplayToLiveRole::PrimaryAgent
+            && let ReplayToLiveOutcome::Live { replay_target } = outcome
+        {
+            self.publish_primary_live(replay_target).await?;
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) async fn prepare_replay_to_live(
         &self,
         linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
         role: ReplayToLiveRole,
@@ -2457,6 +2471,37 @@ impl ReplayState {
             linear_memory.switch_to_live();
             Ok(ReplayToLiveOutcome::Live { replay_target })
         }
+    }
+
+    pub(crate) async fn publish_primary_live(
+        &self,
+        expected_target: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            state
+                .with_tx(async |tx| {
+                    if tx.cursor.replay_target() != expected_target
+                        || tx.cursor.last_replayed_index() != expected_target
+                    {
+                        return Err(WorkerExecutorError::runtime(
+                            "replay target changed before primary live publication",
+                        ));
+                    }
+                    let phase = tx.cursor.transition_phase.load(Ordering::Acquire);
+                    if phase == ReplayTransitionPhase::Live as u8 {
+                        return Ok(());
+                    }
+                    if phase != ReplayTransitionPhase::Settling as u8 {
+                        return Err(WorkerExecutorError::runtime(
+                            "primary live publication was not prepared",
+                        ));
+                    }
+                    tx.cursor.publish_live();
+                    Ok(())
+                })
+                .await
+        })
+        .await
     }
 
     pub(crate) async fn finish_settling_to_live(
@@ -3389,8 +3434,19 @@ impl ReplayState {
     }
 
     pub fn take_new_replay_events(&self) -> Vec<ReplayEvent> {
+        self.take_new_replay_events_inner(false)
+    }
+
+    pub(crate) fn take_new_replay_events_for_assisted_finalization(&self) -> Vec<ReplayEvent> {
+        self.take_new_replay_events_inner(true)
+    }
+
+    fn take_new_replay_events_inner(
+        &self,
+        allow_replay_finished_before_publication: bool,
+    ) -> Vec<ReplayEvent> {
         let mut pending = self.cursor.pending_replay_events.lock().unwrap();
-        if self.is_live_published() {
+        if self.is_live_published() || allow_replay_finished_before_publication {
             std::mem::take(&mut *pending)
         } else {
             let events = std::mem::take(&mut *pending);
@@ -3403,6 +3459,16 @@ impl ReplayState {
                 }
             }
             ready
+        }
+    }
+
+    pub(crate) fn defer_replay_finished(&self) {
+        let mut pending = self.cursor.pending_replay_events.lock().unwrap();
+        if !pending
+            .iter()
+            .any(|event| matches!(event, ReplayEvent::ReplayFinished))
+        {
+            pending.push(ReplayEvent::ReplayFinished);
         }
     }
 

@@ -2064,6 +2064,64 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         metadata: AgentMetadata,
         last_error_and_retry_count: Option<LastError>,
     ) -> Result<golem::worker::AgentMetadata, WorkerExecutorError> {
+        let update_metadata = |pending: Option<&golem_common::model::PendingUpdateRef>,
+                               successful_details: Option<
+            &golem_common::model::oplog::SnapshotAssistedUpdateDetails,
+        >,
+                               failed_details: Option<
+            &golem_common::model::oplog::FailedSnapshotAssistedUpdateDetails,
+        >| {
+            use golem_common::model::{PendingUpdateKind, SnapshotAssistedUpdateSelection};
+
+            let Some(pending) = pending else {
+                return (None, UpdateMode::Manual as i32, None);
+            };
+            let (mode, mut assisted) = match &pending.kind {
+                PendingUpdateKind::Automatic => (UpdateMode::Automatic, None),
+                PendingUpdateKind::SnapshotBased => (UpdateMode::Manual, None),
+                PendingUpdateKind::SnapshotAssistedAutomatic {
+                    source_component_revision,
+                    source_update_epoch,
+                    selection,
+                } => {
+                    let (snapshot_index, snapshot_revision, ineligibility_reason) = match selection
+                    {
+                        SnapshotAssistedUpdateSelection::Selected {
+                            snapshot_index,
+                            snapshot_revision,
+                        } => (
+                            Some(u64::from(*snapshot_index)),
+                            Some(u64::from(*snapshot_revision)),
+                            None,
+                        ),
+                        SnapshotAssistedUpdateSelection::Ineligible(reason) => {
+                            (None, None, Some(format!("{reason:?}")))
+                        }
+                    };
+                    (
+                        UpdateMode::Automatic,
+                        Some(golem::worker::SnapshotAssistedUpdateMetadata {
+                            source_component_revision: (*source_component_revision).into(),
+                            source_update_epoch: (*source_update_epoch).into(),
+                            snapshot_index,
+                            snapshot_revision,
+                            replay_range: None,
+                            ineligibility_reason,
+                        }),
+                    )
+                }
+            };
+            if let (Some(assisted), Some(details)) = (&mut assisted, successful_details) {
+                assisted.replay_range = Some(details.replay_range.clone().into());
+            }
+            if let (Some(assisted), Some(details)) = (&mut assisted, failed_details) {
+                assisted.snapshot_index = details.snapshot_index.map(Into::into);
+                assisted.replay_range = details.replay_range.clone().map(Into::into);
+                assisted.ineligibility_reason = details.ineligibility_reason.clone();
+            }
+            (Some(pending.oplog_index.into()), mode as i32, assisted)
+        };
+
         let mut updates = Vec::new();
 
         let latest_status = metadata.last_known_status;
@@ -2075,28 +2133,49 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     update: Some(golem::worker::update_record::Update::Pending(
                         golem::worker::PendingUpdate {},
                     )),
+                    pending_update_index: None,
+                    mode: UpdateMode::Manual as i32,
+                    snapshot_assisted_details: None,
                 });
             }
         }
         for pending_update in &latest_status.pending_updates {
+            let (pending_update_index, mode, snapshot_assisted_details) =
+                update_metadata(Some(pending_update), None, None);
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(pending_update.timestamp.into()),
                 target_revision: pending_update.target_revision.into(),
                 update: Some(golem::worker::update_record::Update::Pending(
                     golem::worker::PendingUpdate {},
                 )),
+                pending_update_index,
+                mode,
+                snapshot_assisted_details,
             });
         }
         for successful_update in &latest_status.successful_updates {
+            let (pending_update_index, mode, snapshot_assisted_details) = update_metadata(
+                successful_update.pending_update.as_ref(),
+                successful_update.snapshot_assisted_details.as_ref(),
+                None,
+            );
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(successful_update.timestamp.into()),
                 target_revision: successful_update.target_revision.into(),
                 update: Some(golem::worker::update_record::Update::Successful(
                     golem::worker::SuccessfulUpdate {},
                 )),
+                pending_update_index,
+                mode,
+                snapshot_assisted_details,
             });
         }
         for failed_update in &latest_status.failed_updates {
+            let (pending_update_index, mode, snapshot_assisted_details) = update_metadata(
+                failed_update.pending_update.as_ref(),
+                None,
+                failed_update.snapshot_assisted_details.as_ref(),
+            );
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(failed_update.timestamp.into()),
                 target_revision: failed_update.target_revision.into(),
@@ -2105,6 +2184,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         details: failed_update.details.clone(),
                     },
                 )),
+                pending_update_index,
+                mode,
+                snapshot_assisted_details,
             });
         }
         updates.sort_by_key(|record| {

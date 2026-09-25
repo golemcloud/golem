@@ -13,10 +13,12 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord,
-    DurableStreamSessionIndex, ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey,
-    InvocationResultMembership, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
+    AuthoritativeSnapshot, AuthoritativeSnapshotKind, DurableStreamSessionIndex,
+    ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    RetryConfig, RetryPolicyState, SnapshotAssistedUpdateSelection, SuccessfulUpdateRecord,
+    Timestamp,
 };
 use golem_common::serialization::{deserialize, try_deserialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -325,7 +327,7 @@ where
         &region_entries,
     );
 
-    if baseline_is_invalidated(&baseline, &skipped_regions) {
+    if baseline_is_invalidated(&baseline, &deleted_regions, &skipped_regions) {
         return Ok(None);
     }
     baseline.deleted_regions = deleted_regions;
@@ -521,7 +523,8 @@ fn update_status_with_new_entries_internal(
     // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
     // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
     // the revert is applied)
-    if validate_baseline && baseline_is_invalidated(&last_known, &skipped_regions) {
+    if validate_baseline && baseline_is_invalidated(&last_known, &deleted_regions, &skipped_regions)
+    {
         return Ok(None);
     }
 
@@ -536,9 +539,16 @@ fn update_status_with_new_entries_internal(
     )?))
 }
 
-fn baseline_is_invalidated(baseline: &AgentStatusRecord, skipped_regions: &DeletedRegions) -> bool {
-    if !skipped_regions.is_in_deleted_region(baseline.oplog_idx) {
-        return false;
+fn baseline_is_invalidated(
+    baseline: &AgentStatusRecord,
+    deleted_regions: &DeletedRegions,
+    skipped_regions: &DeletedRegions,
+) -> bool {
+    // A baseline taken inside a region a later revert deleted still carries folded state from
+    // entries that no longer exist, even when the baseline's own skipped coverage hides that
+    // region in the comparison below.
+    if deleted_regions.is_in_deleted_region(baseline.oplog_idx) {
+        return true;
     }
 
     let baseline_without_overrides = if baseline.skipped_regions.is_overridden() {
@@ -556,6 +566,15 @@ fn baseline_is_invalidated(baseline: &AgentStatusRecord, skipped_regions: &Delet
         skipped_regions.clone()
     };
     new_without_overrides != baseline_without_overrides
+        && new_without_overrides.regions().any(|new_region| {
+            if new_region.start > baseline.oplog_idx {
+                return false;
+            }
+            let relevant_end = new_region.end.min(baseline.oplog_idx);
+            !baseline_without_overrides.regions().any(|old_region| {
+                old_region.start <= new_region.start && old_region.end >= relevant_end
+            })
+        })
 }
 
 fn update_status_with_precomputed_regions(
@@ -641,7 +660,8 @@ fn update_status_with_precomputed_regions(
         component_revision,
         component_size,
         component_revision_for_replay,
-        last_manual_update_snapshot_index,
+        component_revision_epoch,
+        authoritative_snapshot,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,
@@ -652,7 +672,8 @@ fn update_status_with_precomputed_regions(
         last_known.component_revision,
         last_known.component_size,
         last_known.component_revision_for_replay,
-        last_known.last_manual_update_snapshot_index,
+        last_known.component_revision_epoch,
+        last_known.authoritative_snapshot,
         last_known.last_automatic_snapshot_index,
         last_known.last_automatic_snapshot_timestamp,
         last_known.last_automatic_snapshot_component_revision,
@@ -722,8 +743,9 @@ fn update_status_with_precomputed_regions(
         revoked_cards,
         deleted_regions,
         component_revision_for_replay,
+        component_revision_epoch,
         current_retry_state,
-        last_manual_update_snapshot_index,
+        authoritative_snapshot,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,
@@ -1115,12 +1137,22 @@ fn calculate_skipped_regions_with_deleted_regions(
                     .build(),
                 )
             }
-            OplogEntry::SuccessfulUpdate { .. } => {
+            OplogEntry::SuccessfulUpdate {
+                snapshot_assisted_details,
+                ..
+            } => {
                 if let Some(ovrd) = skipped_override {
                     for region in ovrd.into_regions() {
                         skipped_builder.add(region);
                     }
                     skipped_override = None;
+                }
+                if let Some(details) = snapshot_assisted_details
+                    && !ignored_snapshot_update_region.is_some_and(|region| region.contains(*idx))
+                {
+                    skipped_builder.add(OplogRegion::from_index_range(
+                        OplogIndex::INITIAL.next()..=details.snapshot_index,
+                    ));
                 }
             }
             OplogEntry::FailedUpdate { .. } => {
@@ -1515,7 +1547,8 @@ fn calculate_update_fields(
     initial_revision: ComponentRevision,
     initial_component_size: u64,
     initial_component_revision_for_replay: ComponentRevision,
-    initial_last_manual_update_snapshot_index: Option<OplogIndex>,
+    initial_component_revision_epoch: OplogIndex,
+    initial_authoritative_snapshot: Option<AuthoritativeSnapshot>,
     initial_last_automatic_snapshot_index: Option<OplogIndex>,
     initial_last_automatic_snapshot_timestamp: Option<Timestamp>,
     initial_last_automatic_snapshot_component_revision: Option<ComponentRevision>,
@@ -1528,7 +1561,8 @@ fn calculate_update_fields(
     ComponentRevision,
     u64,
     ComponentRevision,
-    Option<OplogIndex>,
+    OplogIndex,
+    Option<AuthoritativeSnapshot>,
     Option<OplogIndex>,
     Option<Timestamp>,
     Option<ComponentRevision>,
@@ -1539,7 +1573,8 @@ fn calculate_update_fields(
     let mut revision = initial_revision;
     let mut size = initial_component_size;
     let mut component_revision_for_replay = initial_component_revision_for_replay;
-    let mut last_manual_update_snapshot_index = initial_last_manual_update_snapshot_index;
+    let mut component_revision_epoch = initial_component_revision_epoch;
+    let mut authoritative_snapshot = initial_authoritative_snapshot;
     let mut last_automatic_snapshot_index = initial_last_automatic_snapshot_index;
     let mut last_automatic_snapshot_timestamp = initial_last_automatic_snapshot_timestamp;
     let mut last_automatic_snapshot_component_revision =
@@ -1555,6 +1590,7 @@ fn calculate_update_fields(
             OplogEntry::Create { parameters, .. } => {
                 revision = parameters.component_revision;
                 component_revision_for_replay = parameters.component_revision;
+                component_revision_epoch = *oplog_idx;
                 size = parameters.component_size;
             }
             OplogEntry::PendingUpdate {
@@ -1564,6 +1600,42 @@ fn calculate_update_fields(
             } => {
                 let kind = match description {
                     UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
+                    UpdateDescription::SnapshotAssistedAutomatic {
+                        target_revision,
+                        snapshot_exclusion_through,
+                    } => {
+                        let selected_snapshot = match (
+                            last_automatic_snapshot_index,
+                            last_automatic_snapshot_component_revision,
+                        ) {
+                            _ if *target_revision <= revision => None,
+                            (Some(_snapshot_index), Some(snapshot_revision))
+                                if snapshot_revision != revision =>
+                            {
+                                None
+                            }
+                            (Some(snapshot_index), Some(_snapshot_revision))
+                                if snapshot_index <= *snapshot_exclusion_through =>
+                            {
+                                None
+                            }
+                            (Some(snapshot_index), Some(snapshot_revision)) => {
+                                Some(SnapshotAssistedUpdateSelection::Selected {
+                                    snapshot_index,
+                                    snapshot_revision,
+                                })
+                            }
+                            _ => None,
+                        };
+                        match selected_snapshot {
+                            Some(selection) => PendingUpdateKind::SnapshotAssistedAutomatic {
+                                source_component_revision: revision,
+                                source_update_epoch: component_revision_epoch,
+                                selection,
+                            },
+                            None => PendingUpdateKind::Automatic,
+                        }
+                    }
                     UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
                 };
                 pending_updates.push_back(PendingUpdateRef {
@@ -1577,40 +1649,57 @@ fn calculate_update_fields(
                 timestamp,
                 target_revision,
                 details,
+                snapshot_assisted_details,
+                ..
             } => {
+                let applied_update = pending_updates.pop_front();
                 failed_updates.push(FailedUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
                     details: details.clone(),
+                    pending_update: applied_update,
+                    snapshot_assisted_details: snapshot_assisted_details.clone(),
                 });
-                pending_updates.pop_front();
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
                 target_revision,
                 new_component_size,
+                snapshot_assisted_details,
                 ..
             } => {
+                let applied_update = pending_updates.pop_front();
                 successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
+                    pending_update: applied_update.clone(),
+                    snapshot_assisted_details: snapshot_assisted_details.clone(),
                 });
                 revision = *target_revision;
+                component_revision_epoch = *oplog_idx;
                 size = *new_component_size;
 
-                let applied_update = pending_updates.pop_front();
                 last_automatic_snapshot_index = None;
                 last_automatic_snapshot_timestamp = None;
                 last_automatic_snapshot_component_revision = None;
 
-                if let Some(PendingUpdateRef {
+                if let Some(details) = snapshot_assisted_details {
+                    component_revision_for_replay = details.source_component_revision;
+                    authoritative_snapshot = Some(AuthoritativeSnapshot {
+                        index: details.snapshot_index,
+                        kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic,
+                    });
+                } else if let Some(PendingUpdateRef {
                     kind: PendingUpdateKind::SnapshotBased,
                     oplog_index: applied_update_oplog_index,
                     ..
                 }) = applied_update
                 {
                     component_revision_for_replay = *target_revision;
-                    last_manual_update_snapshot_index = Some(applied_update_oplog_index);
+                    authoritative_snapshot = Some(AuthoritativeSnapshot {
+                        index: applied_update_oplog_index,
+                        kind: AuthoritativeSnapshotKind::ManualUpdate,
+                    });
                 }
             }
             OplogEntry::Snapshot { timestamp, .. } => {
@@ -1628,7 +1717,8 @@ fn calculate_update_fields(
         revision,
         size,
         component_revision_for_replay,
-        last_manual_update_snapshot_index,
+        component_revision_epoch,
+        authoritative_snapshot,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,

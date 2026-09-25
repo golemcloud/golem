@@ -59,10 +59,11 @@ use golem_common::model::oplog::{
     ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
     PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
-    PublicExternalToolResult, PublicOplogEntry, PublicOplogEntryAttribution,
-    PublicOplogEntryWithIndex, PublicSnapshotData, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
-    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, UpdateDescription,
+    PublicExternalToolResult, PublicFailedSnapshotAssistedUpdateDetails, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotAssistedUpdateDetails,
+    PublicSnapshotData, PublicToolInvocationOperation, PublicTypedAgentConfigEntry,
+    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
+    SnapshotAssistedAutomaticUpdateParameters, SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
@@ -1072,6 +1073,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     UpdateDescription::Automatic { .. } => {
                         PublicUpdateDescription::Automatic(Empty {})
                     }
+                    UpdateDescription::SnapshotAssistedAutomatic { .. } => {
+                        PublicUpdateDescription::SnapshotAssistedAutomatic(
+                            SnapshotAssistedAutomaticUpdateParameters {},
+                        )
+                    }
                     UpdateDescription::SnapshotBased {
                         payload, mime_type, ..
                     } => {
@@ -1096,6 +1102,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 new_component_size,
                 new_total_linear_memory_size: _,
                 new_active_plugins,
+                snapshot_assisted_details,
             } => {
                 let metadata = components
                     .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
@@ -1116,16 +1123,36 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     target_revision,
                     new_component_size,
                     new_active_plugins: new_plugins,
+                    snapshot_assisted_details: snapshot_assisted_details.map(|details| {
+                        PublicSnapshotAssistedUpdateDetails {
+                            pending_update_index: details.pending_update_index,
+                            source_component_revision: details.source_component_revision,
+                            source_update_epoch: details.source_update_epoch,
+                            snapshot_index: details.snapshot_index,
+                            replay_range: details.replay_range,
+                        }
+                    }),
                 }))
             }
             OplogEntry::FailedUpdate {
                 timestamp,
                 target_revision,
                 details,
+                snapshot_assisted_details,
             } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
                 timestamp,
                 target_revision,
                 details,
+                snapshot_assisted_details: snapshot_assisted_details.map(|details| {
+                    PublicFailedSnapshotAssistedUpdateDetails {
+                        pending_update_index: details.pending_update_index,
+                        source_component_revision: details.source_component_revision,
+                        source_update_epoch: details.source_update_epoch,
+                        snapshot_index: details.snapshot_index,
+                        replay_range: details.replay_range,
+                        ineligibility_reason: details.ineligibility_reason,
+                    }
+                }),
             })),
             OplogEntry::GrowMemory { timestamp, delta } => {
                 Ok(PublicOplogEntry::GrowMemory(GrowMemoryParams {

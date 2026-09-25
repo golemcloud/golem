@@ -6,7 +6,21 @@ As described in the general [Agents](/next/concepts/agents) page, each agent run
 
 ## Automatic update
 
-The **automatic update** mode works as it is described in the general [Agents](/next/concepts/agents) page.
+The **automatic update** mode works as described in the general [Agents](/next/concepts/agents) page.
+
+It promptly restarts the agent. If a periodic snapshot is eligible, Golem loads the newest one recorded before the request in the active source revision's current update epoch and validates the target by replaying the surviving suffix. If no snapshot is eligible, Golem replays all retained history from the authoritative recovery baseline instead. Selection is frozen while the request is folded from the operation log, so a snapshot taken after the request cannot replace it.
+
+```shell copy
+golem agent update <AGENT_ID> auto --await
+```
+
+The replay extends through source history committed before execution stops, rather than ending at the request entry. This preserves work committed after the request and allows an in-flight invocation to continue on the target. `--await` returns only after the attempt records `SuccessfulUpdate` or `FailedUpdate`; success is committed before target live effects continue.
+
+Once a snapshot is selected, the assisted attempt is strict: if loading fails or suffix replay diverges, the update fails and the source revision remains usable. Golem does not try an older snapshot or switch to full target replay after that failure.
+
+After assisted success, the selected snapshot is the authoritative recovery baseline. A later periodic snapshot can speed up recovery, but rejecting it falls back to the selected snapshot, never to the incompatible history before it. Reverting away a successful or failed outcome while retaining the request makes that request pending and retryable again.
+
+Snapshot assistance bounds the amount of **historical replay** to the suffix after the selected snapshot. It does not guarantee a wall-clock bound: loading and replaying the suffix, compiling the target, or waiting for resources can still take time.
 
 ## Manual snapshot-based update
 

@@ -76,3 +76,27 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
         Ok(Self)
     }
 }
+
+#[agent_definition(ephemeral)]
+pub trait SnapshotUpdateTest {
+    fn new() -> Self;
+    fn loaded_snapshot_revision(&self) -> u32;
+    fn replay_revision(&self) -> u32;
+}
+
+struct SnapshotUpdateTestImpl;
+
+#[agent_implementation]
+impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    fn loaded_snapshot_revision(&self) -> u32 {
+        3
+    }
+
+    fn replay_revision(&self) -> u32 {
+        3
+    }
+}

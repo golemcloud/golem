@@ -23,11 +23,14 @@ use super::{
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicExternalSpanData,
-    PublicExternalToolResult, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryAttribution,
-    PublicOplogEntryWithIndex, PublicRetryPolicyState, PublicSnapshotData, PublicSpanData,
-    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicExternalToolResult, PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
+    PublicRetryPolicyState, PublicSnapshotAssistedUpdateDetails, PublicSnapshotData,
+    PublicSpanData, PublicToolInvocationOperation, PublicTypedAgentConfigEntry,
+    PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
+    SnapshotAssistedAutomaticUpdateParameters, SnapshotAssistedUpdateDetails,
+    SnapshotBasedUpdateParameters, StringAttributeValue, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
@@ -76,8 +79,8 @@ use crate::model::oplog::public_oplog_entry::{
 use crate::model::oplog::raw_types::CreateParameters;
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
-    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, HostStreamKind, OplogEntry,
-    OplogErrorKind, PublicQueuedCardEventCard, ReadOnlyViolationError,
+    EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FailedSnapshotAssistedUpdateDetails,
+    HostStreamKind, OplogEntry, OplogErrorKind, PublicQueuedCardEventCard, ReadOnlyViolationError,
 };
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
@@ -961,6 +964,26 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                             .map(|pr| pr.try_into())
                             .collect::<Result<Vec<_>, _>>()?,
                     ),
+                    snapshot_assisted_details: successful_update
+                        .snapshot_assisted_details
+                        .map(|details| {
+                            Ok::<_, String>(PublicSnapshotAssistedUpdateDetails {
+                                pending_update_index: OplogIndex::from_u64(
+                                    details.pending_update_index,
+                                ),
+                                source_component_revision: details
+                                    .source_component_revision
+                                    .try_into()?,
+                                source_update_epoch: OplogIndex::from_u64(
+                                    details.source_update_epoch,
+                                ),
+                                snapshot_index: OplogIndex::from_u64(details.snapshot_index),
+                                replay_range: OplogRegion::from_range(
+                                    details.replay_start..=details.replay_end,
+                                ),
+                            })
+                        })
+                        .transpose()?,
                 }))
             }
             oplog_entry::Entry::FailedUpdate(failed_update) => {
@@ -971,6 +994,34 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                     target_revision: failed_update.target_revision.try_into()?,
                     details: failed_update.details,
+                    snapshot_assisted_details: failed_update
+                        .snapshot_assisted_details
+                        .map(|details| {
+                            let replay_range = match (details.replay_start, details.replay_end) {
+                                (Some(start), Some(end)) => {
+                                    Some(OplogRegion::from_range(start..=end))
+                                }
+                                (None, None) => None,
+                                _ => {
+                                    return Err("Incomplete failed update replay range".to_string());
+                                }
+                            };
+                            Ok::<_, String>(PublicFailedSnapshotAssistedUpdateDetails {
+                                pending_update_index: OplogIndex::from_u64(
+                                    details.pending_update_index,
+                                ),
+                                source_component_revision: details
+                                    .source_component_revision
+                                    .try_into()?,
+                                source_update_epoch: OplogIndex::from_u64(
+                                    details.source_update_epoch,
+                                ),
+                                snapshot_index: details.snapshot_index.map(OplogIndex::from_u64),
+                                replay_range,
+                                ineligibility_reason: details.ineligibility_reason,
+                            })
+                        })
+                        .transpose()?,
                 }))
             }
             oplog_entry::Entry::GrowMemory(grow_memory) => {
@@ -1611,6 +1662,18 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                 .into_iter()
                                 .map(Into::into)
                                 .collect(),
+                            snapshot_assisted_details: successful_update
+                                .snapshot_assisted_details
+                                .map(|details| {
+                                    golem_api_grpc::proto::golem::worker::SnapshotAssistedUpdateDetails {
+                                        pending_update_index: details.pending_update_index.into(),
+                                        source_component_revision: details.source_component_revision.into(),
+                                        source_update_epoch: details.source_update_epoch.into(),
+                                        snapshot_index: details.snapshot_index.into(),
+                                        replay_start: details.replay_range.start.into(),
+                                        replay_end: details.replay_range.end.into(),
+                                    }
+                                }),
                         },
                     )),
                 }
@@ -1622,6 +1685,23 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(failed_update.timestamp.into()),
                             target_revision: failed_update.target_revision.into(),
                             details: failed_update.details,
+                            snapshot_assisted_details: failed_update
+                                .snapshot_assisted_details
+                                .map(|details| {
+                                    let (replay_start, replay_end) = details
+                                        .replay_range
+                                        .map(|range| (Some(range.start.into()), Some(range.end.into())))
+                                        .unwrap_or((None, None));
+                                    golem_api_grpc::proto::golem::worker::FailedSnapshotAssistedUpdateDetails {
+                                        pending_update_index: details.pending_update_index.into(),
+                                        source_component_revision: details.source_component_revision.into(),
+                                        source_update_epoch: details.source_update_epoch.into(),
+                                        snapshot_index: details.snapshot_index.map(Into::into),
+                                        replay_start,
+                                        replay_end,
+                                        ineligibility_reason: details.ineligibility_reason,
+                                    }
+                                }),
                         },
                     )),
                 }
@@ -2831,6 +2911,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for Public
             golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(_) => {
                 Ok(PublicUpdateDescription::Automatic(Empty {}))
             }
+            golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotAssistedAutomatic(_) => {
+                Ok(PublicUpdateDescription::SnapshotAssistedAutomatic(
+                    SnapshotAssistedAutomaticUpdateParameters {},
+                ))
+            }
             golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
                 snapshot_based,
             ) => Ok(PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
@@ -2851,6 +2936,15 @@ impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::Upd
                     ),
                 ),
             },
+            PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
+                golem_api_grpc::proto::golem::worker::UpdateDescription {
+                    description: Some(
+                        golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotAssistedAutomatic(
+                            golem_api_grpc::proto::golem::common::Empty {},
+                        ),
+                    ),
+                }
+            }
             PublicUpdateDescription::SnapshotBased(snapshot_based) => {
                 golem_api_grpc::proto::golem::worker::UpdateDescription {
                     description: Some(
@@ -3492,12 +3586,31 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                     new_component_size: p.new_component_size,
                     new_total_linear_memory_size: None,
                     new_active_plugins,
+                    snapshot_assisted_details: p.snapshot_assisted_details.map(|details| {
+                        SnapshotAssistedUpdateDetails {
+                            pending_update_index: details.pending_update_index,
+                            source_component_revision: details.source_component_revision,
+                            source_update_epoch: details.source_update_epoch,
+                            snapshot_index: details.snapshot_index,
+                            replay_range: details.replay_range,
+                        }
+                    }),
                 })
             }
             PublicOplogEntry::FailedUpdate(p) => Ok(OplogEntry::FailedUpdate {
                 timestamp: p.timestamp,
                 target_revision: p.target_revision,
                 details: p.details,
+                snapshot_assisted_details: p.snapshot_assisted_details.map(|details| {
+                    FailedSnapshotAssistedUpdateDetails {
+                        pending_update_index: details.pending_update_index,
+                        source_component_revision: details.source_component_revision,
+                        source_update_epoch: details.source_update_epoch,
+                        snapshot_index: details.snapshot_index,
+                        replay_range: details.replay_range,
+                        ineligibility_reason: details.ineligibility_reason,
+                    }
+                }),
             }),
             PublicOplogEntry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
                 timestamp: p.timestamp,
@@ -4097,10 +4210,23 @@ fn update_description_to_proto(
 ) -> Result<golem_api_grpc::proto::golem::worker::RawUpdateDescription, String> {
     use crate::model::oplog::raw_types::UpdateDescription;
     use golem_api_grpc::proto::golem::worker::raw_update_description::Description;
-    use golem_api_grpc::proto::golem::worker::{RawSnapshotBasedUpdate, RawUpdateDescription};
+    use golem_api_grpc::proto::golem::worker::{
+        RawSnapshotAssistedAutomaticUpdate, RawSnapshotBasedUpdate, RawUpdateDescription,
+    };
     match desc {
         UpdateDescription::Automatic { target_revision } => Ok(RawUpdateDescription {
             description: Some(Description::AutomaticTargetRevision(target_revision.into())),
+        }),
+        UpdateDescription::SnapshotAssistedAutomatic {
+            target_revision,
+            snapshot_exclusion_through,
+        } => Ok(RawUpdateDescription {
+            description: Some(Description::SnapshotAssistedAutomatic(
+                RawSnapshotAssistedAutomaticUpdate {
+                    target_revision: target_revision.into(),
+                    snapshot_exclusion_through: snapshot_exclusion_through.into(),
+                },
+            )),
         }),
         UpdateDescription::SnapshotBased {
             target_revision,
@@ -4128,6 +4254,12 @@ fn update_description_from_proto(
         Description::AutomaticTargetRevision(rev) => Ok(UpdateDescription::Automatic {
             target_revision: rev.try_into().map_err(|e: String| e)?,
         }),
+        Description::SnapshotAssistedAutomatic(update) => {
+            Ok(UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision: update.target_revision.try_into().map_err(|e: String| e)?,
+                snapshot_exclusion_through: OplogIndex::from_u64(update.snapshot_exclusion_through),
+            })
+        }
         Description::SnapshotBased(snap) => Ok(UpdateDescription::SnapshotBased {
             target_revision: snap.target_revision.try_into().map_err(|e: String| e)?,
             payload: oplog_payload_from_proto(
@@ -4158,14 +4290,15 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             RawCompletionDiscardedParameters, RawCreateParameters, RawCreateResourceParameters,
             RawDeactivatePluginParameters, RawDropResourceParameters,
             RawDurableStreamRecordParameters, RawEndAtomicRegionParameters, RawEndParameters,
-            RawEnvVar, RawErrorParameters, RawFailedUpdateParameters, RawFinishSpanParameters,
-            RawGrowMemoryParameters, RawHostStreamFrameParameters, RawJumpParameters,
-            RawLogParameters, RawOplogProcessorCheckpointParameters, RawOplogRegion,
+            RawEnvVar, RawErrorParameters, RawFailedSnapshotAssistedUpdateDetails,
+            RawFailedUpdateParameters, RawFinishSpanParameters, RawGrowMemoryParameters,
+            RawHostStreamFrameParameters, RawJumpParameters, RawLogParameters,
+            RawOplogProcessorCheckpointParameters, RawOplogRegion,
             RawPendingAgentInvocationParameters, RawPendingUpdateParameters,
             RawRemoteTransactionParameters, RawRemoveRetryPolicyParameters, RawResourceTypeId,
             RawRevertParameters, RawSetRetryPolicyParameters, RawSetSpanAttributeParameters,
-            RawSnapshotParameters, RawStartParameters, RawStartSpanParameters,
-            RawSuccessfulUpdateParameters, RawTimestampOnly,
+            RawSnapshotAssistedUpdateDetails, RawSnapshotParameters, RawStartParameters,
+            RawStartSpanParameters, RawSuccessfulUpdateParameters, RawTimestampOnly,
         };
 
         let timestamp = value.timestamp();
@@ -4355,20 +4488,47 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 new_component_size,
                 new_total_linear_memory_size,
                 new_active_plugins,
+                snapshot_assisted_details,
                 ..
             } => Entry::SuccessfulUpdate(RawSuccessfulUpdateParameters {
                 target_revision: target_revision.into(),
                 new_component_size,
                 new_total_linear_memory_size,
                 new_active_plugins: new_active_plugins.into_iter().map(Into::into).collect(),
+                snapshot_assisted_details: snapshot_assisted_details.map(|details| {
+                    RawSnapshotAssistedUpdateDetails {
+                        pending_update_index: details.pending_update_index.into(),
+                        source_component_revision: details.source_component_revision.into(),
+                        source_update_epoch: details.source_update_epoch.into(),
+                        snapshot_index: details.snapshot_index.into(),
+                        replay_range: Some(RawOplogRegion {
+                            start: details.replay_range.start.into(),
+                            end: details.replay_range.end.into(),
+                        }),
+                    }
+                }),
             }),
             OplogEntry::FailedUpdate {
                 target_revision,
                 details,
+                snapshot_assisted_details,
                 ..
             } => Entry::FailedUpdate(RawFailedUpdateParameters {
                 target_revision: target_revision.into(),
                 details,
+                snapshot_assisted_details: snapshot_assisted_details.map(|details| {
+                    RawFailedSnapshotAssistedUpdateDetails {
+                        pending_update_index: details.pending_update_index.into(),
+                        source_component_revision: details.source_component_revision.into(),
+                        source_update_epoch: details.source_update_epoch.into(),
+                        snapshot_index: details.snapshot_index.map(Into::into),
+                        replay_range: details.replay_range.map(|range| RawOplogRegion {
+                            start: range.start.into(),
+                            end: range.end.into(),
+                        }),
+                        ineligibility_reason: details.ineligibility_reason,
+                    }
+                }),
             }),
             OplogEntry::GrowMemory { delta, .. } => {
                 Entry::GrowMemory(RawGrowMemoryParameters { delta })
@@ -4961,6 +5121,28 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     new_component_size: p.new_component_size,
                     new_total_linear_memory_size: p.new_total_linear_memory_size,
                     new_active_plugins,
+                    snapshot_assisted_details: p
+                        .snapshot_assisted_details
+                        .map(|details| {
+                            let replay_range =
+                                details.replay_range.ok_or("Missing replay_range field")?;
+                            Ok::<_, String>(SnapshotAssistedUpdateDetails {
+                                pending_update_index: OplogIndex::from_u64(
+                                    details.pending_update_index,
+                                ),
+                                source_component_revision: details
+                                    .source_component_revision
+                                    .try_into()?,
+                                source_update_epoch: OplogIndex::from_u64(
+                                    details.source_update_epoch,
+                                ),
+                                snapshot_index: OplogIndex::from_u64(details.snapshot_index),
+                                replay_range: OplogRegion::from_range(
+                                    replay_range.start..=replay_range.end,
+                                ),
+                            })
+                        })
+                        .transpose()?,
                 })
             }
             Entry::FailedUpdate(p) => {
@@ -4970,6 +5152,27 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp,
                     target_revision,
                     details: p.details,
+                    snapshot_assisted_details: p
+                        .snapshot_assisted_details
+                        .map(|details| {
+                            Ok::<_, String>(FailedSnapshotAssistedUpdateDetails {
+                                pending_update_index: OplogIndex::from_u64(
+                                    details.pending_update_index,
+                                ),
+                                source_component_revision: details
+                                    .source_component_revision
+                                    .try_into()?,
+                                source_update_epoch: OplogIndex::from_u64(
+                                    details.source_update_epoch,
+                                ),
+                                snapshot_index: details.snapshot_index.map(OplogIndex::from_u64),
+                                replay_range: details
+                                    .replay_range
+                                    .map(|range| OplogRegion::from_range(range.start..=range.end)),
+                                ineligibility_reason: details.ineligibility_reason,
+                            })
+                        })
+                        .transpose()?,
                 })
             }
             Entry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
@@ -5384,9 +5587,12 @@ mod observational_start_proto_tests {
 
 #[cfg(test)]
 mod successful_update_proto_tests {
-    use crate::model::Timestamp;
     use crate::model::component::ComponentRevision;
-    use crate::model::oplog::OplogEntry;
+    use crate::model::oplog::{
+        FailedSnapshotAssistedUpdateDetails, OplogEntry, SnapshotAssistedUpdateDetails,
+    };
+    use crate::model::regions::OplogRegion;
+    use crate::model::{OplogIndex, Timestamp};
     use golem_api_grpc::proto::golem::worker::RawOplogEntry;
     use std::collections::HashSet;
     use test_r::test;
@@ -5399,6 +5605,35 @@ mod successful_update_proto_tests {
             new_component_size: 123,
             new_total_linear_memory_size: Some(456),
             new_active_plugins: HashSet::new(),
+            snapshot_assisted_details: Some(SnapshotAssistedUpdateDetails {
+                pending_update_index: OplogIndex::from_u64(5),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_update_epoch: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(3),
+                replay_range: OplogRegion::from_range(4..=8),
+            }),
+        };
+
+        let proto: RawOplogEntry = original.clone().try_into().unwrap();
+        let roundtrip: OplogEntry = proto.try_into().unwrap();
+
+        assert_eq!(roundtrip, original);
+    }
+
+    #[test]
+    fn raw_failed_update_preserves_assisted_attempted_range() {
+        let original = OplogEntry::FailedUpdate {
+            timestamp: Timestamp::now_utc(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            details: Some("suffix diverged".to_string()),
+            snapshot_assisted_details: Some(FailedSnapshotAssistedUpdateDetails {
+                pending_update_index: OplogIndex::from_u64(5),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_update_epoch: OplogIndex::INITIAL,
+                snapshot_index: Some(OplogIndex::from_u64(3)),
+                replay_range: Some(OplogRegion::from_range(4..=8)),
+                ineligibility_reason: None,
+            }),
         };
 
         let proto: RawOplogEntry = original.clone().try_into().unwrap();

@@ -163,8 +163,9 @@ fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         revoked_cards: status.revoked_cards.clone(),
         deleted_regions: DeletedRegions::new(),
         component_revision_for_replay: status.component_revision_for_replay,
+        component_revision_epoch: status.component_revision_epoch,
         current_retry_state: status.current_retry_state.clone(),
-        last_manual_update_snapshot_index: status.last_manual_update_snapshot_index,
+        authoritative_snapshot: status.authoritative_snapshot,
         last_automatic_snapshot_index: status.last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp: status.last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision: status
@@ -3119,10 +3120,14 @@ mod tests {
             timestamp: Timestamp::from(1_700_000_000_000u64),
             target_revision: ComponentRevision::new(2).unwrap(),
             details: Some("boom".to_string()),
+            pending_update: None,
+            snapshot_assisted_details: None,
         });
         status.successful_updates.push(SuccessfulUpdateRecord {
             timestamp: Timestamp::from(1_700_000_001_000u64),
             target_revision: ComponentRevision::new(3).unwrap(),
+            pending_update: None,
+            snapshot_assisted_details: None,
         });
         status
     }

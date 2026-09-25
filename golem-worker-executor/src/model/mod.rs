@@ -66,6 +66,27 @@ impl ShardAssignmentCheck for ShardAssignment {
 pub enum SnapshotSource {
     Automatic,
     ManualUpdate,
+    SnapshotAssistedAutomatic,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotReplayPurpose {
+    None,
+    PeriodicRecovery,
+    AssistedUpdate,
+}
+
+impl SnapshotReplayPurpose {
+    pub(crate) fn for_reconstruction(
+        assisted_update_pending: bool,
+        snapshot_source: Option<SnapshotSource>,
+    ) -> Self {
+        match (assisted_update_pending, snapshot_source) {
+            (true, Some(SnapshotSource::SnapshotAssistedAutomatic)) => Self::AssistedUpdate,
+            (_, Some(SnapshotSource::Automatic)) => Self::PeriodicRecovery,
+            _ => Self::None,
+        }
+    }
 }
 
 /// Worker-specific configuration. These values are used to initialize the worker, and they can
@@ -80,6 +101,7 @@ pub struct AgentConfig {
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
     pub last_snapshot_source: Option<SnapshotSource>,
+    pub snapshot_assisted_source_epoch: Option<OplogIndex>,
     pub agent_effective_surface: EffectiveSurface,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
@@ -94,6 +116,7 @@ impl AgentConfig {
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
         last_snapshot_source: Option<SnapshotSource>,
+        snapshot_assisted_source_epoch: Option<OplogIndex>,
         agent_effective_surface: EffectiveSurface,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
@@ -106,6 +129,7 @@ impl AgentConfig {
             initial_agent_config,
             last_snapshot_index,
             last_snapshot_source,
+            snapshot_assisted_source_epoch,
             agent_effective_surface,
             owner_component_metadata,
         }
@@ -884,6 +908,32 @@ mod tests {
     use test_r::test;
     use tracing::info;
     use uuid::Uuid;
+
+    #[test]
+    fn snapshot_replay_purpose_distinguishes_assisted_attempts_from_recovery() {
+        assert_eq!(
+            SnapshotReplayPurpose::for_reconstruction(
+                true,
+                Some(SnapshotSource::SnapshotAssistedAutomatic),
+            ),
+            SnapshotReplayPurpose::AssistedUpdate
+        );
+        assert_eq!(
+            SnapshotReplayPurpose::for_reconstruction(
+                false,
+                Some(SnapshotSource::SnapshotAssistedAutomatic),
+            ),
+            SnapshotReplayPurpose::None
+        );
+        assert_eq!(
+            SnapshotReplayPurpose::for_reconstruction(false, Some(SnapshotSource::Automatic)),
+            SnapshotReplayPurpose::PeriodicRecovery
+        );
+        assert_eq!(
+            SnapshotReplayPurpose::for_reconstruction(true, Some(SnapshotSource::ManualUpdate)),
+            SnapshotReplayPurpose::None
+        );
+    }
 
     #[test]
     fn monthly_http_budget_suspends_durable_agents() {

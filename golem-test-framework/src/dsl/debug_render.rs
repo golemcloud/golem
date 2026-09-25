@@ -269,6 +269,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 PublicUpdateDescription::Automatic(_) => {
                     let _ = writeln!(result, "{pad}type:              automatic");
                 }
+                PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
+                    let _ = writeln!(
+                        result,
+                        "{pad}type:              snapshot-assisted automatic"
+                    );
+                }
                 PublicUpdateDescription::SnapshotBased(_inner_params) => {
                     let _ = writeln!(result, "{pad}type:              snapshot based");
                 }

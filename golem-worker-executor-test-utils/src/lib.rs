@@ -55,11 +55,11 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    AgentError, HostResponse, HostResponseEntityInvocation,
+    AgentError, FailedSnapshotAssistedUpdateDetails, HostResponse, HostResponseEntityInvocation,
     HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload, PayloadId, RawOplogPayload,
-    TimestampedUpdateDescription, host_functions::HostFunctionName, types::ObjectMetadata,
-    types::SerializableEntityBodyExecution, types::SerializableP3HttpBodyChunk,
-    types::SerializableToolOperationTerminal,
+    SnapshotAssistedUpdateDetails, TimestampedUpdateDescription, host_functions::HostFunctionName,
+    types::ObjectMetadata, types::SerializableEntityBodyExecution,
+    types::SerializableP3HttpBodyChunk, types::SerializableToolOperationTerminal,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -2528,9 +2528,10 @@ impl UpdateManagement for TestWorkerCtx {
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
+        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
     ) {
         self.durable_ctx
-            .on_worker_update_failed(target_revision, details)
+            .on_worker_update_failed(target_revision, details, snapshot_assisted_details)
             .await
     }
 
@@ -2539,9 +2540,15 @@ impl UpdateManagement for TestWorkerCtx {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
     ) {
         self.durable_ctx
-            .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(
+                target_revision,
+                new_component_size,
+                new_active_plugins,
+                snapshot_assisted_details,
+            )
             .await
     }
 }
