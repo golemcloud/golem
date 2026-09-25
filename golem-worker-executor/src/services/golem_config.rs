@@ -2341,13 +2341,13 @@ impl SafeDisplay for FilesystemPressureConfig {
 
 /// The default of [`FilesystemSnapshotStoreConfig::storage_call_deadline`]. The slowest measured
 /// call on S3 took 1.7 s, and the value stays at least 10 times the slowest measured call.
-pub const DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE: Duration = Duration::from_secs(30);
+pub const DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE: Duration = Duration::from_secs(60);
 
 /// The default of [`FilesystemSnapshotStoreConfig::restore_reader_threads`].
-const DEFAULT_FILESYSTEM_SNAPSHOT_RESTORE_READER_THREADS: usize = 4;
+const DEFAULT_FILESYSTEM_SNAPSHOT_RESTORE_READER_THREADS: usize = 6;
 
 /// The default of [`FilesystemSnapshotStoreConfig::save_threads`].
-const DEFAULT_FILESYSTEM_SNAPSHOT_SAVE_THREADS: usize = 4;
+const DEFAULT_FILESYSTEM_SNAPSHOT_SAVE_THREADS: usize = 2;
 
 /// Tells whether the executor keeps filesystem snapshots, and gives the settings of the store.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3010,7 +3010,7 @@ mod tests {
                 store.restore_reader_threads().get(),
                 store.save_threads().get(),
             ),
-            (Duration::from_secs(30), 4, 4)
+            (Duration::from_secs(60), 6, 2)
         );
     }
 
