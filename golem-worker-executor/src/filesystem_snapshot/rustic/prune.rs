@@ -106,8 +106,9 @@ pub(super) fn needs_repository_size(ledger: &PruneLedger, now: Timestamp, grace:
 /// Tells whether a prune is due at `now`.
 ///
 /// A prune is due when the grace period passed since the last prune, and the freed bytes reach the
-/// threshold share of `repository_bytes` or the last prune marked packs. A threshold of zero bytes
-/// counts as one byte, so a prune never runs for a scope that freed nothing and marked nothing.
+/// threshold share of `repository_bytes`, rounded down to a whole byte, or the last prune marked
+/// packs. A threshold of zero bytes counts as one byte, so a prune never runs for a scope that
+/// freed nothing and marked nothing.
 pub(super) fn prune_due(
     ledger: &PruneLedger,
     now: Timestamp,
@@ -327,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn a_prune_is_due_when_the_freed_bytes_reach_ten_percent_of_the_repository() {
+    fn a_prune_is_due_when_the_freed_bytes_reach_ten_percent_of_the_repository_rounded_down() {
         let now = at(10_000_000);
         let due = |freed, repository_bytes| {
             prune_due(

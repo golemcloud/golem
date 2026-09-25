@@ -62,7 +62,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 
 /// The share of the size of the repository that deleted snapshots must free before a delete prunes
-/// the scope.
+/// the scope. The threshold is 10% of the size, rounded down to a whole byte, so about 10%.
 const PRUNE_THRESHOLD: Percent = Percent(10);
 
 /// How long a pack that a prune marks stays before a later prune deletes it. It is also the
