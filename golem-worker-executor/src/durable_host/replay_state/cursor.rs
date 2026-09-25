@@ -249,9 +249,18 @@ impl CursorTx<'_> {
     }
 
     fn publish_retained_count(&self) {
-        self.cursor
-            .unclaimed_retained_starts
-            .store(self.st.retained_starts.len(), Ordering::Release);
+        let names = self
+            .st
+            .retained_starts
+            .values()
+            .map(|retained| {
+                let OplogEntry::Start { function_name, .. } = &retained.entry else {
+                    unreachable!("only Start entries are retained");
+                };
+                function_name.clone()
+            })
+            .collect();
+        *self.cursor.unclaimed_retained_starts.lock().unwrap() = names;
     }
 
     fn retain_start(&mut self, idx: OplogIndex, entry: OplogEntry) {
@@ -2089,7 +2098,7 @@ impl ReplayState {
                 custom_subtrees: HashMap::new(),
                 retained_starts: std::collections::BTreeMap::new(),
             }),
-            unclaimed_retained_starts: std::sync::atomic::AtomicUsize::new(0),
+            unclaimed_retained_starts: std::sync::Mutex::new(Vec::new()),
             reconstruction_claims,
             completion_markers: std::sync::Mutex::new(completion_markers),
             log_hashes: std::sync::Mutex::new(HashMap::new()),
@@ -3154,13 +3163,28 @@ impl ReplayState {
     }
 
     /// Whether the cursor has committed past durable-call `Start`s nobody has claimed yet (see
-    /// [`CursorState::retained_starts`]). Lock-free: read by durable-call admission from
-    /// Store-holding host calls, which must not queue on the cursor lock.
+    /// [`CursorState::retained_starts`]). Does not take the cursor lock: read by durable-call
+    /// admission from Store-holding host calls, which must not queue on it.
     pub(crate) fn has_unclaimed_retained_starts(&self) -> bool {
+        !self
+            .cursor
+            .unclaimed_retained_starts
+            .lock()
+            .unwrap()
+            .is_empty()
+    }
+
+    /// Whether one of the unclaimed retained `Start`s records a call of `function_name`. A live
+    /// Store about to issue such a call may still be its owner (replay is deterministic, so the
+    /// owner issues its recorded calls in order), whereas a call of any other kind is known fresh.
+    /// Same locking rule as [`Self::has_unclaimed_retained_starts`].
+    pub(crate) fn retains_unclaimed_start_named(&self, function_name: &HostFunctionName) -> bool {
         self.cursor
             .unclaimed_retained_starts
-            .load(std::sync::atomic::Ordering::Acquire)
-            > 0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|retained| retained == function_name)
     }
 
     /// Releases every still-retained `Start` when a live primary invocation finishes. The
@@ -3254,10 +3278,7 @@ impl ReplayState {
                 ));
             }
             let released = std::mem::take(&mut st.retained_starts);
-            state
-                .cursor
-                .unclaimed_retained_starts
-                .store(0, std::sync::atomic::Ordering::Release);
+            state.cursor.unclaimed_retained_starts.lock().unwrap().clear();
             if released.is_empty() {
                 return Ok(());
             }

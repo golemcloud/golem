@@ -56,6 +56,7 @@ use golem_common::model::entity::{
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
+use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, HostResponseEntityInvocation, TimestampedUpdateDescription,
 };
@@ -407,15 +408,18 @@ pub trait CallCountManagement {
     /// Called at the start of each exported function invocation.
     fn reset_invocation_call_counts(&mut self);
 
-    /// Records one outgoing HTTP call against the monthly account quota.
+    /// Records one outgoing HTTP call, recorded under the durable call's `function_name`, against
+    /// the monthly account quota. Only fresh live work is charged; a replayed call or one that may
+    /// adopt a retained recorded `Start` of the same kind is not.
     ///
     /// Returns `Err` with `WorkerMonthlyHttpCallBudgetExhausted` if budget is exhausted.
-    fn record_monthly_http_call(&mut self) -> anyhow::Result<()>;
+    fn record_monthly_http_call(&mut self, function_name: &HostFunctionName) -> anyhow::Result<()>;
 
-    /// Records one outgoing RPC call against the monthly account quota.
+    /// Records one outgoing RPC call, recorded under the durable call's `function_name`, against
+    /// the monthly account quota, under the same rule as [`Self::record_monthly_http_call`].
     ///
     /// Returns `Err` with `WorkerMonthlyRpcCallBudgetExhausted` if budget is exhausted.
-    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()>;
+    fn record_monthly_rpc_call(&mut self, function_name: &HostFunctionName) -> anyhow::Result<()>;
 }
 
 /// The invocation management interface of a worker context is responsible for connecting

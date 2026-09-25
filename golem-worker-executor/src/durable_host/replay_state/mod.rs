@@ -228,11 +228,14 @@ struct ReplayCursor {
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
-    /// Number of entries in [`CursorState::retained_starts`]: unclaimed `Start`s the cursor has
-    /// already committed past. Published lock-free (written only through a held [`CursorTx`]) so
-    /// durable-call admission can tell "the cursor is exhausted" apart from "every recorded call
-    /// has been claimed" without queueing on the cursor lock from a Store-holding host call.
-    unclaimed_retained_starts: std::sync::atomic::AtomicUsize,
+    /// Function names of the entries in [`CursorState::retained_starts`]: unclaimed `Start`s the
+    /// cursor has already committed past, in oplog order. Published outside the cursor lock
+    /// (written only through a held [`CursorTx`], behind an uncontended synchronous mutex) so
+    /// durable-call admission and quota charging can tell "the cursor is exhausted" apart from
+    /// "every recorded call has been claimed" — and whether a recorded call of a given kind is
+    /// still waiting for its owner — without queueing on the cursor lock from a Store-holding
+    /// host call.
+    unclaimed_retained_starts: std::sync::Mutex<Vec<HostFunctionName>>,
     /// Resolver-owned reconstruction population registered atomically with entity `Start` claims.
     /// This shared view is used only for waiting and active-body subscriptions outside the cursor
     /// lock; resolver registration, incomplete release, and guard settlement own all mutations.

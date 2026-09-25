@@ -24,7 +24,7 @@ use crate::durable_host::http::policy::{
 };
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpOutgoingBodyState, HttpRequestSession, HttpRequestState,
-    HttpRetryEligibility, PendingStatusRetryDecision,
+    HttpRetryEligibility, PendingStatusRetryDecision, batched_write_scope_name,
 };
 use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
@@ -240,16 +240,18 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
 
         // Check the per-invocation HTTP call limit before initiating the call.
-        // Only counted in live mode; replay is a no-op.
+        // Only counted for fresh live work; replay is a no-op. The call is recorded as a
+        // batched-write durable scope, so that is the recorded kind the charge is keyed by.
+        let scope_name = batched_write_scope_name(None);
         self.state
-            .check_and_increment_http_call_count()
+            .check_and_increment_http_call_count(&scope_name)
             .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
 
-        // Record against the monthly account-level HTTP call quota (live mode only).
+        // Record against the monthly account-level HTTP call quota (fresh live work only).
         // Returns Err(WorkerMonthlyHttpCallBudgetExhausted) when exhausted,
         // which maps to RetryDecision::TryStop — suspending the worker until
         // the registry replenishes the budget (e.g. next billing month).
-        self.record_monthly_http_call()
+        self.record_monthly_http_call(&scope_name)
             .map_err(|e| HttpError::trap(wasmtime::Error::from_anyhow(e)))?;
 
         // Durability is handled by the WasiHttpView send_request method and the follow-up

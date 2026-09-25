@@ -31,10 +31,9 @@ use crate::services::external_durable_stream::{
 use crate::services::{HasActiveAgents, HasExternalDurableStreamService, HasWorker};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::card::SecretVerb;
-use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::host_functions::{
     GolemAgentDurableStreamReaderNew, GolemAgentDurableStreamReaderRead,
-    GolemAgentDurableStreamWriterAppend, GolemAgentDurableStreamWriterNew,
+    GolemAgentDurableStreamWriterAppend, GolemAgentDurableStreamWriterNew, HostFunctionName,
 };
 use golem_common::model::oplog::payload::external_durable_stream::*;
 use golem_common::model::oplog::payload::{
@@ -43,6 +42,7 @@ use golem_common::model::oplog::payload::{
     HostResponseDurableStreamAppend, HostResponseDurableStreamRead,
     HostResponseDurableStreamResource,
 };
+use golem_common::model::oplog::{DurableFunctionType, HostPayloadPair};
 use golem_common::schema::SchemaValue;
 use golem_schema::schema::wit::SecretHandleRep;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -308,6 +308,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostDurableStreamReaderWithStore<U>
         });
         let (result, _memory) = match live_attempt(
             accessor,
+            &GolemAgentDurableStreamReaderRead::HOST_FUNCTION_NAME,
             validate_read(&request, limit),
             reader.auth,
             request.timeout_ms,
@@ -386,6 +387,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostDurableStreamWriterWithStore<U>
         });
         let (result, _memory) = match live_attempt(
             accessor,
+            &GolemAgentDurableStreamWriterAppend::HOST_FUNCTION_NAME,
             preflight_append(&request, limit),
             writer.auth,
             request.timeout_ms,
@@ -410,6 +412,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> wit::HostDurableStreamWriterWithStore<U>
 
 async fn live_attempt<U: Send + 'static, Ctx: WorkerCtx, T>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    function_name: &HostFunctionName,
     url: Result<reqwest::Url, DurableStreamError>,
     auth: Option<SecretEntry>,
     timeout_ms: u64,
@@ -482,8 +485,9 @@ async fn live_attempt<U: Send + 'static, Ctx: WorkerCtx, T>(
     };
     accessor.with(|mut access| {
         let ctx = access.get();
-        ctx.state.check_and_increment_http_call_count()?;
-        ctx.record_monthly_http_call()
+        ctx.state
+            .check_and_increment_http_call_count(function_name)?;
+        ctx.record_monthly_http_call(function_name)
     })?;
     let action = async {
         let token = if let Some(entry) = auth {

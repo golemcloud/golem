@@ -58,6 +58,7 @@ use golem_common::model::invocation_context::{AttributeValue, InvocationContextS
 use golem_common::model::oplog::host_functions::{
     GolemRpcCancellationTokenCancel, GolemRpcWasmRpcActivate, GolemRpcWasmRpcInvoke,
     GolemRpcWasmRpcInvokeAndAwaitResult, GolemRpcWasmRpcNew, GolemRpcWasmRpcScheduleInvocation,
+    HostFunctionName,
 };
 use golem_common::model::oplog::types::{SerializableRpcError, SerializableScheduleId};
 use golem_common::model::oplog::{
@@ -603,7 +604,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .await;
             }
         };
-        self.record_outbound_rpc_call()?;
+        self.record_outbound_rpc_call(&GolemRpcWasmRpcInvokeAndAwaitResult::HOST_FUNCTION_NAME)?;
 
         if prepared.is_streaming() {
             let begun = DurableCallSession::<
@@ -1028,7 +1029,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .await;
             }
         };
-        self.record_outbound_rpc_call()?;
+        self.record_outbound_rpc_call(&GolemRpcWasmRpcInvoke::HOST_FUNCTION_NAME)?;
 
         let begun =
             DurableCallSession::<GolemRpcWasmRpcInvoke, NotCancellable>::begin_with_agent_authority(
@@ -1240,7 +1241,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .await;
             }
         };
-        self.record_outbound_rpc_call()?;
+        self.record_outbound_rpc_call(&GolemRpcWasmRpcInvokeAndAwaitResult::HOST_FUNCTION_NAME)?;
 
         if streaming {
             let begun = DurableCallSession::<
@@ -1956,12 +1957,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(Ok(RpcTargetAdmission::Recorded))
     }
 
-    fn record_outbound_rpc_call(&mut self) -> anyhow::Result<()> {
+    fn record_outbound_rpc_call(&mut self, function_name: &HostFunctionName) -> anyhow::Result<()> {
         if self.state.is_live() {
             self.state
-                .check_and_increment_rpc_call_count()
+                .check_and_increment_rpc_call_count(function_name)
                 .map_err(wasmtime::Error::from)?;
-            self.record_monthly_rpc_call()?;
+            self.record_monthly_rpc_call(function_name)?;
         }
         Ok(())
     }

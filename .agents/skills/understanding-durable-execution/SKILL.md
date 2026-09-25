@@ -438,21 +438,40 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   scan-ahead claimed). Otherwise `check_parked_positional_read` reports the head as divergence
   instead of hanging replay; the invocation-boundary reader never parks on another Store.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
-  tolerance (`AbandonedStarts`); when a live primary invocation finishes they are released with a
-  warning. A settled entity body that returned without claiming a retained descendant is a
-  structural divergence (`ensure_body_claimed_retained_descendants`, `entity.rs`).
+  tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
+  invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
+  released with a warning; an unclosed one is a divergence error
+  (`release_retained_starts_at_live_invocation_end`), so `AgentInvocationFinished` is never
+  appended after an open `Start`. A settled entity body that returned without claiming a retained
+  descendant is a structural divergence (`ensure_body_claimed_retained_descendants`, `entity.rs`).
 - While unclaimed retained `Start`s exist, a call arriving after the live transition may still be
-  their replayed owner, so durable-call admission and per-call quota charging use
-  `durable_call_is_live()` (stricter than `is_live()`): such calls claim first and append a fresh
-  `Start` only when replay reports none remains (`claim_start_for_store`, which also returns
-  `StoreAlreadyLive` for an incomplete entity that continued live locally). Positional readers,
+  their replayed owner, so durable-call admission uses `durable_call_is_live()` (stricter than
+  `is_live()`): such calls claim first and append a fresh `Start` only when replay reports none
+  remains (`claim_start_for_store`, which also returns `StoreAlreadyLive` for an incomplete entity
+  that continued live locally). The primary runtime treats a cursor that became live between its
+  liveness check and the claim as `ReplayEnded`, not divergence. Custom (guest manual) durability
+  follows the same per-Store admission: `begin_custom_durable_invocation` claims through
+  `claim_custom_start_for_store` and continues to live with the Store's own `ReplayToLiveRole`
+  (`Primary` only for the primary agent runtime), so a completed-replay entity body can neither
+  settle the primary fence nor fall through to fresh execution. Positional readers,
   authorization and snapshot decisions keep using `is_live()`.
+- Per-call quotas (`check_and_increment_{http,rpc}_call_count`, `record_monthly_{http,rpc}_call`)
+  are charged before the call's `Start` is claimed or appended, so a refused call leaves no oplog
+  entry. They use `durable_call_is_fresh(&HostFunctionName)`: the cursor publishes the kinds of
+  its unclaimed retained `Start`s (`retains_unclaimed_start_named`), and only a call of the same
+  recorded kind — which may still be a retained `Start`'s late owner — is exempt; unrelated
+  retained `Start`s do not suppress the charge. Each site passes its recorded kind (p2 HTTP and
+  rdbms share the `<scope:batched-write>` scope name, RPC its `golem:rpc` function, MCP dispatch
+  the owning `McpToolCall`).
 
 Tests: `replay_state/tests.rs` (`positional_reader_waits_for_a_retained_entity_start_to_be_claimed`,
 `interleaved_positional_markers_are_consumed_only_by_the_recording_store`,
 `request_matching_claim_adopts_retained_start_behind_its_own_delivery_marker`,
 `retained_start_publishes_the_non_hint_position_only_when_claimed`,
-`replay_jump_prunes_retained_starts_of_the_abandoned_attempt`),
+`replay_jump_prunes_retained_starts_of_the_abandoned_attempt`,
+`retained_start_names_are_published_per_call_kind`,
+`closed_retained_starts_are_released_at_live_invocation_end`,
+`unclosed_retained_starts_are_rejected_at_live_invocation_end`),
 `tests/tool_streaming.rs` (`positional_atomic_marker_does_not_consume_unclaimed_body_*`,
 `direct_call_waits_without_blocking_body_admission_*`,
 `incomplete_custom_durability_waits_for_overlapping_completed_reconstruction`).

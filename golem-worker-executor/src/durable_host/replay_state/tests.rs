@@ -4046,6 +4046,55 @@ async fn retained_start_claim_rejects_mismatched_identity() {
 }
 
 #[test]
+async fn retained_start_names_are_published_per_call_kind() {
+    // [NoOp, Start(A=2 now), Start(B=3 now), End(A=2→4), End(B=3→5)] — while B is retained, only
+    // a call of B's recorded kind may still be B's late owner; a call of any other kind is fresh.
+    // Adopting B clears the published name again.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(2, 42),
+        end_for(3, 43),
+    ])
+    .await;
+    assert!(!rs.retains_unclaimed_start_named(&HostFunctionName::MonotonicClockNow));
+
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+    assert!(rs.retains_unclaimed_start_named(&HostFunctionName::MonotonicClockNow));
+    assert!(
+        !rs.retains_unclaimed_start_named(&HostFunctionName::MonotonicClockResolution),
+        "a retained Start of another kind must not suppress the charge for this kind"
+    );
+
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
+    assert!(!rs.retains_unclaimed_start_named(&HostFunctionName::MonotonicClockNow));
+    assert!(!rs.has_unclaimed_retained_starts());
+    match rs.await_resolution(handle_b).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
 async fn retained_start_without_terminal_resolves_incomplete_at_live_switch() {
     // [NoOp, Start(A=2), Start(B=3), End(A=2→4)] — B's End was never recorded. Draining A's End
     // retains B; when B's owner claims it, the claim registers an ordinary awaiter that reaches

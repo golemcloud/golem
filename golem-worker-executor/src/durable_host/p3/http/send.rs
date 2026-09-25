@@ -46,7 +46,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpScheme,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostRequestP3HttpClientSend,
+    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestP3HttpClientSend,
     HostResponseP3HttpClientSendResult, OplogIndex,
 };
 use golem_common::model::{
@@ -169,15 +169,16 @@ where
 
     // Per-invocation HTTP call limit and monthly account-level HTTP call quota,
     // mirroring the P2 `http::outgoing_handler::handle` path. Both checks
-    // no-op during replay. Permission-denied calls are durably recorded below
+    // no-op during replay and for a send that may still adopt its retained
+    // recorded `Start`. Permission-denied calls are durably recorded below
     // without consuming quota.
     if !authorization_denied {
         store.with(|mut access| {
             let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
             ctx.state
-                .check_and_increment_http_call_count()
+                .check_and_increment_http_call_count(&P3HttpClientSend::HOST_FUNCTION_NAME)
                 .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
-            ctx.record_monthly_http_call()
+            ctx.record_monthly_http_call(&P3HttpClientSend::HOST_FUNCTION_NAME)
                 .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))
         })?;
     }

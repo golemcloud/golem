@@ -55,6 +55,18 @@ tokio::task_local! {
     static ENTITY_CANCELLATION_MASKED: ();
 }
 
+/// The recorded function name of a batched-write durable scope `Start`. A discriminator makes the
+/// name unique among concurrent sibling scopes of the same durable function type; a discriminated
+/// claim never matches a plain-named scope and vice versa.
+pub(crate) fn batched_write_scope_name(discriminator: Option<&str>) -> HostFunctionName {
+    match discriminator {
+        Some(discriminator) => {
+            HostFunctionName::Custom(format!("<scope:batched-write:{discriminator}>"))
+        }
+        None => HostFunctionName::Custom("<scope:batched-write>".to_string()),
+    }
+}
+
 pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Output {
     ENTITY_CANCELLATION_MASKED.scope((), future).await
 }
@@ -1283,13 +1295,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.reset_invocation_call_counts();
     }
 
-    /// Records one outgoing HTTP call against the monthly account quota.
+    /// Records one outgoing HTTP call, recorded under `function_name`, against the monthly
+    /// account quota when it is fresh live work (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
     /// is exhausted. This trap maps to `RetryDecision::TryStop`; the worker is
     /// suspended and resumed when the registry replenishes the budget.
-    pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
-        if self.state.durable_call_is_live() && !self.state.resource_limit_entry.record_http_call()
+    pub fn record_monthly_http_call(
+        &mut self,
+        function_name: &HostFunctionName,
+    ) -> anyhow::Result<()> {
+        if self.state.durable_call_is_fresh(function_name)
+            && !self.state.resource_limit_entry.record_http_call()
         {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
@@ -1299,12 +1316,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Records one outgoing RPC call against the monthly account quota.
+    /// Records one outgoing RPC call, recorded under `function_name`, against the monthly account
+    /// quota when it is fresh live work (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyRpcCallBudgetExhausted)` if the monthly budget
     /// is exhausted.
-    pub fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
-        if self.state.durable_call_is_live() && !self.state.resource_limit_entry.record_rpc_call() {
+    pub fn record_monthly_rpc_call(
+        &mut self,
+        function_name: &HostFunctionName,
+    ) -> anyhow::Result<()> {
+        if self.state.durable_call_is_fresh(function_name)
+            && !self.state.resource_limit_entry.record_rpc_call()
+        {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted
             ))
@@ -3115,7 +3138,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // and only stored when the scope continues replaying (not when recovery switches to live
             // and re-runs the body, which appends a fresh `End` live).
             let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
+            let scope_name = batched_write_scope_name(None);
             // A scope opened after the live transition may still own a recorded scope `Start`
             // the cursor retained for it (see `WorkerState::durable_call_is_live`), so it claims
             // first and appends a new `Start` only once replay reports none remains.
@@ -11208,17 +11231,21 @@ impl PrivateDurableWorkerState {
         }
     }
 
-    /// Increments the HTTP call counter for the current invocation if in live mode.
+    /// Increments the HTTP call counter for the current invocation if the call recorded under
+    /// `function_name` is fresh live work.
     ///
     /// Returns `Err` if the per-invocation HTTP call limit would be exceeded.
     /// The check and increment are performed only during live execution; replay
     /// mode is a no-op so that recovering workers are not penalised for calls
     /// already made in a prior execution. Call quotas are charged before the
     /// call's `Start` is claimed or written, so they use
-    /// [`Self::durable_call_is_live`]: a call that may still adopt a retained
-    /// recorded `Start` is not charged again.
-    pub fn check_and_increment_http_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.durable_call_is_live() {
+    /// [`Self::durable_call_is_fresh`]: a call that may still adopt a retained
+    /// recorded `Start` of its own kind is not charged again.
+    pub fn check_and_increment_http_call_count(
+        &mut self,
+        function_name: &HostFunctionName,
+    ) -> Result<(), GolemSpecificWasmTrap> {
+        if !self.durable_call_is_fresh(function_name) {
             return Ok(());
         }
         if self.per_invocation_http_call_limit != u64::MAX
@@ -11230,13 +11257,17 @@ impl PrivateDurableWorkerState {
         Ok(())
     }
 
-    /// Increments the RPC call counter for the current invocation if in live mode.
+    /// Increments the RPC call counter for the current invocation if the call recorded under
+    /// `function_name` is fresh live work.
     ///
     /// Returns `Err` if the per-invocation RPC call limit would be exceeded. Uses
-    /// [`Self::durable_call_is_live`] for the same reason as
+    /// [`Self::durable_call_is_fresh`] for the same reason as
     /// [`Self::check_and_increment_http_call_count`].
-    pub fn check_and_increment_rpc_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.durable_call_is_live() {
+    pub fn check_and_increment_rpc_call_count(
+        &mut self,
+        function_name: &HostFunctionName,
+    ) -> Result<(), GolemSpecificWasmTrap> {
+        if !self.durable_call_is_fresh(function_name) {
             return Ok(());
         }
         if self.per_invocation_rpc_call_limit != u64::MAX
@@ -11282,13 +11313,29 @@ impl PrivateDurableWorkerState {
     /// they always answer `true` once live.
     ///
     /// Positional readers, authorization and snapshot decisions keep using [`Self::is_live`],
-    /// which describes the Store's position, not a call's admission. Per-call quotas are charged
-    /// before a call is admitted, so they use this predicate too: a call that may still adopt a
-    /// retained recorded `Start` is not charged again.
+    /// which describes the Store's position, not a call's admission. Per-call quotas use
+    /// [`Self::durable_call_is_fresh`], which narrows the retained-`Start` exception to the
+    /// call's own kind.
     pub fn durable_call_is_live(&self) -> bool {
         self.is_live()
             && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
                 || !self.replay_state.has_unclaimed_retained_starts())
+    }
+
+    /// Whether a durable call recorded under `function_name` that this Store is about to issue is
+    /// known to create fresh work: the Store is live and no unclaimed retained `Start` of that kind
+    /// remains for a late owner to adopt. Per-call quotas are charged before a call is admitted
+    /// (so that a refused call leaves no oplog entry), and use this predicate: a call that may
+    /// still adopt a retained recorded `Start` is not charged again, while calls of every other
+    /// kind are charged even when unrelated retained `Start`s exist. Retained `Start`s of the same
+    /// kind but a different owner (another Store of this agent) also suppress the charge; that
+    /// residual under-charge is bounded by the recorded prefix of one recovered invocation.
+    pub fn durable_call_is_fresh(&self, function_name: &HostFunctionName) -> bool {
+        self.is_live()
+            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+                || !self
+                    .replay_state
+                    .retains_unclaimed_start_named(function_name))
     }
 
     /// Whether this Store is an incomplete entity that already continued live locally while the

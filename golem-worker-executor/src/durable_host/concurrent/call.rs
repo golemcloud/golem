@@ -2047,12 +2047,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // siblings, so the replay claim below pairs the call with exactly its own recorded scope
         // (and with it the correct incomplete-scope detection). Without one, concurrent scopes of
         // the same durable function type are interchangeable at claim time.
-        let scope_name = match &prepared.claim_options.scope_discriminator {
-            Some(discriminator) => {
-                HostFunctionName::Custom(format!("<scope:batched-write:{discriminator}>"))
-            }
-            None => HostFunctionName::Custom("<scope:batched-write>".to_string()),
-        };
+        let scope_name = crate::durable_host::batched_write_scope_name(
+            prepared.claim_options.scope_discriminator.as_deref(),
+        );
         if prepared.is_live {
             match &mut prepared.claim_options.scope_replay_recovery {
                 ScopeReplayRecovery::Forbidden => {

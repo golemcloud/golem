@@ -163,13 +163,13 @@ use golem_worker_executor::services::{
 };
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
+pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
     FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
     InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, StatusManagement,
     UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
-pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use prometheus::Registry;
 use regex::Regex;
@@ -2318,12 +2318,12 @@ impl CallCountManagement for TestWorkerCtx {
         self.durable_ctx.reset_invocation_call_counts();
     }
 
-    fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
-        self.durable_ctx.record_monthly_http_call()
+    fn record_monthly_http_call(&mut self, function_name: &HostFunctionName) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_http_call(function_name)
     }
 
-    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
-        self.durable_ctx.record_monthly_rpc_call()
+    fn record_monthly_rpc_call(&mut self, function_name: &HostFunctionName) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_rpc_call(function_name)
     }
 }
 
@@ -5048,8 +5048,7 @@ pub struct AdditionalTestDeps {
     /// for a matching function at a given stage, and one-shot signals fired when
     /// a direct (Store-holding) durable call starts waiting for its replayed
     /// resolution.
-    replay_admission_gates:
-        Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
+    replay_admission_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
     direct_replay_wait_signals:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
     agent_invocation_success_gates:
@@ -5322,7 +5321,9 @@ impl AdditionalTestDeps {
             gates: self.replay_admission_gates.clone(),
             signals: self.direct_replay_wait_signals.clone(),
         })
-            as Arc<dyn golem_worker_executor::workerctx::ReplayAdmissionHook>)
+            as Arc<
+                dyn golem_worker_executor::workerctx::ReplayAdmissionHook,
+            >)
     }
 
     /// Arms a one-shot gate that pauses the given agent's next consume-body
