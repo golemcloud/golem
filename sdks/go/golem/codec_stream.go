@@ -89,18 +89,21 @@ func compileStream(c *codec, inner *codec) {
 		if !ok {
 			return fmt.Errorf("golem: a stream can only be received inside a component")
 		}
-		fresh := reflect.New(c.typ).Elem()
-		newStreamValue(fresh, src)
-		dst.Set(fresh)
+		fresh := reflect.New(c.typ)
+		fresh.Interface().(streamReceiver).streamReceive(src)
+		dst.Set(fresh.Elem())
 		return nil
 	}
 }
 
-// newStreamValue initialises a zero AgentStream in place with a received
-// endpoint. It goes through the streamish interface so it needs no knowledge of
-// the item type.
-func newStreamValue(dst reflect.Value, src treeSource) {
-	st := &streamState{src: src}
-	// The zero value's st field is nil, so set it through the addressable copy.
-	dst.FieldByName("st").Set(reflect.ValueOf(st))
+// streamReceiver initialises a zero AgentStream with a received endpoint. Its
+// state is unexported, and reflection cannot set an unexported field, so the
+// decoder goes through this method on a pointer to a fresh value instead.
+type streamReceiver interface {
+	streamReceive(src treeSource)
+}
+
+func (s *AgentStream[T]) streamReceive(src treeSource) {
+	s.st = &streamState{src: src}
+	s.codec = defaultStreamCodec[T]()
 }

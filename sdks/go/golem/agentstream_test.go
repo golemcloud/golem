@@ -267,3 +267,25 @@ func TestContainsStreamPropagatesThroughComposites(t *testing.T) {
 		}
 	}
 }
+
+// A received stream lands in a field of the method's input struct, which the
+// decoder fills through reflection. Reflection cannot set the stream's
+// unexported state, so the decoder initialises a fresh value through a method
+// instead; this is that exact path, for a stream held in a struct field.
+func TestAReceivedStreamCanBeStoredInAStructField(t *testing.T) {
+	type in struct {
+		Chunks AgentStream[byte]
+		Name   string
+	}
+	var v in
+	dst := reflect.ValueOf(&v).Elem().Field(0)
+	fresh := reflect.New(dst.Type())
+	fresh.Interface().(streamReceiver).streamReceive(treeSource{})
+	dst.Set(fresh.Elem())
+	if v.Chunks.st == nil {
+		t.Fatal("the received stream has no state")
+	}
+	if v.Chunks.codec.decode == nil {
+		t.Fatal("the received stream cannot decode its items")
+	}
+}
