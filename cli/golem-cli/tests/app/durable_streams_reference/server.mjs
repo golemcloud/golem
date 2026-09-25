@@ -9,6 +9,7 @@ const server = new DurableStreamTestServer({
 })
 const upstream = await server.start()
 const requests = []
+const expectedToken = process.env.GOLEM_DS_TEST_TOKEN
 
 // Record transport selection without interpreting or changing upstream stream data.
 const proxy = createServer((req, res) => {
@@ -18,6 +19,7 @@ const proxy = createServer((req, res) => {
     res.end(JSON.stringify(requests))
     return
   }
+  const authenticated = req.headers.authorization === `Bearer ${expectedToken}`
   const record = {
     method: req.method,
     path: url.pathname,
@@ -26,6 +28,14 @@ const proxy = createServer((req, res) => {
     producerEpoch: req.headers["producer-epoch"],
     producerSeq: req.headers["producer-seq"],
     closed: req.headers["stream-closed"],
+    authenticated,
+  }
+  if (url.pathname === "/template" && !authenticated) {
+    record.status = 401
+    requests.push(record)
+    res.writeHead(401)
+    res.end()
+    return
   }
   const outgoing = forward(url, { method: req.method, headers: req.headers }, (incoming) => {
     record.status = incoming.statusCode
