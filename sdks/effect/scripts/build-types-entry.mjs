@@ -111,6 +111,48 @@ const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root)
 const program = ts.createProgram(parsed.fileNames, { ...parsed.options, noEmit: true })
 const checker = program.getTypeChecker()
 const index = program.getSourceFile(resolve(root, "src/index.ts"))
+const witCodecFacade = resolve(distDir, "src/WitCodec.js")
+const witCodecImplementation = resolve(distDir, "src/internal/WitCodec.js")
+
+function relativeImport(fromFile, toFile) {
+  const path = relative(dirname(fromFile), toFile).replaceAll("\\", "/")
+  return path.startsWith(".") ? path : `./${path}`
+}
+
+function rewriteRelativeImports(source, fromFile, rewrite, outputFile = fromFile) {
+  return source.replace(/(["'])(\.\.?\/[^"']+)\1/g, (match, quote, specifier) => {
+    const target = resolve(dirname(fromFile), specifier)
+    const replacement = rewrite(target)
+    return replacement ? `${quote}${relativeImport(outputFile, replacement)}${quote}` : match
+  })
+}
+
+const witCodecSource = readFileSync(witCodecFacade, "utf8")
+writeFileSync(
+  witCodecImplementation,
+  rewriteRelativeImports(
+    witCodecSource,
+    witCodecFacade,
+    (target) => target,
+    witCodecImplementation,
+  ),
+)
+function redirectWitCodecImports(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name)
+    if (entry.isDirectory()) {
+      redirectWitCodecImports(path)
+    } else if (path.endsWith(".js") && path !== witCodecImplementation) {
+      const source = readFileSync(path, "utf8")
+      const rewritten = rewriteRelativeImports(source, path, (target) =>
+        target === witCodecFacade ? witCodecImplementation : undefined,
+      )
+      if (rewritten !== source) writeFileSync(path, rewritten)
+    }
+  }
+}
+redirectWitCodecImports(resolve(distDir, "src"))
+
 const facades = index.statements
   .filter(
     (node) =>
@@ -129,10 +171,6 @@ facades.push(
   ["Ignite/IgniteClient", "@golemcloud/effect-golem/ignite2"],
 )
 for (const [modulePath, owner, namespace] of facades) {
-  // WitCodec is the implementation used by the package itself. Replacing it
-  // with a facade would make the package import that facade through its own
-  // public entrypoint and create a circular, uninitialized module.
-  if (modulePath === "WitCodec") continue
   const source = program.getSourceFile(resolve(root, "src", `${modulePath}.ts`))
   const exports = checker
     .getExportsOfModule(checker.getSymbolAtLocation(source))
