@@ -47,8 +47,10 @@ use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_val
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
+use std::future::Future;
+use std::pin::Pin;
 use tracing::{Instrument, Level, debug, span};
-use wasmtime::component::Accessor;
+use wasmtime::component::{Accessor, AccessorTask};
 use wasmtime::{AsContextMut, StoreContextMut};
 
 pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
@@ -370,7 +372,7 @@ pub(crate) async fn materialize_streaming_result<Ctx: WorkerCtx>(
             return invoke_result_from_trap(&mut store, consumed_fuel, error).await;
         }
     };
-    if let Err(error) = run_guest_call_settled(&mut store, async |_accessor| ()).await {
+    if let Err(error) = run_guest_call_settled(&mut store, |_accessor| Box::pin(async {})).await {
         return match error {
             GuestCallSettlementError::Infrastructure(error) => Err(error),
             GuestCallSettlementError::Trap(error)
@@ -541,25 +543,107 @@ fn classify_guest_call_settlement<R>(
 /// is instead delivered *cooperatively*: every blocking host park point races the worker's
 /// interrupt signal, abandons its durable call handles for the trap, and unwinds the event loop
 /// with the interrupt from within.
-pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
+struct RootGuestCall<F, R> {
+    fun: F,
+    result: tokio::sync::oneshot::Sender<R>,
+}
+
+type RootGuestCallFuture<'a, R> = Pin<Box<dyn Future<Output = R> + Send + 'a>>;
+
+impl<Ctx, F, R> AccessorTask<Ctx> for RootGuestCall<F, R>
+where
+    Ctx: WorkerCtx,
+    F: for<'a> FnOnce(&'a Accessor<Ctx>) -> RootGuestCallFuture<'a, R> + Send + 'static,
+    R: Send + 'static,
+{
+    async fn run(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+        let result = (self.fun)(accessor).await;
+        let _ = self.result.send(result);
+        Ok(())
+    }
+}
+
+enum GuestCallProgress<R> {
+    Completed(R),
+    SnapshotAssistedFinalizationRequested,
+}
+
+pub(crate) async fn run_guest_call_unsettled<Ctx: WorkerCtx, R, F>(
     store: &mut StoreContextMut<'_, Ctx>,
-    fun: impl AsyncFnOnce(&Accessor<Ctx>) -> R,
-) -> Result<R, GuestCallSettlementError> {
+    fun: F,
+) -> Result<R, GuestCallSettlementError>
+where
+    F: for<'a> FnOnce(&'a Accessor<Ctx>) -> RootGuestCallFuture<'a, R> + Send + 'static,
+    R: Send + 'static,
+{
+    let assisted_finalization = store
+        .data()
+        .durable_ctx()
+        .snapshot_assisted_finalization_gate();
+    let result = if let Some(gate) = assisted_finalization {
+        let (result_sender, mut result_receiver) = tokio::sync::oneshot::channel();
+        let gate_for_wait = gate.clone();
+        let progress = store
+            .as_context_mut()
+            .run_concurrent(async |accessor| {
+                accessor.spawn(RootGuestCall {
+                    fun,
+                    result: result_sender,
+                });
+                tokio::select! {
+                    result = &mut result_receiver => GuestCallProgress::Completed(
+                        result.expect("store retains the spawned guest-call task")
+                    ),
+                    _ = gate_for_wait.wait_owner_finalization_request() => {
+                        GuestCallProgress::SnapshotAssistedFinalizationRequested
+                    }
+                }
+            })
+            .await;
+        match progress {
+            Ok(GuestCallProgress::Completed(result)) => Ok(result),
+            Ok(GuestCallProgress::SnapshotAssistedFinalizationRequested) => {
+                if let Err(error) = store
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .complete_requested_snapshot_assisted_finalization()
+                    .await
+                {
+                    return Err(GuestCallSettlementError::Infrastructure(error));
+                }
+                store
+                    .as_context_mut()
+                    .run_concurrent(async move |_accessor| {
+                        result_receiver
+                            .await
+                            .expect("store retains the spawned guest-call task")
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        store
+            .as_context_mut()
+            .run_concurrent(async move |accessor| fun(accessor).await)
+            .await
+    };
+    let interrupted = store.data().durable_ctx().is_interrupting()
+        || store.data().durable_ctx().invocation_deadline_exceeded();
+    classify_guest_call_settlement(result, None, interrupted)
+}
+
+pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R, F>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    fun: F,
+) -> Result<R, GuestCallSettlementError>
+where
+    F: for<'a> FnOnce(&'a Accessor<Ctx>) -> RootGuestCallFuture<'a, R> + Send + 'static,
+    R: Send + 'static,
+{
     let tracker = store.data().durable_ctx().tail_work_tracker();
     let tracker_for_error = tracker.clone();
     let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
-    let fun = {
-        let drain_started = drain_started.clone();
-        async move |accessor: &Accessor<Ctx>| {
-            let result = fun(accessor).await;
-            // The root future has completed: everything from here on is the (bounded) drain
-            // phase. Arm the timeout here rather than in the settlement predicate — the
-            // predicate is only consulted at idle observation points, which are never reached
-            // if e.g. a guest task lingers, and the drain must stay bounded even then.
-            drain_started.notify_one();
-            result
-        }
-    };
     let mut settled = move |_store: StoreContextMut<'_, Ctx>| {
         let active = tracker.active_count();
         tracing::debug!("invocation tail-work settlement check: {active} spawned task(s) active");
@@ -568,10 +652,45 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     let tail_work_deadline = store
         .data()
         .durable_ctx()
-        .arm_tail_work_deadline(drain_started);
-    let result = store
+        .arm_tail_work_deadline(drain_started.clone());
+    if store
+        .data()
+        .durable_ctx()
+        .snapshot_assisted_finalization_gate()
+        .is_none()
+    {
+        let root_completed = drain_started.clone();
+        let result = store
+            .as_context_mut()
+            .run_concurrent_and_settle(
+                async move |accessor| {
+                    let result = fun(accessor).await;
+                    root_completed.notify_one();
+                    result
+                },
+                &mut settled,
+            )
+            .await;
+        let interrupted = store.data().durable_ctx().is_interrupting()
+            || store.data().durable_ctx().invocation_deadline_exceeded();
+        let tail_timeout = if tail_work_deadline.exceeded() && !interrupted {
+            Some((
+                tail_work_deadline.duration(),
+                tracker_for_error.active_count(),
+            ))
+        } else {
+            None
+        };
+        return classify_guest_call_settlement(result, tail_timeout, interrupted);
+    }
+    let result = run_guest_call_unsettled(store, fun).await?;
+    // The root future has completed: everything from here on is the (bounded) drain phase. Arm
+    // the timeout here rather than in the settlement predicate — the predicate is only consulted
+    // at idle observation points, which are never reached if e.g. a guest task lingers.
+    drain_started.notify_one();
+    let settlement = store
         .as_context_mut()
-        .run_concurrent_and_settle(fun, &mut settled)
+        .run_concurrent_and_settle(async |_accessor| (), &mut settled)
         .await;
     let interrupted = store.data().durable_ctx().is_interrupting()
         || store.data().durable_ctx().invocation_deadline_exceeded();
@@ -583,7 +702,8 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     } else {
         None
     };
-    classify_guest_call_settlement(result, tail_timeout, interrupted)
+    classify_guest_call_settlement(settlement, tail_timeout, interrupted)?;
+    Ok(result)
 }
 
 /// Dispatches a single lowered invocation to the matching typed guest export
@@ -604,10 +724,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = run_guest_call_settled(store, async |accessor| {
-                guest
-                    .call_initialize(accessor, agent_type, input, principal)
-                    .await
+            let result = run_guest_call_settled(store, move |accessor| {
+                Box::pin(async move {
+                    guest
+                        .call_initialize(accessor, agent_type, input, principal)
+                        .await
+                })
             })
             .await;
             let consumed_fuel =
@@ -637,22 +759,21 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_agent_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
             let result = if expected_output.uses_streams() {
-                let result = store
-                    .as_context_mut()
-                    .run_concurrent(async |accessor| {
+                run_guest_call_unsettled(store, move |accessor| {
+                    Box::pin(async move {
                         guest
                             .call_invoke(accessor, method_name, input, principal)
                             .await
                     })
-                    .await;
-                let interrupted = store.data().durable_ctx().is_interrupting()
-                    || store.data().durable_ctx().invocation_deadline_exceeded();
-                classify_guest_call_settlement(result, None, interrupted)
+                })
+                .await
             } else {
-                run_guest_call_settled(store, async |accessor| {
-                    guest
-                        .call_invoke(accessor, method_name, input, principal)
-                        .await
+                run_guest_call_settled(store, move |accessor| {
+                    Box::pin(async move {
+                        guest
+                            .call_invoke(accessor, method_name, input, principal)
+                            .await
+                    })
                 })
                 .await
             };
@@ -681,9 +802,10 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result =
-                run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
-                    .await;
+            let result = run_guest_call_settled(store, move |accessor| {
+                Box::pin(async move { guest.call_save(accessor).await })
+            })
+            .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -704,8 +826,8 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::LoadSnapshot { snapshot } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = run_guest_call_settled(store, async |accessor| {
-                guest.call_load(accessor, snapshot).await
+            let result = run_guest_call_settled(store, move |accessor| {
+                Box::pin(async move { guest.call_load(accessor, snapshot).await })
             })
             .await;
             let consumed_fuel =
@@ -734,19 +856,21 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         } => {
             let guest = load_oplog_processor_guest(store, instance)?;
             prepare_guest_call(store, display_name).await;
-            let result = run_guest_call_settled(store, async |accessor| {
-                guest
-                    .call_process(
-                        accessor,
-                        account_info,
-                        config,
-                        component_id,
-                        agent_id,
-                        metadata,
-                        first_entry_index,
-                        entries,
-                    )
-                    .await
+            let result = run_guest_call_settled(store, move |accessor| {
+                Box::pin(async move {
+                    guest
+                        .call_process(
+                            accessor,
+                            account_info,
+                            config,
+                            component_id,
+                            agent_id,
+                            metadata,
+                            first_entry_index,
+                            entries,
+                        )
+                        .await
+                })
             })
             .await;
             let consumed_fuel =

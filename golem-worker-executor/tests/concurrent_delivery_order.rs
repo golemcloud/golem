@@ -60,6 +60,29 @@ async fn host_only_materialization_waits_before_ready_root_settlement() -> anyho
     Ok(())
 }
 
+#[test]
+async fn settled_event_loop_reports_deadlock_before_root_completion() -> anyhow::Result<()> {
+    let mut store = Store::new(&engine(), ());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        store.as_context_mut().run_concurrent_and_settle(
+            async |_accessor| std::future::pending::<()>().await,
+            &mut |_| true,
+        ),
+    )
+    .await
+    .expect("settled event loop must not hang when its root future is deadlocked")
+    .expect_err("a permanently parked root must report AsyncDeadlock");
+    assert!(
+        matches!(
+            result.downcast_ref::<wasmtime::Trap>(),
+            Some(wasmtime::Trap::AsyncDeadlock)
+        ),
+        "unexpected event-loop failure: {result}"
+    );
+    Ok(())
+}
+
 /// Host-side state driving the completion order of the bespoke `call` host
 /// function.
 struct DeliveryState {

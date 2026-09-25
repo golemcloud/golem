@@ -690,6 +690,13 @@ pub trait TestDsl {
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
+    async fn snapshot_assisted_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()>;
+
     async fn manual_update_worker(
         &self,
         agent_id: &AgentId,

@@ -100,6 +100,64 @@ use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
 
+fn client_update_mode(mode: AgentUpdateMode) -> golem_common::model::worker::AgentUpdateMode {
+    match mode {
+        AgentUpdateMode::Automatic => golem_common::model::worker::AgentUpdateMode::Automatic,
+        AgentUpdateMode::Manual => golem_common::model::worker::AgentUpdateMode::Manual,
+    }
+}
+
+fn latest_pending_update_index(
+    updates: &[UpdateRecord],
+    target_revision: ComponentRevision,
+    mode: golem_common::model::worker::AgentUpdateMode,
+) -> Option<OplogIndex> {
+    updates
+        .iter()
+        .filter_map(|record| match record {
+            UpdateRecord::PendingUpdate(details)
+                if details.target_revision == target_revision && details.mode == mode =>
+            {
+                details.pending_update_index
+            }
+            UpdateRecord::SuccessfulUpdate(details)
+                if details.target_revision == target_revision && details.mode == mode =>
+            {
+                details.pending_update_index
+            }
+            UpdateRecord::FailedUpdate(details)
+                if details.target_revision == target_revision && details.mode == mode =>
+            {
+                details.pending_update_index
+            }
+            _ => None,
+        })
+        .max()
+}
+
+fn next_update_attempt_index(
+    indices: impl IntoIterator<Item = OplogIndex>,
+    previous_pending_update_index: Option<OplogIndex>,
+) -> Option<OplogIndex> {
+    indices
+        .into_iter()
+        .filter(|index| previous_pending_update_index.is_none_or(|previous| *index > previous))
+        .min()
+}
+
+fn is_selected_update_attempt(
+    mode: golem_common::model::worker::AgentUpdateMode,
+    pending_update_index: Option<OplogIndex>,
+    selected_pending_update_index: Option<OplogIndex>,
+) -> bool {
+    mode == golem_common::model::worker::AgentUpdateMode::Manual
+        || pending_update_index == selected_pending_update_index
+}
+
+fn update_admission_is_impossible(status: golem_common::model::AgentStatus) -> bool {
+    status == golem_common::model::AgentStatus::Exited
+}
+
 pub struct AgentCommandHandler {
     ctx: Arc<Context>,
 }
@@ -1978,7 +2036,9 @@ impl AgentCommandHandler {
             .component_handler()
             .component_version_at(component_id, target_revision)
             .await;
+        let client_update_mode = client_update_mode(update_mode);
         let mut update_results = TryUpdateAllWorkersView::default();
+        let mut agents_awaiting_update = Vec::new();
         for agent in &agents_to_update {
             let result = self
                 .update_agent(
@@ -1998,6 +2058,8 @@ impl AgentCommandHandler {
                     agent_id: agent.agent_id.agent_id.as_str().into(),
                     error: error_message_for_output(error),
                 });
+            } else {
+                agents_awaiting_update.push(agent);
             }
             update_results.agents.push(AgentUpdateMeta {
                 component_name: component_name.clone(),
@@ -2014,12 +2076,18 @@ impl AgentCommandHandler {
         }
 
         if await_update {
-            for agent in &agents_to_update {
+            for agent in agents_awaiting_update {
                 if let Err(error) = self
                     .await_update_result(
                         &agent.agent_id.component_id,
                         &agent.agent_id.agent_id,
                         target_revision,
+                        client_update_mode,
+                        latest_pending_update_index(
+                            &agent.updates,
+                            target_revision,
+                            client_update_mode,
+                        ),
                     )
                     .await
                 {
@@ -2057,6 +2125,16 @@ impl AgentCommandHandler {
         );
 
         let clients = self.ctx.golem_clients().await?;
+        let client_update_mode = client_update_mode(update_mode);
+        let previous_pending_update_index = if await_update {
+            let metadata = clients
+                .worker
+                .get_worker_metadata(&component_id.0, agent_id)
+                .await?;
+            latest_pending_update_index(&metadata.updates, target_revision, client_update_mode)
+        } else {
+            None
+        };
 
         let result = clients
             .worker
@@ -2064,12 +2142,7 @@ impl AgentCommandHandler {
                 &component_id.0,
                 agent_id,
                 &UpdateWorkerRequest {
-                    mode: match update_mode {
-                        AgentUpdateMode::Automatic => {
-                            golem_client::model::AgentUpdateMode::Automatic
-                        }
-                        AgentUpdateMode::Manual => golem_client::model::AgentUpdateMode::Manual,
-                    },
+                    mode: client_update_mode,
                     target_revision: target_revision.into(),
                     disable_wakeup: Some(disable_wakeup),
                 },
@@ -2083,8 +2156,14 @@ impl AgentCommandHandler {
                 log_action("Triggered update", "");
 
                 if await_update {
-                    self.await_update_result(component_id, agent_id, target_revision)
-                        .await?;
+                    self.await_update_result(
+                        component_id,
+                        agent_id,
+                        target_revision,
+                        client_update_mode,
+                        previous_pending_update_index,
+                    )
+                    .await?;
                 }
 
                 Ok(())
@@ -2103,33 +2182,95 @@ impl AgentCommandHandler {
         component_id: &ComponentId,
         agent_id: &str,
         target_revision: ComponentRevision,
+        update_mode: golem_common::model::worker::AgentUpdateMode,
+        previous_pending_update_index: Option<OplogIndex>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
+        let mut selected_pending_update_index = None;
         loop {
             let metadata = clients
                 .worker
                 .get_worker_metadata(&component_id.0, agent_id)
                 .await?;
-            // Aggregate across ALL update records for the target revision, then decide once.
-            // (Deciding per-record would act on whichever record comes first — spuriously erroring on
-            // a non-target record, or reporting a stale outcome instead of the most recent one.)
-            let mut pending_count = 0;
+            // Correlate the outcome with the newly appended pending-update entry. Revision and
+            // timestamp alone are insufficient when the same target is attempted repeatedly.
+            if update_mode != golem_common::model::worker::AgentUpdateMode::Manual
+                && selected_pending_update_index.is_none()
+            {
+                selected_pending_update_index = next_update_attempt_index(
+                    metadata.updates.iter().filter_map(|record| match record {
+                        UpdateRecord::PendingUpdate(details)
+                            if details.target_revision == target_revision
+                                && details.mode == update_mode =>
+                        {
+                            details.pending_update_index
+                        }
+                        UpdateRecord::SuccessfulUpdate(details)
+                            if details.target_revision == target_revision
+                                && details.mode == update_mode =>
+                        {
+                            details.pending_update_index
+                        }
+                        UpdateRecord::FailedUpdate(details)
+                            if details.target_revision == target_revision
+                                && details.mode == update_mode =>
+                        {
+                            details.pending_update_index
+                        }
+                        _ => None,
+                    }),
+                    previous_pending_update_index,
+                );
+            }
+
+            if update_mode != golem_common::model::worker::AgentUpdateMode::Manual
+                && selected_pending_update_index.is_none()
+            {
+                if update_admission_is_impossible(metadata.status) {
+                    return Err(anyhow!(
+                        "Agent update was not admitted because the agent has exited"
+                    ));
+                }
+                log_action("Agent update", "is awaiting admission metadata");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+
+            let mut pending = false;
             let mut successes = Vec::new();
             let mut failures = Vec::new();
             for update_record in metadata.updates {
                 match update_record {
                     UpdateRecord::PendingUpdate(details)
-                        if details.target_revision == target_revision =>
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                update_mode,
+                                details.pending_update_index,
+                                selected_pending_update_index,
+                            ) =>
                     {
-                        pending_count += 1;
+                        pending = true;
                     }
                     UpdateRecord::SuccessfulUpdate(details)
-                        if details.target_revision == target_revision =>
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                update_mode,
+                                details.pending_update_index,
+                                selected_pending_update_index,
+                            ) =>
                     {
                         successes.push(details);
                     }
                     UpdateRecord::FailedUpdate(details)
-                        if details.target_revision == target_revision =>
+                        if details.target_revision == target_revision
+                            && details.mode == update_mode
+                            && is_selected_update_attempt(
+                                update_mode,
+                                details.pending_update_index,
+                                selected_pending_update_index,
+                            ) =>
                     {
                         failures.push(details);
                     }
@@ -2147,7 +2288,7 @@ impl AgentCommandHandler {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
-            if pending_count > 0 {
+            if pending {
                 log_action("Agent update", "is still pending");
                 tokio::time::sleep(Duration::from_secs(2)).await;
             } else {
@@ -3378,9 +3519,10 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, apply_list_mode_filter, build_repl_agent_id, normalize_public_agent_id,
+        AgentListMode, AgentUpdateMode, apply_list_mode_filter, build_repl_agent_id,
+        is_selected_update_attempt, next_update_attempt_index, normalize_public_agent_id,
         parse_method_argument_schema_value, render_revert_command, split_agent_id,
-        validate_public_invocation_agent_id,
+        update_admission_is_impossible, validate_public_invocation_agent_id,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -3389,7 +3531,8 @@ mod tests {
     use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId, Snapshotting};
     use golem_common::model::application::ApplicationName;
     use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::{Empty, IdempotencyKey};
+    use golem_common::model::worker::AgentUpdateMode as ApiAgentUpdateMode;
+    use golem_common::model::{Empty, IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
@@ -3399,6 +3542,60 @@ mod tests {
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn await_update_attempt_filter_ignores_earlier_same_target_outcomes() {
+        let previous = OplogIndex::from_u64(10);
+        let selected = next_update_attempt_index(
+            [OplogIndex::from_u64(12), previous, OplogIndex::from_u64(11)],
+            Some(previous),
+        );
+
+        assert_eq!(selected, Some(OplogIndex::from_u64(11)));
+        assert!(!is_selected_update_attempt(
+            ApiAgentUpdateMode::Automatic,
+            Some(previous),
+            selected,
+        ));
+        assert!(is_selected_update_attempt(
+            ApiAgentUpdateMode::Automatic,
+            Some(OplogIndex::from_u64(11)),
+            selected,
+        ));
+        assert!(!is_selected_update_attempt(
+            ApiAgentUpdateMode::Automatic,
+            Some(OplogIndex::from_u64(12)),
+            selected,
+        ));
+        assert!(is_selected_update_attempt(
+            ApiAgentUpdateMode::Manual,
+            None,
+            None,
+        ));
+        assert!(update_admission_is_impossible(
+            golem_common::model::AgentStatus::Exited
+        ));
+        assert!(!update_admission_is_impossible(
+            golem_common::model::AgentStatus::Idle
+        ));
+    }
+
+    #[test]
+    fn update_mode_exposes_only_automatic_and_manual() {
+        assert_eq!(
+            "auto".parse::<AgentUpdateMode>().unwrap(),
+            AgentUpdateMode::Automatic
+        );
+        assert_eq!(
+            "manual".parse::<AgentUpdateMode>().unwrap(),
+            AgentUpdateMode::Manual
+        );
+        assert!(
+            "snapshot-assisted-automatic"
+                .parse::<AgentUpdateMode>()
+                .is_err()
+        );
+    }
 
     #[test]
     fn revert_command_preserves_scope_and_shell_sensitive_arguments() {

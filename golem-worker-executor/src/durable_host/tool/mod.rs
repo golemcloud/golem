@@ -2301,20 +2301,27 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                     "failed to load tool guest export: {error}"
                 ))
             })?;
-            run_guest_call_settled(&mut store, async move |accessor| {
-                let result = guest
-                    .call_invoke(
+            run_guest_call_settled(&mut store, move |accessor| {
+                Box::pin(async move {
+                    let result = guest
+                        .call_invoke(
+                            accessor,
+                            tool_name,
+                            command_path,
+                            input,
+                            stdin,
+                            stdout,
+                            principal,
+                        )
+                        .await?;
+                    materialize_guest_tool_response(
                         accessor,
-                        tool_name,
-                        command_path,
-                        input,
-                        stdin,
-                        stdout,
-                        principal,
+                        result,
+                        &output_contract,
+                        &result_streams,
                     )
-                    .await?;
-                materialize_guest_tool_response(accessor, result, &output_contract, &result_streams)
                     .await
+                })
             })
             .await
         }
@@ -2354,30 +2361,32 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                     "failed to load tool middleware guest export: {error}"
                 ))
             })?;
-            run_guest_call_settled(&mut store, async move |accessor| {
-                let result = guest
-                    .call_invoke_tool_middleware(
+            run_guest_call_settled(&mut store, move |accessor| {
+                Box::pin(async move {
+                    let result = guest
+                        .call_invoke_tool_middleware(
+                            accessor,
+                            middleware_name,
+                            tool_name,
+                            metadata,
+                            parameters,
+                            command_path,
+                            input,
+                            stdin,
+                            stdout,
+                            principal,
+                            wrapped,
+                        )
+                        .await;
+                    revoke.revoke();
+                    materialize_guest_tool_response(
                         accessor,
-                        middleware_name,
-                        tool_name,
-                        metadata,
-                        parameters,
-                        command_path,
-                        input,
-                        stdin,
-                        stdout,
-                        principal,
-                        wrapped,
+                        result?,
+                        &output_contract,
+                        &result_streams,
                     )
-                    .await;
-                revoke.revoke();
-                materialize_guest_tool_response(
-                    accessor,
-                    result?,
-                    &output_contract,
-                    &result_streams,
-                )
-                .await
+                    .await
+                })
             })
             .await
         }
@@ -4449,9 +4458,8 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
     stdout: bool,
     principal: Principal,
 ) -> Result<anyhow::Result<ToolInvokeResponse>, GuestCallSettlementError> {
-    run_guest_call_settled(
-        store,
-        async move |accessor| -> anyhow::Result<ToolInvokeResponse> {
+    run_guest_call_settled(store, move |accessor| {
+        Box::pin(async move {
             let accessor =
                 accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(|ctx| ctx.durable_ctx_mut());
             let (result, receiver) = oneshot::channel();
@@ -4468,8 +4476,8 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
             receiver
                 .await
                 .map_err(|_| anyhow!("native tool task ended without a result"))
-        },
-    )
+        })
+    })
     .await
 }
 

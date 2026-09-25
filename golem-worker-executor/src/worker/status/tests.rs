@@ -42,18 +42,22 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AgentError, DurableFunctionType, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
-    OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
+    AgentError, AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails,
+    HostRequest, HostRequestNoInput, HostResponse, OplogEntry, OplogErrorKind, OplogPayload,
+    PayloadId, RawOplogPayload, SnapshotAssistedUpdateDetails, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult,
-    AgentMetadata, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
-    PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
+    AgentMetadata, AgentResourceDescription, AgentStatus, AgentStatusRecord, AuthoritativeSnapshot,
+    AuthoritativeSnapshotKind, FailedUpdateRecord, IdempotencyKey, OplogProcessorCheckpointState,
+    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
+    SnapshotAssistedUpdateIneligibilityReason, SnapshotAssistedUpdateSelection,
     SuccessfulUpdateRecord, Timestamp,
 };
 use golem_common::read_only_lock;
+use golem_common::resource_runtime::ResourceTypeId;
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -372,6 +376,7 @@ fn successful_update_resets_total_linear_memory_size() {
                 100,
                 Some(32),
                 HashSet::new(),
+                None,
             ),
         ),
         (OplogIndex::from_u64(3), OplogEntry::grow_memory(8)),
@@ -1711,7 +1716,13 @@ fn revert_validation_preserves_jump_while_removing_crossed_snapshot_baseline() {
         ),
         (
             OplogIndex::from_u64(21),
-            OplogEntry::successful_update(*update.target_revision(), 100, None, Default::default()),
+            OplogEntry::successful_update(
+                *update.target_revision(),
+                100,
+                None,
+                Default::default(),
+                None,
+            ),
         ),
     ]);
 
@@ -1747,6 +1758,43 @@ fn revert_validation_ignores_unapplied_snapshot_update_in_dropped_region() {
     );
 
     assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(2)));
+}
+
+#[test]
+fn revert_validation_removes_only_crossed_assisted_promotion() {
+    let details = SnapshotAssistedUpdateDetails {
+        pending_update_index: OplogIndex::from_u64(3),
+        source_component_revision: ComponentRevision::new(1).unwrap(),
+        source_update_epoch: OplogIndex::INITIAL,
+        snapshot_index: OplogIndex::from_u64(2),
+        replay_range: OplogRegion::from_range(3..=3),
+    };
+    let successful_update = OplogEntry::successful_update(
+        ComponentRevision::new(2).unwrap(),
+        100,
+        None,
+        Default::default(),
+        Some(details),
+    );
+    let dropped_update = OplogRegion::from_range(3..=4);
+
+    let regions = calculate_revert_validation_regions(
+        &BTreeMap::from([(OplogIndex::from_u64(4), successful_update.clone())]),
+        &dropped_update,
+    );
+    assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(2)));
+
+    let regions_with_overlap = calculate_revert_validation_regions(
+        &BTreeMap::from([
+            (OplogIndex::from_u64(4), successful_update),
+            (
+                OplogIndex::from_u64(5),
+                OplogEntry::jump(None, OplogRegion::from_range(2..=2)),
+            ),
+        ]),
+        &OplogRegion::from_range(3..=5),
+    );
+    assert!(regions_with_overlap.is_in_deleted_region(OplogIndex::from_u64(2)));
 }
 
 #[test]
@@ -2207,6 +2255,380 @@ async fn failed_auto_update_keeps_automatic_snapshot() {
     run_test_case(test_case).await;
 }
 
+fn snapshot_assisted_pending_details(
+    pending: &PendingUpdateRef,
+) -> (
+    ComponentRevision,
+    OplogIndex,
+    SnapshotAssistedUpdateSelection,
+) {
+    match pending.kind {
+        PendingUpdateKind::SnapshotAssistedAutomatic {
+            source_component_revision,
+            source_update_epoch,
+            selection,
+        } => (source_component_revision, source_update_epoch, selection),
+        _ => panic!("expected snapshot-assisted automatic pending update"),
+    }
+}
+
+#[test]
+async fn snapshot_assisted_selection_freezes_newest_snapshot_before_pending_entry() {
+    let source_revision = ComponentRevision::new(1).unwrap();
+    let update = UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        snapshot_exclusion_through: OplogIndex::NONE,
+    };
+
+    let test_case = TestCase::builder(source_revision.get())
+        .snapshot()
+        .grow_memory(10)
+        // This snapshot represents one that committed after admission prepared its watermark but
+        // before the PendingUpdate append. Reducer-time selection must include it.
+        .snapshot()
+        .pending_update(&update, |_| {})
+        // A later snapshot must not replace the selection frozen at PendingUpdate.
+        .snapshot()
+        .build();
+    let final_status = &test_case.entries.last().unwrap().expected_status;
+    let pending = final_status.pending_updates.front().unwrap();
+    let (source_revision, source_epoch, selection) = snapshot_assisted_pending_details(pending);
+
+    assert_eq!(source_revision, ComponentRevision::new(1).unwrap());
+    assert_eq!(source_epoch, OplogIndex::INITIAL);
+    assert_eq!(
+        selection,
+        SnapshotAssistedUpdateSelection::Selected {
+            snapshot_index: OplogIndex::from_u64(4),
+            snapshot_revision: source_revision,
+        }
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn automatic_update_falls_back_when_snapshot_is_missing_or_excluded() {
+    let target_revision = ComponentRevision::new(2).unwrap();
+    let missing = UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision,
+        snapshot_exclusion_through: OplogIndex::NONE,
+    };
+    let missing_case = TestCase::builder(1)
+        .pending_update(&missing, |_| {})
+        .build();
+    assert_eq!(
+        missing_case
+            .entries
+            .last()
+            .unwrap()
+            .expected_status
+            .pending_updates[0]
+            .kind,
+        PendingUpdateKind::Automatic,
+    );
+    run_test_case(missing_case).await;
+
+    let excluded = UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision,
+        snapshot_exclusion_through: OplogIndex::from_u64(2),
+    };
+    let excluded_case = TestCase::builder(1)
+        .snapshot()
+        .pending_update(&excluded, |_| {})
+        .build();
+    assert_eq!(
+        excluded_case
+            .entries
+            .last()
+            .unwrap()
+            .expected_status
+            .pending_updates[0]
+            .kind,
+        PendingUpdateKind::Automatic,
+    );
+    run_test_case(excluded_case).await;
+}
+
+#[test]
+async fn automatic_update_falls_back_for_mismatched_snapshot_revision() {
+    let mut baseline = TestCase::builder(1).snapshot().build().entries[1]
+        .expected_status
+        .clone();
+    baseline.last_automatic_snapshot_component_revision = Some(ComponentRevision::INITIAL);
+    baseline.component_revision = ComponentRevision::new(2).unwrap();
+    baseline.component_revision_epoch = OplogIndex::from_u64(3);
+    let pending_index = OplogIndex::from_u64(3);
+    let entries = BTreeMap::from([(
+        pending_index,
+        OplogEntry::pending_update(UpdateDescription::SnapshotAssistedAutomatic {
+            target_revision: ComponentRevision::new(3).unwrap(),
+            snapshot_exclusion_through: OplogIndex::NONE,
+        }),
+    )]);
+
+    let status = super::update_status_with_new_entries(
+        AgentMode::Durable,
+        baseline,
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(status.pending_updates[0].kind, PendingUpdateKind::Automatic);
+}
+
+#[test]
+async fn snapshot_assisted_selection_survives_outcome_revert_and_checkpoint_fold() {
+    let update = UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        snapshot_exclusion_through: OplogIndex::NONE,
+    };
+    let test_case = TestCase::builder(1)
+        .snapshot()
+        .pending_update(&update, |_| {})
+        .failed_update(update)
+        .revert(OplogIndex::from_u64(3))
+        .build();
+    let expected = test_case.entries.last().unwrap().expected_status.clone();
+    let expected_selection = Some(SnapshotAssistedUpdateSelection::Selected {
+        snapshot_index: OplogIndex::from_u64(2),
+        snapshot_revision: ComponentRevision::new(1).unwrap(),
+    });
+    assert_eq!(
+        Some(snapshot_assisted_pending_details(&expected.pending_updates[0]).2),
+        expected_selection,
+    );
+
+    let checkpoint = test_case.entries[1].expected_status.clone();
+    test_case.read_starts.lock().unwrap().clear();
+    let checkpoint_fold = calculate_last_known_status_with_checkpoint_reader(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        || async { Some(checkpoint) },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(checkpoint_fold, expected);
+    let read_starts = test_case.read_starts.lock().unwrap().clone();
+    assert!(read_starts.contains(&OplogIndex::from_u64(3).as_u64()));
+    assert!(!read_starts.contains(&OplogIndex::INITIAL.as_u64()));
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn snapshot_assisted_selection_survives_successful_outcome_revert() {
+    let source_revision = ComponentRevision::new(1).unwrap();
+    let update = UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        snapshot_exclusion_through: OplogIndex::NONE,
+    };
+    let test_case = TestCase::builder(source_revision.get())
+        .snapshot()
+        .pending_update(&update, |_| {})
+        .successful_snapshot_assisted_update(
+            update,
+            OplogIndex::from_u64(2),
+            OplogRegion::from_range(3..=3),
+        )
+        .revert(OplogIndex::from_u64(3))
+        .build();
+    let status = &test_case.entries.last().unwrap().expected_status;
+    let (selected_source, source_epoch, selection) =
+        snapshot_assisted_pending_details(&status.pending_updates[0]);
+
+    assert_eq!(status.component_revision, source_revision);
+    assert_eq!(status.component_revision_epoch, OplogIndex::INITIAL);
+    assert_eq!(status.authoritative_snapshot, None);
+    assert!(
+        !status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(2))
+    );
+    assert!(
+        !status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(3))
+    );
+    assert!(
+        status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(4))
+    );
+    assert_eq!(selected_source, source_revision);
+    assert_eq!(source_epoch, OplogIndex::INITIAL);
+    assert_eq!(
+        selection,
+        SnapshotAssistedUpdateSelection::Selected {
+            snapshot_index: OplogIndex::from_u64(2),
+            snapshot_revision: source_revision,
+        }
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn automatic_update_falls_back_for_pre_aba_epoch_snapshot() {
+    let source_revision = ComponentRevision::new(1).unwrap();
+    let away = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+    let back = UpdateDescription::Automatic {
+        target_revision: source_revision,
+    };
+    let assisted = UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision: ComponentRevision::new(3).unwrap(),
+        snapshot_exclusion_through: OplogIndex::NONE,
+    };
+    let test_case = TestCase::builder(source_revision.get())
+        .snapshot()
+        .pending_update(&away, |_| {})
+        .successful_update(away, 2000, &HashSet::new())
+        .pending_update(&back, |_| {})
+        .successful_update(back, 1000, &HashSet::new())
+        .pending_update(&assisted, |_| {})
+        .build();
+    let status = &test_case.entries.last().unwrap().expected_status;
+    assert_eq!(status.pending_updates[0].kind, PendingUpdateKind::Automatic);
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn snapshot_assisted_selection_freezes_source_update_epoch() {
+    let first_update = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+    let assisted_update = UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision: ComponentRevision::new(3).unwrap(),
+        snapshot_exclusion_through: OplogIndex::NONE,
+    };
+    let test_case = TestCase::builder(1)
+        .pending_update(&first_update, |_| {})
+        .successful_update(first_update, 2000, &HashSet::new())
+        .snapshot()
+        .pending_update(&assisted_update, |_| {})
+        .build();
+    let pending = test_case
+        .entries
+        .last()
+        .unwrap()
+        .expected_status
+        .pending_updates[0]
+        .clone();
+    let (source_component_revision, source_update_epoch, selection) =
+        snapshot_assisted_pending_details(&pending);
+
+    assert_eq!(
+        source_component_revision,
+        ComponentRevision::new(2).unwrap()
+    );
+    assert_eq!(source_update_epoch, OplogIndex::from_u64(3));
+    assert_eq!(
+        selection,
+        SnapshotAssistedUpdateSelection::Selected {
+            snapshot_index: OplogIndex::from_u64(4),
+            snapshot_revision: ComponentRevision::new(2).unwrap(),
+        }
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn successful_snapshot_assisted_update_promotes_only_selected_snapshot_prefix() {
+    let source_revision = ComponentRevision::new(1).unwrap();
+    let target_revision = ComponentRevision::new(2).unwrap();
+    let update = UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision,
+        snapshot_exclusion_through: OplogIndex::NONE,
+    };
+    let before_snapshot = AgentResourceId(11);
+    let after_snapshot = AgentResourceId(12);
+    let snapshot_index = OplogIndex::from_u64(3);
+    let mut test_case = TestCase::builder(source_revision.get())
+        .create_resource(before_snapshot)
+        .snapshot()
+        .create_resource(after_snapshot)
+        .pending_update(&update, |_| {})
+        .successful_snapshot_assisted_update(update, snapshot_index, OplogRegion::from_range(4..=5))
+        .build();
+    test_case
+        .entries
+        .last_mut()
+        .unwrap()
+        .expected_status
+        .owned_resources
+        .remove(&before_snapshot);
+    let status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(status.component_revision, target_revision);
+    assert_eq!(status.component_revision_for_replay, source_revision);
+    assert_eq!(
+        status.authoritative_snapshot,
+        Some(AuthoritativeSnapshot {
+            index: snapshot_index,
+            kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic,
+        })
+    );
+    assert!(status.skipped_regions.is_in_deleted_region(snapshot_index));
+    for index in 4..=6 {
+        assert!(
+            !status
+                .skipped_regions
+                .is_in_deleted_region(OplogIndex::from_u64(index))
+        );
+    }
+    assert_eq!(status.last_automatic_snapshot_index, None);
+    assert_eq!(status.last_automatic_snapshot_timestamp, None);
+    assert_eq!(status.last_automatic_snapshot_component_revision, None);
+    assert!(!status.owned_resources.contains_key(&before_snapshot));
+    assert!(status.owned_resources.contains_key(&after_snapshot));
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn failed_snapshot_assisted_update_does_not_promote_snapshot() {
+    let source_revision = ComponentRevision::new(1).unwrap();
+    let update = UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        snapshot_exclusion_through: OplogIndex::NONE,
+    };
+    let test_case = TestCase::builder(source_revision.get())
+        .snapshot()
+        .pending_update(&update, |_| {})
+        .failed_snapshot_assisted_update(update, OplogRegion::from_range(3..=3))
+        .build();
+    let status = &test_case.entries.last().unwrap().expected_status;
+    let failed = status.failed_updates.last().unwrap();
+
+    assert_eq!(status.component_revision, source_revision);
+    assert_eq!(status.component_revision_for_replay, source_revision);
+    assert_eq!(status.authoritative_snapshot, None);
+    assert!(
+        !status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(2))
+    );
+    assert_eq!(
+        status.last_automatic_snapshot_index,
+        Some(OplogIndex::from_u64(2))
+    );
+    assert_eq!(
+        failed.pending_update.as_ref().unwrap().oplog_index,
+        OplogIndex::from_u64(3)
+    );
+    assert_eq!(
+        failed
+            .snapshot_assisted_details
+            .as_ref()
+            .unwrap()
+            .replay_range,
+        Some(OplogRegion::from_range(3..=3))
+    );
+    run_test_case(test_case).await;
+}
+
 #[test]
 async fn snapshot_tracking_with_revert() {
     let k1 = IdempotencyKey::fresh();
@@ -2570,6 +2992,33 @@ impl TestCaseBuilder {
         )
     }
 
+    pub fn create_resource(self, id: AgentResourceId) -> Self {
+        let timestamp = Timestamp::now_utc().rounded();
+        let resource_type_id = ResourceTypeId {
+            name: format!("resource-{id}"),
+            owner: "test:resources".to_string(),
+        };
+        self.add(
+            OplogEntry::CreateResource {
+                timestamp,
+                entity_parent_start_index: None,
+                id,
+                resource_type_id: resource_type_id.clone(),
+            },
+            move |mut status| {
+                status.owned_resources.insert(
+                    id,
+                    AgentResourceDescription {
+                        created_at: timestamp,
+                        resource_owner: resource_type_id.owner,
+                        resource_name: resource_type_id.name,
+                    },
+                );
+                status
+            },
+        )
+    }
+
     pub fn snapshot(self) -> Self {
         let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
         let timestamp = Timestamp::now_utc().rounded();
@@ -2640,12 +3089,14 @@ impl TestCaseBuilder {
             status.owned_resources = old_status.owned_resources;
             status.successful_updates = old_status.successful_updates;
             status.failed_updates = old_status.failed_updates;
+            status.pending_updates = old_status.pending_updates;
             status.invocation_results = old_status.invocation_results;
             status
                 .invocation_results
                 .set_revert_generation(revert_generation);
             status.component_revision_for_replay = old_status.component_revision_for_replay;
-            status.last_manual_update_snapshot_index = old_status.last_manual_update_snapshot_index;
+            status.component_revision_epoch = old_status.component_revision_epoch;
+            status.authoritative_snapshot = old_status.authoritative_snapshot;
             status.last_automatic_snapshot_index = old_status.last_automatic_snapshot_index;
             status.last_automatic_snapshot_timestamp = old_status.last_automatic_snapshot_timestamp;
             status.last_automatic_snapshot_component_revision =
@@ -2725,9 +3176,65 @@ impl TestCaseBuilder {
         let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
         self.add(entry.clone(), move |mut status| {
             let kind = match update_description {
-                UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
-                UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
-            };
+                    UpdateDescription::SnapshotAssistedAutomatic {
+                        target_revision,
+                        snapshot_exclusion_through,
+                    } => {
+                        let selection = match (
+                            status.last_automatic_snapshot_index,
+                            status.last_automatic_snapshot_component_revision,
+                        ) {
+                            _ if *target_revision <= status.component_revision => {
+                                SnapshotAssistedUpdateSelection::Ineligible(
+                                    SnapshotAssistedUpdateIneligibilityReason::NoSnapshotInSourceEpoch,
+                                )
+                            }
+                            (Some(snapshot_index), Some(snapshot_revision))
+                                if snapshot_revision != status.component_revision =>
+                            {
+                                SnapshotAssistedUpdateSelection::Ineligible(
+                                    SnapshotAssistedUpdateIneligibilityReason::SnapshotFromDifferentRevision {
+                                        snapshot_index,
+                                        snapshot_revision,
+                                    },
+                                )
+                            }
+                            (Some(snapshot_index), Some(_))
+                                if snapshot_index <= *snapshot_exclusion_through =>
+                            {
+                                SnapshotAssistedUpdateSelection::Ineligible(
+                                    SnapshotAssistedUpdateIneligibilityReason::SnapshotExcluded {
+                                        snapshot_index,
+                                        exclusion_through: *snapshot_exclusion_through,
+                                    },
+                                )
+                            }
+                            (Some(snapshot_index), Some(snapshot_revision)) => {
+                                SnapshotAssistedUpdateSelection::Selected {
+                                    snapshot_index,
+                                    snapshot_revision,
+                                }
+                            }
+                            _ => SnapshotAssistedUpdateSelection::Ineligible(
+                                SnapshotAssistedUpdateIneligibilityReason::NoSnapshotInSourceEpoch,
+                            ),
+                        };
+                        match selection {
+                            SnapshotAssistedUpdateSelection::Selected { .. } => {
+                                PendingUpdateKind::SnapshotAssistedAutomatic {
+                                    source_component_revision: status.component_revision,
+                                    source_update_epoch: status.component_revision_epoch,
+                                    selection,
+                                }
+                            }
+                            SnapshotAssistedUpdateSelection::Ineligible(_) => {
+                                PendingUpdateKind::Automatic
+                            }
+                        }
+                    }
+                    UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
+                    UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
+                };
             status.pending_updates.push_back(PendingUpdateRef {
                 timestamp: entry.timestamp(),
                 oplog_index: oplog_idx,
@@ -2765,6 +3272,7 @@ impl TestCaseBuilder {
             new_component_size,
             None,
             new_active_plugins.clone(),
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -2772,9 +3280,12 @@ impl TestCaseBuilder {
             status.successful_updates.push(SuccessfulUpdateRecord {
                 timestamp: entry.timestamp(),
                 target_revision: *update_description.target_revision(),
+                pending_update: applied_update.clone(),
+                snapshot_assisted_details: None,
             });
             status.component_size = new_component_size;
             status.component_revision = *update_description.target_revision();
+            status.component_revision_epoch = status.oplog_idx;
             status.active_plugins = new_active_plugins.clone();
             status.last_automatic_snapshot_index = None;
             status.last_automatic_snapshot_timestamp = None;
@@ -2791,9 +3302,71 @@ impl TestCaseBuilder {
             } = update_description
             {
                 status.component_revision_for_replay = target_revision;
-                status.last_manual_update_snapshot_index = applied_update.map(|au| au.oplog_index);
+                status.authoritative_snapshot = applied_update.map(|au| AuthoritativeSnapshot {
+                    index: au.oplog_index,
+                    kind: AuthoritativeSnapshotKind::ManualUpdate,
+                });
             };
 
+            status
+        })
+    }
+
+    pub fn successful_snapshot_assisted_update(
+        self,
+        update_description: UpdateDescription,
+        snapshot_index: OplogIndex,
+        replay_range: OplogRegion,
+    ) -> Self {
+        let pending = self
+            .entries
+            .last()
+            .unwrap()
+            .expected_status
+            .pending_updates
+            .front()
+            .unwrap()
+            .clone();
+        let (source_component_revision, source_update_epoch, _) =
+            snapshot_assisted_pending_details(&pending);
+        let details = SnapshotAssistedUpdateDetails {
+            pending_update_index: pending.oplog_index,
+            source_component_revision,
+            source_update_epoch,
+            snapshot_index,
+            replay_range,
+        };
+        let target_revision = *update_description.target_revision();
+        let entry = OplogEntry::successful_update(
+            target_revision,
+            2000,
+            None,
+            HashSet::new(),
+            Some(details.clone()),
+        )
+        .rounded();
+        self.add(entry.clone(), move |mut status| {
+            let applied_update = status.pending_updates.pop_front();
+            status.successful_updates.push(SuccessfulUpdateRecord {
+                timestamp: entry.timestamp(),
+                target_revision,
+                pending_update: applied_update,
+                snapshot_assisted_details: Some(details.clone()),
+            });
+            status.component_size = 2000;
+            status.component_revision = target_revision;
+            status.component_revision_epoch = status.oplog_idx;
+            status.component_revision_for_replay = source_component_revision;
+            status.authoritative_snapshot = Some(AuthoritativeSnapshot {
+                index: snapshot_index,
+                kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic,
+            });
+            status.skipped_regions.add(OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=snapshot_index,
+            ));
+            status.last_automatic_snapshot_index = None;
+            status.last_automatic_snapshot_timestamp = None;
+            status.last_automatic_snapshot_component_revision = None;
             status
         })
     }
@@ -2802,15 +3375,18 @@ impl TestCaseBuilder {
         let entry = OplogEntry::failed_update(
             *update_description.target_revision(),
             Some("details".to_string()),
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
+            let applied_update = status.pending_updates.pop_front();
             status.failed_updates.push(FailedUpdateRecord {
                 timestamp: entry.timestamp(),
                 target_revision: *update_description.target_revision(),
                 details: Some("details".to_string()),
+                pending_update: applied_update,
+                snapshot_assisted_details: None,
             });
-            status.pending_updates.pop_front();
 
             if status.skipped_regions.is_overridden() {
                 status.skipped_regions.drop_override();
@@ -2825,6 +3401,53 @@ impl TestCaseBuilder {
                 });
             };
 
+            status
+        })
+    }
+
+    pub fn failed_snapshot_assisted_update(
+        self,
+        update_description: UpdateDescription,
+        replay_range: OplogRegion,
+    ) -> Self {
+        let pending = self
+            .entries
+            .last()
+            .unwrap()
+            .expected_status
+            .pending_updates
+            .front()
+            .unwrap()
+            .clone();
+        let (source_component_revision, source_update_epoch, selection) =
+            snapshot_assisted_pending_details(&pending);
+        let SnapshotAssistedUpdateSelection::Selected { snapshot_index, .. } = selection else {
+            panic!("test requires a selected snapshot")
+        };
+        let details = FailedSnapshotAssistedUpdateDetails {
+            pending_update_index: pending.oplog_index,
+            source_component_revision,
+            source_update_epoch,
+            snapshot_index: Some(snapshot_index),
+            replay_range: Some(replay_range),
+            ineligibility_reason: None,
+        };
+        let target_revision = *update_description.target_revision();
+        let entry = OplogEntry::failed_update(
+            target_revision,
+            Some("details".to_string()),
+            Some(details.clone()),
+        )
+        .rounded();
+        self.add(entry.clone(), move |mut status| {
+            let applied_update = status.pending_updates.pop_front();
+            status.failed_updates.push(FailedUpdateRecord {
+                timestamp: entry.timestamp(),
+                target_revision,
+                details: Some("details".to_string()),
+                pending_update: applied_update,
+                snapshot_assisted_details: Some(details.clone()),
+            });
             status
         })
     }
@@ -3525,6 +4148,7 @@ fn successful_update_drops_old_grant_retains_new() {
                 new_component_size: 200,
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::from([new_grant]),
+                snapshot_assisted_details: None,
             },
         ),
         (

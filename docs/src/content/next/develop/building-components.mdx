@@ -23,13 +23,13 @@ By default, `golem deploy` uploads and activates the latest component versions b
 | Flag | Behavior |
 |------|----------|
 | `--reset` | Delete all agents **and** the environment (API deployments, retry policies, plugins, etc.), then deploy everything from scratch. This is the most destructive option, but the most useful during **iterative development**. |
-| `--update-agents <MODE>` | Update agents **in-place** to the new component version. Use `auto` for automatic oplog-replay–based migration, or `manual` when you have implemented snapshot-based migration. Agent state is **preserved**. |
+| `--update-agents <MODE>` | Update agents **in-place** to the new component version. Use `auto` to automatically start from the latest eligible periodic snapshot or replay retained history when none is available, or `manual` for a fresh snapshot-based migration. Agent state is **preserved**. |
 | `--redeploy-agents` | Delete every existing agent and recreate it with the same name, environment variables, and configuration, pointing to the latest component version. Agent state is **lost**. |
 
 ### When to use each option
 
 - **`--reset`** — Use when you want a completely clean slate, for example during iterative local development or in CI pipelines where you need deterministic, reproducible deployments.
-- **`--update-agents auto`** — Use in production or whenever you need to preserve agent state across a backward-compatible code change.
+- **`--update-agents auto`** — Use in production or whenever you need to preserve agent state across a compatible code change. Golem automatically uses a periodic snapshot when eligible and otherwise replays from the authoritative recovery baseline.
 - **`--update-agents manual`** — Use when you have a breaking change but have implemented a snapshot-based migration so state can be carried over.
 - **`--redeploy-agents`** — Use during development when agent state does not matter but you want to preserve the existing agent list and per-agent environment variables / configuration
 

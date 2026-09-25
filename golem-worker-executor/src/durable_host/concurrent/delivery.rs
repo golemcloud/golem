@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::SnapshotAssistedFinalizationGate;
 use crate::durable_host::tail_work::TailActivity;
 
 #[derive(Debug)]
@@ -81,14 +82,30 @@ impl OrderedAppend {
 pub(in crate::durable_host) struct CompletionMarkerRecorder {
     oplog: Arc<dyn Oplog>,
     replay_state: ReplayState,
+    snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
 }
 
 impl CompletionMarkerRecorder {
-    pub(in crate::durable_host) fn new(oplog: Arc<dyn Oplog>, replay_state: ReplayState) -> Self {
+    pub(in crate::durable_host) fn new(
+        oplog: Arc<dyn Oplog>,
+        replay_state: ReplayState,
+        snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
+    ) -> Self {
         Self {
             oplog,
             replay_state,
+            snapshot_assisted_finalization,
         }
+    }
+
+    fn request_snapshot_assisted_finalization(&self) {
+        if let Some(gate) = &self.snapshot_assisted_finalization {
+            gate.request_owner_finalization();
+        }
+    }
+
+    fn requires_snapshot_assisted_finalization(&self) -> bool {
+        self.snapshot_assisted_finalization.is_some()
     }
 
     pub(super) fn record(
@@ -456,8 +473,13 @@ impl CompletionDelivery {
                     CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(barrier));
             }
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(live)) => {
-                let replay_state = live.marker.recorder.replay_state.clone();
+                let recorder = live.marker.recorder.clone();
+                let replay_state = recorder.replay_state.clone();
                 replay_state.await_natural_tail_end(activity).await?;
+                if recorder.requires_snapshot_assisted_finalization() {
+                    recorder.request_snapshot_assisted_finalization();
+                    replay_state.await_live_publication(activity).await?;
+                }
                 if let CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(
                     live,
                 )) = std::mem::replace(&mut self.state, CompletionDeliveryState::Done)
@@ -719,7 +741,7 @@ impl CompletionDelivery {
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
         )
         .await?;
-        let recorder = CompletionMarkerRecorder::new(oplog, replay_state);
+        let recorder = CompletionMarkerRecorder::new(oplog, replay_state, None);
         Ok(Self {
             state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
                 marker: CompletionMarkerRecord {
@@ -762,8 +784,10 @@ impl CompletionDelivery {
         replay_state: ReplayState,
         start_idx: OplogIndex,
         cleanup_sink: Option<UnboundedSender<DropEvent>>,
+        snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
     ) -> Self {
-        let recorder = CompletionMarkerRecorder::new(oplog, replay_state);
+        let recorder =
+            CompletionMarkerRecorder::new(oplog, replay_state, snapshot_assisted_finalization);
         Self::replay_delivered(
             ReplayDeliveryDisposition::AtReplayTail,
             start_idx,

@@ -449,6 +449,13 @@ mod tests {
         }
     }
 
+    fn snapshot_assisted_update(revision: u64) -> UpdateDescription {
+        UpdateDescription::SnapshotAssistedAutomatic {
+            target_revision: ComponentRevision::new(revision).unwrap(),
+            snapshot_exclusion_through: OplogIndex::NONE,
+        }
+    }
+
     #[test]
     fn successful_snapshot_update_boundary_is_validated() {
         let update = snapshot_update(2);
@@ -461,6 +468,7 @@ mod tests {
                     100,
                     None,
                     Default::default(),
+                    None,
                 ),
             ),
         ]);
@@ -496,7 +504,11 @@ mod tests {
             (idx(3), OplogEntry::pending_update(update.clone())),
             (
                 idx(5),
-                OplogEntry::failed_update(*update.target_revision(), Some("failed".to_string())),
+                OplogEntry::failed_update(
+                    *update.target_revision(),
+                    Some("failed".to_string()),
+                    None,
+                ),
             ),
         ]);
 
@@ -507,6 +519,36 @@ mod tests {
                 outcome_index: idx(5),
             })
         );
+    }
+
+    #[test]
+    fn assisted_update_outcome_can_be_removed_while_request_is_retained() {
+        for outcome in [
+            OplogEntry::successful_update(
+                ComponentRevision::new(2).unwrap(),
+                100,
+                None,
+                Default::default(),
+                None,
+            ),
+            OplogEntry::failed_update(
+                ComponentRevision::new(2).unwrap(),
+                Some("failed".to_string()),
+                None,
+            ),
+        ] {
+            let entries = BTreeMap::from([
+                (
+                    idx(3),
+                    OplogEntry::pending_update(snapshot_assisted_update(2)),
+                ),
+                (idx(5), outcome),
+            ]);
+            assert_eq!(
+                validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+                Ok(())
+            );
+        }
     }
 
     #[test]
@@ -539,6 +581,7 @@ mod tests {
                     100,
                     None,
                     Default::default(),
+                    None,
                 ),
             ),
             (idx(5), OplogEntry::pending_update(automatic.clone())),
@@ -549,6 +592,7 @@ mod tests {
                     100,
                     None,
                     Default::default(),
+                    None,
                 ),
             ),
         ]);

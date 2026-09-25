@@ -1293,14 +1293,17 @@ pub struct AgentStatusRecord {
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
     pub component_revision_for_replay: ComponentRevision,
+    /// Oplog index that began the active component revision epoch (`Create` or the latest
+    /// surviving `SuccessfulUpdate`).
+    pub component_revision_epoch: OplogIndex,
     /// Semantic retry policy state per `retry_from` oplog index.
     pub current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
-    /// Index of the last manual update snapshot index. Agent will call load_snapshot
-    /// on this payload before starting replay.
-    pub last_manual_update_snapshot_index: Option<OplogIndex>,
-    /// Index of the last automatic snapshot index. Must be >= last_manual_snapshot_index.
+    /// Mandatory recovery snapshot established by a successful update. Agent will call
+    /// load_snapshot on this payload before starting replay.
+    pub authoritative_snapshot: Option<AuthoritativeSnapshot>,
+    /// Index of the last automatic snapshot index. Must be newer than the authoritative snapshot.
     /// Agent will call load_snapshot on this payload before starting replay. If the load_snapshot
-    /// fails this will be ignored and a full replay from last_manual_snapshot_index will performed.
+    /// fails this will be ignored and replay will fall back to the authoritative snapshot.
     pub last_automatic_snapshot_index: Option<OplogIndex>,
     /// Timestamp of the last automatic snapshot entry in the oplog.
     pub last_automatic_snapshot_timestamp: Option<Timestamp>,
@@ -1344,8 +1347,9 @@ impl Default for AgentStatusRecord {
             revoked_cards: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
+            component_revision_epoch: OplogIndex::INITIAL,
             current_retry_state: HashMap::new(),
-            last_manual_update_snapshot_index: None,
+            authoritative_snapshot: None,
             last_automatic_snapshot_index: None,
             last_automatic_snapshot_timestamp: None,
             last_automatic_snapshot_component_revision: None,
@@ -1971,6 +1975,8 @@ pub struct FailedUpdateRecord {
     pub timestamp: Timestamp,
     pub target_revision: ComponentRevision,
     pub details: Option<String>,
+    pub pending_update: Option<PendingUpdateRef>,
+    pub snapshot_assisted_details: Option<oplog::FailedSnapshotAssistedUpdateDetails>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -1978,6 +1984,22 @@ pub struct FailedUpdateRecord {
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
     pub target_revision: ComponentRevision,
+    pub pending_update: Option<PendingUpdateRef>,
+    pub snapshot_assisted_details: Option<oplog::SnapshotAssistedUpdateDetails>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct AuthoritativeSnapshot {
+    pub index: OplogIndex,
+    pub kind: AuthoritativeSnapshotKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum AuthoritativeSnapshotKind {
+    ManualUpdate,
+    SnapshotAssistedAutomatic,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -2620,7 +2642,36 @@ pub struct PendingCardEventRef {
 #[desert(evolution())]
 pub enum PendingUpdateKind {
     Automatic,
+    SnapshotAssistedAutomatic {
+        source_component_revision: ComponentRevision,
+        source_update_epoch: OplogIndex,
+        selection: SnapshotAssistedUpdateSelection,
+    },
     SnapshotBased,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SnapshotAssistedUpdateIneligibilityReason {
+    NoSnapshotInSourceEpoch,
+    SnapshotExcluded {
+        snapshot_index: OplogIndex,
+        exclusion_through: OplogIndex,
+    },
+    SnapshotFromDifferentRevision {
+        snapshot_index: OplogIndex,
+        snapshot_revision: ComponentRevision,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SnapshotAssistedUpdateSelection {
+    Selected {
+        snapshot_index: OplogIndex,
+        snapshot_revision: ComponentRevision,
+    },
+    Ineligible(SnapshotAssistedUpdateIneligibilityReason),
 }
 
 /// A lightweight reference to a pending update whose full description is stored in the oplog.

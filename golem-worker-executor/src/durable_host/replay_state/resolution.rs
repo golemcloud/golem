@@ -128,7 +128,7 @@ impl ReplayState {
         }
     }
 
-    /// Waits until the recorded replay tail is naturally exhausted and the cursor is live.
+    /// Waits until the recorded replay tail is naturally exhausted.
     ///
     /// Used to withhold the completion of a markerless successful durable call (its recorded run
     /// crashed after the `End` became durable but before the completion crossed to the guest): no
@@ -140,7 +140,7 @@ impl ReplayState {
     /// orphan terminals, scan-ahead-claimed `Start`s, trailing hints) so a tail whose remaining
     /// entries have no active reader still exhausts, then parks on cursor progress while a real
     /// entry (or a reserved delivery marker owned by another token) sits at the head.
-    pub(in crate::durable_host) async fn await_natural_tail_end(
+    pub(in crate::durable_host) async fn await_natural_tail_exhaustion(
         &self,
         activity: Option<&TailActivity>,
     ) -> Result<(), WorkerExecutorError> {
@@ -170,6 +170,33 @@ impl ReplayState {
                 progress.await;
             }
         }
+    }
+
+    pub(in crate::durable_host) async fn await_live_publication(
+        &self,
+        activity: Option<&TailActivity>,
+    ) -> Result<(), WorkerExecutorError> {
+        while !self.is_live_published() {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            if self.is_live_published() {
+                break;
+            }
+            if let Some(activity) = activity {
+                activity.park(progress.as_mut()).await;
+            } else {
+                progress.await;
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::durable_host) async fn await_natural_tail_end(
+        &self,
+        activity: Option<&TailActivity>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.await_natural_tail_exhaustion(activity).await
     }
 
     /// Awaits the resolution of the call identified by `handle`, treating end-of-replay as a hard

@@ -8,6 +8,7 @@ import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/public_oplog.proto";
+import "golem/worker/update_mode.proto";
 import "golem/worker/worker_id.proto";
 import "golem/worker/worker_status.proto";
 import "google/protobuf/timestamp.proto";
@@ -52,6 +53,18 @@ message UpdateRecord {
     FailedUpdate failed = 4;
     SuccessfulUpdate successful = 5;
   }
+  optional uint64 pending_update_index = 6;
+  UpdateMode mode = 7;
+  optional SnapshotAssistedUpdateMetadata snapshot_assisted_details = 8;
+}
+
+message SnapshotAssistedUpdateMetadata {
+  uint64 source_component_revision = 1;
+  uint64 source_update_epoch = 2;
+  optional uint64 snapshot_index = 3;
+  optional uint64 snapshot_revision = 4;
+  optional OplogRegion replay_range = 5;
+  optional string ineligibility_reason = 6;
 }
 
 message PendingUpdate {

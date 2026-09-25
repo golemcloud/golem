@@ -3102,7 +3102,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> CommandOutcome {
         self.store
             .data()
-            .on_worker_update_failed(target_revision, Some(error))
+            .on_worker_update_failed(target_revision, Some(error), None)
             .await;
         CommandOutcome::Continue
     }

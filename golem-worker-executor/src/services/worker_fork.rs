@@ -929,6 +929,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     timestamp: now,
                     target_revision,
                     details: Some("cancelled by fork".to_string()),
+                    snapshot_assisted_details: None,
                 })
                 .await;
         }

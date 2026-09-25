@@ -88,17 +88,35 @@ declare_structs! {
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
+        pub pending_update_index: Option<OplogIndex>,
+        pub mode: AgentUpdateMode,
+        pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
     }
 
     pub struct SuccessfulUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
+        pub pending_update_index: Option<OplogIndex>,
+        pub mode: AgentUpdateMode,
+        pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
     }
 
     pub struct FailedUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
         pub details: Option<String>,
+        pub pending_update_index: Option<OplogIndex>,
+        pub mode: AgentUpdateMode,
+        pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
+    }
+
+    pub struct SnapshotAssistedUpdateMetadata {
+        pub source_component_revision: ComponentRevision,
+        pub source_update_epoch: OplogIndex,
+        pub snapshot_index: Option<OplogIndex>,
+        pub snapshot_revision: Option<ComponentRevision>,
+        pub replay_range: Option<OplogRegion>,
+        pub ineligibility_reason: Option<String>,
     }
 
     pub struct ExportedResourceMetadata {

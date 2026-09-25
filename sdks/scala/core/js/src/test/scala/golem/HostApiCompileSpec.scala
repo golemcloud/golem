@@ -97,7 +97,10 @@ object HostApiCompileSpec extends ZIOSpecDefault {
     // ---------------------------------------------------------------------------
 
     test("UpdateMode variants accessible") {
-      val modes = List(HostApi.UpdateMode.Automatic, HostApi.UpdateMode.SnapshotBased)
+      val modes = List(
+        HostApi.UpdateMode.Automatic,
+        HostApi.UpdateMode.SnapshotBased
+      )
       assertTrue(modes.size == 2)
     },
 

@@ -365,11 +365,13 @@ oplog_entry! {
             new_component_size: u64,
             new_total_linear_memory_size: Option<u64>,
             new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+            snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
         }
         public {
             target_revision: ComponentRevision,
             new_component_size: u64,
             new_active_plugins: BTreeSet<PluginInstallationDescription>,
+            snapshot_assisted_details: Option<PublicSnapshotAssistedUpdateDetails>,
         }
     },
     /// An update failed to be applied
@@ -380,10 +382,12 @@ oplog_entry! {
         raw {
             target_revision: ComponentRevision,
             details: Option<String>,
+            snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
         }
         public {
             target_revision: ComponentRevision,
             details: Option<String>,
+            snapshot_assisted_details: Option<PublicFailedSnapshotAssistedUpdateDetails>,
         }
     },
     /// Increased total linear memory size

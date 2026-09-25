@@ -22,6 +22,7 @@ use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use crate::model::oplog::OplogPayload;
 use crate::model::quota::ResourceName;
+use crate::model::regions::OplogRegion;
 use crate::model::worker::UntypedAgentConfigEntry;
 use desert_rust::BinaryCodec;
 use nonempty_collections::NEVec;
@@ -245,6 +246,12 @@ pub enum UpdateDescription {
     /// Automatic update by replaying the oplog on the new version
     Automatic { target_revision: ComponentRevision },
 
+    /// Automatic update assisted by the latest eligible periodic snapshot preceding this entry.
+    SnapshotAssistedAutomatic {
+        target_revision: ComponentRevision,
+        snapshot_exclusion_through: OplogIndex,
+    },
+
     /// Custom update by loading a given snapshot on the new version
     SnapshotBased {
         target_revision: ComponentRevision,
@@ -257,6 +264,9 @@ impl UpdateDescription {
     pub fn target_revision(&self) -> &ComponentRevision {
         match self {
             UpdateDescription::Automatic { target_revision } => target_revision,
+            UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision, ..
+            } => target_revision,
             UpdateDescription::SnapshotBased {
                 target_revision, ..
             } => target_revision,
@@ -270,6 +280,29 @@ pub struct TimestampedUpdateDescription {
     pub timestamp: Timestamp,
     pub oplog_index: OplogIndex,
     pub description: UpdateDescription,
+}
+
+/// Provenance of a snapshot-assisted automatic update, persisted on its successful outcome.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_update_epoch: OplogIndex,
+    pub snapshot_index: OplogIndex,
+    pub replay_range: OplogRegion,
+}
+
+/// Provenance and attempted replay range of a failed snapshot-assisted automatic update.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct FailedSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_update_epoch: OplogIndex,
+    pub snapshot_index: Option<OplogIndex>,
+    pub replay_range: Option<OplogRegion>,
+    pub ineligibility_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]

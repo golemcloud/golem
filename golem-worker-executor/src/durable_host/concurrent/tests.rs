@@ -14,6 +14,7 @@
 
 use super::*;
 
+use crate::durable_host::SnapshotAssistedFinalizationGate;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel,
@@ -390,7 +391,7 @@ async fn live_delivery_token(
     )
     .await
     .expect("failed to build replay state");
-    let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
+    let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state, None);
     CompletionDelivery {
         state: CompletionDeliveryState::Live(Box::new(LiveDelivery {
             marker: CompletionMarkerRecord {
@@ -488,7 +489,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
     .await
     .expect("failed to build replay state");
     let oplog_dyn: Arc<dyn Oplog> = oplog.clone();
-    let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state);
+    let recorder = CompletionMarkerRecorder::new(oplog_dyn, replay_state, None);
 
     // These synchronous submissions model two terminal-observer callbacks. Even though the
     // appends are asynchronous, their oplog order must equal the callback handoff order.
@@ -677,6 +678,7 @@ async fn completion_delivery_replay_tokens_are_inert() {
 async fn tail_gated_token_over_crash_tail(
     extra_tail: Vec<OplogEntry>,
     cleanup_sink: Option<mpsc::UnboundedSender<DropEvent>>,
+    snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
 ) -> (Arc<InMemoryOplog>, ReplayState, CompletionDelivery) {
     let oplog = Arc::new(InMemoryOplog::new());
     oplog
@@ -745,6 +747,7 @@ async fn tail_gated_token_over_crash_tail(
         replay_state.clone(),
         idx(2),
         cleanup_sink,
+        snapshot_assisted_finalization,
     );
     (oplog, replay_state, token)
 }
@@ -763,6 +766,7 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
             context: "stdout".to_string(),
             message: "crash tail hint".to_string(),
         }],
+        None,
         None,
     )
     .await;
@@ -795,10 +799,60 @@ async fn tail_gated_token_converts_to_live_and_delivered_records_marker() {
 }
 
 #[test]
+async fn assisted_markerless_tail_requests_store_owner_finalization() {
+    let gate = Arc::new(SnapshotAssistedFinalizationGate::new());
+    gate.begin_finalization();
+    let (_oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+        vec![OplogEntry::BeginAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+        }],
+        None,
+        Some(gate.clone()),
+    )
+    .await;
+
+    let mut preparation = Box::pin(token.prepare_delivery(None));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), preparation.as_mut())
+            .await
+            .is_err()
+    );
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(20),
+            gate.wait_owner_finalization_request()
+        )
+        .await
+        .is_err(),
+        "an unconsumed positional suffix must not authorize finalization"
+    );
+    let (index, entry) = replay_state.get_oplog_entry().await.unwrap();
+    assert_eq!(index, idx(4));
+    assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+
+    tokio::select! {
+        result = preparation.as_mut() => {
+            panic!("delivery crossed the unpublished assisted transition: {result:?}")
+        }
+        _ = gate.wait_owner_finalization_request() => {}
+    }
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), preparation.as_mut())
+            .await
+            .is_err(),
+        "delivery must stay pending until the Store owner commits the update and publishes live"
+    );
+    assert!(!replay_state.is_live_published());
+}
+
+#[test]
 async fn tail_gated_token_torn_after_conversion_records_discarded_marker() {
     // After tail conversion the token is a real live-armed token: tearing it (dropping the
     // delivering future) must record a `CompletionDiscarded` marker through the drain queue.
-    let (oplog, _replay_state, mut token) = tail_gated_token_over_crash_tail(vec![], None).await;
+    let (oplog, _replay_state, mut token) =
+        tail_gated_token_over_crash_tail(vec![], None, None).await;
     let (tx, mut rx) = mpsc::unbounded_channel();
     token
         .prepare_delivery(None)
@@ -836,7 +890,7 @@ async fn tail_gated_token_delivered_without_prepare_poisons_replay() {
     // A delivery boundary firing while the completion is still tail-gated means the call site
     // never awaited `prepare_delivery`: replay must fail loudly instead of silently re-opening
     // the crash window the gate closes.
-    let (_oplog, replay_state, token) = tail_gated_token_over_crash_tail(vec![], None).await;
+    let (_oplog, replay_state, token) = tail_gated_token_over_crash_tail(vec![], None, None).await;
     token.delivered();
 
     let err = replay_state
@@ -865,6 +919,7 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
                 entity_parent_start_index: None,
             },
         ],
+        None,
         None,
     )
     .await;
@@ -1266,7 +1321,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     .await
     .expect("failed to build replay state");
     let completion_marker_recorder =
-        CompletionMarkerRecorder::new(persist_oplog.clone(), persist_replay_state);
+        CompletionMarkerRecorder::new(persist_oplog.clone(), persist_replay_state, None);
     let bytes = vec![42u8; 4096];
     let original_ptr = bytes.as_ptr() as usize;
     let persist = tokio::spawn(async move {
