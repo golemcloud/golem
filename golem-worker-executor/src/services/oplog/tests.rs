@@ -589,22 +589,11 @@ pub(crate) struct ReadCountingIndexedStorage {
     append_many_attempts: AtomicUsize,
     append_many_batch_ptr: AtomicUsize,
     append_many_batch_changed: AtomicBool,
-    drop_prefix_started: StdMutex<Option<oneshot::Sender<()>>>,
-    release_drop_prefix: Option<Arc<Notify>>,
 }
 
 impl ReadCountingIndexedStorage {
     pub(crate) fn new() -> Self {
         Self::default()
-    }
-
-    /// Every `drop_prefix` waits for `release`; the first one signals `started` when it arrives.
-    fn blocking_drop_prefix(started: oneshot::Sender<()>, release: Arc<Notify>) -> Self {
-        Self {
-            drop_prefix_started: StdMutex::new(Some(started)),
-            release_drop_prefix: Some(release),
-            ..Self::default()
-        }
     }
 
     fn discarding_compressed_appends() -> Self {
@@ -981,13 +970,6 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
         last_dropped_id: u64,
     ) -> Result<(), IndexedStorageError> {
-        if let Some(release) = &self.release_drop_prefix {
-            let started = self.drop_prefix_started.lock().unwrap().take();
-            if let Some(started) = started {
-                let _ = started.send(());
-            }
-            release.notified().await;
-        }
         self.inner
             .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
             .await
@@ -10131,26 +10113,3 @@ async fn a_refused_append_reports_the_stored_epoch_and_the_latch_does_not_report
     owner.add(OplogEntry::suspend().rounded()).await.unwrap();
     owner.commit(CommitLevel::Always).await.unwrap();
 }
-
-async fn open_unfenced_fork_target(
-    service: &MultiLayerOplogService,
-    owned_agent_id: &OwnedAgentId,
-) -> Arc<dyn Oplog> {
-    service
-        .open(
-            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
-            owned_agent_id,
-            AgentMode::Durable,
-            None,
-            make_agent_metadata(
-                owned_agent_id.agent_id.clone(),
-                AccountId::new(),
-                owned_agent_id.environment_id,
-            ),
-            default_last_known_status(),
-            default_execution_status(AgentMode::Durable),
-            None,
-        )
-        .await
-}
-
