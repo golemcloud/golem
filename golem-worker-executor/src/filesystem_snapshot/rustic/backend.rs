@@ -163,21 +163,8 @@ impl BlobBackend {
         path: &Path,
         future: impl Future<Output = anyhow::Result<T>>,
     ) -> RusticResult<T> {
-        if self.cancel.is_cancelled() {
-            return Err(storage_error(
-                call,
-                path,
-                anyhow::Error::new(OperationCancelled),
-            ));
-        }
         self.runtime
-            .block_on(async {
-                tokio::select! {
-                    biased;
-                    answer = answer_within(self.deadline, future) => answer,
-                    () = self.cancel.cancelled() => Err(anyhow::Error::new(OperationCancelled)),
-                }
-            })
+            .block_on(answer_or_cancel(self.deadline, &self.cancel, future))
             .map_err(|error| storage_error(call, path, error))
     }
 
@@ -214,6 +201,24 @@ pub(super) async fn answer_within<T>(
                 "the blob storage gave no answer within {deadline:?}"
             )))
         })
+}
+
+/// Gives the output of the future within the deadline, or an error when the operation of the token
+/// is cancelled. A call of a cancelled operation does not start, and a cancel ends a call that
+/// runs.
+pub(super) async fn answer_or_cancel<T>(
+    deadline: Duration,
+    cancel: &CancellationToken,
+    future: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    if cancel.is_cancelled() {
+        return Err(anyhow::Error::new(OperationCancelled));
+    }
+    tokio::select! {
+        biased;
+        answer = answer_within(deadline, future) => answer,
+        () = cancel.cancelled() => Err(anyhow::Error::new(OperationCancelled)),
+    }
 }
 
 impl ReadBackend for BlobBackend {

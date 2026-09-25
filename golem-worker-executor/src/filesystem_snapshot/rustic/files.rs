@@ -16,8 +16,7 @@
 //!
 //! Each call waits for at most the deadline of the scope, and a cancel of its operation ends it.
 
-use super::backend::answer_within;
-use super::fault::OperationCancelled;
+use super::backend::answer_or_cancel;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageNamespace, ListedBlob, PutIfAbsent,
 };
@@ -46,14 +45,7 @@ impl SnapshotFiles {
         &self,
         future: impl Future<Output = anyhow::Result<T>>,
     ) -> anyhow::Result<T> {
-        if self.cancel.is_cancelled() {
-            return Err(anyhow::Error::new(OperationCancelled));
-        }
-        tokio::select! {
-            biased;
-            answer = answer_within(self.deadline, future) => answer,
-            () = self.cancel.cancelled() => Err(anyhow::Error::new(OperationCancelled)),
-        }
+        answer_or_cancel(self.deadline, &self.cancel, future).await
     }
 
     /// Gives the content of the blob at the path, or `None` when the path has no blob.
