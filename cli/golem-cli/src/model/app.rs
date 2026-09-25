@@ -3543,6 +3543,7 @@ mod app_builder {
         ComponentProperties, PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
+    use crate::model::cascade::error::StoreGetValueError;
     use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
@@ -5214,6 +5215,25 @@ mod app_builder {
                         WithSource::new(source, (component_properties, component_layer_properties)),
                     );
                 }
+                Err(StoreGetValueError::MultipleParentPaths {
+                    layer,
+                    first_path,
+                    second_path,
+                }) => {
+                    let render_path = |path: &[ComponentLayerId]| {
+                        path.iter()
+                            .filter_map(|id| id.template_name())
+                            .dedup()
+                            .join(" -> ")
+                    };
+                    validation.add_error(format!(
+                        "Template {} is inherited by {} through multiple paths: {} and {}. Remove one of the references.",
+                        layer.name().log_color_highlight(),
+                        component_name.as_str().log_color_highlight(),
+                        render_path(&first_path).log_color_highlight(),
+                        render_path(&second_path).log_color_highlight(),
+                    ))
+                }
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
             }
         }
@@ -6236,8 +6256,8 @@ mod test {
     }
 
     #[test]
-    fn test_component_templates_with_shared_parent_apply_it_once() {
-        let source = indoc! { r#"
+    fn test_component_templates_with_shared_parent_are_rejected() {
+        let errors = load_app_errors(indoc! { r#"
             app: hello-app
 
             environments:
@@ -6247,31 +6267,24 @@ mod test {
             componentTemplates:
               base:
                 componentWasm: base.wasm
-                clean: [base-output]
               template-a:
                 templates: base
-                clean: [a-output]
               template-b:
                 templates: base
-                clean: [b-output]
 
             components:
               app:main:
                 templates: [template-a, template-b]
-        "# };
+        "# });
 
-        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
-
-        let component_name = parse_component_name("app:main");
-        let component = app.component(&component_name);
-
-        assert_eq!(
-            component.clean(),
-            &vec![
-                "base-output".to_string(),
-                "a-output".to_string(),
-                "b-output".to_string(),
-            ]
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:#?}");
+        assert!(
+            errors[0].contains(
+                "Template base is inherited by app:main through multiple paths: \
+                 template-a -> base and template-b -> base"
+            ),
+            "unexpected error: {}",
+            errors[0]
         );
     }
 

@@ -721,6 +721,9 @@ The generator reads only the release's safe tool definition and metadata digest.
 
     The _template name_ must be one of that are defined in <FieldLink path="componentTemplates"/>.
 
+    Templates can also inherit other templates, but every template may be inherited only through a single path:
+    e.g. using two templates that both inherit the same template is rejected.
+
     See <FieldLink path="componentTemplates"/> and [Template variable and functions](#template-variables-and-functions)
     for defining templates.
 

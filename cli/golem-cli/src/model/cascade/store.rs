@@ -14,7 +14,7 @@
 
 use crate::model::cascade::error::{StoreAddLayerError, StoreGetValueError};
 use crate::model::cascade::layer::Layer;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Store<L: Layer> {
@@ -61,9 +61,9 @@ impl<L: Layer> Store<L> {
             return Err(StoreGetValueError::LayerNotFound(id.clone()));
         };
 
-        // Parents are applied depth-first before their child. A layer reachable through multiple
-        // paths (diamond inheritance) is applied only once, at its first position, so properties
-        // with appending merge modes do not receive its entries multiple times.
+        // Parents are applied depth-first before their child. Every layer must be reachable through
+        // a single parent path: a layer inherited through multiple paths (diamond inheritance) is
+        // rejected, so the applied order is always the one written in the layer definitions.
         fn apply_layer<'a, L: Layer>(
             store: &'a Store<L>,
             ctx: &L::ApplyContext,
@@ -71,16 +71,24 @@ impl<L: Layer> Store<L> {
             layer: &'a L,
             value: &mut L::Value,
             path: &mut Vec<&'a L::Id>,
-            applied: &mut HashSet<&'a L::Id>,
+            applied: &mut HashMap<&'a L::Id, Vec<&'a L::Id>>,
         ) -> Result<(), StoreGetValueError<L>> {
             let layer_id = layer.id();
+            let to_owned_path = |path: &[&L::Id]| {
+                path.iter()
+                    .map(|id| (*id).clone())
+                    .chain(std::iter::once(layer_id.clone()))
+                    .collect::<Vec<_>>()
+            };
             if path.contains(&layer_id) {
-                let mut chain = path.iter().map(|id| (*id).clone()).collect::<Vec<_>>();
-                chain.push(layer_id.clone());
-                return Err(StoreGetValueError::CircularParents(chain));
+                return Err(StoreGetValueError::CircularParents(to_owned_path(path)));
             }
-            if applied.contains(layer_id) {
-                return Ok(());
+            if let Some(first_path) = applied.get(layer_id) {
+                return Err(StoreGetValueError::MultipleParentPaths {
+                    layer: layer_id.clone(),
+                    first_path: first_path.iter().map(|id| (*id).clone()).collect(),
+                    second_path: to_owned_path(path),
+                });
             }
             path.push(layer_id);
             for parent_id in layer.parent_layers() {
@@ -92,13 +100,13 @@ impl<L: Layer> Store<L> {
             if let Some(err) = layer.apply_onto_parent(ctx, selector, value).err() {
                 return Err(StoreGetValueError::LayerApplyError(layer.id().clone(), err));
             };
+            applied.insert(layer_id, path.clone());
             path.pop();
-            applied.insert(layer_id);
             Ok(())
         }
         let mut value = L::Value::default();
         let mut path = Vec::new();
-        let mut applied = HashSet::new();
+        let mut applied = HashMap::new();
         apply_layer(
             self,
             ctx,
@@ -210,15 +218,38 @@ mod test {
     }
 
     #[test]
-    fn value_applies_diamond_shared_parent_once() {
-        // a -> {b, c} -> d : d is reachable via two paths but is not a cycle.
+    fn value_rejects_diamond_shaped_parents() {
+        // a -> {b, c} -> d : d is reachable via two paths.
         let mut store = Store::<TestLayer>::new();
         add(&mut store, "d", &[]);
         add(&mut store, "b", &["d"]);
         add(&mut store, "c", &["d"]);
         add(&mut store, "a", &["b", "c"]);
 
-        let value = store.value(&"a".to_string(), &(), &()).unwrap();
-        assert_eq!(value, vec!["d", "b", "c", "a"]);
+        match store.value(&"a".to_string(), &(), &()).unwrap_err() {
+            StoreGetValueError::MultipleParentPaths {
+                layer,
+                first_path,
+                second_path,
+            } => {
+                assert_eq!(layer, "d");
+                assert_eq!(first_path, vec!["a", "b", "d"]);
+                assert_eq!(second_path, vec!["a", "c", "d"]);
+            }
+            err => panic!("expected MultipleParentPaths, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn value_rejects_parent_listed_twice() {
+        let mut store = Store::<TestLayer>::new();
+        add(&mut store, "b", &[]);
+        add(&mut store, "a", &["b", "b"]);
+
+        let err = store.value(&"a".to_string(), &(), &()).unwrap_err();
+        assert!(
+            matches!(err, StoreGetValueError::MultipleParentPaths { .. }),
+            "expected MultipleParentPaths, got {err:?}"
+        );
     }
 }
