@@ -23,11 +23,25 @@ import { type as arkType } from 'arktype';
 import { Schema } from 'effect';
 
 import { compileSchema } from '../src/schema/adapter';
+import { field, t } from '../src/internal/schema-model';
 import '../src/schema/valibot';
 import '../src/schema/arktype';
 import '../src/schema/effect';
+import { matchesSchemaType } from '../src/schema/union';
 
 const ark = (def: unknown) => arkType(def as never);
+
+describe('plain-union structural matching', () => {
+  it('requires prototype-named record fields to be own properties', () => {
+    const constructorRecord = t.record([field('constructor', t.string())]);
+    const toStringRecord = t.record([field('toString', t.string())]);
+
+    expect(matchesSchemaType(new Map(), constructorRecord, {})).toBe(false);
+    expect(matchesSchemaType(new Map(), toStringRecord, {})).toBe(false);
+    expect(matchesSchemaType(new Map(), constructorRecord, { constructor: 'own' })).toBe(true);
+    expect(matchesSchemaType(new Map(), toStringRecord, { toString: 'own' })).toBe(true);
+  });
+});
 
 // ============================================================
 // Valibot (vendor '~standard'.vendor === 'valibot')

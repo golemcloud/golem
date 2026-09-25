@@ -1124,6 +1124,18 @@ fn external_streaming_generation_compiles_recursive_streams() {
                 )))),
             ),
             method("status", vec![], Some(SchemaType::string())),
+            method(
+                "document",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(unstructured_text_schema_type(TextRestrictions::default())),
+            ),
+            method(
+                "attachment",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(unstructured_binary_schema_type(
+                    BinaryRestrictions::default(),
+                )),
+            ),
         ],
         vec![],
         AgentMode::Durable,
@@ -1158,6 +1170,12 @@ fn external_streaming_generation_compiles_recursive_streams() {
     assert!(source.contains("\"stable\""));
     assert!(source.contains("config: this.publicConfig"));
     assert!(source.contains("path: [\"limits\",\"maximum\"]"));
+    assert!(source.contains(
+        "if(v.$case === 'inline') return base.UnstructuredText.fromInline(v.value.text, v.value.language)"
+    ));
+    assert!(source.contains(
+        "if(v.$case === 'inline') return base.UnstructuredBinary.fromInline(Uint8Array.from(Buffer.from(v.value.bytes, 'base64url')), v.value.mimeType)"
+    ));
     for line in source
         .lines()
         .filter(|line| line.contains(".push({ path: [\"limits\",\"maximum\"]"))

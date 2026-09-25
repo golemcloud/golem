@@ -9,6 +9,10 @@ use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::effect::effect_external::EffectExternalBridgeGenerator;
 use golem_common::model::agent::AgentMode;
 use golem_common::schema::SchemaType;
+use golem_common::schema::schema_type::{BinaryRestrictions, TextRestrictions};
+use golem_common::schema::unstructured::{
+    unstructured_binary_schema_type, unstructured_text_schema_type,
+};
 use tempfile::TempDir;
 use test_r::test;
 
@@ -24,6 +28,18 @@ fn effect_external_all_schema_streaming_consumer_compiles() {
         "rename",
         vec![field("payload", ref_to("MappedInput"))],
         None,
+    ));
+    schema.methods.push(method(
+        "document",
+        vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+        Some(unstructured_text_schema_type(TextRestrictions::default())),
+    ));
+    schema.methods.push(method(
+        "attachment",
+        vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+        Some(unstructured_binary_schema_type(
+            BinaryRestrictions::default(),
+        )),
     ));
     schema
         .methods
@@ -62,6 +78,15 @@ fn effect_external_all_schema_streaming_consumer_compiles() {
         !source.contains("Effect.Effect<any"),
         "untyped Effect method in {generated}"
     );
+    let transport =
+        std::fs::read_to_string(target.join("internal/transport/guest-streaming-agent-client.ts"))
+            .unwrap();
+    assert!(transport.contains(
+        "if(v.$case === 'inline') return base.UnstructuredText.fromInline(v.value.text, v.value.language)"
+    ));
+    assert!(transport.contains(
+        "if(v.$case === 'inline') return base.UnstructuredBinary.fromInline(Uint8Array.from(Buffer.from(v.value.bytes, 'base64url')), v.value.mimeType)"
+    ));
     std::fs::write(
         target.join("consumer.ts"),
         r#"import { Effect, Fiber, Scope, Stream } from "effect"

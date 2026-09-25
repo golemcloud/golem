@@ -149,5 +149,7 @@ object Bridge {
     inputCodec: PublicValueCodec.Codec,
     outputCodec: Option[PublicValueCodec.Codec]
   ): Future[AgentInvocationResult] =
-    StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec)
+    Try(
+      StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec)
+    ).fold(Future.failed, future => future)
 }

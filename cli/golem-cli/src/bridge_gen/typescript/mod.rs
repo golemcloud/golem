@@ -2308,6 +2308,16 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn decode_public_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.$case === 'inline') return base.UnstructuredText.fromInline(v.value.text, v.value.language); if(v.$case === 'url') return base.UnstructuredText.fromUrl(v.value); throw new Error('unknown unstructured text variant'); }})({value})"
+            ));
+        }
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.$case === 'inline') return base.UnstructuredBinary.fromInline(Uint8Array.from(Buffer.from(v.value.bytes, 'base64url')), v.value.mimeType); if(v.$case === 'url') return base.UnstructuredBinary.fromUrl(v.value); throw new Error('unknown unstructured binary variant'); }})({value})"
+            ));
+        }
         Ok(match typ {
             SchemaType::S64 { .. } | SchemaType::U64 { .. } => format!("BigInt({value})"),
             SchemaType::Stream {

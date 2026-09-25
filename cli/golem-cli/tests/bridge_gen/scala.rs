@@ -612,6 +612,32 @@ class StreamRuntimeTest extends munit.FunSuite {
     )
     assert(call.isSuccess)
     intercept[BridgeException](Await.result(call.get, 1.second))
+
+    val tupleCodec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"tuple","value":{"elements":[]}}}"""
+    )
+    val boundedCodec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10}}}}}"""
+    )
+    val streamingCall = scala.util.Try(
+      Bridge.invokeStreamingAgent(
+        ResolvedAgent(
+          Configuration(GolemServer.Custom("http://127.0.0.1:1", "token"), "app", "env", global),
+          "ConfigAgent",
+          SchemaValue.U32Value(1),
+          None,
+          List.empty,
+          None
+        ),
+        "stream",
+        () => SchemaValue.TupleValue(List.empty),
+        boundedCodec,
+        tupleCodec,
+        None
+      )
+    )
+    assert(streamingCall.isSuccess)
+    intercept[BridgeException](Await.result(streamingCall.get, 1.second))
   }
 
   test("public codec enforces quantity bounds restrictions unions and integer boundaries") {
