@@ -1,6 +1,6 @@
 ---
 name: golem-update-running-agents
-description: "Updating running agents to a new component version. Use when asked to update existing agents, explain update modes (auto/manual), or trigger updates via the CLI or deploy command."
+description: "Updating running agents to a new component version. Use when asked to update existing agents, explain automatic or manual update modes, or trigger updates via the CLI or deploy command."
 ---
 
 # Updating Running Agents
@@ -15,12 +15,12 @@ Golem supports two update modes:
 
 | Mode | CLI Value | Description |
 |------|-----------|-------------|
-| **Automatic** | `auto` (default) | Replays the agent's operation log against the new component version. Works when the new version is compatible with the old one (same exported functions, compatible signatures). Fails if there is a divergence. |
+| **Automatic** | `auto` (default) | Uses the newest eligible periodic snapshot recorded before the request and replays its surviving suffix when one is available; otherwise replays retained history from the authoritative recovery baseline. Fails if the selected replay diverges. |
 | **Manual** | `manual` | Uses user-defined `save-snapshot` and `load-snapshot` functions to serialize the agent's state from the old version and restore it in the new version. Required when the new component is incompatible with the old one (changed function signatures, removed functions, restructured state). |
 
 ### When to Use Each Mode
 
-- **Use `auto`** when the change is backward-compatible — adding new functions, fixing bugs in existing logic, or changing internal implementation without altering the exported API shape. The operation log can be replayed successfully against the new version.
+- **Use `auto`** when the target can replay the relevant retained history. For periodically snapshotted agents, Golem automatically starts from the latest eligible snapshot and validates only the recent suffix; without an eligible snapshot it validates the complete retained history from the authoritative baseline.
 - **Use `manual`** when the change is breaking — renamed or removed functions, changed parameter types, restructured internal state. The agent's state must be explicitly migrated via snapshot functions.
 
 ## Method 1: Update During Deploy
@@ -153,20 +153,22 @@ This is exposed in each SDK's host bindings. The function returns immediately �
 
 ## How Automatic Update Works
 
-1. The agent is interrupted.
-2. The agent's operation log (oplog) is replayed from the beginning against the new component version.
-3. If replay succeeds, the agent resumes with the new version.
-4. If replay fails (e.g., a function no longer exists or has an incompatible signature), the update fails and the agent reverts to the old version.
+1. Admission records the target and the current periodic-snapshot exclusion watermark.
+2. While folding that request, Golem selects the newest eligible periodic snapshot that precedes it in the current source update epoch. If none is eligible, Golem selects full replay from the authoritative recovery baseline.
+3. The worker is restarted promptly, including when an invocation is in flight.
+4. The target loads the selected snapshot, if any, and replays the surviving committed history. The replay can extend beyond the request entry because source work may finish while execution is stopping.
+5. Success is recorded only after replay validation and before target live effects continue. An assisted snapshot then becomes the authoritative recovery baseline.
+6. If replay fails, one failed outcome is recorded and the healthy source revision is reconstructed. Once a snapshot has been selected, Golem does not try an older snapshot or switch to full replay after a load or suffix failure.
+
+`--await` waits for that terminal success or failure, including a repeated request for the same target. Reverting away an outcome while retaining the request makes the request pending and retryable again. Snapshot assistance bounds historical replay to the suffix after the selected snapshot; it does not guarantee a wall-clock update bound.
 
 ## How Manual (Snapshot-Based) Update Works
 
-1. The agent is interrupted.
-2. The **old** component version's `save-snapshot` export is called, which serializes the agent's state into a byte payload with a MIME type.
+1. The update is queued behind the current and any earlier invocations.
+2. At that idle invocation boundary, the **old** component version's `save-snapshot` export is called, which serializes the agent's current state into a fresh byte payload with a MIME type.
 3. The agent is restarted with the **new** component version.
-4. The new version's `load-snapshot` export is called with the snapshot payload.
+4. The new version's `load-snapshot` export is called with the fresh snapshot payload.
 5. If `load-snapshot` returns `Ok`, the agent continues with the new version.
 6. If `load-snapshot` returns `Err`, the update fails and the agent reverts to the old version.
 
 To implement manual updates, the component must export the `save-snapshot` and `load-snapshot` WIT interfaces. Each SDK provides helpers for this — see the language-specific `golem-custom-snapshot-*` skills for implementation details.
-
-
