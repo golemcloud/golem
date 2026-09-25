@@ -1029,9 +1029,9 @@ async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_pr
 
 #[test]
 #[timeout("60s")]
-async fn a_prune_that_fails_deletes_its_claim_and_a_retry_of_the_delete_prunes() {
-    // The first call after the first claim is the start of the first prune, and it fails before
-    // the prune lists the packs. So only the retry counts as a prune.
+async fn a_failed_second_read_of_the_ledger_deletes_the_claim_and_a_retry_of_the_delete_prunes() {
+    // The first call after the first claim is the second read of the ledger, and it fails. So the
+    // first delete does not prune, and only the retry counts as a prune.
     let claimed = Arc::new(AtomicBool::new(false));
     let refused = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
@@ -1071,6 +1071,57 @@ async fn a_prune_that_fails_deletes_its_claim_and_a_retry_of_the_delete_prunes()
             prunes(&storage.calls())
         ),
         (Vec::<String>::new(), true, 1)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_that_fails_deletes_its_claim_and_a_retry_of_the_delete_prunes() {
+    // The first listing of the packs by a prune after the first claim fails. Only a prune lists
+    // the packs with that call, so the second read of the ledger passes and the prune fails.
+    let claimed = Arc::new(AtomicBool::new(false));
+    let refused = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let (claimed, refused) = (claimed.clone(), refused.clone());
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "list"
+                && path == Path::new("data")
+                && claimed.load(Ordering::SeqCst)
+                && !refused.swap(true, Ordering::SeqCst)
+            {
+                Script::Refuse
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let failed = store.delete(&scope, &name("p-1")).await;
+    let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
+    let retried = store.delete(&scope, &name("p-1")).await;
+    let after = ledger(&storage, &scope).await;
+
+    assert!(
+        failed.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{failed:?}"
+    );
+    assert!(retried.is_ok(), "{retried:?}");
+    assert_eq!(
+        (
+            claims_after_failure,
+            refused.load(Ordering::SeqCst),
+            after.last_prune.is_some()
+        ),
+        (Vec::<String>::new(), true, true)
     );
 }
 
