@@ -63,7 +63,7 @@ const PRUNE_THRESHOLD_BYTES: u64 = 64 * 1024 * 1024;
 /// How long a pack that a prune marks stays before a later prune deletes it. It is also the
 /// shortest time between two prunes of one scope. It must be longer than the longest save and the
 /// longest restore.
-const PRUNE_GRACE: Duration = Duration::from_secs(3600);
+const PRUNE_GRACE: Duration = Duration::from_secs(15 * 60);
 
 /// The settings of the store: the rustic settings of each operation, and the prune threshold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,7 +92,7 @@ impl StorePolicy {
             save_threads: Some(config.save_threads()),
             restore_reader_threads: config.restore_reader_threads(),
             prune: PruneSettings {
-                fast_repack: false,
+                fast_repack: true,
                 keep_delete: PRUNE_GRACE,
                 repack: RepackLimits::Rustic,
             },

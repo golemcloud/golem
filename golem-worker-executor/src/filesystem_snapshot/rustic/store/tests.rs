@@ -221,8 +221,8 @@ fn the_policy_takes_the_configured_values_and_the_options_are_strict() {
             Duration::from_secs(30),
             Some(3),
             4,
-            Duration::from_secs(3600),
-            false,
+            Duration::from_secs(15 * 60),
+            true,
             RepackLimits::Rustic,
             64 * 1024 * 1024,
         )
