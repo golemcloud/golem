@@ -91,3 +91,17 @@ test "native config accepts large integers without a JSON round trip" {
     _ => fail("expected JSON unsafe integer to be rejected")
   }
 }
+
+///|
+test "agent snapshot accessors return defensive nested copies" {
+  let agent_type = configured_reflected_type()
+  let declarations = agent_type.config()
+  let path = declarations[0].path()
+  path[0] = "mutated"
+  declarations[0] = declarations[1]
+  let graph = agent_type.constructor_input().graph()
+  graph.root.metadata.aliases.push("mutated")
+
+  assert_eq(agent_type.config()[0].path(), ["greeting"])
+  assert_eq(agent_type.constructor_input().root().metadata.aliases, [])
+}

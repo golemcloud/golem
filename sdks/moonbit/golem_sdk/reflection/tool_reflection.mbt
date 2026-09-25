@@ -1,6 +1,6 @@
 ///|
 /// A selected argument in a discovered tool command's canonical input.
-pub(all) struct ToolArgument {
+pub struct ToolArgument {
   kind : String
   name : String
   aliases : Array[String]
@@ -13,7 +13,7 @@ pub(all) struct ToolArgument {
 
 ///|
 /// A snapshot of one tool registration visible to the calling component.
-pub(all) struct ToolType {
+pub struct ToolType {
   lookup_name : String
   definition : @toolCommon.Tool
   implemented_by : @types.ComponentId
@@ -21,12 +21,12 @@ pub(all) struct ToolType {
 } derive(Debug, Eq)
 
 ///|
-pub(all) struct ReflectedToolClient {
+pub struct ReflectedToolClient {
   tool : ToolType
 } derive(Debug, Eq)
 
 ///|
-pub(all) struct ToolCommand {
+pub struct ToolCommand {
   tool : ToolType
   path : Array[String]
   body : @toolCommon.CommandBody?
@@ -36,6 +36,149 @@ pub(all) struct ToolCommand {
   priv wire_input : @model.SchemaGraph
   result : SchemaRef?
 } derive(Debug, Eq)
+
+///|
+pub fn ToolArgument::kind(self : ToolArgument) -> String {
+  self.kind
+}
+
+///|
+pub fn ToolArgument::name(self : ToolArgument) -> String {
+  self.name
+}
+
+///|
+pub fn ToolArgument::aliases(self : ToolArgument) -> Array[String] {
+  self.aliases.copy()
+}
+
+///|
+pub fn ToolArgument::short(self : ToolArgument) -> Char? {
+  self.short
+}
+
+///|
+pub fn ToolArgument::required(self : ToolArgument) -> Bool {
+  self.required
+}
+
+///|
+fn schema_value_contains_capability(value : @model.SchemaValue) -> Bool {
+  match value {
+    Record(values) | Tuple(values) | List(values) | FixedList(values) => {
+      for value in values {
+        if schema_value_contains_capability(value) {
+          return true
+        }
+      }
+      false
+    }
+    Variant(_, payload)
+    | Option(payload)
+    | ResultOk(payload)
+    | ResultErr(payload) =>
+      match payload {
+        Some(value) => schema_value_contains_capability(value)
+        None => false
+      }
+    Map(entries) => {
+      for entry in entries {
+        if schema_value_contains_capability(entry.key) ||
+          schema_value_contains_capability(entry.value) {
+          return true
+        }
+      }
+      false
+    }
+    Union(_, body) => schema_value_contains_capability(body)
+    Secret(_) | QuotaToken(_) | Stream(_) | PermissionCard(_) => true
+    _ => false
+  }
+}
+
+///|
+pub fn ToolArgument::default(
+  self : ToolArgument,
+) -> @model.SchemaValue? raise ReflectError {
+  match self.default {
+    Some(value) => {
+      if schema_value_contains_capability(value) {
+        raise Schema("tool argument defaults cannot contain capabilities")
+      }
+      let encoded = @model.schema_value_to_wit(value) catch {
+        error =>
+          raise Schema("failed to copy tool argument default: \{repr(error)}")
+      }
+      Some(
+        @model_host.schema_value_from_wit(encoded) catch {
+          error =>
+            raise Schema("failed to copy tool argument default: \{repr(error)}")
+        },
+      )
+    }
+    None => None
+  }
+}
+
+///|
+pub fn ToolArgument::schema(self : ToolArgument) -> SchemaRef {
+  self.schema
+}
+
+///|
+pub fn ToolType::lookup_name(self : ToolType) -> String {
+  self.lookup_name
+}
+
+///|
+pub fn ToolType::version(self : ToolType) -> String {
+  self.definition.version
+}
+
+///|
+pub fn ToolType::implemented_by(self : ToolType) -> @types.ComponentId {
+  self.implemented_by
+}
+
+///|
+pub fn ReflectedToolClient::tool(self : ReflectedToolClient) -> ToolType {
+  self.tool
+}
+
+///|
+pub fn ToolCommand::tool(self : ToolCommand) -> ToolType {
+  self.tool
+}
+
+///|
+pub fn ToolCommand::path(self : ToolCommand) -> Array[String] {
+  self.path.copy()
+}
+
+///|
+pub fn ToolCommand::subcommands(self : ToolCommand) -> Array[String] {
+  self.subcommands.copy()
+}
+
+///|
+pub fn ToolCommand::arguments(self : ToolCommand) -> Array[ToolArgument] {
+  self.arguments.copy()
+}
+
+///|
+pub fn ToolCommand::input_schema(self : ToolCommand) -> SchemaRef {
+  self.input_schema
+}
+
+///|
+pub fn ToolCommand::result(self : ToolCommand) -> SchemaRef? {
+  self.result
+}
+
+///|
+pub fn ToolCommand::is_callable(self : ToolCommand) -> Bool {
+  self.body is Some(_)
+}
 
 ///|
 pub(all) struct ReflectedToolCustomError {

@@ -79,20 +79,41 @@ private[golem] object Derivation {
 
   /** Convert a Scala value into its structural [[SchemaValue]]. */
   def toValue[A](schema: Schema[A], value: A): SchemaValue =
-    try dynamicToSchemaValue(schema.reflect, schema.toDynamicValue(value))
-    catch {
+    try {
+      val reflect = schema.reflect
+      if (isInstant(reflect)) {
+        val instant = value.asInstanceOf[Instant]
+        SchemaValue.DatetimeValue(Datetime(instant.getEpochSecond, instant.getNano))
+      } else if (isDuration(reflect)) {
+        SchemaValue.DurationValue(value.asInstanceOf[JDuration].toNanos)
+      } else dynamicToSchemaValue(reflect, schema.toDynamicValue(value))
+    } catch {
       case e: SchemaEncodeError => throw e
       case NonFatal(e)          => throw SchemaEncodeError(Option(e.getMessage).getOrElse(e.toString))
     }
 
   /** Reconstruct a Scala value from a structural [[SchemaValue]]. */
   def fromValue[A](schema: Schema[A], value: SchemaValue): Either[FromSchemaError, A] =
-    try
-      schema
-        .fromDynamicValue(schemaValueToDynamic(schema.reflect, value))
-        .left
-        .map(err => FromSchemaError(err.toString))
-    catch {
+    try {
+      val reflect = schema.reflect
+      if (isInstant(reflect))
+        value match {
+          case SchemaValue.DatetimeValue(v) =>
+            validateNanoseconds(v.nanoseconds)
+            Right(Instant.ofEpochSecond(v.seconds, v.nanoseconds.toLong).asInstanceOf[A])
+          case other => Left(FromSchemaError(s"expected datetime value for Instant, got $other"))
+        }
+      else if (isDuration(reflect))
+        value match {
+          case SchemaValue.DurationValue(v) => Right(JDuration.ofNanos(v).asInstanceOf[A])
+          case other                        => Left(FromSchemaError(s"expected duration value for Duration, got $other"))
+        }
+      else
+        schema
+          .fromDynamicValue(schemaValueToDynamic(reflect, value))
+          .left
+          .map(err => FromSchemaError(err.toString))
+    } catch {
       case e: FromSchemaError => Left(e)
       case NonFatal(e)        => Left(FromSchemaError(Option(e.getMessage).getOrElse(e.toString)))
     }

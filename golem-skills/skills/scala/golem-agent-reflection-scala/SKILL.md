@@ -34,6 +34,13 @@ Agent type names are unique in an environment. An `AgentType` exposes its
 current component ID, lifecycle mode, constructor
 `SchemaRef`, and method `SchemaRef`s. `SchemaRef` validates `SchemaValue`, packs
 and unpacks canonical `zio.blocks.schema.json.Json`, and renders JSON Schema.
+An omitted option record field and an explicit `null` both decode as `None`;
+re-encoding may emit `null`, and the field is omitted from JSON Schema
+`required`. Canonical JSON encodes `s64` and `u64` as decimal strings, duration
+as `{ "nanoseconds": "..." }`, and quantity mantissas as decimal strings. These
+strings reject `+`, leading zeroes, `-0`, and overflow. Capabilities, futures,
+and streams cannot be packed or unpacked as reflected JSON and project to an
+unsatisfiable reflection JSON Schema.
 `getAgentType` returns `Right(None)` for a missing type and reserves `Left` for
 discovery or decoding failures. The returned schemas are an immutable snapshot;
 call discovery again when a newer deployment must be observed.

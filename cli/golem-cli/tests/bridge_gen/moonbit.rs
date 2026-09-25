@@ -2229,6 +2229,144 @@ fn config_constructors_are_generated() {
     ));
 }
 
+#[test]
+fn reflection_corpus_drives_generated_runtime_wire_regressions() {
+    let corpus: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            workspace_root()
+                .unwrap()
+                .join("test-data/reflection-conformance/v1.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let case = |id: &str| {
+        corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap()
+    };
+    let binary_expected = case("canonical/binary-mime")["expected"].to_string();
+    let invalid_binary = case("errors/binary-noncanonical-base64")["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| serde_json::to_string(&value.to_string()).unwrap())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config_expected = case("config/canonical-entry")["expected"].to_string();
+    let request_expected = format!(
+        "{{\"appName\":\"app\",\"envName\":\"env\",\"agentTypeName\":\"ConfigAgent\",\"parameters\":{{\"kind\":\"tuple\",\"value\":{{\"elements\":[]}}}},\"config\":[{config_expected},{{\"path\":[\"optional\"],\"value\":\"west\"}}]}}"
+    );
+
+    let mut agent_type = agent(
+        "ConfigAgent",
+        "moonbit",
+        vec![],
+        vec![method("ping", vec![], None)],
+        vec![],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(vec!["limits", "maximum"], SchemaType::s64())];
+    let pkg = GeneratedPackage::new(agent_type);
+    let source = r#"test "reflection corpus bridge wire cases" {
+  let mime_type = "application/octet-stream"
+  let binary_value = BinaryValue(b"\xfb\xff", Some(mime_type))
+  assert_eq(
+    schema_value_to_json(binary_value).stringify(),
+    "{\"kind\":\"binary\",\"value\":{\"bytes\":[251,255],\"mimeType\":\"application/octet-stream\"}}",
+  )
+  let binary_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"binary\",\"value\":{\"restrictions\":{}}}}",
+  )
+  assert_eq(binary_codec.encode(binary_value).stringify(), __BINARY_EXPECTED__)
+  for input in [__INVALID_BINARY__] {
+    try binary_codec.decode(@json.parse(input)) catch {
+      BridgeError(_) => ()
+      _ => fail("expected noncanonical binary JSON to be rejected")
+    } noraise {
+      _ => fail("expected noncanonical binary JSON to be rejected")
+    }
+  }
+  let s64_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"s64\",\"value\":{}}}",
+  )
+  let entry = AgentConfigEntry::{
+    path: ["limits", "maximum"],
+    value: S64Value(9223372036854775807L),
+    codec: s64_codec,
+  }
+  let option_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"option\",\"value\":{\"inner\":{\"kind\":\"string\",\"value\":{}}}}}",
+  )
+  let option_value = OptionValue(Some(StringValue("west")))
+  assert_eq(
+    option_codec.encode(option_value).stringify(),
+    "{\"$option\":\"some\",\"value\":\"west\"}",
+  )
+  assert_eq(option_codec.encode_canonical(option_value).stringify(), "\"west\"")
+  let variant_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"variant\",\"value\":{\"cases\":[{\"name\":\"payload\",\"payload\":{\"kind\":\"string\",\"value\":{}}}]}}}",
+  )
+  assert_eq(
+    variant_codec
+    .encode_canonical(VariantValue(0, Some(StringValue("value"))))
+    .stringify(),
+    "{\"payload\":\"value\"}",
+  )
+  let result_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"result\",\"value\":{\"spec\":{\"ok\":{\"kind\":\"string\",\"value\":{}}}}}}",
+  )
+  assert_eq(
+    result_codec
+    .encode_canonical(ResultValue(ResultOk(Some(StringValue("ready")))))
+    .stringify(),
+    "{\"ok\":\"ready\"}",
+  )
+  let union_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"union\",\"value\":{\"spec\":{\"branches\":[{\"tag\":\"command\",\"body\":{\"kind\":\"string\",\"value\":{}},\"discriminator\":{\"rule\":\"prefix\",\"value\":{\"prefix\":\"cmd:\"}}}]}}}}",
+  )
+  assert_eq(
+    union_codec
+    .encode_canonical(UnionValue("command", StringValue("cmd:run")))
+    .stringify(),
+    "\"cmd:run\"",
+  )
+  let option_entry = AgentConfigEntry::{
+    path: ["optional"],
+    value: option_value,
+    codec: option_codec,
+  }
+  let request = encode_create_agent_request(
+    "app",
+    "env",
+    "ConfigAgent",
+    TupleValue([]),
+    None,
+    [entry, option_entry],
+  )
+  assert_eq(request.stringify(), __REQUEST_EXPECTED__)
+}
+"#
+    .replace(
+        "__BINARY_EXPECTED__",
+        &serde_json::to_string(&binary_expected).unwrap(),
+    )
+    .replace("__INVALID_BINARY__", &invalid_binary)
+    .replace(
+        "__REQUEST_EXPECTED__",
+        &serde_json::to_string(&request_expected).unwrap(),
+    );
+    std::fs::write(
+        pkg.module_dir().join("runtime/reflection_wire_wbtest.mbt"),
+        source,
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
 /// An ephemeral agent must not get a `get_with_config` (no parameter-addressable
 /// `get`), but still gets the phantom config variants.
 #[test]
@@ -2522,7 +2660,11 @@ fn external_recursive_stream_client_compiles() {
     std::fs::write(&mod_path, serde_json::to_string_pretty(&module).unwrap()).unwrap();
     let manifest_path = pkg.module_dir().join("runtime/moon.pkg");
     let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
-    manifest = manifest.replacen("import {", "import {\n  \"moonbitlang/x/fs\" @fs,", 1);
+    manifest = manifest.replacen(
+        "import {",
+        "import {\n  \"moonbitlang/core/encoding/base64\",\n  \"moonbitlang/x/fs\" @fs,",
+        1,
+    );
     std::fs::write(&manifest_path, manifest).unwrap();
     std::fs::write(
         pkg.module_dir().join("runtime/frozen_fixture_wbtest.mbt"),
@@ -2539,7 +2681,7 @@ test "binary codec matches every frozen public v1 frame" {
       let pair = payload_hex.substring(start=i * 2, end=i * 2 + 2)
       @string.parse_int(pair[:], base=16).to_byte()
     })
-    let actual = pvc_base64_encode(encode_binary_envelope(metadata, payload))
+    let actual = @base64.encode(encode_binary_envelope(metadata, payload), padding=true)
     assert_true(actual == expect_string(get_field(object, "frameBase64")))
   }
 }

@@ -224,7 +224,6 @@ impl ToolType {
             .body
             .as_ref()
             .expect("resolved body");
-        let input_graph = Arc::new(input.record_schema.clone());
         let mut arguments = Vec::with_capacity(input.fields.len());
         let surfaces = self.definition.canonical_input_surfaces(index);
         input
@@ -272,7 +271,7 @@ impl ToolType {
                     name: field.name.clone(),
                     aliases: field.aliases.clone(),
                     short: field.short,
-                    schema: SchemaRef::with_root(input_graph.clone(), field.type_.clone()),
+                    schema: SchemaRef::with_root(self.schema.clone(), field.type_.clone()),
                     required,
                     default,
                 });
@@ -297,7 +296,7 @@ impl ToolType {
             tool: self.clone(),
             index,
             path: canonical_path,
-            input: SchemaRef::with_root(input_graph, input.record_schema.root.clone()),
+            input: SchemaRef::with_root(self.schema.clone(), input.record_schema.root.clone()),
             wire_input: input.record_schema,
             arguments,
         })
@@ -1321,7 +1320,7 @@ mod tests {
             env_var: None,
         });
         let command = tool.command(&["run"]).unwrap();
-        assert_eq!(command.input_schema().graph(), &command.wire_input);
+        assert_eq!(command.input_schema().root(), &command.wire_input.root);
         for fields in [
             vec![
                 SchemaValue::Option { inner: None },
@@ -1339,6 +1338,34 @@ mod tests {
             let value = SchemaValue::Record { fields };
             assert!(command.checked_input(value).is_ok());
         }
+    }
+
+    #[test]
+    fn repeated_command_lookup_shares_the_discovered_definition_pool() {
+        let tool = sample();
+        let first = tool.command(&["run"]).unwrap();
+        let second = tool.command(&["r"]).unwrap();
+
+        assert!(
+            first
+                .input_schema()
+                .shares_definition_pool_with(second.input_schema())
+        );
+        assert!(
+            first
+                .input_schema()
+                .shares_definition_pool_with(&first.arguments()[0].schema)
+        );
+        assert!(
+            first
+                .input_schema()
+                .shares_definition_pool_with(&first.output_schema().unwrap())
+        );
+        assert!(
+            !first
+                .input_schema()
+                .shares_definition_pool_with(&SchemaRef::new(first.wire_input.clone()))
+        );
     }
 
     #[test]

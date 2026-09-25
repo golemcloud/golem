@@ -1115,6 +1115,12 @@ impl TypeScriptBridgeGenerator {
     /// Generates a type definition and an encode/decode function pair for custom types used
     /// by the agent.
     pub(crate) fn generate_ts_type_definitions(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
+        let needs_config_encoders = self.mode == TypeScriptBridgeMode::ExternalRest
+            && self
+                .agent_type
+                .config
+                .iter()
+                .any(|config| config.source == AgentConfigSource::Local);
         if self.has_external_streams() {
             for (typ, name) in self.type_naming.types() {
                 writer.write_line(format!(
@@ -1132,12 +1138,31 @@ impl TypeScriptBridgeGenerator {
                 self.generate_ts_schema_type_encode(writer, name, typ)?;
                 self.generate_ts_schema_type_decode(writer, name, typ)?;
             }
-            if self.has_external_streams() {
+            if self.has_external_streams() || needs_config_encoders {
+                let public_type = if self.has_external_streams() {
+                    self.streaming_type_name(name).to_string()
+                } else {
+                    name.to_string()
+                };
                 writer.write_line(format!(
                     "function encodePublic{name}(value: {}, stream: any): any {{ return {}; }}",
-                    self.streaming_type_name(name),
+                    public_type,
                     self.encode_public_value_body("value", typ, "stream")?
                 ));
+            }
+            if needs_config_encoders {
+                let canonical_type = if self.has_external_streams() {
+                    self.streaming_type_name(name).to_string()
+                } else {
+                    name.to_string()
+                };
+                writer.write_line(format!(
+                    "function encodeCanonical{name}(value: {}): any {{ return {}; }}",
+                    canonical_type,
+                    self.encode_canonical_value_body("value", typ)?
+                ));
+            }
+            if self.has_external_streams() {
                 writer.write_line(format!(
                     "function decodePublic{name}(value: any, stream: any): {} {{ return {}; }}",
                     self.streaming_type_name(name),
@@ -1644,21 +1669,24 @@ impl TypeScriptBridgeGenerator {
         }
         for (config, param_name) in local_configs.iter().zip(&names.config_parameters) {
             let path = serde_json::to_string(&config.path)?;
-            let encoded_value = self.encode_schema_value(param_name, &config.value_type)?;
+            let public_value = self.encode_public_value_with_stream(
+                param_name,
+                &config.value_type,
+                "((_value: any) => { throw new Error('configuration streams are unsupported'); })",
+            )?;
+            let public_value =
+                self.validate_public_value(&public_value, &config.value_type, "none");
+            let canonical_value = self.encode_canonical_value(param_name, &config.value_type)?;
             writer.write_line(format!("if ({param_name} !== undefined) {{"));
             writer.indent();
+            if !self.has_external_streams() {
+                writer.write_line(format!("void ({public_value});"));
+            }
             writer.write_line(format!(
-                "{}.push({{ path: {path}, value: {encoded_value} }});",
+                "{}.push({{ path: {path}, value: {canonical_value} }});",
                 names.agent_config
             ));
             if self.has_external_streams() {
-                let public_value = self.encode_public_value_with_stream(
-                    param_name,
-                    &config.value_type,
-                    "((_value: any) => { throw new Error('configuration streams are unsupported'); })",
-                )?;
-                let public_value =
-                    self.validate_public_value(&public_value, &config.value_type, "none");
                 writer.write_line(format!(
                     "{}.push({{ path: {path}, value: {public_value} }});",
                     names.public_config
@@ -1937,6 +1965,16 @@ impl TypeScriptBridgeGenerator {
         typ: &SchemaType,
         stream: &str,
     ) -> anyhow::Result<String> {
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.tag === 'inline') return {{ $case: 'inline', value: {{ text: v.val, ...(v.languageCode !== undefined ? {{ language: v.languageCode }} : {{}}) }} }}; if(v.tag === 'url') return {{ $case: 'url', value: v.val }}; throw new Error('unknown unstructured text variant'); }})({value})"
+            ));
+        }
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.tag === 'inline') return {{ $case: 'inline', value: {{ bytes: Buffer.from(v.val).toString('base64url'), ...(v.mimeType !== undefined ? {{ mimeType: v.mimeType }} : {{}}) }} }}; if(v.tag === 'url') return {{ $case: 'url', value: v.val }}; throw new Error('unknown unstructured binary variant'); }})({value})"
+            ));
+        }
         Ok(match typ {
             SchemaType::S64 { .. } | SchemaType::U64 { .. } => format!("({value}).toString()"),
             SchemaType::Bool { .. }
@@ -2013,7 +2051,7 @@ impl TypeScriptBridgeGenerator {
                 )
             }
             SchemaType::Binary { .. } => format!(
-                "({{ bytes: Buffer.from(({value}).bytes).toString('base64'), ...(({value}).mimeType !== undefined ? {{ mimeType: ({value}).mimeType }} : {{}}) }})"
+                "({{ bytes: Buffer.from(({value}).bytes).toString('base64url'), ...(({value}).mimeType !== undefined ? {{ mimeType: ({value}).mimeType }} : {{}}) }})"
             ),
             SchemaType::Text { .. } => value.to_string(),
             SchemaType::Map {
@@ -2101,6 +2139,167 @@ impl TypeScriptBridgeGenerator {
         })
     }
 
+    fn encode_canonical_value(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(name) = self.type_naming.type_name_for_type(typ) {
+            return Ok(format!("encodeCanonical{name}({value})"));
+        }
+        self.encode_canonical_value_body(value, typ)
+    }
+
+    fn encode_canonical_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.tag === 'inline') return {{ inline: {{ text: v.val, ...(v.languageCode !== undefined ? {{ language: v.languageCode }} : {{}}) }} }}; if(v.tag === 'url') return {{ url: v.val }}; throw new Error('unknown unstructured text variant'); }})({value})"
+            ));
+        }
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.tag === 'inline') return {{ inline: {{ bytes: Buffer.from(v.val).toString('base64url'), ...(v.mimeType !== undefined ? {{ mimeType: v.mimeType }} : {{}}) }} }}; if(v.tag === 'url') return {{ url: v.val }}; throw new Error('unknown unstructured binary variant'); }})({value})"
+            ));
+        }
+        Ok(match typ {
+            SchemaType::S64 { .. } | SchemaType::U64 { .. } => format!("({value}).toString()"),
+            SchemaType::Bool { .. }
+            | SchemaType::S8 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::String { .. }
+            | SchemaType::Path { .. }
+            | SchemaType::Url { .. }
+            | SchemaType::Datetime { .. } => value.to_string(),
+            SchemaType::F32 { .. } | SchemaType::F64 { .. } => format!(
+                "((v: number) => {{ if (!Number.isFinite(v)) throw new Error('configuration floats must be finite'); return v; }})({value})"
+            ),
+            SchemaType::Duration { .. } => {
+                format!("({{ nanoseconds: ({value}).toString() }})")
+            }
+            SchemaType::Quantity { .. } => format!(
+                "({{ mantissa: ({value}).mantissa.toString(), scale: ({value}).scale, unit: ({value}).unit }})"
+            ),
+            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => format!(
+                "Array.from({value} as Iterable<any>).map((item: any) => {})",
+                self.encode_canonical_value("item", element)?
+            ),
+            SchemaType::Tuple { elements, .. } => format!(
+                "[{}]",
+                elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| self
+                        .encode_canonical_value(&format!("{value}[{index}]"), element))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::Record { fields, .. } => format!(
+                "({{{}}})",
+                fields
+                    .iter()
+                    .zip(self.member_names(fields.iter().map(|field| field.name.as_str())))
+                    .map(|(field, member)| Ok(format!(
+                        "{}: {}",
+                        serde_json::to_string(&field.name)?,
+                        self.encode_canonical_value(&format!("{value}.{member}"), &field.body)?
+                    )))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(", ")
+            ),
+            SchemaType::Option { inner, .. } => format!(
+                "({value} === undefined ? null : {})",
+                self.encode_canonical_value(value, inner)?
+            ),
+            SchemaType::Binary { .. } => format!(
+                "({{ bytes: Buffer.from(({value}).bytes).toString('base64url'), ...(({value}).mimeType !== undefined ? {{ mimeType: ({value}).mimeType }} : {{}}) }})"
+            ),
+            SchemaType::Text { .. } => value.to_string(),
+            SchemaType::Map {
+                key, value: item, ..
+            } => format!(
+                "Array.from(({value} as Map<any,any>).entries()).map(([key,val]) => [{}, {}])",
+                self.encode_canonical_value("key", key)?,
+                self.encode_canonical_value("val", item)?
+            ),
+            SchemaType::Enum { .. } => value.to_string(),
+            SchemaType::Flags { flags, .. } => {
+                let names = self.member_names(flags.iter().map(String::as_str));
+                format!(
+                    "[{}].filter((entry: [string, string]) => ({value} as any)[entry[1]]).map((entry: [string, string]) => entry[0])",
+                    flags
+                        .iter()
+                        .zip(names)
+                        .map(|(wire, member)| Ok(format!(
+                            "[{}, {}]",
+                            serde_json::to_string(wire)?,
+                            serde_json::to_string(&member)?
+                        )))
+                        .collect::<anyhow::Result<Vec<_>>>()?
+                        .join(",")
+                )
+            }
+            SchemaType::Variant { cases, .. } => format!(
+                "((v:any) => {{ {} throw new Error('unknown variant'); }})({value})",
+                cases
+                    .iter()
+                    .map(|case| Ok(match &case.payload {
+                        Some(payload) => format!(
+                            "if(v.tag === {:?}) return {{ {:?}: {} }};",
+                            case.name,
+                            case.name,
+                            self.encode_canonical_value("v.val", payload)?
+                        ),
+                        None => format!("if(v.tag === {:?}) return {:?};", case.name, case.name),
+                    }))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(" ")
+            ),
+            SchemaType::Result { spec, .. } => {
+                let ok = spec
+                    .ok
+                    .as_deref()
+                    .map(|payload| self.encode_canonical_value("v.ok", payload))
+                    .transpose()?
+                    .unwrap_or_else(|| "null".to_string());
+                let err = spec
+                    .err
+                    .as_deref()
+                    .map(|payload| self.encode_canonical_value("v.err", payload))
+                    .transpose()?
+                    .unwrap_or_else(|| "null".to_string());
+                format!("((v:any) => 'ok' in v ? {{ ok: {ok} }} : {{ err: {err} }})({value})")
+            }
+            SchemaType::Union { spec, .. } => format!(
+                "((v:any) => {{ {} throw new Error('unknown union'); }})({value})",
+                spec.branches
+                    .iter()
+                    .map(|branch| Ok(format!(
+                        "if(v.tag === {:?}) return {};",
+                        branch.tag,
+                        self.encode_canonical_value("v.val", &branch.body)?
+                    )))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(" ")
+            ),
+            SchemaType::Ref { id, .. } => {
+                let definition = self
+                    .type_naming
+                    .graph()
+                    .lookup(id)
+                    .ok_or_else(|| anyhow!("missing canonical schema ref {id}"))?;
+                self.encode_canonical_value(value, &definition.body)?
+            }
+            SchemaType::Secret { .. }
+            | SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
+            | SchemaType::Future { .. }
+            | SchemaType::Stream { .. } => format!(
+                "((_: any) => {{ throw new Error('unsupported configuration value'); }})({value})"
+            ),
+        })
+    }
+
     fn decode_public_value(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
         if let Some(name) = self.type_naming.type_name_for_type(typ) {
             return Ok(format!("decodePublic{name}({value}, stream)"));
@@ -2109,6 +2308,16 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn decode_public_value_body(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.$case === 'inline') return base.UnstructuredText.fromInline(v.value.text, v.value.language); if(v.$case === 'url') return base.UnstructuredText.fromUrl(v.value); throw new Error('unknown unstructured text variant'); }})({value})"
+            ));
+        }
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
+            return Ok(format!(
+                "((v:any) => {{ if(v.$case === 'inline') return base.UnstructuredBinary.fromInline(Uint8Array.from(Buffer.from(v.value.bytes, 'base64url')), v.value.mimeType); if(v.$case === 'url') return base.UnstructuredBinary.fromUrl(v.value); throw new Error('unknown unstructured binary variant'); }})({value})"
+            ));
+        }
         Ok(match typ {
             SchemaType::S64 { .. } | SchemaType::U64 { .. } => format!("BigInt({value})"),
             SchemaType::Stream {
@@ -2163,7 +2372,7 @@ impl TypeScriptBridgeGenerator {
                 self.decode_public_value(&format!("({value} as any).value"), inner)?
             ),
             SchemaType::Binary { .. } => format!(
-                "({{ bytes: Uint8Array.from(Buffer.from(({value} as any).bytes, 'base64')), mimeType: ({value} as any).mimeType }})"
+                "({{ bytes: Uint8Array.from(Buffer.from(({value} as any).bytes, 'base64url')), mimeType: ({value} as any).mimeType }})"
             ),
             SchemaType::Duration { .. } => format!("BigInt(({value} as any).nanoseconds)"),
             SchemaType::Quantity { .. } => format!(
@@ -3907,6 +4116,13 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn streaming_type_definition(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(self.unstructured_text_type(restrictions));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            return Ok(self.unstructured_binary_type(restrictions));
+        }
         Ok(match self.resolve_ref(typ) {
             SchemaType::Variant { cases, .. } => cases
                 .iter()
@@ -4193,6 +4409,13 @@ impl TypeScriptBridgeGenerator {
     }
 
     fn type_definition(&self, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+            return Ok(self.unstructured_text_type(restrictions));
+        }
+        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
+        {
+            return Ok(self.unstructured_binary_type(restrictions));
+        }
         // Resolve through `Ref` so the body shape drives the type definition.
         let resolved = self.resolve_ref(typ);
         match resolved {

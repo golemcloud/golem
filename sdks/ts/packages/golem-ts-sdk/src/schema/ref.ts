@@ -84,6 +84,9 @@ export class SchemaRef {
   }
 
   unpackJson(value: SchemaValue): JsonValue {
+    if (!schemaValueConforms(this.graph, this.root, value)) {
+      throw new SchemaRenderError('schema value does not conform to the expected schema');
+    }
     return toCanonicalJson(this.graph, this.root, value);
   }
 

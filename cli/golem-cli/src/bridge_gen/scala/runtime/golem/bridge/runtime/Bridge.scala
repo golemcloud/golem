@@ -22,6 +22,7 @@ import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.util.concurrent.CompletableFuture
 import scala.concurrent.{Future, Promise}
+import scala.util.Try
 
 /**
  * The REST transport shared by all generated bridge clients in this project.
@@ -52,9 +53,10 @@ object Bridge {
       phantomId = phantomId,
       config = config
     )
-    val body = BridgeProtocol.encodeCreateAgentRequest(request).render
-    send(configuration, "create-agent", body, None).flatMap { response =>
-      complete("create-agent", response, BridgeProtocol.decodeCreateAgentResponse)
+    Future.fromTry(Try(BridgeProtocol.encodeCreateAgentRequest(request).render)).flatMap { body =>
+      send(configuration, "create-agent", body, None).flatMap { response =>
+        complete("create-agent", response, BridgeProtocol.decodeCreateAgentResponse)
+      }
     }
   }
 
@@ -81,9 +83,10 @@ object Bridge {
       scheduleAt = scheduleAt,
       idempotencyKey = None
     )
-    val body = BridgeProtocol.encodeAgentInvocationRequest(request).render
-    send(configuration, "invoke-agent", body, request.idempotencyKey).flatMap { response =>
-      complete("invoke-agent", response, BridgeProtocol.decodeAgentInvocationResult)
+    Future.fromTry(Try(BridgeProtocol.encodeAgentInvocationRequest(request).render)).flatMap { body =>
+      send(configuration, "invoke-agent", body, request.idempotencyKey).flatMap { response =>
+        complete("invoke-agent", response, BridgeProtocol.decodeAgentInvocationResult)
+      }
     }
   }
 
@@ -144,8 +147,9 @@ object Bridge {
     methodParameters: () => SchemaValue,
     constructorCodec: PublicValueCodec.Codec,
     inputCodec: PublicValueCodec.Codec,
-    outputCodec: Option[PublicValueCodec.Codec],
-    configCodecs: List[(List[String], PublicValueCodec.Codec)]
+    outputCodec: Option[PublicValueCodec.Codec]
   ): Future[AgentInvocationResult] =
-    StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec, configCodecs)
+    Try(
+      StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec)
+    ).fold(Future.failed, future => future)
 }

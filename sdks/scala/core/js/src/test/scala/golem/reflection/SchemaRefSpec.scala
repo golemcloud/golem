@@ -113,28 +113,65 @@ object SchemaRefSpec extends ZIOSpecDefault {
                 ),
                 NamedFieldType(
                   "message",
-                  SchemaType(TextType(TextRestrictions(minLength = Some(12), regex = Some("^https://"))))
+                  SchemaType(
+                    TextType(
+                      TextRestrictions(
+                        languages = Some(List("en", "de")),
+                        minLength = Some(12),
+                        regex = Some("^https://")
+                      )
+                    )
+                  )
                 ),
                 NamedFieldType(
                   "content",
-                  SchemaType(BinaryType(BinaryRestrictions(minBytes = Some(3), maxBytes = Some(6))))
+                  SchemaType(
+                    BinaryType(
+                      BinaryRestrictions(
+                        mimeTypes = Some(List("image/png")),
+                        minBytes = Some(3),
+                        maxBytes = Some(6)
+                      )
+                    )
+                  )
                 )
               )
             )
           )
         )
       )
-      val rendered   = restricted.toJsonSchema()
-      val properties = rendered.get("properties").one.toOption.get
-      val count      = properties.get("count").one.toOption.get
-      val text       = properties.get("message").one.toOption.get.get("properties").one.toOption.get.get("text").one
-      val bytes      = properties.get("content").one.toOption.get.get("properties").one.toOption.get.get("bytes").one
+      val rendered         = restricted.toJsonSchema()
+      val properties       = rendered.get("properties").one.toOption.get
+      val count            = properties.get("count").one.toOption.get
+      val textSchema       = properties.get("message").one.toOption.get
+      val textProperties   = textSchema.get("properties").one.toOption.get
+      val text             = textProperties.get("text").one
+      val binarySchema     = properties.get("content").one.toOption.get
+      val binaryProperties = binarySchema.get("properties").one.toOption.get
+      val bytes            = binaryProperties.get("bytes").one
+      val mimeType         = binaryProperties.get("mimeType").one
+      val pattern          = bytes.flatMap(_.get("pattern").one) match {
+        case Right(Json.String(value)) => value
+        case other                     => throw new AssertionError(s"expected binary pattern, got $other")
+      }
+      val canonical    = List("", "AQ", "AQI", "AQID", "-_8").forall(value => pattern.r.pattern.matcher(value).matches())
+      val nonCanonical = List("+/8", "AQ==", "-_9", "A").forall(value => !pattern.r.pattern.matcher(value).matches())
       assertTrue(
         count.get("maximum").one == Right(Json.Number(BigDecimal(3))),
         text.flatMap(_.get("minLength").one) == Right(Json.Number(BigDecimal(12))),
         text.flatMap(_.get("pattern").one) == Right(Json.String("^https://")),
+        textProperties.get("language").one.flatMap(_.get("enum").one) ==
+          Right(Json.Array(Json.String("en"), Json.String("de"))),
+        textSchema.get("description").one.isLeft,
         bytes.flatMap(_.get("minLength").one) == Right(Json.Number(BigDecimal(4))),
-        bytes.flatMap(_.get("maxLength").one) == Right(Json.Number(BigDecimal(8)))
+        bytes.flatMap(_.get("maxLength").one) == Right(Json.Number(BigDecimal(8))),
+        pattern == "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+        canonical,
+        nonCanonical,
+        mimeType.flatMap(_.get("pattern").one) ==
+          Right(Json.String("^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$")),
+        mimeType.flatMap(_.get("enum").one) == Right(Json.Array(Json.String("image/png"))),
+        binarySchema.get("description").one.isLeft
       )
     },
     test("union export keeps discriminator and branch body while packing enforces the rule") {
@@ -171,18 +208,139 @@ object SchemaRefSpec extends ZIOSpecDefault {
         union.packJson(Json.String("http://host")).isLeft
       )
     },
-    test("requires explicit null for an absent option and renders it as required") {
+    test("decodes omitted and explicit-null option fields as absent") {
       val optional = SchemaRef(
         SchemaGraph(
-          ListMap.empty,
-          SchemaType(RecordType(List(NamedFieldType("maybe", SchemaType(OptionType(SchemaType(StringType)))))))
+          ListMap("maybe-ref" -> SchemaTypeDef(SchemaType(OptionType(SchemaType(StringType))))),
+          SchemaType(
+            RecordType(
+              List(
+                NamedFieldType("maybe", SchemaType(OptionType(SchemaType(StringType)))),
+                NamedFieldType("referenced", SchemaType(RefType("maybe-ref")))
+              )
+            )
+          )
+        )
+      )
+      val absent        = RecordValue(List(OptionValue(None), OptionValue(None)))
+      val malformedRefs = SchemaRef(
+        SchemaGraph(
+          ListMap(
+            "cycle-a" -> SchemaTypeDef(SchemaType(RefType("cycle-b"))),
+            "cycle-b" -> SchemaTypeDef(SchemaType(RefType("cycle-a")))
+          ),
+          SchemaType(
+            RecordType(
+              List(
+                NamedFieldType("dangling", SchemaType(RefType("missing"))),
+                NamedFieldType("cycle", SchemaType(RefType("cycle-a")))
+              )
+            )
+          )
         )
       )
       assertTrue(
-        optional.packJson(Json.Object()).isLeft,
-        optional.packJson(Json.Object("maybe" -> Json.Null)) == Right(RecordValue(List(OptionValue(None)))),
-        optional.toJsonSchema().get("required").one == Right(Json.Array(Json.String("maybe")))
+        optional.packJson(Json.Object()) == Right(absent),
+        optional.packJson(Json.Object("maybe" -> Json.Null, "referenced" -> Json.Null)) == Right(absent),
+        optional.toJsonSchema().get("required").one == Right(Json.Array()),
+        malformedRefs.toJsonSchema().get("required").one ==
+          Right(Json.Array(Json.String("dangling"), Json.String("cycle")))
       )
+    },
+    test("uses lossless canonical JSON for wide integers, durations, and quantities") {
+      val wide = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(
+            RecordType(
+              List(
+                NamedFieldType("signed", SchemaType(S64Type())),
+                NamedFieldType("unsigned", SchemaType(U64Type())),
+                NamedFieldType("duration", SchemaType(DurationType)),
+                NamedFieldType(
+                  "quantity",
+                  SchemaType(QuantityType(QuantitySpec("m", Nil, None, None)))
+                )
+              )
+            )
+          )
+        )
+      )
+      val json = Json.Object(
+        "signed"   -> Json.String(Long.MinValue.toString),
+        "unsigned" -> Json.String("18446744073709551615"),
+        "duration" -> Json.Object("nanoseconds" -> Json.String(Long.MaxValue.toString)),
+        "quantity" -> Json.Object(
+          "mantissa" -> Json.String(Long.MinValue.toString),
+          "scale"    -> Json.Number(BigDecimal(-2)),
+          "unit"     -> Json.String("m")
+        )
+      )
+      val value = RecordValue(
+        List(
+          S64Value(Long.MinValue),
+          U64Value(-1L),
+          DurationValue(Long.MaxValue),
+          QuantityValueNode(QuantityValue(Long.MinValue, -2, "m"))
+        )
+      )
+      val rendered = wide.toJsonSchema(includeDraftMarker = false)
+      val props    = rendered.get("properties").one.toOption.get
+      assertTrue(
+        wide.packJson(json) == Right(value),
+        wide.unpackJson(value) == Right(json),
+        props.get("signed").one.flatMap(_.get("pattern").one) ==
+          Right(Json.String("^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$")),
+        props.get("unsigned").one.flatMap(_.get("x-golem-maximum").one) ==
+          Right(Json.String("18446744073709551615")),
+        props.get("duration").one.flatMap(_.get("type").one) == Right(Json.String("object")),
+        props
+          .get("quantity")
+          .one
+          .flatMap(_.get("properties").one)
+          .flatMap(_.get("mantissa").one)
+          .flatMap(_.get("type").one) == Right(Json.String("string"))
+      )
+    },
+    test("rejects non-canonical or overflowing wide decimal strings") {
+      val signed   = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(S64Type())))
+      val unsigned = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(U64Type())))
+      val duration = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(DurationType)))
+      val quantity = SchemaRef(
+        SchemaGraph(ListMap.empty, SchemaType(QuantityType(QuantitySpec("m", Nil, None, None))))
+      )
+      assertTrue(
+        List(Json.String("+1"), Json.String("01"), Json.String("-0"), Json.String("9223372036854775808"))
+          .forall(signed.packJson(_).isLeft),
+        List(Json.String("-1"), Json.String("+1"), Json.String("01"), Json.String("18446744073709551616"))
+          .forall(unsigned.packJson(_).isLeft),
+        duration.packJson(Json.String("PT1S")).isLeft,
+        duration.packJson(Json.Object("nanoseconds" -> Json.Number(BigDecimal(1)))).isLeft,
+        quantity
+          .packJson(
+            Json.Object(
+              "mantissa" -> Json.String("-0"),
+              "scale"    -> Json.Number(BigDecimal(0)),
+              "unit"     -> Json.String("m")
+            )
+          )
+          .isLeft
+      )
+    },
+    test("reflection JSON Schema rejects leaves with no JSON representation") {
+      val leaves = List[SchemaTypeBody](
+        SecretType(SecretSpec(SchemaType(StringType), None)),
+        QuotaTokenType(QuotaTokenSpec(None)),
+        PermissionCardType(PermissionCardSpec(polymorphic = false)),
+        FutureType(None),
+        StreamType(None)
+      )
+      assertTrue(leaves.forall { body =>
+        SchemaRef(SchemaGraph(ListMap.empty, SchemaType(body)))
+          .toJsonSchema(includeDraftMarker = false)
+          .get("not")
+          .one == Right(Json.Object())
+      })
     },
     test("rejects numbers that overflow after float narrowing") {
       val f32 = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(F32Type())))
@@ -319,6 +477,21 @@ object SchemaRefSpec extends ZIOSpecDefault {
         .get
       val expected = Json.Number(BigDecimal((Int.MaxValue.toLong * 4 + 2) / 3))
       assertTrue(bytes.get("minLength").one == Right(expected), bytes.get("maxLength").one == Right(expected))
+    },
+    test("binary MIME syntax is canonical while MIME metadata stays optional") {
+      val ref = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(BinaryType(BinaryRestrictions(mimeTypes = Some(List("image/png")))))
+        )
+      )
+      val withoutMime = Json.Object("bytes" -> Json.String("AQ"))
+      val invalidMime = Json.Object("bytes" -> Json.String("AQ"), "mimeType" -> Json.String("not a mime"))
+      assertTrue(
+        ref.validateJson(withoutMime).isRight,
+        ref.packJson(invalidMime).isLeft,
+        ref.unpackJson(BinaryValue(Vector[Byte](1), Some("not a mime"))).isLeft
+      )
     },
     test("throwing config codecs return schema encode failures") {
       val definition = AgentClientDefinition.full[String, String](

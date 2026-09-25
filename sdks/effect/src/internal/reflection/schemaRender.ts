@@ -154,7 +154,10 @@ export function fromCanonicalJson(
       return {
         tag: "record",
         fields: body.fields.map((field) => {
-          if (!(field.name in object)) fail([...path, field.name], "missing field")
+          if (!Object.prototype.hasOwnProperty.call(object, field.name)) {
+            if (resolve(graph, field.body).body.tag === "option") return { tag: "option" }
+            fail([...path, field.name], "missing field")
+          }
           return fromCanonicalJson(graph, field.body, object[field.name], [...path, field.name])
         }),
       }
@@ -312,11 +315,14 @@ export function toCanonicalJson(
         text: value.text,
         ...(value.language === undefined ? {} : { language: value.language }),
       }
-    case "binary":
+    case "binary": {
+      if (value.mimeType !== undefined && !MIME_TYPE_PATTERN.test(value.mimeType))
+        fail([...path, "mimeType"], "invalid MIME type")
       return {
         bytes: bytesToBase64(value.bytes),
         ...(value.mimeType === undefined ? {} : { mimeType: value.mimeType }),
       }
+    }
     case "datetime":
       return datetimeToISOString(value.value)
     case "duration":
@@ -453,7 +459,7 @@ export function toCanonicalJsonSchema(
   type: SchemaType,
   includeDraftMarker: boolean,
 ): JsonValue {
-  const referencedDefinitions = assertCanonicalJsonEligible(graph, type)
+  const referencedDefinitions = assertCanonicalJsonEligible(graph, type, true)
   const root = renderSchema(graph, type)
   const defs = Object.fromEntries(
     [...referencedDefinitions].map((id) => {
@@ -474,7 +480,11 @@ export function toCanonicalJsonSchema(
   }
 }
 
-function assertCanonicalJsonEligible(graph: SchemaGraph, root: SchemaType): ReadonlySet<string> {
+export function assertCanonicalJsonEligible(
+  graph: SchemaGraph,
+  root: SchemaType,
+  allowUnsupportedLeaves = false,
+): ReadonlySet<string> {
   const referencedDefinitions = new Set<string>()
   const visit = (type: SchemaType, path: Path, aliasChain = new Set<string>()): void => {
     const body = type.body
@@ -523,9 +533,11 @@ function assertCanonicalJsonEligible(graph: SchemaGraph, root: SchemaType): Read
       case "secret":
       case "quota-token":
       case "permission-card":
+        if (allowUnsupportedLeaves) return
         return fail(path, `${body.tag} values cannot cross a canonical JSON boundary`)
       case "future":
       case "stream":
+        if (allowUnsupportedLeaves) return
         return fail(path, `${body.tag} values have no canonical JSON representation`)
       default:
         return
@@ -613,12 +625,17 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       if (body.restrictions.regex !== undefined) text.pattern = body.restrictions.regex
       rendered = {
         type: "object",
-        properties: { text, language: { type: "string" } },
+        properties: {
+          text,
+          language: {
+            type: "string",
+            ...(body.restrictions.languages === undefined
+              ? {}
+              : { enum: body.restrictions.languages }),
+          },
+        },
         required: ["text"],
         additionalProperties: false,
-        ...(body.restrictions.languages === undefined
-          ? {}
-          : { description: `Allowed languages: ${body.restrictions.languages.join(", ")}` }),
       }
       break
     }
@@ -630,6 +647,7 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
           bytes: {
             type: "string",
             contentEncoding: "base64url",
+            pattern: BASE64URL_PATTERN,
             ...(body.restrictions.minBytes === undefined
               ? {}
               : { minLength: base64UrlLength(body.restrictions.minBytes) }),
@@ -637,12 +655,15 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
               ? {}
               : { maxLength: base64UrlLength(body.restrictions.maxBytes) }),
           },
-          mimeType: { type: "string", pattern: MIME_TYPE_PATTERN.source },
+          mimeType: {
+            type: "string",
+            pattern: MIME_TYPE_PATTERN.source,
+            ...(body.restrictions.mimeTypes === undefined
+              ? {}
+              : { enum: body.restrictions.mimeTypes }),
+          },
         },
         additionalProperties: false,
-        ...(body.restrictions.mimeTypes === undefined
-          ? {}
-          : { description: `Allowed MIME types: ${body.restrictions.mimeTypes.join(", ")}` }),
       }
       break
     case "path": {
@@ -716,7 +737,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
             attachMetadata(renderSchema(graph, field.body), field.metadata),
           ]),
         ),
-        required: body.fields.map((field) => field.name),
+        required: body.fields
+          .filter((field) => resolve(graph, field.body).body.tag !== "option")
+          .map((field) => field.name),
         additionalProperties: false,
       }
       break
@@ -804,10 +827,10 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
     case "secret":
     case "quota-token":
     case "permission-card":
-      return fail([], `${body.tag} values cannot cross a canonical JSON boundary`)
     case "future":
     case "stream":
-      return fail([], `${body.tag} values have no canonical JSON representation`)
+      rendered = { not: {} }
+      break
   }
   if ((rendered.type === "integer" || rendered.type === "number") && "restrictions" in body) {
     const bounds = body.restrictions as NumericRestrictions | undefined
@@ -1025,7 +1048,9 @@ function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonV
   }
   return false
 }
-const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/u
+const MIME_TYPE_PATTERN = new RegExp("^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$", "u")
+const BASE64URL_PATTERN =
+  "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$"
 
 function bytesToBase64(bytes: Uint8Array): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -1056,7 +1081,9 @@ function base64UrlToBytes(value: string, path: Path): Uint8Array {
     if (value[index + 2] !== undefined) bytes.push(((b & 15) << 4) | (c >> 2))
     if (value[index + 3] !== undefined) bytes.push(((c & 3) << 6) | d)
   }
-  return Uint8Array.from(bytes)
+  const result = Uint8Array.from(bytes)
+  if (bytesToBase64(result) !== value) fail(path, "invalid base64url without padding")
+  return result
 }
 
 function rejectUnknownFields(

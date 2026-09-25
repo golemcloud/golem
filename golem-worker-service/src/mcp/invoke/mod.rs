@@ -194,19 +194,24 @@ mod codec_tests {
     }
 
     #[test]
-    fn option_record_field_is_required() {
+    fn option_record_field_may_be_omitted() {
         let ty = SchemaType::record(vec![field(
             "inner",
             SchemaType::option(SchemaType::string()),
         )]);
-        // The advertised schema marks the field required; an explicit null is
-        // accepted and round-trips.
+        // The advertised schema omits the field from `required`; omission and
+        // explicit null both decode as `None`.
         round_trip(ty.clone(), json!({"inner": null}));
         round_trip(ty.clone(), json!({"inner": "x"}));
-        // Omitting the field is rejected (schema and runtime now agree).
-        assert!(
-            parse_fails(ty, json!({})),
-            "omitted option<T> record field must be rejected"
+        let graph = SchemaGraph::anonymous(ty);
+        let value = from_json_value(&graph, &graph.root, &json!({})).expect("omitted option field");
+        assert_eq!(
+            value,
+            golem_common::schema::schema_value::SchemaValue::Record {
+                fields: vec![golem_common::schema::schema_value::SchemaValue::Option {
+                    inner: None,
+                }],
+            }
         );
     }
 }

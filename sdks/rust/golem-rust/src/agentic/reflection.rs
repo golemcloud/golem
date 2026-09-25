@@ -23,7 +23,7 @@ pub use super::tool_reflection::{
 
 use crate::bindings::golem::agent::{common as wire_common, host};
 use crate::schema::render::{
-    RenderError, from_json_value, to_json_schema_with_config, to_json_value,
+    RenderError, from_json_value, to_json_value, to_reflection_json_schema,
 };
 use crate::schema::validation::validate_value;
 use crate::schema::{
@@ -57,6 +57,11 @@ impl SchemaRef {
 
     pub(crate) fn with_root(graph: Arc<SchemaGraph>, root: SchemaType) -> Self {
         Self { graph, root }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_definition_pool_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.graph, &other.graph)
     }
 
     pub fn graph(&self) -> &SchemaGraph {
@@ -102,12 +107,7 @@ impl SchemaRef {
 
     #[cfg(feature = "json")]
     pub fn to_json_schema(&self, include_draft_marker: bool) -> serde_json::Value {
-        let config = if include_draft_marker {
-            crate::schema::render::JsonSchemaConfig::CANONICAL
-        } else {
-            crate::schema::render::JsonSchemaConfig::WITHOUT_DRAFT_MARKER
-        };
-        to_json_schema_with_config(&self.graph, &self.root, config)
+        to_reflection_json_schema(&self.graph, &self.root, include_draft_marker)
     }
 }
 
@@ -515,7 +515,7 @@ impl AgentType {
         )?;
         Ok(ReflectedAgentClient {
             agent_type: self.clone(),
-            transport: Rc::new(transport),
+            transport: ReflectedTransport::Host(Rc::new(transport)),
             reusable_identity: Some(agent_id.clone()),
         })
     }
@@ -855,7 +855,7 @@ impl ReflectedAgentClientFactory {
         )?;
         Ok(ReflectedAgentClient {
             agent_type: self.agent_type.clone(),
-            transport: Rc::new(transport),
+            transport: ReflectedTransport::Host(Rc::new(transport)),
             reusable_identity: identity,
         })
     }
@@ -864,7 +864,7 @@ impl ReflectedAgentClientFactory {
 #[derive(Clone)]
 pub struct ReflectedAgentClient {
     agent_type: AgentType,
-    transport: Rc<RpcTransport>,
+    transport: ReflectedTransport,
     reusable_identity: Option<ParsedAgentId>,
 }
 
@@ -893,7 +893,101 @@ impl ReflectedAgentClient {
 #[derive(Clone)]
 pub struct ReflectedAgentMethod {
     definition: AgentMethod,
-    transport: Rc<RpcTransport>,
+    transport: ReflectedTransport,
+}
+
+#[derive(Clone)]
+enum ReflectedTransport {
+    Host(Rc<RpcTransport>),
+    #[cfg(test)]
+    Test(Rc<TestReflectedTransport>),
+}
+
+#[cfg(test)]
+struct TestReflectedTransport {
+    value: Option<SchemaValue>,
+}
+
+#[cfg(test)]
+impl TestReflectedTransport {
+    fn completion(&self) -> Invocation<Option<SchemaValue>> {
+        Invocation {
+            metadata: InvocationMetadata {
+                agent_id: ParsedAgentId::new("test-agent"),
+                idempotency_key: "test-key".to_string(),
+            },
+            value: self.value.clone(),
+        }
+    }
+
+    async fn invoke_and_await(&self, _method: &str, _input: SchemaValue) -> PendingResult {
+        Ok(self.completion())
+    }
+
+    fn pending(&self, _method: &str, _input: SchemaValue) -> ReflectedTransportPending {
+        let completion = self.completion();
+        ReflectedTransportPending {
+            metadata: completion.metadata.clone(),
+            cancel: Rc::new(|| {}),
+            future: Box::pin(std::future::ready(Ok(completion))),
+        }
+    }
+}
+
+impl ReflectedTransport {
+    async fn invoke_and_await(&self, method: &str, input: SchemaValue) -> PendingResult {
+        match self {
+            Self::Host(transport) => transport.invoke_and_await(method, input).await,
+            #[cfg(test)]
+            Self::Test(transport) => transport.invoke_and_await(method, input).await,
+        }
+    }
+
+    fn pending(
+        &self,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<ReflectedTransportPending, GolemReflectError> {
+        match self {
+            Self::Host(transport) => {
+                let pending = transport.pending(method, input)?;
+                let metadata = pending.metadata.clone();
+                let cancellation = Rc::clone(&pending.raw);
+                Ok(ReflectedTransportPending {
+                    metadata,
+                    cancel: Rc::new(move || cancellation.cancel()),
+                    future: Box::pin(pending),
+                })
+            }
+            #[cfg(test)]
+            Self::Test(transport) => Ok(transport.pending(method, input)),
+        }
+    }
+
+    fn trigger(
+        &self,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<InvocationMetadata, GolemReflectError> {
+        match self {
+            Self::Host(transport) => transport.trigger(method, input),
+            #[cfg(test)]
+            Self::Test(_) => panic!("test reflected transport does not support trigger"),
+        }
+    }
+
+    fn schedule(
+        &self,
+        at: ScheduledTime,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<ScheduledInvocation, GolemReflectError> {
+        match self {
+            Self::Host(transport) => transport.schedule(at, method, input),
+            #[cfg(test)]
+            Self::Test(_) => panic!("test reflected transport does not support scheduling"),
+        }
+    }
 }
 
 fn validate_declared_output(
@@ -1122,6 +1216,21 @@ pub struct ScheduledInvocation {
 }
 
 type PendingResult = Result<Invocation<Option<SchemaValue>>, GolemReflectError>;
+type PendingResultFuture = Pin<Box<dyn Future<Output = PendingResult>>>;
+
+struct ReflectedTransportPending {
+    metadata: InvocationMetadata,
+    cancel: Rc<dyn Fn()>,
+    future: PendingResultFuture,
+}
+
+impl Future for ReflectedTransportPending {
+    type Output = PendingResult;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().future.as_mut().poll(cx)
+    }
+}
 
 pub struct PendingInvocation {
     pub metadata: InvocationMetadata,
@@ -1131,7 +1240,7 @@ pub struct PendingInvocation {
 
 /// A reflected pending invocation that applies the selected method's output policy on completion.
 pub struct ReflectedPendingInvocation {
-    checked: CheckedReflectedOutput<PendingInvocation>,
+    checked: CheckedReflectedOutput<ReflectedTransportPending>,
 }
 
 struct CheckedReflectedOutput<F> {
@@ -1146,7 +1255,7 @@ impl ReflectedPendingInvocation {
     }
 
     pub fn cancel(&self) {
-        self.checked.inner.cancel();
+        (self.checked.inner.cancel)();
     }
 
     pub async fn get(self) -> PendingResult {
@@ -1565,17 +1674,21 @@ fn decode_custom_error(value: crate::schema::wit::wire::TypedSchemaValue) -> Rem
 #[cfg(test)]
 mod tests {
     use super::{
-        CheckedReflectedOutput, GolemReflectError, Invocation, InvocationMetadata,
-        MethodOnlyAgentClientDefinition, ParsedAgentId, SchemaRef, validate_declared_output,
+        AgentMethod, GolemReflectError, MethodOnlyAgentClientDefinition, ReflectedAgentMethod,
+        ReflectedTransport, SchemaRef, TestReflectedTransport, validate_declared_output,
     };
+    use crate::bindings::golem::agent::common as wire_common;
+    use crate::schema::render::from_json_value;
+    use crate::schema::schema_type::{NumericBound, NumericRestrictions};
+    use crate::schema::validation::{is_equivalent_cross_graph, validate_graph, validate_value};
     use crate::schema::{
-        MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, VariantCaseType,
-        VariantValuePayload,
+        BinaryRestrictions, MetadataEnvelope, NamedFieldType, PermissionCardSpec, QuantitySpec,
+        QuotaTokenSpec, ResultSpec, SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue,
+        TextRestrictions, TypeId, VariantCaseType, VariantValuePayload,
     };
-    use serde_json::json;
-    use std::future::{Future, ready};
-    use std::pin::Pin;
-    use std::task::{Context, Poll, Waker};
+    use serde_json::{Value, json};
+    use std::collections::HashSet;
+    use std::rc::Rc;
     use test_r::test;
 
     #[test]
@@ -1612,6 +1725,410 @@ mod tests {
             json!({ "name": "demo", "enabled": true })
         );
         assert_eq!(schema.to_json_schema(true)["type"], json!("object"));
+        assert_eq!(
+            schema
+                .pack_json(&json!({ "name": "demo" }))
+                .expect("decode omitted option"),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("demo".to_string()),
+                    SchemaValue::Option { inner: None },
+                ]
+            }
+        );
+        assert_eq!(schema.to_json_schema(false)["required"], json!(["name"]));
+    }
+
+    #[test]
+    fn reflection_json_schema_rejects_unrepresentable_leaves() {
+        for ty in [
+            SchemaType::secret(Default::default()),
+            SchemaType::future(None),
+            SchemaType::stream(None),
+        ] {
+            let schema = SchemaRef::new(SchemaGraph::anonymous(ty));
+            assert_eq!(schema.to_json_schema(false)["not"], json!({}));
+        }
+    }
+
+    fn conformance_field(name: &str, body: SchemaType) -> NamedFieldType {
+        NamedFieldType {
+            name: name.to_string(),
+            body,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+
+    fn conformance_schema(name: &str, id: &str) -> SchemaRef {
+        let root = match name {
+            "s64" => SchemaType::s64(),
+            "constrained-s64" => SchemaType::S64 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::Signed(-9_007_199_254_740_993)),
+                    max: Some(NumericBound::Signed(9_007_199_254_740_993)),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+            "u64" => SchemaType::u64(),
+            "binary" => SchemaType::binary(BinaryRestrictions::default()),
+            "duration" => SchemaType::duration(),
+            "quantity" => SchemaType::quantity(QuantitySpec {
+                base_unit: "m".to_string(),
+                allowed_suffixes: vec![],
+                min: None,
+                max: None,
+            }),
+            "tool-input" => SchemaType::record(vec![
+                conformance_field("pattern", SchemaType::string()),
+                conformance_field("paths", SchemaType::list(SchemaType::string())),
+                conformance_field("ignoreCase", SchemaType::option(SchemaType::bool())),
+            ]),
+            "config-entry" => SchemaType::record(vec![
+                conformance_field("path", SchemaType::list(SchemaType::string())),
+                conformance_field("value", SchemaType::s64()),
+            ]),
+            "constrained-u32" => SchemaType::U32 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::Unsigned(2)),
+                    max: Some(NumericBound::Unsigned(10)),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+            "constrained-f64" => SchemaType::F64 {
+                restrictions: Some(NumericRestrictions {
+                    min: Some(NumericBound::float(-1.5).unwrap()),
+                    max: Some(NumericBound::float(2.5).unwrap()),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+            "constrained-text" => SchemaType::text(TextRestrictions {
+                languages: Some(vec!["en".to_string(), "de".to_string()]),
+                min_length: Some(2),
+                max_length: Some(8),
+                regex: Some("^[a-z]+$".to_string()),
+            }),
+            "constrained-binary" => SchemaType::binary(BinaryRestrictions {
+                mime_types: Some(vec![
+                    "image/png".to_string(),
+                    "application/octet-stream".to_string(),
+                ]),
+                min_bytes: Some(2),
+                max_bytes: Some(4),
+            }),
+            "result" => SchemaType::result(ResultSpec {
+                ok: Some(Box::new(SchemaType::string())),
+                err: Some(Box::new(SchemaType::u32())),
+            }),
+            "custom-error" => SchemaType::result(ResultSpec {
+                ok: Some(Box::new(SchemaType::string())),
+                err: Some(Box::new(SchemaType::record(vec![
+                    conformance_field("code", SchemaType::string()),
+                    conformance_field("retryable", SchemaType::bool()),
+                ]))),
+            }),
+            "optional-record" => {
+                let id = TypeId::new("conformance.optional");
+                return SchemaRef::new(SchemaGraph {
+                    defs: vec![SchemaTypeDef {
+                        id: id.clone(),
+                        name: None,
+                        body: SchemaType::option(SchemaType::string()),
+                    }],
+                    root: SchemaType::record(vec![
+                        conformance_field("direct", SchemaType::option(SchemaType::string())),
+                        conformance_field("referenced", SchemaType::ref_to(id)),
+                    ]),
+                });
+            }
+            other => panic!("{id}: unknown conformance fixture {other}"),
+        };
+        SchemaRef::new(SchemaGraph::anonymous(root))
+    }
+
+    fn conformance_json_pointer<'a>(value: &'a Value, pointer: &str, id: &str) -> &'a Value {
+        if pointer.is_empty() {
+            value
+        } else {
+            value
+                .pointer(pointer)
+                .unwrap_or_else(|| panic!("{id}: missing JSON pointer {pointer} in {value}"))
+        }
+    }
+
+    fn assert_conformance_subset(actual: &Value, expected: &Value, id: &str) {
+        match expected {
+            Value::Object(expected) => {
+                let actual = actual
+                    .as_object()
+                    .unwrap_or_else(|| panic!("{id}: expected JSON object, got {actual}"));
+                for (key, expected) in expected {
+                    assert_conformance_subset(
+                        actual
+                            .get(key)
+                            .unwrap_or_else(|| panic!("{id}: missing key {key} in {actual:?}")),
+                        expected,
+                        id,
+                    );
+                }
+            }
+            _ => assert_eq!(actual, expected, "{id}"),
+        }
+    }
+
+    fn assert_conformance_semantic(fixture: &str, expected: &Value, id: &str) {
+        match fixture {
+            "unsupported-leaves" => {
+                let types = [
+                    SchemaType::secret(Default::default()),
+                    SchemaType::quota_token(QuotaTokenSpec::default()),
+                    SchemaType::permission_card(PermissionCardSpec::default()),
+                    SchemaType::future(None),
+                    SchemaType::stream(None),
+                ];
+                assert_eq!(
+                    types.len(),
+                    expected["count"]
+                        .as_u64()
+                        .unwrap_or_else(|| panic!("{id}: missing unsupported-leaves count"))
+                        as usize,
+                    "{id}"
+                );
+                for ty in types {
+                    assert_conformance_subset(
+                        &SchemaRef::new(SchemaGraph::anonymous(ty)).to_json_schema(false),
+                        &expected["schema"],
+                        id,
+                    );
+                }
+            }
+            "all-kinds" => assert_eq!(
+                serde_json::to_value(vec![
+                    "ref",
+                    "bool",
+                    "s8",
+                    "s16",
+                    "s32",
+                    "s64",
+                    "u8",
+                    "u16",
+                    "u32",
+                    "u64",
+                    "f32",
+                    "f64",
+                    "char",
+                    "string",
+                    "record",
+                    "variant",
+                    "enum",
+                    "flags",
+                    "tuple",
+                    "list",
+                    "fixed-list",
+                    "map",
+                    "option",
+                    "result",
+                    "text",
+                    "binary",
+                    "path",
+                    "url",
+                    "datetime",
+                    "duration",
+                    "quantity",
+                    "union",
+                    "secret",
+                    "quota-token",
+                    "permission-card",
+                    "future",
+                    "stream",
+                ])
+                .unwrap(),
+                expected["names"],
+                "{id}"
+            ),
+            "all-restrictions" => assert_eq!(
+                serde_json::to_value(vec![
+                    "numeric-minimum",
+                    "numeric-maximum",
+                    "numeric-unit",
+                    "text-languages",
+                    "text-min-length",
+                    "text-max-length",
+                    "text-regex",
+                    "binary-mime-types",
+                    "binary-min-bytes",
+                    "binary-max-bytes",
+                    "path-direction",
+                    "path-kind",
+                    "path-mime-types",
+                    "path-extensions",
+                    "url-schemes",
+                    "url-hosts",
+                    "quantity-base-unit",
+                    "quantity-suffixes",
+                    "quantity-minimum",
+                    "quantity-maximum",
+                    "union-prefix",
+                    "union-suffix",
+                    "union-regex",
+                    "union-field",
+                ])
+                .unwrap(),
+                expected["names"],
+                "{id}"
+            ),
+            "graph" => {
+                let referenced = conformance_schema("optional-record", id);
+                let inline = SchemaRef::new(SchemaGraph::anonymous(SchemaType::record(vec![
+                    conformance_field("direct", SchemaType::option(SchemaType::string())),
+                    conformance_field("referenced", SchemaType::option(SchemaType::string())),
+                ])));
+                assert!(validate_graph(referenced.graph()).is_ok(), "{id}");
+                assert!(
+                    is_equivalent_cross_graph(
+                        referenced.graph(),
+                        referenced.root(),
+                        inline.graph(),
+                        inline.root(),
+                    ),
+                    "{id}"
+                );
+            }
+            other => panic!("{id}: unknown semantic conformance fixture {other}"),
+        }
+    }
+
+    fn conformance_corpus() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../../../test-data/reflection-conformance/v1.json"
+        ))
+        .expect("valid reflection conformance corpus")
+    }
+
+    fn run_conformance_cases(operation: &str) {
+        let corpus = conformance_corpus();
+        let cases = corpus["cases"].as_array().expect("cases array");
+        for case in cases {
+            let id = case["id"].as_str().expect("case id");
+            let case_operation = case["operation"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{id}: missing operation"));
+            if case_operation != operation {
+                continue;
+            }
+            let fixture = case["fixture"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{id}: missing fixture"));
+            let expected = &case["expected"];
+            match operation {
+                "roundtrip" => {
+                    let schema = conformance_schema(fixture, id);
+                    let packed = schema
+                        .pack_json(&case["input"])
+                        .unwrap_or_else(|error| panic!("{id}: {error}"));
+                    assert_eq!(
+                        schema
+                            .unpack_json(&packed)
+                            .unwrap_or_else(|error| panic!("{id}: {error}")),
+                        *expected,
+                        "{id}",
+                    );
+                }
+                "reject" => {
+                    let schema = conformance_schema(fixture, id);
+                    let inputs = case["inputs"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_else(|| vec![case["input"].clone()]);
+                    for input in inputs {
+                        let actual = match from_json_value(schema.graph(), schema.root(), &input) {
+                            Err(_) => "invalid-json",
+                            Ok(value)
+                                if validate_value(schema.graph(), schema.root(), &value)
+                                    .is_err() =>
+                            {
+                                "constraint-violation"
+                            }
+                            Ok(value) => panic!("{id} accepted {input} as {value:?}"),
+                        };
+                        assert_eq!(
+                            actual,
+                            expected["kind"]
+                                .as_str()
+                                .unwrap_or_else(|| panic!("{id}: missing reject kind")),
+                            "{id}"
+                        );
+                    }
+                }
+                "json-schema" => {
+                    let schema = conformance_schema(fixture, id);
+                    let rendered = schema.to_json_schema(false);
+                    let path = case["path"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{id}: missing path"));
+                    assert_conformance_subset(
+                        conformance_json_pointer(&rendered, path, id),
+                        expected,
+                        id,
+                    );
+                }
+                "semantic" => assert_conformance_semantic(fixture, expected, id),
+                operation => panic!("unknown requested conformance operation {operation}"),
+            }
+        }
+    }
+
+    #[test]
+    fn reflection_conformance_corpus_integrity() {
+        let corpus = conformance_corpus();
+        assert_eq!(corpus["version"], "1.0.0");
+        let cases = corpus["cases"].as_array().expect("cases array");
+        let recognized = HashSet::from(["roundtrip", "reject", "json-schema", "semantic"]);
+        let mut case_ids = HashSet::new();
+        for case in cases {
+            let id = case["id"].as_str().expect("case id");
+            assert!(case_ids.insert(id), "duplicate case ID {id}");
+            let operation = case["operation"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{id}: missing operation"));
+            assert!(
+                recognized.contains(operation),
+                "{id}: unknown operation {operation}"
+            );
+        }
+        let declared_ids = corpus["caseIds"].as_array().expect("declared case IDs");
+        let declared: HashSet<_> = declared_ids
+            .iter()
+            .map(|id| id.as_str().expect("declared case ID"))
+            .collect();
+        assert_eq!(
+            declared.len(),
+            declared_ids.len(),
+            "duplicate declared case ID"
+        );
+        assert_eq!(case_ids, declared, "missing or unknown conformance cases");
+    }
+
+    #[test]
+    fn reflection_conformance_roundtrip_cases() {
+        run_conformance_cases("roundtrip");
+    }
+
+    #[test]
+    fn reflection_conformance_reject_cases() {
+        run_conformance_cases("reject");
+    }
+
+    #[test]
+    fn reflection_conformance_json_schema_cases() {
+        run_conformance_cases("json-schema");
+    }
+
+    #[test]
+    fn reflection_conformance_semantic_cases() {
+        run_conformance_cases("semantic");
     }
 
     #[test]
@@ -1661,39 +2178,61 @@ mod tests {
     }
 
     #[test]
-    fn reflected_pending_output_matches_awaited_policy() {
+    async fn reflected_public_completion_paths_apply_the_same_output_policy() {
         let output = SchemaRef::new(SchemaGraph::anonymous(SchemaType::string()));
-        for (declared, value) in [
-            (Some(output.clone()), None),
-            (None, Some(SchemaValue::Bool(true))),
-            (Some(output.clone()), Some(SchemaValue::U32(7))),
+        let input = SchemaRef::new(SchemaGraph::anonymous(SchemaType::record(vec![])));
+        for (name, declared, value) in [
+            ("missing_declared", Some(output.clone()), None),
+            ("unexpected_unit", None, Some(SchemaValue::Bool(true))),
             (
+                "incompatible",
                 Some(output.clone()),
-                Some(SchemaValue::String("ok".to_string())),
+                Some(SchemaValue::U32(7)),
             ),
         ] {
-            let awaited = validate_declared_output(declared.as_ref(), value.as_ref(), "read");
-            let invocation = Invocation {
-                metadata: InvocationMetadata {
-                    agent_id: ParsedAgentId::new("test"),
-                    idempotency_key: "test".to_string(),
+            let method = ReflectedAgentMethod {
+                definition: AgentMethod {
+                    agent_type_name: "InvalidOutput".to_string(),
+                    raw: wire_common::AgentMethod {
+                        name: name.to_string(),
+                        description: String::new(),
+                        http_endpoint: vec![],
+                        prompt_hint: None,
+                        input_schema: wire_common::InputSchema::Parameters(vec![]),
+                        output_schema: if declared.is_some() {
+                            wire_common::OutputSchema::Single(0)
+                        } else {
+                            wire_common::OutputSchema::Unit
+                        },
+                        read_only: None,
+                    },
+                    input: input.clone(),
+                    output: declared,
                 },
-                value,
+                transport: ReflectedTransport::Test(Rc::new(TestReflectedTransport { value })),
             };
-            let mut pending = CheckedReflectedOutput {
-                inner: ready(Ok(invocation)),
-                output: declared,
-                method: "read".to_string(),
-            };
-            let mut context = Context::from_waker(Waker::noop());
-            let completed = Pin::new(&mut pending).poll(&mut context);
-            let Poll::Ready(result) = completed else {
-                panic!("ready reflected invocation must complete");
-            };
-            assert_eq!(result.is_ok(), awaited.is_ok());
-            if let Err(error) = result {
-                assert!(matches!(error, GolemReflectError::MalformedRemoteOutput(_)));
-            }
+            let empty = SchemaValue::Record { fields: vec![] };
+
+            let awaited = method
+                .invoke_value(empty.clone())
+                .await
+                .expect_err("awaited completion must reject malformed output");
+            let pending = method
+                .pending_value(empty)
+                .expect("pending invocation starts")
+                .get()
+                .await
+                .expect_err("pending completion must reject malformed output");
+
+            assert!(matches!(
+                awaited,
+                GolemReflectError::MalformedRemoteOutput(_)
+            ));
+            assert!(matches!(
+                pending,
+                GolemReflectError::MalformedRemoteOutput(_)
+            ));
+            assert_eq!(awaited.to_string(), pending.to_string());
         }
     }
 

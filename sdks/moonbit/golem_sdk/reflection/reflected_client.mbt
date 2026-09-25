@@ -1,6 +1,6 @@
 ///|
 /// A method discovered from the runtime-owned agent schema.
-pub(all) struct AgentMethod {
+pub struct AgentMethod {
   name : String
   description : String
   prompt_hint : String?
@@ -9,7 +9,7 @@ pub(all) struct AgentMethod {
 } derive(Debug, Eq)
 
 ///|
-pub(all) struct ReflectedConfigDeclaration {
+pub struct ReflectedConfigDeclaration {
   path : Array[String]
   source : @common.AgentConfigSource
   schema : SchemaRef
@@ -29,7 +29,7 @@ pub(all) struct ReflectedConfigValue {
 
 ///|
 /// An agent type discovered from the runtime registry.
-pub(all) struct AgentType {
+pub struct AgentType {
   name : String
   description : String
   source_language : String
@@ -39,6 +39,92 @@ pub(all) struct AgentType {
   methods : Array[AgentMethod]
   config : Array[ReflectedConfigDeclaration]
 } derive(Debug, Eq)
+
+///|
+pub fn AgentMethod::name(self : AgentMethod) -> String {
+  self.name
+}
+
+///|
+pub fn AgentMethod::description(self : AgentMethod) -> String {
+  self.description
+}
+
+///|
+pub fn AgentMethod::prompt_hint(self : AgentMethod) -> String? {
+  self.prompt_hint
+}
+
+///|
+pub fn AgentMethod::input(self : AgentMethod) -> SchemaRef {
+  self.input
+}
+
+///|
+pub fn AgentMethod::output(self : AgentMethod) -> SchemaRef? {
+  self.output
+}
+
+///|
+pub fn ReflectedConfigDeclaration::path(
+  self : ReflectedConfigDeclaration,
+) -> Array[String] {
+  self.path.copy()
+}
+
+///|
+pub fn ReflectedConfigDeclaration::source(
+  self : ReflectedConfigDeclaration,
+) -> @common.AgentConfigSource {
+  self.source
+}
+
+///|
+pub fn ReflectedConfigDeclaration::schema(
+  self : ReflectedConfigDeclaration,
+) -> SchemaRef {
+  self.schema
+}
+
+///|
+pub fn AgentType::name(self : AgentType) -> String {
+  self.name
+}
+
+///|
+pub fn AgentType::description(self : AgentType) -> String {
+  self.description
+}
+
+///|
+pub fn AgentType::source_language(self : AgentType) -> String {
+  self.source_language
+}
+
+///|
+pub fn AgentType::mode(self : AgentType) -> AgentMode {
+  self.mode
+}
+
+///|
+pub fn AgentType::implemented_by(self : AgentType) -> @types.ComponentId {
+  self.implemented_by
+}
+
+///|
+pub fn AgentType::constructor_input(self : AgentType) -> SchemaRef {
+  self.constructor_input
+}
+
+///|
+pub fn AgentType::methods(self : AgentType) -> Array[AgentMethod] {
+  self.methods.copy()
+}
+
+///|
+pub fn AgentType::config(self : AgentType) -> Array[ReflectedConfigDeclaration] {
+  self.config.copy()
+}
 
 ///|
 /// A reflected client and any reusable identity created before invocation.

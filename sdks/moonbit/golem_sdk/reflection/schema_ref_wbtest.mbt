@@ -42,12 +42,29 @@ test "JSON Schema projects records and recursive definitions" {
               ]),
             }),
           }),
-          "required": Json::array([Json::string("next")]),
+          "required": Json::array([]),
           "additionalProperties": Json::boolean(false),
         }),
       }),
     }),
   )
+}
+
+///|
+test "canonical JSON rejects cyclic alias references" {
+  let schema = SchemaRef::new({
+    defs: [
+      { id: "alias-a", name: None, body: @model.schema_type(Ref("alias-b")), },
+      { id: "alias-b", name: None, body: @model.schema_type(Ref("alias-a")), },
+    ],
+    root: @model.schema_type(Ref("alias-a")),
+  })
+  try schema.pack_json(Json::null()) catch {
+    Schema(message) => assert_eq(message, "cyclic schema reference 'alias-a'")
+    error => fail("unexpected error: \{repr(error)}")
+  } noraise {
+    _ => fail("expected cyclic alias rejection")
+  }
 }
 
 ///|
@@ -96,11 +113,17 @@ test "JSON Schema retains text and binary constraints" {
         "bytes": Json::object({
           "type": Json::string("string"),
           "contentEncoding": Json::string("base64url"),
+          "pattern": Json::string(
+            "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+          ),
           "minLength": Json::number(4.0),
           "maxLength": Json::number(8.0),
         }),
         "mimeType": Json::object({
           "type": Json::string("string"),
+          "pattern": Json::string(
+            "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$",
+          ),
           "enum": Json::array([Json::string("image/png")]),
         }),
       }),
@@ -108,6 +131,29 @@ test "JSON Schema retains text and binary constraints" {
       "additionalProperties": Json::boolean(false),
     }),
   )
+  let pattern = match rendered {
+    Object(fields) =>
+      match fields.get("properties") {
+        Some(Object(properties)) =>
+          match properties.get("bytes") {
+            Some(Object(bytes)) =>
+              match bytes.get("pattern") {
+                Some(String(value)) => value
+                _ => fail("expected binary pattern string")
+              }
+            _ => fail("expected binary bytes schema")
+          }
+        _ => fail("expected binary properties")
+      }
+    _ => fail("expected binary JSON Schema object")
+  }
+  let regex = @string.Regex::Regex(pattern.replace_all(old="_-]", new="_\\-]"))
+  for valid in ["", "AQ", "AQI", "AQID", "-_8"] {
+    assert_true(regex.execute(valid) is Some(_))
+  }
+  for invalid in ["+/8", "AQ==", "-_9", "A"] {
+    assert_true(regex.execute(invalid) is None)
+  }
 }
 
 ///|
@@ -126,7 +172,9 @@ test "JSON Schema keeps wide numeric bounds exact in metadata" {
     Object(fields) => fields
     _ => fail("expected JSON Schema object")
   }
-  assert_eq(fields.get("x-golem-numeric-width"), Some(Json::string("u64")))
+  assert_eq(fields.get("type"), Some(Json::string("string")))
+  assert_eq(fields.get("format"), Some(Json::string("uint64")))
+  assert_eq(fields.get("pattern"), Some(Json::string("^(?:0|[1-9][0-9]*)$")))
   assert_eq(
     fields.get("x-golem-minimum"),
     Some(Json::string("9007199254740993")),
@@ -269,18 +317,36 @@ test "unsigned 32-bit JSON preserves values above the signed range" {
 }
 
 ///|
-test "64-bit JSON rejects values outside the safe integer range" {
+test "64-bit JSON uses full-range canonical decimal strings" {
   let signed = test_schema(S64(None))
   let unsigned = test_schema(U64(None))
-  try signed.unpack_json(@model.SchemaValue::S64(9007199254740992L)) catch {
-    _ => ()
-  } noraise {
-    _ => fail("expected unsafe signed integer to be rejected")
+  assert_eq(
+    signed.unpack_json(@model.SchemaValue::S64(-9223372036854775807L - 1L)),
+    Json::string("-9223372036854775808"),
+  )
+  assert_eq(
+    signed.pack_json(Json::string("9223372036854775807")),
+    @model.SchemaValue::S64(9223372036854775807L),
+  )
+  assert_eq(
+    unsigned.unpack_json(@model.SchemaValue::U64(18446744073709551615UL)),
+    Json::string("18446744073709551615"),
+  )
+  assert_eq(
+    unsigned.pack_json(Json::string("18446744073709551615")),
+    @model.SchemaValue::U64(18446744073709551615UL),
+  )
+  for invalid in ["+1", "01", "-0", "9223372036854775808"] {
+    try signed.pack_json(Json::string(invalid)) catch {
+      _ => ()
+    } noraise {
+      _ => fail("expected malformed or overflowing s64 to be rejected")
+    }
   }
-  try unsigned.unpack_json(@model.SchemaValue::U64(9007199254740992UL)) catch {
+  try unsigned.pack_json(Json::number(1.0)) catch {
     _ => ()
   } noraise {
-    _ => fail("expected unsafe unsigned integer to be rejected")
+    _ => fail("expected numeric u64 JSON to be rejected")
   }
 }
 
@@ -400,31 +466,96 @@ test "binary JSON round-trips unpadded base64url and MIME type" {
   } noraise {
     _ => fail("expected padded base64url to be rejected")
   }
-}
-
-///|
-test "quantity JSON round-trips within the safe integer range" {
-  let schema = test_schema(
-    Quantity({ base_unit: "kg", allowed_suffixes: [], min: None, max: None, }),
-  )
-  let value = @model.SchemaValue::Quantity({
-    mantissa: 1234L,
-    scale: 2,
-    unit: "kg",
-  })
-  assert_eq(schema.pack_json(schema.unpack_json(value)), value)
   try
-    schema.unpack_json(
-      @model.SchemaValue::Quantity({
-        mantissa: 9007199254740992L,
-        scale: 0,
-        unit: "kg",
+    schema.pack_json(
+      Json::object({
+        "bytes": Json::string("AQ"),
+        "mimeType": Json::string("not a mime"),
       }),
     )
   catch {
     _ => ()
   } noraise {
-    _ => fail("expected unsafe quantity mantissa to be rejected")
+    _ => fail("expected invalid MIME type to be rejected")
+  }
+  try
+    schema.unpack_json(
+      @model.SchemaValue::Binary(([1] : FixedArray[Byte]), Some("not a mime")),
+    )
+  catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected invalid MIME type to be rejected")
+  }
+}
+
+///|
+test "constrained text and binary metadata remain optional" {
+  let text = test_schema(
+    Text({
+      languages: Some(["en"]),
+      min_length: None,
+      max_length: None,
+      regex: None,
+    }),
+  )
+  text.validate_value(@model.SchemaValue::Text("hello", None))
+  try
+    text.pack_json(
+      Json::object({
+        "text": Json::string("hello"),
+        "extra": Json::boolean(true),
+      }),
+    )
+  catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected unknown text field to be rejected")
+  }
+  let binary = test_schema(
+    Binary({
+      min_bytes: None,
+      max_bytes: None,
+      mime_types: Some(["image/png"]),
+    }),
+  )
+  binary.validate_value(
+    @model.SchemaValue::Binary(([1] : FixedArray[Byte]), None),
+  )
+}
+
+///|
+test "quantity JSON uses a full-range canonical mantissa string" {
+  let schema = test_schema(
+    Quantity({ base_unit: "kg", allowed_suffixes: [], min: None, max: None, }),
+  )
+  let value = @model.SchemaValue::Quantity({
+    mantissa: -9223372036854775807L - 1L,
+    scale: 2,
+    unit: "kg",
+  })
+  let json = schema.unpack_json(value)
+  assert_eq(
+    json,
+    Json::object({
+      "mantissa": Json::string("-9223372036854775808"),
+      "scale": Json::number(2.0),
+      "unit": Json::string("kg"),
+    }),
+  )
+  assert_eq(schema.pack_json(json), value)
+  try
+    schema.pack_json(
+      Json::object({
+        "mantissa": Json::string("-0"),
+        "scale": Json::number(0.0),
+        "unit": Json::string("kg"),
+      }),
+    )
+  catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected non-canonical quantity mantissa to be rejected")
   }
 }
 
@@ -457,28 +588,76 @@ test "datetime JSON round-trips UTC instants and rejects invalid dates" {
 }
 
 ///|
-test "duration JSON round-trips ISO strings and accepts shorthand" {
+test "duration JSON uses a signed decimal nanoseconds object" {
   let schema = test_schema(Duration)
-  let value = @model.SchemaValue::Duration(-90061000000001L)
-  let json = Json::string("-P1DT1H1M1.000000001S")
+  let value = @model.SchemaValue::Duration(-9223372036854775807L - 1L)
+  let json = Json::object({
+    "nanoseconds": Json::string("-9223372036854775808"),
+  })
   assert_eq(schema.unpack_json(value), json)
   assert_eq(schema.pack_json(json), value)
-  assert_eq(
-    schema.pack_json(Json::string("1500ms")),
-    @model.SchemaValue::Duration(1500000000L),
-  )
-  assert_eq(
-    schema.pack_json(Json::string("-9223372036854775808ns")),
-    @model.SchemaValue::Duration(-9223372036854775807L - 1L),
-  )
-  assert_eq(
-    schema.pack_json(Json::object({ "nanoseconds": Json::number(42.0) })),
-    @model.SchemaValue::Duration(42L),
-  )
-  try schema.pack_json(Json::string("PT9223372037S")) catch {
+  try schema.pack_json(Json::string("PT1S")) catch {
     _ => ()
   } noraise {
-    _ => fail("expected duration overflow to be rejected")
+    _ => fail("expected non-canonical duration JSON to be rejected")
+  }
+  try
+    schema.pack_json(Json::object({ "nanoseconds": Json::string("-0") }))
+  catch {
+    _ => ()
+  } noraise {
+    _ => fail("expected non-canonical duration integer to be rejected")
+  }
+}
+
+///|
+test "omitted option record fields decode as none" {
+  let metadata = @model.empty_metadata()
+  let schema = SchemaRef::new({
+    defs: [
+      {
+        id: "optional-string",
+        name: None,
+        body: @model.schema_type(Option(@model.schema_type(String))),
+      },
+    ],
+    root: @model.schema_type(
+      Record([
+        {
+          name: "direct",
+          body: @model.schema_type(Option(@model.schema_type(String))),
+          metadata,
+        },
+        {
+          name: "referenced",
+          body: @model.schema_type(Ref("optional-string")),
+          metadata,
+        },
+      ]),
+    ),
+  })
+  let absent = @model.SchemaValue::Record([
+    @model.SchemaValue::Option(None),
+    @model.SchemaValue::Option(None),
+  ])
+  assert_eq(schema.pack_json(Json::object({})), absent)
+  let rendered = schema.to_json_schema(include_draft_marker=false)
+  guard rendered is Object(fields) else { fail("expected schema object") }
+  assert_eq(fields.get("required"), Some(Json::array([])))
+}
+
+///|
+test "reflection JSON Schema rejects unrepresentable leaves" {
+  for
+    body in [
+      @model.SchemaTypeBody::Future(None),
+      @model.SchemaTypeBody::Stream(None),
+      @model.SchemaTypeBody::QuotaToken({ resource_name: None, }),
+    ] {
+    assert_eq(
+      test_schema(body).to_json_schema(include_draft_marker=false),
+      Json::object({ "not": Json::object({}) }),
+    )
   }
 }
 

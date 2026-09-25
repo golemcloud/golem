@@ -16,6 +16,7 @@ import {
   "moonbitlang/core/string",
   "moonbitlang/core/math",
   "moonbitlang/core/encoding/base64",
+  "moonbitlang/core/json",
 }
 
 supported_targets = "+wasm"

@@ -110,10 +110,14 @@ test('REST request JSON preserves exact bigint values', async () => {
         envName: 'env',
         agentTypeName: 'agent',
         parameters: { kind: 'u64', value: 18_446_744_073_709_551_615n },
+        config: [{ path: ['limits', 'maximum'], value: '18446744073709551615' }],
       },
     );
     assert.match(body, /"value":18446744073709551615(?:[,}])/u);
-    assert.doesNotMatch(body, /"18446744073709551615"/u);
+    assert.match(
+      body,
+      /"config":\[\{"path":\["limits","maximum"\],"value":"18446744073709551615"\}\]/u,
+    );
   } finally {
     await new Promise((resolve) => http.close(resolve));
   }
@@ -951,14 +955,18 @@ test('public value codec enforces canonical values, restrictions, and strict sha
     },
   });
   assert.deepEqual(
-    binary.validate({ bytes: '+/8=', mimeType: 'application/octet-stream' }, 'none'),
-    { bytes: '+/8=', mimeType: 'application/octet-stream' },
+    binary.validate({ bytes: '-_8', mimeType: 'application/octet-stream' }, 'none'),
+    { bytes: '-_8', mimeType: 'application/octet-stream' },
   );
   assert.throws(
-    () => binary.validate({ bytes: '-_8=', mimeType: 'application/octet-stream' }, 'none'),
+    () => binary.validate({ bytes: '+/8=', mimeType: 'application/octet-stream' }, 'none'),
     { code: 'malformed-message' },
   );
-  assert.throws(() => binary.validate({ bytes: '+/8=', mimeType: 'image/png' }, 'none'), {
+  assert.throws(
+    () => binary.validate({ bytes: '-_9', mimeType: 'application/octet-stream' }, 'none'),
+    { code: 'malformed-message' },
+  );
+  assert.throws(() => binary.validate({ bytes: '-_8', mimeType: 'image/png' }, 'none'), {
     code: 'validation-error',
   });
 

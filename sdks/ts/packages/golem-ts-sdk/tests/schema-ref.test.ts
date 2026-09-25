@@ -27,17 +27,31 @@ function schema(root: SchemaGraph['root']): SchemaRef {
   return new SchemaRef({ defs: new Map(), root });
 }
 
+function floatBits(value: number): bigint {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  return view.getBigUint64(0);
+}
+
 describe('SchemaRef canonical JSON', () => {
-  it('requires an explicit null for an absent option in a record', () => {
+  it('decodes omitted and explicit-null option fields as absent', () => {
     const ref = schema(t.record([field('maybe', t.option(t.string()))]));
-    expect(ref.validateJson({}).success).toBe(false);
+    expect(ref.packJson({})).toEqual(v.record([v.option()]));
     expect(ref.packJson({ maybe: null })).toEqual(v.record([v.option()]));
+
+    const inheritedName = schema(t.record([field('constructor', t.option(t.string()))]));
+    expect(inheritedName.packJson({})).toEqual(v.record([v.option()]));
   });
 
   it('rejects finite JSON numbers that overflow f32 after narrowing', () => {
     expect(schema(t.f32()).validateJson(1e100).success).toBe(false);
     expect(() => schema(t.f32()).unpackJson(v.f32(Infinity))).toThrow(/finite JSON number/);
     expect(() => schema(t.f64()).unpackJson(v.f64(-Infinity))).toThrow(/finite JSON number/);
+  });
+
+  it('rejects native values outside declared restrictions before unpacking', () => {
+    const ref = schema(t.u32({ min: { tag: 'unsigned', val: 10n } }));
+    expect(() => ref.unpackJson(v.u32(1))).toThrow(/does not conform/);
   });
 
   it('uses the canonical object representation for text', () => {
@@ -74,6 +88,11 @@ describe('SchemaRef canonical JSON', () => {
       issues: [{ path: ['bytes'], message: 'invalid base64url without padding' }],
     });
     expect(ref.validateJson({ bytes: 'AQI', mimeType: 'not a mime' }).success).toBe(false);
+    expect(() =>
+      schema(schemaType({ tag: 'binary', restrictions: {} })).unpackJson(
+        v.binary(Uint8Array.from([1]), 'not a mime'),
+      ),
+    ).toThrow(/invalid MIME type/);
   });
 
   it('uses a canonical signed decimal nanosecond string for durations', () => {
@@ -88,7 +107,7 @@ describe('SchemaRef canonical JSON', () => {
   });
 
   it('uses canonical signed decimal strings for quantity mantissas', () => {
-    const ref = schema(t.quantity({ baseUnit: 'm', allowedUnits: [] }));
+    const ref = schema(t.quantity({ baseUnit: 'm', allowedSuffixes: [] }));
     const json = { mantissa: '123', scale: -2, unit: 'm' } as const;
 
     expect(ref.packJson(json)).toEqual(v.quantity({ mantissa: 123n, scale: -2, unit: 'm' }));
@@ -162,7 +181,7 @@ describe('SchemaRef JSON Schema', () => {
             name: { type: 'string', description: 'Display name', examples: ['Ada'] },
             nickname: { oneOf: [{ type: 'null' }, { type: 'string' }] },
           },
-          required: ['name', 'nickname'],
+          required: ['name'],
           additionalProperties: false,
         },
       },
@@ -173,7 +192,7 @@ describe('SchemaRef JSON Schema', () => {
     const root = t.record([
       field('text', schemaType({ tag: 'text', restrictions: {} })),
       field('duration', t.duration()),
-      field('quantity', t.quantity({ baseUnit: 'm', allowedUnits: [] })),
+      field('quantity', t.quantity({ baseUnit: 'm', allowedSuffixes: [] })),
     ]);
 
     expect(schema(root).toJsonSchema()).toMatchObject({
@@ -225,5 +244,134 @@ describe('SchemaRef JSON Schema', () => {
       'x-golem-minimum': '0',
       'x-golem-maximum': '18446744073709551615',
     });
+  });
+
+  it('renders declared bounds for every narrow integer and float family', () => {
+    for (const type of [
+      t.s8({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
+      t.s16({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
+      t.s32({ min: { tag: 'signed', val: -12n }, max: { tag: 'signed', val: 12n } }),
+      t.u8({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
+      t.u16({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
+      t.u32({ min: { tag: 'unsigned', val: 2n }, max: { tag: 'unsigned', val: 12n } }),
+    ]) {
+      expect(schema(type).toJsonSchema()).toMatchObject({
+        minimum: type.body.tag.startsWith('s') ? -12 : 2,
+        maximum: 12,
+      });
+    }
+
+    for (const type of [
+      t.f32({
+        min: { tag: 'float-bits', val: 0xbff0000000000000n },
+        max: { tag: 'float-bits', val: 0x3fe0000000000000n },
+      }),
+      t.f64({
+        min: { tag: 'float-bits', val: 0xbff0000000000000n },
+        max: { tag: 'float-bits', val: 0x3fe0000000000000n },
+      }),
+    ]) {
+      expect(schema(type).toJsonSchema()).toMatchObject({ minimum: -1, maximum: 0.5 });
+    }
+  });
+
+  it('clamps out-of-domain bounds to primitive ranges', () => {
+    for (const [type, minimum, maximum] of [
+      [
+        t.s8({
+          min: { tag: 'signed', val: -(2n ** 63n) },
+          max: { tag: 'signed', val: 2n ** 63n - 1n },
+        }),
+        -128,
+        127,
+      ],
+      [
+        t.s16({
+          min: { tag: 'signed', val: -(2n ** 63n) },
+          max: { tag: 'signed', val: 2n ** 63n - 1n },
+        }),
+        -32768,
+        32767,
+      ],
+      [
+        t.s32({
+          min: { tag: 'signed', val: -(2n ** 63n) },
+          max: { tag: 'signed', val: 2n ** 63n - 1n },
+        }),
+        -(2 ** 31),
+        2 ** 31 - 1,
+      ],
+      [
+        t.u8({ min: { tag: 'unsigned', val: 0n }, max: { tag: 'unsigned', val: 2n ** 64n - 1n } }),
+        0,
+        255,
+      ],
+      [
+        t.u16({ min: { tag: 'unsigned', val: 0n }, max: { tag: 'unsigned', val: 2n ** 64n - 1n } }),
+        0,
+        65535,
+      ],
+      [
+        t.u32({ min: { tag: 'unsigned', val: 0n }, max: { tag: 'unsigned', val: 2n ** 64n - 1n } }),
+        0,
+        2 ** 32 - 1,
+      ],
+    ] as const) {
+      expect(schema(type).toJsonSchema()).toMatchObject({ minimum, maximum });
+    }
+
+    expect(
+      schema(
+        t.f32({
+          min: { tag: 'float-bits', val: floatBits(-1e100) },
+          max: { tag: 'float-bits', val: floatBits(1e100) },
+        }),
+      ).toJsonSchema(),
+    ).toMatchObject({ minimum: -3.4028234663852886e38, maximum: 3.4028234663852886e38 });
+  });
+
+  it('renders enforceable rich-value allowlists and canonical base64url bytes', () => {
+    const rendered = schema(
+      t.record([
+        field('text', schemaType({ tag: 'text', restrictions: { languages: ['en', 'de'] } })),
+        field('binary', schemaType({ tag: 'binary', restrictions: { mimeTypes: ['image/png'] } })),
+      ]),
+    ).toJsonSchema();
+    expect(rendered).toMatchObject({
+      properties: {
+        text: { properties: { language: { enum: ['en', 'de'] } } },
+        binary: { properties: { mimeType: { enum: ['image/png'] } } },
+      },
+    });
+    const properties = (
+      rendered as {
+        properties: { text: Record<string, unknown>; binary: Record<string, unknown> };
+      }
+    ).properties;
+    expect(properties.text).not.toHaveProperty('description');
+    expect(properties.binary).not.toHaveProperty('description');
+    const pattern = (
+      rendered as {
+        properties: { binary: { properties: { bytes: { pattern: string } } } };
+      }
+    ).properties.binary.properties.bytes.pattern;
+    expect(pattern).toBe(
+      '^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$',
+    );
+    const regex = new RegExp(pattern, 'u');
+    for (const valid of ['', 'AQ', 'AQI', 'AQID', '-_8']) expect(regex.test(valid)).toBe(true);
+    for (const invalid of ['+/8', 'AQ==', '-_9', 'A']) expect(regex.test(invalid)).toBe(false);
+  });
+
+  it('makes reflection-only unsupported leaves unsatisfiable', () => {
+    for (const type of [
+      t.secret(t.string()),
+      t.quotaToken({}),
+      t.permissionCard({ polymorphic: false }),
+      schemaType({ tag: 'future', element: t.string() }),
+      t.stream(t.string()),
+    ]) {
+      expect(schema(type).toJsonSchema()).toMatchObject({ not: {} });
+    }
   });
 });

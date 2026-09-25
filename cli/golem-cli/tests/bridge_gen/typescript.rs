@@ -305,6 +305,100 @@ fn static_and_instance_agent_methods_can_share_names() {
 }
 
 #[test]
+fn external_rest_config_uses_canonical_json_for_named_non_streaming_values() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "ConfigAgent",
+        "typescript",
+        vec![],
+        vec![],
+        vec![def(
+            "config-shape",
+            SchemaType::record(vec![
+                named_field("maybe-region", SchemaType::option(SchemaType::string())),
+                named_field(
+                    "outcome",
+                    SchemaType::result(ResultSpec {
+                        ok: Some(Box::new(SchemaType::string())),
+                        err: None,
+                    }),
+                ),
+                named_field(
+                    "mode",
+                    SchemaType::variant(vec![
+                        variant_case("off", None),
+                        variant_case("on", Some(SchemaType::string())),
+                    ]),
+                ),
+                named_field(
+                    "target",
+                    SchemaType::union(UnionSpec {
+                        branches: vec![UnionBranch {
+                            tag: "command".to_string(),
+                            body: SchemaType::string(),
+                            discriminator: DiscriminatorRule::Prefix {
+                                prefix: "cmd:".to_string(),
+                            },
+                            metadata: MetadataEnvelope::default(),
+                        }],
+                    }),
+                ),
+                named_field(
+                    "document",
+                    unstructured_text_schema_type(TextRestrictions::default()),
+                ),
+                named_field(
+                    "attachment",
+                    unstructured_binary_schema_type(BinaryRestrictions::default()),
+                ),
+            ]),
+        )],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(
+        vec!["limits", "maximum"],
+        ref_to("config-shape"),
+    )];
+    let package_dir = target.join("config-agent-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::ExternalRest,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("config-agent-client.ts")).unwrap();
+    assert!(source.contains("function encodeCanonicalConfigShape(value: ConfigShape): any"));
+    assert!(source.contains("value: encodeCanonicalConfigShape(configLimitsMaximum)"));
+    assert!(
+        source.contains("function encodePublicConfigShape(value: ConfigShape, stream: any): any")
+    );
+    let canonical = source
+        .lines()
+        .find(|line| line.starts_with("function encodeCanonicalConfigShape"))
+        .expect("missing canonical config encoder");
+    assert!(canonical.contains("'ok' in v ? { ok:"));
+    assert!(canonical.contains("unknown variant"));
+    assert!(canonical.contains("if(v.tag === \"command\") return"));
+    assert!(canonical.contains("if(v.tag === 'inline') return { inline: { text: v.val"));
+    assert!(canonical.contains(
+        "if(v.tag === 'inline') return { inline: { bytes: Buffer.from(v.val).toString('base64url')"
+    ));
+    assert!(
+        source.contains("if(v.tag === 'inline') return { $case: 'inline', value: { text: v.val")
+    );
+    assert!(source.contains(
+        "if(v.tag === 'inline') return { $case: 'inline', value: { bytes: Buffer.from(v.val).toString('base64url')"
+    ));
+    assert!(source.contains("void ("));
+    install_and_build(&package_dir);
+}
+
+#[test]
 fn guest_agent_runtime_import_alias_does_not_collide_with_agent_class() {
     let dir = TempDir::new().unwrap();
     generate_and_compile_with_mode(
@@ -1030,8 +1124,27 @@ fn external_streaming_generation_compiles_recursive_streams() {
                 )))),
             ),
             method("status", vec![], Some(SchemaType::string())),
+            method(
+                "document",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(ref_to("Document")),
+            ),
+            method(
+                "attachment",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(ref_to("Attachment")),
+            ),
         ],
-        vec![],
+        vec![
+            def(
+                "Document",
+                unstructured_text_schema_type(TextRestrictions::default()),
+            ),
+            def(
+                "Attachment",
+                unstructured_binary_schema_type(BinaryRestrictions::default()),
+            ),
+        ],
         AgentMode::Durable,
     );
     agent_type.config = vec![local_config(
@@ -1052,6 +1165,8 @@ fn external_streaming_generation_compiles_recursive_streams() {
     .unwrap();
     assert!(source.contains("createStreamingRemoteMethod"));
     assert!(source.contains("AgentStream<base.AgentBinary>"));
+    assert!(source.contains("toString('base64url')"));
+    assert!(source.contains("'base64url'"));
     assert!(source.contains("AgentStream<number>"));
     assert!(source.contains(": bigint;"));
     assert!(source.contains("amount: base.QuantityValue"));
@@ -1062,6 +1177,25 @@ fn external_streaming_generation_compiles_recursive_streams() {
     assert!(source.contains("\"stable\""));
     assert!(source.contains("config: this.publicConfig"));
     assert!(source.contains("path: [\"limits\",\"maximum\"]"));
+    assert!(source.contains(
+        "if(v.$case === 'inline') return base.UnstructuredText.fromInline(v.value.text, v.value.language)"
+    ));
+    assert!(source.contains(
+        "if(v.$case === 'inline') return base.UnstructuredBinary.fromInline(Uint8Array.from(Buffer.from(v.value.bytes, 'base64url')), v.value.mimeType)"
+    ));
+    for line in source
+        .lines()
+        .filter(|line| line.contains(".push({ path: [\"limits\",\"maximum\"]"))
+    {
+        assert!(
+            line.contains(".toString()"),
+            "config is not public JSON: {line}"
+        );
+        assert!(
+            !line.contains("kind:"),
+            "config is tagged schema JSON: {line}"
+        );
+    }
     assert!(source.contains("val: 9007199254740993n"));
     assert!(source.contains("val: 18446744073709551615n"));
     assert!(!source.contains("triggerExchange"));

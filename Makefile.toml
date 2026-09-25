@@ -1137,6 +1137,20 @@ script = '''
   fi
 '''
 
+[tasks.generate-reflection-conformance]
+description = "Embeds the reflection conformance corpus in Scala and MoonBit test sources"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error node scripts/sync-reflection-conformance.mjs
+'''
+
+[tasks.check-reflection-conformance]
+description = "Fails if Scala or MoonBit reflection conformance embeds are stale"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error node scripts/sync-reflection-conformance.mjs --check
+'''
+
 ## ** PUBLISH **
 [tasks.publish]
 description = "Publishes packages to crates.io"

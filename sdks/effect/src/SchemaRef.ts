@@ -7,6 +7,7 @@ import {
   schemaValueToWit,
 } from "./internal/schema-model/wit.js"
 import {
+  assertCanonicalJsonEligible,
   jsonSchema,
   packJson,
   SchemaRenderError,
@@ -49,7 +50,10 @@ export class SchemaRef {
   }
   /** Unpack a native schema value into canonical JSON. @since 1.6.0 @category conversions */
   unpackJson(value: CoreTypes.SchemaValueTree): JsonValue {
-    return unpackJson(this.graph, this.root, schemaValueFromWit(value))
+    const model = schemaValueFromWit(value)
+    if (!schemaValueConforms(this.graph, this.root, model))
+      throw new SchemaRenderError([], "schema value does not conform to the expected schema")
+    return unpackJson(this.graph, this.root, model)
   }
   /** Explicitly validate canonical JSON. @since 1.6.0 @category validation */
   validateJson(value: JsonValue): ValidationResult<CoreTypes.SchemaValueTree> {
@@ -76,7 +80,7 @@ export class SchemaRef {
   /** Check whether this root has an unambiguous canonical JSON representation. @since 1.6.0 @category validation */
   jsonEligibility(): ValidationResult<void> {
     try {
-      jsonSchema(this.graph, this.root, false)
+      assertCanonicalJsonEligible(this.graph, this.root)
       return { success: true, value: undefined }
     } catch (error) {
       return invalid(error)

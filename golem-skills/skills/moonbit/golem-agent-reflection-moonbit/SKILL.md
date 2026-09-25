@@ -36,7 +36,13 @@ Reflection clients do not pin that component ID. `SchemaRef::pack_json`
 converts canonical JSON into a schema-native value; `unpack_json` performs the
 awaited conversion back. `to_json_schema()` projects the canonical JSON carrier
 for introspection, including named definitions and representable restrictions;
-capabilities and streams have no JSON value representation. Discovery returns
+capabilities, futures, and streams have no JSON value representation and project
+to an unsatisfiable reflection JSON Schema. An omitted option record field and
+an explicit `null` both decode as absent; re-encoding may emit `null`, and the
+field is omitted from JSON Schema `required`. Canonical JSON encodes `s64` and
+`u64` as decimal strings, duration as `{ "nanoseconds": "..." }`, and quantity
+mantissas as decimal strings. These strings reject `+`, leading zeroes, `-0`,
+and overflow. Discovery returns
 an immutable snapshot; explicitly
 discover again when a newer deployment must be observed.
 
@@ -54,7 +60,7 @@ let result = counter.invoke_json(
 )
 ```
 
-For explicit reflected packing, call `add.input.pack_json`, invoke through
+For explicit reflected packing, call `add.input().pack_json`, invoke through
 `invoke_value`, await the result, and call the output `SchemaRef::unpack_json`.
 Reflected schema-native constructor and method inputs are checked locally
 against the selected schema graph before opening RPC. Declared native outputs
@@ -121,14 +127,17 @@ async fn invoke_discovered_tool_dynamically() -> String {
     Ok(value) => value
     Err(error) => return "input:\{describe_dynamic_tool_error(error)}"
   }
-  command.input_schema.validate_value(packed) catch {
+  command.input_schema().validate_value(packed) catch {
+    error => return "input:\{Repr(error)}"
+  }
+  let typed_input = command.input_schema().typed_value(packed) catch {
     error => return "input:\{Repr(error)}"
   }
 
-  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name)
+  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name())
   let raw = match dynamic.invoke_value(
-    command.path,
-    { graph: command.input_schema.graph, value: packed },
+    command.path(),
+    typed_input,
   ) {
     Ok(raw) => raw
     Err(error) => {
@@ -136,7 +145,7 @@ async fn invoke_discovered_tool_dynamically() -> String {
     }
   }
 
-  match (command.result, raw.result) {
+  match (command.result(), raw.result) {
     (None, None) => "ok"
     (Some(schema), Some(output)) => {
       schema.validate_value(output.value) catch {

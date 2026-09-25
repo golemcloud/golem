@@ -86,7 +86,7 @@ test "public codec preserves record s64 binary and structural wire shapes" {
   inspect(
     json.stringify(),
     content=(
-      #|{"count":"-9","data":{"bytes":"AP8=","mimeType":"application/octet-stream"},"choice":{"$option":"some","value":"yes"}}
+      #|{"count":"-9","data":{"bytes":"AP8","mimeType":"application/octet-stream"},"choice":{"$option":"some","value":"yes"}}
     ),
   )
   assert_true(codec.decode(json) == value)

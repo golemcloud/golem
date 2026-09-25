@@ -5,7 +5,7 @@ pub fn SchemaRef::to_json_schema(
   self : SchemaRef,
   include_draft_marker? : Bool = true,
 ) -> Json {
-  let root = schema_json(self.root)
+  let root = schema_json(self.graph, self.root)
   let fields : Map[String, Json] = match root {
     Object(value) => value
     _ => {}
@@ -18,7 +18,7 @@ pub fn SchemaRef::to_json_schema(
   if !self.graph.defs.is_empty() {
     let defs : Map[String, Json] = Map([])
     for definition in self.graph.defs {
-      defs[definition.id] = schema_json(definition.body)
+      defs[definition.id] = schema_json(self.graph, definition.body)
     }
     fields["$defs"] = Json::object(defs)
   }
@@ -127,10 +127,15 @@ fn schema_wide_integer(
   restrictions : @types.NumericRestrictions?,
 ) -> Json {
   let fields : Map[String, Json] = {
-    "type": Json::string("integer"),
-    "minimum": Json::number(if signed { -9007199254740991.0 } else { 0.0 }),
-    "maximum": Json::number(9007199254740991.0),
-    "x-golem-numeric-width": Json::string(if signed { "s64" } else { "u64" }),
+    "type": Json::string("string"),
+    "format": Json::string(if signed { "int64" } else { "uint64" }),
+    "pattern": Json::string(
+      if signed {
+        "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$"
+      } else {
+        "^(?:0|[1-9][0-9]*)$"
+      },
+    ),
     "x-golem-minimum": Json::string(
       if signed {
         "-9223372036854775808"
@@ -149,23 +154,13 @@ fn schema_wide_integer(
   match restrictions {
     Some(value) => {
       match value.min {
-        Some(bound) => {
-          fields["minimum"] = Json::number(
-            (if signed { -9007199254740991.0 } else { 0.0 }).max(
-              schema_bound_number(bound),
-            ),
-          )
+        Some(bound) =>
           fields["x-golem-minimum"] = Json::string(schema_bound_text(bound))
-        }
         None => ()
       }
       match value.max {
-        Some(bound) => {
-          fields["maximum"] = Json::number(
-            9007199254740991.0.min(schema_bound_number(bound)),
-          )
+        Some(bound) =>
           fields["x-golem-maximum"] = Json::string(schema_bound_text(bound))
-        }
         None => ()
       }
     }
@@ -175,15 +170,43 @@ fn schema_wide_integer(
 }
 
 ///|
-fn schema_record(fields : Array[@model.NamedFieldType]) -> Json {
+fn schema_resolves_to_option(
+  graph : @model.SchemaGraph,
+  schema : @model.SchemaType,
+  visited : Map[String, Unit],
+) -> Bool {
+  match schema.body {
+    Option(_) => true
+    Ref(id) =>
+      if visited.contains(id) {
+        false
+      } else {
+        visited[id] = ()
+        match graph.defs.iter().find_first(definition => definition.id == id) {
+          Some(definition) =>
+            schema_resolves_to_option(graph, definition.body, visited)
+          None => false
+        }
+      }
+    _ => false
+  }
+}
+
+///|
+fn schema_record(
+  graph : @model.SchemaGraph,
+  fields : Array[@model.NamedFieldType],
+) -> Json {
   let properties : Map[String, Json] = Map([])
   let required : Array[Json] = []
   for field in fields {
     properties[field.name] = schema_with_metadata(
-      schema_json(field.body),
+      schema_json(graph, field.body),
       field.metadata,
     )
-    required.push(Json::string(field.name))
+    if !schema_resolves_to_option(graph, field.body, Map([])) {
+      required.push(Json::string(field.name))
+    }
   }
   Json::object({
     "type": Json::string("object"),
@@ -288,14 +311,17 @@ fn schema_quantity_bound(value : @types.QuantityValue) -> Json {
 }
 
 ///|
-fn schema_variant(cases : Array[@model.VariantCaseType]) -> Json {
+fn schema_variant(
+  graph : @model.SchemaGraph,
+  cases : Array[@model.VariantCaseType],
+) -> Json {
   let choices : Array[Json] = []
   for entry in cases {
     match entry.payload {
       None => choices.push(Json::object({ "const": Json::string(entry.name) }))
       Some(payload) => {
         let properties : Map[String, Json] = Map([])
-        properties[entry.name] = schema_json(payload)
+        properties[entry.name] = schema_json(graph, payload)
         choices.push(
           Json::object({
             "type": Json::string("object"),
@@ -322,10 +348,14 @@ fn schema_pair(first : Json, second : Json) -> Json {
 }
 
 ///|
-fn schema_result_side(name : String, payload : @model.SchemaType?) -> Json {
+fn schema_result_side(
+  graph : @model.SchemaGraph,
+  name : String,
+  payload : @model.SchemaType?,
+) -> Json {
   let properties : Map[String, Json] = Map([])
   properties[name] = match payload {
-    Some(value) => schema_json(value)
+    Some(value) => schema_json(graph, value)
     None => schema_type("null")
   }
   Json::object({
@@ -337,7 +367,7 @@ fn schema_result_side(name : String, payload : @model.SchemaType?) -> Json {
 }
 
 ///|
-fn schema_json(schema : @model.SchemaType) -> Json {
+fn schema_json(graph : @model.SchemaGraph, schema : @model.SchemaType) -> Json {
   let rendered = match schema.body {
     Ref(id) =>
       Json::object({
@@ -363,8 +393,8 @@ fn schema_json(schema : @model.SchemaType) -> Json {
         "maxLength": schema_number(1),
       })
     String => schema_type("string")
-    Record(fields) => schema_record(fields)
-    Variant(cases) => schema_variant(cases)
+    Record(fields) => schema_record(graph, fields)
+    Variant(cases) => schema_variant(graph, cases)
     Enum(cases) =>
       Json::object({
         "type": Json::string("string"),
@@ -382,7 +412,7 @@ fn schema_json(schema : @model.SchemaType) -> Json {
     Tuple(elements) => {
       let items : Array[Json] = []
       for element in elements {
-        items.push(schema_json(element))
+        items.push(schema_json(graph, element))
       }
       Json::object({
         "type": Json::string("array"),
@@ -395,29 +425,29 @@ fn schema_json(schema : @model.SchemaType) -> Json {
     List(element) =>
       Json::object({
         "type": Json::string("array"),
-        "items": schema_json(element),
+        "items": schema_json(graph, element),
       })
     FixedList(element, length) =>
       Json::object({
         "type": Json::string("array"),
-        "items": schema_json(element),
+        "items": schema_json(graph, element),
         "minItems": Json::number(length.to_double()),
         "maxItems": Json::number(length.to_double()),
       })
     Map(key, value) =>
       Json::object({
         "type": Json::string("array"),
-        "items": schema_pair(schema_json(key), schema_json(value)),
+        "items": schema_pair(schema_json(graph, key), schema_json(graph, value)),
       })
     Option(element) =>
       Json::object({
-        "oneOf": schema_array([schema_type("null"), schema_json(element)]),
+        "oneOf": schema_array([schema_type("null"), schema_json(graph, element)]),
       })
     Result(ok, err) =>
       Json::object({
         "oneOf": schema_array([
-          schema_result_side("ok", ok),
-          schema_result_side("err", err),
+          schema_result_side(graph, "ok", ok),
+          schema_result_side(graph, "err", err),
         ]),
       })
     Text(restrictions) => {
@@ -453,6 +483,9 @@ fn schema_json(schema : @model.SchemaType) -> Json {
       let bytes : Map[String, Json] = {
         "type": Json::string("string"),
         "contentEncoding": Json::string("base64url"),
+        "pattern": Json::string(
+          "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+        ),
       }
       match restrictions.min_bytes {
         Some(value) =>
@@ -468,7 +501,12 @@ fn schema_json(schema : @model.SchemaType) -> Json {
           )
         None => ()
       }
-      let mime : Map[String, Json] = { "type": Json::string("string") }
+      let mime : Map[String, Json] = {
+        "type": Json::string("string"),
+        "pattern": Json::string(
+          "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$",
+        ),
+      }
       match restrictions.mime_types {
         Some(values) => mime["enum"] = schema_strings(values)
         None => ()
@@ -543,14 +581,19 @@ fn schema_json(schema : @model.SchemaType) -> Json {
       })
     Duration =>
       Json::object({
-        "type": Json::string("string"),
-        "format": Json::string("duration"),
+        "type": Json::string("object"),
+        "properties": Json::object({
+          "nanoseconds": schema_wide_integer(true, None),
+        }),
+        "required": schema_strings(["nanoseconds"]),
+        "additionalProperties": Json::boolean(false),
+        "title": Json::string("Duration in nanoseconds"),
       })
     Quantity(spec) => {
       let fields : Map[String, Json] = {
         "type": Json::string("object"),
         "properties": Json::object({
-          "mantissa": schema_type("integer"),
+          "mantissa": schema_wide_integer(true, None),
           "scale": schema_type("integer"),
           "unit": schema_type("string"),
         }),
@@ -581,7 +624,10 @@ fn schema_json(schema : @model.SchemaType) -> Json {
         choices.push(
           Json::object({
             "allOf": schema_array([
-              schema_with_metadata(schema_json(branch.body), branch.metadata),
+              schema_with_metadata(
+                schema_json(graph, branch.body),
+                branch.metadata,
+              ),
               schema_discriminator(branch.discriminator),
             ]),
           }),
@@ -589,13 +635,8 @@ fn schema_json(schema : @model.SchemaType) -> Json {
       }
       Json::object({ "oneOf": Json::array(choices) })
     }
-    Secret(_) => Json::object({ "x-golem-capability": Json::string("secret") })
-    QuotaToken(_) =>
-      Json::object({ "x-golem-capability": Json::string("quota-token") })
-    PermissionCard(_) =>
-      Json::object({ "x-golem-capability": Json::string("permission-card") })
-    Future(_) => Json::object({ "x-golem-unsupported": Json::string("future") })
-    Stream(_) => Json::object({ "x-golem-unsupported": Json::string("stream") })
+    Secret(_) | QuotaToken(_) | PermissionCard(_) | Future(_) | Stream(_) =>
+      Json::object({ "not": Json::object({}) })
   }
   schema_with_metadata(rendered, schema.metadata)
 }

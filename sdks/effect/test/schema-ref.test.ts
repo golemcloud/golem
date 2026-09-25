@@ -35,7 +35,7 @@ describe("SchemaRef", () => {
     })
   })
 
-  it("renders numeric restrictions and required nullable fields", () => {
+  it("renders numeric restrictions and optional nullable fields", () => {
     const schema = ref(
       t.record([
         field(
@@ -46,11 +46,14 @@ describe("SchemaRef", () => {
       ]),
     )
     expect(schema.toJsonSchema()).toMatchObject({
-      required: ["bounded", "nullable"],
+      required: ["bounded"],
       properties: { bounded: { type: "integer", minimum: 10, maximum: 20 } },
     })
-    expect(schema.validateJson({ bounded: 15 }).success).toBe(false)
+    expect(schema.validateJson({ bounded: 15 }).success).toBe(true)
     expect(schema.validateJson({ bounded: 15, nullable: null }).success).toBe(true)
+    expect(
+      ref(t.record([field("constructor", t.option(t.string()))])).validateJson({}).success,
+    ).toBe(true)
     for (const numeric of [t.f32, t.f64]) {
       expect(
         ref(
@@ -61,6 +64,46 @@ describe("SchemaRef", () => {
         ).toJsonSchema(),
       ).toMatchObject({ type: "number", minimum: -1, maximum: 0.5 })
     }
+  })
+
+  it("rejects native values outside declared restrictions before unpacking", () => {
+    const schema = ref(t.u32({ min: { tag: "unsigned", val: 10n } }))
+    expect(() =>
+      schema.unpackJson({ root: 0, valueNodes: [{ tag: "u32-value", val: 1 }] }),
+    ).toThrow(/does not conform/)
+  })
+
+  it("renders enforceable rich-value allowlists and canonical base64url bytes", () => {
+    const rendered = ref(
+      t.record([
+        field("text", t.text({ languages: ["en", "de"] })),
+        field("binary", t.binary({ mimeTypes: ["image/png"] })),
+      ]),
+    ).toJsonSchema()
+    expect(rendered).toMatchObject({
+      properties: {
+        text: { properties: { language: { enum: ["en", "de"] } } },
+        binary: { properties: { mimeType: { enum: ["image/png"] } } },
+      },
+    })
+    const properties = (
+      rendered as {
+        properties: { text: Record<string, unknown>; binary: Record<string, unknown> }
+      }
+    ).properties
+    expect(properties.text).not.toHaveProperty("description")
+    expect(properties.binary).not.toHaveProperty("description")
+    const pattern = (
+      rendered as {
+        properties: { binary: { properties: { bytes: { pattern: string } } } }
+      }
+    ).properties.binary.properties.bytes.pattern
+    expect(pattern).toBe(
+      "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$",
+    )
+    const regex = new RegExp(pattern, "u")
+    for (const valid of ["", "AQ", "AQI", "AQID", "-_8"]) expect(regex.test(valid)).toBe(true)
+    for (const invalid of ["+/8", "AQ==", "-_9", "A"]) expect(regex.test(invalid)).toBe(false)
   })
 
   it("matches canonical rich JSON forms, restrictions, and lossless integer ranges", () => {
@@ -94,6 +137,17 @@ describe("SchemaRef", () => {
     ).toBe(false)
     expect(schema.validateJson({ ...valid, duration: { nanoseconds: "-0" } }).success).toBe(false)
     expect(schema.unpackJson(schema.packJson(valid))).toEqual(valid)
+    expect(() =>
+      ref(t.binary()).unpackJson({
+        root: 0,
+        valueNodes: [
+          {
+            tag: "binary-value",
+            val: { bytes: new Uint8Array([1]), mimeType: "not a mime" },
+          },
+        ],
+      }),
+    ).toThrow(/invalid MIME type/)
   })
 
   it("validates nested native capabilities without consuming or rewriting them", () => {
@@ -159,7 +213,9 @@ describe("SchemaRef", () => {
       const eligibility = schema.jsonEligibility()
       expect(eligibility.success).toBe(false)
       if (!eligibility.success) expect(eligibility.issues[0]?.path).toEqual(["unsupported"])
-      expect(() => schema.toJsonSchema()).toThrow(/canonical JSON/)
+      expect(schema.toJsonSchema()).toMatchObject({
+        properties: { unsupported: { not: {} } },
+      })
     }
 
     const nestedOption = ref(t.option(t.option(t.string())))
@@ -276,6 +332,18 @@ describe("SchemaRef", () => {
       "x-golem-minimum": "0",
       "x-golem-maximum": "18446744073709551615",
     })
+  })
+
+  it("makes reflection-only unsupported leaves unsatisfiable", () => {
+    for (const type of [
+      t.secret(t.string()),
+      t.quotaToken({}),
+      t.permissionCard({ polymorphic: false }),
+      t.future(t.string()),
+      t.stream(t.string()),
+    ]) {
+      expect(ref(type).toJsonSchema()).toMatchObject({ not: {} })
+    }
   })
 
   it("renders declared restrictions for canonical wide integers", () => {
