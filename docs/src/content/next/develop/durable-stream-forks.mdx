@@ -12,7 +12,7 @@ The target inherits agent state and stream history through the selected cut, str
 
 The target does **not** inherit the source's live attachment, external HTTP producer deduplication table, post-cut tombstones, or post-cut items. Its producer table starts fresh, so the same producer tuple can be accepted independently on source and fork. Long-poll and SSE readers attach to one branch only.
 
-External Durable Streams consumed by agent code are different: copied agent state retains the same remote URL and reader checkpoint, and copied writers retain the same producer identity and pending request. That does not fork the external service. See [Consuming External Durable Streams](/next/develop/external-durable-streams#pending-writes-and-exactly-once-effects).
+External Durable Streams consumed by agent code are different: copied agent state retains the same remote URL and reader checkpoint, and copied writers retain the same producer identity and pending request. That does not fork the external service. See [External Durable Streams](/next/develop/durable-streams#producer-identity-and-idempotency).
 
 ## Create and navigate a fork
 

@@ -10,9 +10,9 @@ The currently supported databases are:
 - Apache Ignite 2
 
 <details>
-    <summary>See the full API definition</summary>
+    <summary>See selected API types and signatures</summary>
 
-    <Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
       ```ts
       declare module 'golem:rdbms/types@1.5.0' {
@@ -236,6 +236,18 @@ The currently supported databases are:
     </Tabs.Tab>
 
     <Tabs.Tab>
+    Effect TypeScript wraps these WIT interfaces with Effect SQL clients. Import the adapter for the selected database; do not import native Node database drivers:
+
+    ```typescript
+    import { MySqlClient } from "@golemcloud/effect-golem/mysql"
+    import { PgClient } from "@golemcloud/effect-golem/postgres"
+    import { IgniteClient } from "@golemcloud/effect-golem/ignite2"
+    ```
+
+    Each adapter implements the canonical `SqlClient` API from `effect/unstable/sql`, including tagged SQL, schema integration, streaming, and `withTransaction`.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
 
     In generated bindings, find the following modules under `golem_rust::bindings::golem::rdbms`:
 
@@ -446,19 +458,19 @@ The currently supported databases are:
       year : Int
       month : Byte
       day : Byte
-    } derive(Show, Eq)
+    } derive(Debug, Eq)
 
     pub(all) struct Time {
       hour : Byte
       minute : Byte
       second : Byte
       nanosecond : UInt
-    } derive(Show, Eq)
+    } derive(Debug, Eq)
 
     pub(all) struct Timestamp {
       date : Date
       time : Time
-    } derive(Show, Eq)
+    } derive(Debug, Eq)
 
     // In `@postgres`:
     pub(all) suberror Error_ {
@@ -467,13 +479,13 @@ The currently supported databases are:
       QueryExecutionFailure(String)
       QueryResponseFailure(String)
       Other(String)
-    } derive(Show, Eq)
+    } derive(Debug, Eq)
 
     pub(all) struct SparseVec {
       dim : Int
       indices : FixedArray[Int]
       values : FixedArray[Float]
-    } derive(Show, Eq)
+    } derive(Debug, Eq)
 
     pub(all) enum DbValue {
       Text(String)
@@ -489,7 +501,7 @@ The currently supported databases are:
       Sparsevec(SparseVec)
       Null
       // ...
-    } derive(Show, Eq)
+    } derive(Debug, Eq)
 
     pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn]
     pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]?
@@ -539,7 +551,7 @@ The currently supported databases are:
       QueryExecutionFailure(String)
       QueryResponseFailure(String)
       Other(String)
-    } derive(Show, Eq)
+    } derive(Debug, Eq)
 
     pub(all) enum DbValue {
       Varchar(String)
@@ -548,7 +560,7 @@ The currently supported databases are:
       Json(String)
       Null
       // ...
-    } derive(Show, Eq)
+    } derive(Debug, Eq)
 
     pub fn DbResultStream::get_columns(self : DbResultStream) -> Array[DbColumn]
     pub fn DbResultStream::get_next(self : DbResultStream) -> Array[DbRow]?
@@ -598,10 +610,12 @@ The currently supported databases are:
 
 ### Executing SQL statements
 
-To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` resource and call `execute` on it:
+To execute an SQL statement with `golem-rdbms`, first create a `db-connection` resource and call `execute` on it:
+
+The Effect examples below run inside a Golem Effect agent, whose runtime supplies the database host services. Creating an Effect does not execute it. Database failures use the `SqlError` error channel; handle them or map them to the agent method's declared error type.
 
 #### MySQL
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/mysql@1.5.0";
@@ -623,6 +637,26 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
   <Callout type="info">
   The functions in the `golem:rdbms/mysql@1.5.0` module are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
   </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```typescript
+  import { Effect } from "effect"
+  import { MySqlClient } from "@golemcloud/effect-golem/mysql"
+
+  const createTable = Effect.gen(function* () {
+    const sql = yield* MySqlClient.make({
+      connectionAddress: "mysql://root@localhost:3306/test",
+    })
+    yield* sql`
+      CREATE TABLE IF NOT EXISTS test_users (
+        user_id varchar(25) NOT NULL PRIMARY KEY,
+        name varchar(255) NOT NULL,
+        created_on timestamp NOT NULL DEFAULT NOW()
+      )
+    `
+  }).pipe(Effect.scoped)
+  ```
   </Tabs.Tab>
 
   <Tabs.Tab>
@@ -683,6 +717,7 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
   // Connecting to the database called 'test' with user 'root'
   // Use appropriate error handling in real code
   let conn = @mysql.DbConnection::open("mysql://root@localhost:3306/test").unwrap()
+  defer conn.drop()
   let statement =
     #|CREATE TABLE IF NOT EXISTS test_users
     #|  (
@@ -692,7 +727,7 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
     #|      PRIMARY KEY (user_id)
     #|  );
 
-  @mysql.DbConnection::execute(conn, statement, []).unwrap()
+  let _ = @mysql.DbConnection::execute(conn, statement, []).unwrap()
   ```
 
   <Callout type="info">
@@ -704,7 +739,7 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
 
 #### PostgreSQL
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/postgres@1.5.0";
@@ -726,6 +761,26 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
   <Callout type="info">
     The functions in the `golem:rdbms/postgres@1.5.0` module are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
   </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```typescript
+  import { Effect } from "effect"
+  import { PgClient } from "@golemcloud/effect-golem/postgres"
+
+  const createTable = Effect.gen(function* () {
+    const sql = yield* PgClient.make({
+      connectionAddress: "postgresql://user@localhost:5432/test",
+    })
+    yield* sql`
+      CREATE TABLE IF NOT EXISTS test_users (
+        user_id varchar(25) NOT NULL PRIMARY KEY,
+        name varchar(255) NOT NULL,
+        created_on timestamp NOT NULL DEFAULT NOW()
+      )
+    `
+  }).pipe(Effect.scoped)
+  ```
   </Tabs.Tab>
 
   <Tabs.Tab>
@@ -787,6 +842,7 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
   // Connecting to the database called 'test' with user 'user'
   // Use appropriate error handling in real code
   let conn = @postgres.DbConnection::open("postgresql://user@localhost:5432/test").unwrap()
+  defer conn.drop()
   let statement =
     #|CREATE TABLE IF NOT EXISTS test_users
     #|  (
@@ -807,7 +863,7 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
 
 #### Apache Ignite
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/ignite2@1.5.0";
@@ -841,6 +897,35 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
   <Callout type="info">
   The functions in the `golem:rdbms/ignite2@1.5.0` module are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
   </Callout>
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+  ```typescript
+  import { Effect } from "effect"
+  import { IgniteClient } from "@golemcloud/effect-golem/ignite2"
+
+  const useIgnite = Effect.gen(function* () {
+    const sql = yield* IgniteClient.make({
+      connectionAddress: "ignite://127.0.0.1:10800",
+      transformResultNames: (name) => name.toLowerCase(),
+    })
+    yield* sql`
+      CREATE TABLE IF NOT EXISTS test_users (
+        user_id varchar(25) NOT NULL PRIMARY KEY,
+        name varchar(255) NOT NULL
+      ) WITH "CACHE_NAME=TestUsers"
+    `
+    const rows = yield* sql<{ user_id: string; name: string }>`
+      SELECT user_id, name FROM test_users WHERE name = ${"hello"}
+    `
+    yield* sql.withTransaction(
+      sql`INSERT INTO test_users (user_id, name) VALUES (${"1"}, ${"Alice"})`,
+    )
+    return rows
+  }).pipe(Effect.scoped)
+  ```
+
+  Ignite does not support nested `withTransaction` calls because it has no savepoints.
   </Tabs.Tab>
 
   <Tabs.Tab>
@@ -888,7 +973,7 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
   // Connecting to an Apache Ignite 2 instance
   // Use appropriate error handling in real code
   val result =
-    Rdbms.Ignite2.open("ignite://localhost:10800").flatMap { conn =>
+    Rdbms.Ignite.open("ignite://localhost:10800").flatMap { conn =>
       conn.execute(
         """CREATE TABLE IF NOT EXISTS test_users
           |  (
@@ -902,7 +987,7 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
   ```
 
   <Callout type="info">
-  The functions in `golem.host.Rdbms.Ignite2` are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  The functions in `golem.host.Rdbms.Ignite` are synchronous.
   </Callout>
   </Tabs.Tab>
 
@@ -913,6 +998,7 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
   // Connecting to an Apache Ignite 2 instance
   // Use appropriate error handling in real code
   let conn = @ignite.DbConnection::open("ignite://127.0.0.1:10800").unwrap()
+  defer conn.drop()
   let statement =
     #|CREATE TABLE IF NOT EXISTS test_users
     #|  (
@@ -921,7 +1007,7 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
     #|      PRIMARY KEY (user_id)
     #|  ) WITH "CACHE_NAME=TestUsers";
 
-  @ignite.DbConnection::execute(conn, statement, []).unwrap()
+  let _ = @ignite.DbConnection::execute(conn, statement, []).unwrap()
 
   // Querying data
   let result = @ignite.DbConnection::query(
@@ -932,7 +1018,8 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
 
   // Using transactions
   let tx = conn.begin_transaction().unwrap()
-  tx.execute(
+  defer tx.drop()
+  let _ = tx.execute(
     "INSERT INTO test_users (user_id, name) VALUES (?, ?)",
     [@ignite.DbValue::DbString("1"), @ignite.DbValue::DbString("Alice")]
   ).unwrap()
@@ -951,5 +1038,5 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
 Additionally you can:
 
 - `query` executes a SQL statement and returns a result
-- `query-stream` executs a SQL statement and returns a streaming result
+- `query-stream` executes a SQL statement and returns a streaming result where the selected SDK exposes streaming
 - `begin-transaction` creates a transaction resource on which, in addition to the `query` and `execute` functions, there is also a `commit` and a `rollback` method.
