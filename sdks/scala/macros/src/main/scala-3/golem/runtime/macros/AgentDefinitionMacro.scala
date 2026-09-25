@@ -41,9 +41,12 @@ import golem.runtime.http.{
   DurableStreamSlotSource,
   HttpAgentValidation,
   HeaderVariable,
+  HttpExchangeCodec,
   HttpEndpointDetails,
   HttpMethod,
   HttpMountDetails,
+  HttpRequest,
+  HttpResponse,
   HttpRouteParser,
   HttpValidation,
   PathSegment,
@@ -83,13 +86,14 @@ object AgentDefinitionMacro {
     val traitType = TypeRepr.of[T]
     val sym       = traitType.typeSymbol
     if (!sym.flags.is(Flags.Trait)) report.errorAndAbort(s"@agent target must be a trait, found: ${sym.fullName}")
-    val router = HttpDeclarationMacro.isRouter(sym)
+    val router             = HttpDeclarationMacro.isRouter(sym)
     val hasAgentDefinition =
       sym.annotations.exists(_.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.agentDefinition")
     if (router && hasAgentDefinition) report.errorAndAbort("Use either @httpRouter or @agentDefinition, not both")
     if (!router && !hasAgentDefinition)
       report.errorAndAbort(s"Missing @agentDefinition(...) on agent trait: ${sym.fullName}")
-    val name             = if (router) HttpDeclarationMacro.string(sym, "typeName", 0) else agentDefinitionTypeName(sym).getOrElse(sym.name)
+    val name =
+      if (router) HttpDeclarationMacro.string(sym, "typeName", 0) else agentDefinitionTypeName(sym).getOrElse(sym.name)
     val descriptionValue = annotationString(sym, TypeRepr.of[description]).orElse(docstringText(sym))
     val mode             = if (router) Some("ephemeral") else agentDefinitionMode(sym).map(_.valueOrAbort)
     val mount            = if (router) Some(HttpDeclarationMacro.routerMountValue(sym)) else extractHttpMount(sym, name)
@@ -143,15 +147,30 @@ object AgentDefinitionMacro {
         val readonly = extractReadOnly(method, principalNames.nonEmpty)
         if (mode.contains("ephemeral") && readonly.nonEmpty)
           report.errorAndAbort(s"Agent '$name' is ephemeral but method '${method.name}' is marked with @readOnly.")
-        val out = unwrapAsyncType(method.tree.asInstanceOf[DefDef].returnTpt.tpe)
+        val out         = unwrapAsyncType(method.tree.asInstanceOf[DefDef].returnTpt.tpe)
+        val methodInput = if (handler) {
+          arguments match {
+            case List(("request", request)) if request.dealias =:= TypeRepr.of[HttpRequest] =>
+              InputMetadata(
+                List(ParameterMetadata("request", FieldSource.UserSupplied, HttpExchangeCodec.requestGraph))
+              )
+            case _ => report.errorAndAbort("handler-schema")
+          }
+        } else input(arguments)
+        val methodOutput = if (handler) {
+          if (!(out.dealias =:= TypeRepr.of[HttpResponse])) report.errorAndAbort("handler-schema")
+          OutputMetadata.Single(HttpExchangeCodec.responseGraph)
+        } else if (out =:= TypeRepr.of[Unit]) OutputMetadata.Unit
+        else OutputMetadata.Single(graph(out))
         MethodMetadata(
           method.name,
           annotationString(method, TypeRepr.of[description]).orElse(docstringText(method)),
           annotationString(method, TypeRepr.of[prompt]),
           None,
-          input(arguments),
-          if (out =:= TypeRepr.of[Unit]) OutputMetadata.Unit else OutputMetadata.Single(graph(out)),
-          if (handler) List(HttpEndpointDetails(HttpMethod.Any, Nil, Nil, Nil, None, None)) else extractEndpoints(method, headers),
+          methodInput,
+          methodOutput,
+          if (handler) List(HttpEndpointDetails(HttpMethod.Any, Nil, Nil, Nil, None, None))
+          else extractEndpoints(method, headers),
           readonly
         )
     }
@@ -175,9 +194,12 @@ object AgentDefinitionMacro {
       traitType.baseType(base).typeArgs
     }
     if (configTypes.size > 1) report.errorAndAbort("Agent trait may extend at most one AgentConfig[T]")
-    val snapshotting = if (router) Snapshotting.Disabled else Snapshotting
-      .parse(extractAgentDefinitionStringArg(sym, "snapshotting", 7).getOrElse("disabled"))
-      .fold(error => report.errorAndAbort(error), value => value)
+    val snapshotting =
+      if (router) Snapshotting.Disabled
+      else
+        Snapshotting
+          .parse(extractAgentDefinitionStringArg(sym, "snapshotting", 7).getOrElse("disabled"))
+          .fold(error => report.errorAndAbort(error), value => value)
     val metadata = AgentMetadata(
       name,
       if (router) AgentTypeKind.HttpRouter else AgentTypeKind.Regular,
