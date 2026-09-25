@@ -13,6 +13,7 @@ import {
   type DurableStreamReadRequest,
 } from 'golem:agent/durable-streams@2.0.0';
 import type { Secret as SecretHandle } from 'golem:core/types@2.0.0';
+import { Secret, withConfigSecretHandle } from './secret';
 import { AgentStream } from './schema/agentStream';
 import { compileSchema } from './schema/adapter';
 import { SchemaRef } from './schema/ref';
@@ -38,7 +39,7 @@ export class DurableStreamError extends Error {
 export interface DurableStreamOptions {
   readonly url: string;
   /** Borrowed capability; the SDK never reveals the bearer token. */
-  readonly auth?: SecretHandle;
+  readonly auth?: Secret<string>;
   /** Whole HTTP attempt deadline, 1–300000 ms. Default: 30000. */
   readonly timeoutMs?: number;
   /** Automatic retries per batch operation, not counting the first attempt. Default: 5. */
@@ -165,9 +166,10 @@ function readStream<T>(
   const options = checkedOptions(input);
   const live = input.live ?? 'long-poll';
   const idleDelay = boundedInteger(input.idleDelayMs ?? 100, 1, 300000, 'idleDelayMs');
-  const reader = new HostReader(
-    { url: options.url, mode, timeoutMs: BigInt(options.timeoutMs) },
+  const reader = withAuth(
     options.auth,
+    (auth) =>
+      new HostReader({ url: options.url, mode, timeoutMs: BigInt(options.timeoutMs) }, auth),
   );
   const request: DurableStreamReadRequest = {
     checkpoint: { offset: input.offset ?? '-1', cursor: input.cursor },
@@ -240,15 +242,19 @@ function createWriter<T>(
   if (!producerId || epoch < 0n || epoch > MAX_PRODUCER_INTEGER) {
     throw new DurableStreamError('invalid-request', 'Invalid producer ID or epoch');
   }
-  const writer = new HostWriter(
-    {
-      url: options.url,
-      contentType,
-      producerId,
-      producerEpoch: epoch,
-      timeoutMs: BigInt(options.timeoutMs),
-    },
+  const writer = withAuth(
     options.auth,
+    (auth) =>
+      new HostWriter(
+        {
+          url: options.url,
+          contentType,
+          producerId,
+          producerEpoch: epoch,
+          timeoutMs: BigInt(options.timeoutMs),
+        },
+        auth,
+      ),
   );
   let nextSequence = 0n;
   let closed = false;
@@ -324,6 +330,10 @@ function createWriter<T>(
 }
 
 const MAX_PRODUCER_INTEGER = 9007199254740991n;
+
+function withAuth<R>(auth: Secret<string> | undefined, use: (handle?: SecretHandle) => R): R {
+  return auth === undefined ? use() : withConfigSecretHandle(auth, use);
+}
 
 function boundedInteger(value: number, min: number, max: number, name: string): number {
   if (!Number.isSafeInteger(value) || value < min || value > max) {

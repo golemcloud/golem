@@ -399,6 +399,13 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
     }
 
     pub async fn del(&self, namespace: KeyValueStorageNamespace, key: &str) -> Result<(), String> {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            "delete",
+            self.svc_name,
+            self.api_name,
+            "",
+        );
         self.storage
             .del(self.svc_name, self.api_name, namespace, key)
             .await
@@ -410,6 +417,13 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         keys: Arc<[String]>,
     ) -> Result<(), String> {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            "delete_many",
+            self.svc_name,
+            self.api_name,
+            "",
+        );
         self.storage
             .del_many(self.svc_name, self.api_name, namespace, keys)
             .await
@@ -421,6 +435,13 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            "exists",
+            self.svc_name,
+            self.api_name,
+            "",
+        );
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
             .await
@@ -428,6 +449,13 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
     }
 
     pub async fn keys(&self, namespace: KeyValueStorageNamespace) -> Result<Vec<String>, String> {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            "keys",
+            self.svc_name,
+            self.api_name,
+            "",
+        );
         self.storage
             .keys(self.svc_name, self.api_name, namespace)
             .await
@@ -443,6 +471,16 @@ pub struct LabelledEntityKeyValueStorage<'a, S: KeyValueStorage + ?Sized> {
 }
 
 impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
+    fn record(&self, operation: &'static str) {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            operation,
+            self.svc_name,
+            self.api_name,
+            self.entity_name,
+        );
+    }
+
     pub fn new(
         svc_name: &'static str,
         api_name: &'static str,
@@ -463,6 +501,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &V,
     ) -> Result<(), String> {
+        self.record("set");
         let serialized = serialize(value)?;
 
         self.storage
@@ -484,6 +523,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
+        self.record("set");
         self.storage
             .set(
                 self.svc_name,
@@ -524,6 +564,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &V,
     ) -> Result<bool, String> {
+        self.record("set_if_not_exists");
         let serialized = serialize(value)?;
         self.storage
             .set_if_not_exists(
@@ -543,6 +584,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &V)],
     ) -> Result<(), String> {
+        self.record("set_many");
         let pairs = pairs
             .iter()
             .map(|(k, v)| serialize(v).map(|v| (k.to_string(), v.to_vec())))
@@ -568,6 +610,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
+        self.record("set_many");
         self.storage
             .set_many(
                 self.svc_name,
@@ -588,6 +631,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, String> {
+        self.record("compare_and_set_many");
         self.storage
             .compare_and_set_many(
                 self.svc_name,
@@ -644,6 +688,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Result<V, String>>, String> {
+        self.record("get");
         let maybe_bytes = self
             .storage
             .get(
@@ -667,6 +712,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Bytes>, String> {
+        self.record("get");
         self.storage
             .get(
                 self.svc_name,
@@ -684,6 +730,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         keys: Arc<[String]>,
     ) -> Result<Vec<Option<V>>, String> {
+        self.record("get_many");
         let maybe_bytes = self
             .storage
             .get_many(
@@ -711,6 +758,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, String> {
+        self.record("get_many");
         self.storage
             .get_many(
                 self.svc_name,
@@ -727,6 +775,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         &self,
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<(String, Bytes)>, String> {
+        self.record("get_all");
         self.storage
             .get_all(self.svc_name, self.api_name, self.entity_name, namespace)
             .await
@@ -739,6 +788,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &V,
     ) -> Result<(), String> {
+        self.record("add_to_set");
         let serialized = serialize(value)?;
         self.storage
             .add_to_set(
@@ -759,6 +809,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &V,
     ) -> Result<(), String> {
+        self.record("remove_from_set");
         let serialized = serialize(value)?;
         self.storage
             .remove_from_set(
@@ -778,6 +829,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<V>, String> {
+        self.record("members_of_set");
         let maybe_bytes = self
             .storage
             .members_of_set(
@@ -803,6 +855,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         score: f64,
         value: &V,
     ) -> Result<(), String> {
+        self.record("add_to_sorted_set");
         let serialized = serialize(value)?;
         self.storage
             .add_to_sorted_set(
@@ -824,6 +877,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &V,
     ) -> Result<(), String> {
+        self.record("remove_from_sorted_set");
         let serialized = serialize(value)?;
         self.storage
             .remove_from_sorted_set(
@@ -843,6 +897,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<(f64, V)>, String> {
+        self.record("get_sorted_set");
         let maybe_bytes = self
             .storage
             .get_sorted_set(
@@ -868,6 +923,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         min: f64,
         max: f64,
     ) -> Result<Vec<(f64, V)>, String> {
+        self.record("query_sorted_set");
         let maybe_bytes = self
             .storage
             .query_sorted_set(

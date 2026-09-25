@@ -7,6 +7,23 @@
 // graph for the declared value type.
 
 ///|
+extern "wasm" fn reset_resource_drop_counts() = "golem:test" "reset-resource-drop-counts"
+
+///|
+extern "wasm" fn resource_drop_count(kind : Int) -> Int = "golem:test" "resource-drop-count"
+
+///|
+test "opaque secret capability is borrowed and dropped without reveal" {
+  reset_resource_drop_counts()
+  let seen = with_owned_handle(@types.Secret::Secret(77), fn(handle) {
+    let @types.Secret::Secret(raw) = handle
+    raw
+  })
+  assert_eq(seen, 77)
+  assert_eq(resource_drop_count(0), 1)
+}
+
+///|
 test "collect_entries_of - primitive String is a LOCAL declaration" {
   let entries = collect_entries_of(
     (@schema.TypeTag::{ } : @schema.TypeTag[String]),

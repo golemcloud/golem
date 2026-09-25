@@ -109,7 +109,10 @@ async fn lifecycle_executor_loss_after_head(
     let before = agent_count(context).await?;
     anyhow::ensure!(before > 0, "active ephemeral was absent from enumeration");
 
-    cluster.kill_all().await;
+    cluster
+        .kill_all_and_wait(60_000)
+        .await
+        .map_err(anyhow::Error::msg)?;
     let result = async {
         let terminal = tokio::time::timeout(Duration::from_secs(15), response.chunk()).await;
         Ok::<_, anyhow::Error>((terminal, before))
