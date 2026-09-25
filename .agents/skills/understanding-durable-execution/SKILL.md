@@ -423,7 +423,14 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   A durable call that derives its position from that index (`begin_function` without a scope:
   the replay-time begin index and retry point) therefore observes the same value the live run
   saw as the oplog tip before its own `Start` was appended, not a position advanced by entries
-  no caller has consumed.
+  no caller has consumed. The same holds for replay events: a `CardDerived` or `CardInstalled`
+  hint trailing a retained `Start` or its terminal is a side effect of that call, and its owner
+  looks it up when it replays the terminal (`pending_card_derivation`). Publishing it while the
+  `Start` is merely retained would let an intervening authority boundary apply it first, so
+  events recorded during a retained commit are deferred on the `RetainedStart`
+  (`deferred_events`) and published by `publish_deferred_events` when the `Start` leaves the
+  retained map: claimed, adopted into a custom subtree, folded into the abandoned tolerance, or
+  released at the live invocation end (`release_retained_starts_at_live_invocation_end`).
 - A recovery Jump abandons the attempt it deletes, including any `Start`s retained from it.
   Every recovery-time Jump (incomplete batched-write and remote-transaction retries on the
   direct and accessor paths, atomic-region rollbacks on the primary and entity Stores) goes

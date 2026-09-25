@@ -440,6 +440,13 @@ struct RetainedStart {
     entry: OplogEntry,
     /// The committed `End`/`Cancelled` closing this `Start`, once the cursor has reached it.
     terminal: Option<(OplogIndex, OplogEntry)>,
+    /// Replay events of the entries the cursor committed past on this `Start`'s behalf: the
+    /// `Start` itself, its attached terminal, and the hint entries trailing each of them, keyed
+    /// by the index they were recorded at. A reader that is not this call's owner must not make
+    /// these effects visible: the owner observes them only once it consumes the `Start`
+    /// (a `CardDerived` audit hint is looked up by the call that replays the terminal it
+    /// follows), so they are published when the `Start` leaves the retained map.
+    deferred_events: Vec<(OplogIndex, ReplayEvent)>,
 }
 
 #[allow(dead_code)]

@@ -3989,6 +3989,165 @@ async fn drain_retains_unclaimed_start_for_its_owner() {
 }
 
 #[test]
+async fn hints_behind_a_retained_start_are_published_when_its_owner_claims_it() {
+    // [NoOp, Start(A=2), End(A=2→3), Start(B=4), End(B=4→5), CardDerived(6), Start(C=7)] — A's
+    // drain steps over B (retained, End attached) and the CardDerived hint that B's owner
+    // recorded right after its End. The hint's replay event is a side effect of B's durable
+    // call: publishing it while B is merely retained would let the guest's later authority
+    // boundary apply the card before B's owner re-claims the Start and reads the derivation,
+    // so it stays deferred on the retained Start until the owner claims it.
+    let derived_card = stored_test_card(CardId::new());
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        start_now(),
+        end_for(4, 43),
+        OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            card: Box::new(derived_card.clone()),
+            wallet_generation: 0,
+        },
+        start_now(),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_a.start_idx(), OplogIndex::from_u64(2));
+
+    rs.drain_awaited_terminals().await.unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        let retained_b = internal
+            .retained_starts
+            .get(&OplogIndex::from_u64(4))
+            .expect("Start(B) must be retained for its owner");
+        assert_eq!(
+            retained_b
+                .terminal
+                .as_ref()
+                .map(|(terminal_idx, _)| *terminal_idx),
+            Some(OplogIndex::from_u64(5))
+        );
+        assert_eq!(
+            retained_b
+                .deferred_events
+                .iter()
+                .map(|(idx, _)| *idx)
+                .collect::<Vec<_>>(),
+            vec![OplogIndex::from_u64(6)],
+            "the CardDerived hint behind B's End is deferred on the retained Start"
+        );
+        assert!(
+            internal
+                .retained_starts
+                .contains_key(&OplogIndex::from_u64(7)),
+            "the drain retains Start(C) after skipping the hint"
+        );
+    }
+    assert!(
+        rs.last_replayed_index() >= OplogIndex::from_u64(6),
+        "the drain must have committed past the hint"
+    );
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        None,
+        "a retained Start's hint must not be observable before its owner claims it"
+    );
+    assert!(rs.take_new_replay_events().is_empty());
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(3)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(4));
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        Some((derived_card.clone(), 0)),
+        "claiming B publishes the deferred hint for its owner"
+    );
+    assert_eq!(
+        rs.take_new_replay_events(),
+        vec![ReplayEvent::CardDerived {
+            card: derived_card,
+            wallet_generation: 0,
+        }]
+    );
+    match rs.await_resolution(handle_b).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn hints_behind_a_released_retained_start_are_published_at_live_invocation_end() {
+    // [NoOp, Start(A=2), Start(B=3), End(B=3→4), CardDerived(5), End(A=2→6)] — B and the hint
+    // behind its End are retained by A's await and B is never claimed. Releasing the closed
+    // retained Start at the live invocation end must still publish the deferred hint: the card
+    // derivation is recorded history and the next authority boundary has to observe it.
+    let derived_card = stored_test_card(CardId::new());
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(3, 43),
+        OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            card: Box::new(derived_card.clone()),
+            wallet_generation: 0,
+        },
+        end_for(2, 42),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        None
+    );
+    rs.switch_cursor_to_live().await.unwrap();
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        None,
+        "switch_to_live keeps retained Starts and their deferred hints"
+    );
+
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        Some((derived_card, 0)),
+        "releasing the retained Start publishes its deferred hint"
+    );
+}
+
+#[test]
 async fn retained_start_claim_rejects_mismatched_identity() {
     // [NoOp, Start(A=2 now), Start(B=3 now), End(A=2→4), End(B=3→5), Start(C=6 resolution)] —
     // after A's

@@ -46,6 +46,7 @@ impl ReplayCursor {
             advance_gate: Some(advance_gate),
             blocked_on_completion_delivery: false,
             resolved_retained_claim: None,
+            retaining_for: None,
             notify_progress: false,
         })
     }
@@ -190,6 +191,11 @@ pub(super) struct CursorTx<'a> {
     /// Set when this transaction claimed a retained `Start` whose terminal the cursor had already
     /// committed: the claim was resolved on the spot, so no resolver awaiter remains for it.
     resolved_retained_claim: Option<OplogIndex>,
+    /// Set while this transaction commits a retained `Start` or its attached terminal: the replay
+    /// events recorded meanwhile (by the entry itself and the hints skipped after it) are deferred
+    /// to that `Start` ([`RetainedStart::deferred_events`]) instead of being published. Holds the
+    /// retained `Start` index and the index of the entry currently being committed past.
+    retaining_for: Option<(OplogIndex, OplogIndex)>,
     notify_progress: bool,
 }
 
@@ -230,12 +236,14 @@ impl CursorTx<'_> {
                 .retained_starts
                 .remove(&idx)
                 .expect("adopted retained Starts are taken from the retained map");
-            // Adoption consumes the record on the root's behalf, so it publishes the position the
-            // cursor withheld while the Start was retained, like an in-position consumption would.
+            // Adoption consumes the record on the root's behalf, so it publishes the position and
+            // the replay events the cursor withheld while the Start was retained, like an
+            // in-position consumption would.
             self.publish_claimed_position(
                 idx,
                 retained.terminal.map(|(terminal_idx, _)| terminal_idx),
             );
+            self.publish_deferred_events(retained.deferred_events);
         }
         self.publish_retained_count();
         self.st.custom_subtrees.insert(root, members);
@@ -269,9 +277,23 @@ impl CursorTx<'_> {
             RetainedStart {
                 entry,
                 terminal: None,
+                deferred_events: Vec::new(),
             },
         );
         self.publish_retained_count();
+    }
+
+    /// Publishes the replay events a retained `Start` withheld, once that `Start` is consumed on
+    /// its owner's behalf (claimed, adopted into a custom subtree, folded into the abandoned
+    /// tolerance, or released at a live invocation end).
+    fn publish_deferred_events(&mut self, deferred_events: Vec<(OplogIndex, ReplayEvent)>) {
+        debug_assert!(
+            self.retaining_for.is_none(),
+            "deferred replay events are published outside a retained commit"
+        );
+        for (_, event) in deferred_events {
+            self.record_replay_event(event);
+        }
     }
 
     /// Attaches a committed terminal to the retained `Start` it closes. Returns `false` when the
@@ -322,6 +344,9 @@ impl CursorTx<'_> {
             if let Some((terminal_idx, terminal)) = &retained.terminal {
                 abandoned.record_terminal(idx, *terminal_idx, terminal_kind(terminal))?;
             }
+            // The boundary reader consumes abandoned records in position, so the hints trailing
+            // them take effect as they would have without the retention.
+            self.publish_deferred_events(retained.deferred_events);
         }
         Ok(())
     }
@@ -395,6 +420,10 @@ impl CursorTx<'_> {
                     .as_ref()
                     .map(|(terminal_idx, _)| *terminal_idx),
             );
+            // The owner consumes the `Start` (and its attached terminal) now, so the hints the
+            // cursor skipped past on its behalf become observable to it, in oplog order, before
+            // it reads the replayed completion.
+            self.publish_deferred_events(retained.deferred_events);
             let handle = match retained.terminal {
                 Some((terminal_idx, terminal)) => {
                     let receiver = self.st.concurrent_resolver.register(idx);
@@ -416,7 +445,8 @@ impl CursorTx<'_> {
         Ok(None)
     }
 
-    /// Drops retained `Start`s (and detaches retained terminals) that `deleted` now hides.
+    /// Drops retained `Start`s (and detaches retained terminals and deferred replay events) that
+    /// `deleted` now hides.
     fn prune_retained_starts(&mut self, mut deleted: impl FnMut(OplogIndex) -> bool) {
         self.st.retained_starts.retain(|idx, _| !deleted(*idx));
         for retained in self.st.retained_starts.values_mut() {
@@ -427,6 +457,9 @@ impl CursorTx<'_> {
             {
                 retained.terminal = None;
             }
+            retained
+                .deferred_events
+                .retain(|(event_idx, _)| !deleted(*event_idx));
         }
         self.publish_retained_count();
     }
@@ -873,20 +906,27 @@ impl CursorTx<'_> {
         read_idx: OplogIndex,
         entry: &OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
-        self.commit_entry(read_idx, entry, true).await
+        self.commit_entry(read_idx, entry, None).await
     }
 
     /// Commits a retained `Start` the reader is not entitled to, or the terminal attached to
-    /// such a `Start`. The cursor moves past it physically, but the non-hint position is not
-    /// published: the owner has not consumed it yet, and publishing it here would let the owner's
-    /// `begin_function` observe a position the live run never saw before its own `Start`. The
-    /// position is published when the owner claims the `Start` (`publish_claimed_position`).
+    /// such a `Start`. The cursor moves past it physically, but neither the non-hint position nor
+    /// the replay events of the entry and its trailing hints are published: the owner has not
+    /// consumed it yet, publishing the position here would let the owner's `begin_function`
+    /// observe a position the live run never saw before its own `Start`, and publishing the
+    /// events would let a boundary apply them before the owner looks for them. Both are published
+    /// when the owner claims the `Start` (`publish_claimed_position`, `publish_deferred_events`).
     async fn commit_retained_entry(
         &mut self,
         read_idx: OplogIndex,
         entry: &OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
-        self.commit_entry(read_idx, entry, false).await
+        let start_idx = terminal_start_index(entry).unwrap_or(read_idx);
+        debug_assert!(
+            self.st.retained_starts.contains_key(&start_idx),
+            "retained commits target a retained Start"
+        );
+        self.commit_entry(read_idx, entry, Some(start_idx)).await
     }
 
     /// Publishes the non-hint position of a retained `Start` (and its attached terminal, if any)
@@ -900,7 +940,25 @@ impl CursorTx<'_> {
         }
     }
 
+    /// Commits `entry`; `retained_for` names the retained `Start` on whose behalf a reader that is
+    /// not its owner commits past it (see [`Self::commit_retained_entry`]), in which case the
+    /// non-hint position stays unpublished and every replay event recorded by this commit is
+    /// deferred to that `Start`.
     async fn commit_entry(
+        &mut self,
+        read_idx: OplogIndex,
+        entry: &OplogEntry,
+        retained_for: Option<OplogIndex>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.retaining_for = retained_for.map(|start_idx| (start_idx, read_idx));
+        let result = self
+            .commit_entry_inner(read_idx, entry, retained_for.is_none())
+            .await;
+        self.retaining_for = None;
+        result
+    }
+
+    async fn commit_entry_inner(
         &mut self,
         read_idx: OplogIndex,
         entry: &OplogEntry,
@@ -951,6 +1009,9 @@ impl CursorTx<'_> {
                     // This hint entry is being permanently consumed, so its commit-only side
                     // effects fire here (they must NOT fire on the rolled-back probe in the `None`
                     // branch below).
+                    if let Some((start_idx, _)) = self.retaining_for {
+                        self.retaining_for = Some((start_idx, read_idx));
+                    }
                     self.apply_commit_effects(read_idx, &entry).await?;
 
                     // Recording seen log entries
@@ -1430,7 +1491,22 @@ impl CursorTx<'_> {
         }
     }
 
+    /// Publishes a replay event for the primary Store to apply at its next boundary. While a
+    /// retained `Start` is being committed past on its owner's behalf, the event is deferred to
+    /// that `Start` instead (see [`RetainedStart::deferred_events`]); `ReplayFinished` describes
+    /// the cursor rather than an entry and is never deferred.
     pub(super) fn record_replay_event(&mut self, event: ReplayEvent) {
+        if let Some((start_idx, entry_idx)) = self.retaining_for
+            && !matches!(event, ReplayEvent::ReplayFinished)
+        {
+            self.st
+                .retained_starts
+                .get_mut(&start_idx)
+                .expect("replay events are deferred to a retained Start")
+                .deferred_events
+                .push((entry_idx, event));
+            return;
+        }
         self.cursor
             .pending_replay_events
             .lock()
@@ -3281,6 +3357,17 @@ impl ReplayState {
             state.cursor.unclaimed_retained_starts.lock().unwrap().clear();
             if released.is_empty() {
                 return Ok(());
+            }
+            {
+                let mut pending = state.cursor.pending_replay_events.lock().unwrap();
+                for retained in released.values() {
+                    pending.extend(
+                        retained
+                            .deferred_events
+                            .iter()
+                            .map(|(_, event)| event.clone()),
+                    );
+                }
             }
             let summary: Vec<_> = released
                 .iter()
