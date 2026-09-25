@@ -169,7 +169,8 @@ where
 
     // Per-invocation HTTP call limit and monthly account-level HTTP call quota,
     // mirroring the P2 `http::outgoing_handler::handle` path. Both checks
-    // no-op during replay. Permission-denied calls are durably recorded below
+    // no-op during replay and for a send that may still adopt its retained
+    // recorded `Start`. Permission-denied calls are durably recorded below
     // without consuming quota.
     if !authorization_denied {
         store.with(|mut access| {

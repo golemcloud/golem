@@ -55,15 +55,87 @@ tokio::task_local! {
     static ENTITY_CANCELLATION_MASKED: ();
 }
 
+/// The recorded function name of a batched-write durable scope `Start`. A discriminator makes the
+/// name unique among concurrent sibling scopes of the same durable function type; a discriminated
+/// claim never matches a plain-named scope and vice versa.
+pub(crate) fn batched_write_scope_name(discriminator: Option<&str>) -> HostFunctionName {
+    match discriminator {
+        Some(discriminator) => {
+            HostFunctionName::Custom(format!("<scope:batched-write:{discriminator}>"))
+        }
+        None => HostFunctionName::Custom(PLAIN_BATCHED_WRITE_SCOPE_NAME.to_string()),
+    }
+}
+
+const PLAIN_BATCHED_WRITE_SCOPE_NAME: &str = "<scope:batched-write>";
+
+/// The per-call quota an outbound durable call is charged against: the per-invocation call
+/// limits and the monthly account budgets exist for outgoing HTTP and for agent RPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaClass {
+    Http,
+    Rpc,
+}
+
+impl QuotaClass {
+    /// The quota class a recorded durable call is charged against, or `None` when calls of this
+    /// kind are not quota-charged. This is the single mapping from recorded call kind to quota:
+    /// the charging sites name their class directly, and the replay cursor uses this to report
+    /// which classes still have an unclaimed retained `Start` waiting for its owner (see
+    /// `WorkerState::durable_call_is_fresh`), so the two must agree on the recorded kinds.
+    ///
+    /// P2 HTTP (`wasi:http/outgoing-handler.handle`) is recorded as a plain batched-write scope,
+    /// a name it shares with rdbms transactions; a retained scope of that name therefore counts as
+    /// a possibly-HTTP one.
+    pub(crate) fn of_recorded_call(function_name: &HostFunctionName) -> Option<Self> {
+        match function_name {
+            HostFunctionName::P3HttpClientSend
+            | HostFunctionName::McpToolCall
+            | HostFunctionName::GolemAgentDurableStreamReaderRead
+            | HostFunctionName::GolemAgentDurableStreamWriterAppend => Some(Self::Http),
+            HostFunctionName::GolemRpcWasmRpcInvoke
+            | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult => Some(Self::Rpc),
+            HostFunctionName::Custom(name) if name == PLAIN_BATCHED_WRITE_SCOPE_NAME => {
+                Some(Self::Http)
+            }
+            _ => None,
+        }
+    }
+}
+
 pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Output {
     ENTITY_CANCELLATION_MASKED.scope((), future).await
+}
+
+/// Appends one `Jump` per `deleted_region` while a durable context recovers from an incomplete
+/// recorded attempt (batched-write scope, remote transaction or atomic region) by re-executing it
+/// live, and makes the Jumps effective in the shared replay cursor before the caller finishes the
+/// replay-to-live switch. Future replays skip the abandoned attempt, and any `Start` of that
+/// attempt the cursor still retains is dropped so the live re-execution neither claims it nor is
+/// blamed for leaving it unconsumed. Worker status is recomputed because the folded deleted
+/// regions changed.
+pub(crate) async fn commit_replay_jumps<Ctx: WorkerCtx>(
+    worker: &Worker<Ctx>,
+    replay_state: &ReplayState,
+    entity_parent_start_index: Option<OplogIndex>,
+    deleted_regions: Vec<OplogRegion>,
+) -> Result<(), WorkerExecutorError> {
+    for region in &deleted_regions {
+        worker
+            .add_and_commit_oplog(OplogEntry::jump(entity_parent_start_index, region.clone()))
+            .await;
+    }
+    replay_state.register_replay_jump(deleted_regions).await?;
+    worker.reattach_worker_status().await;
+    Ok(())
 }
 
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{
-    OplogEntryLookupResult, ReplayState, ReplayToLiveOutcome, ReplayToLiveRole,
+    OplogEntryLookupResult, ReplayStartClaimOutcome, ReplayState, ReplayToLiveOutcome,
+    ReplayToLiveRole, StartClaim,
 };
 use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
@@ -454,6 +526,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     _owner_resources: Arc<OwnerRuntimeResources>,
     entity_reconstruction_claim_hook:
         Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
+    replay_admission_hook: Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>>,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     filesystem_generation_handle: FilesystemGenerationHandle,
@@ -766,6 +839,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.entity_reconstruction_claim_hook.clone()
     }
 
+    pub(crate) fn replay_admission_hook(
+        &self,
+    ) -> Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>> {
+        self.replay_admission_hook.clone()
+    }
+
     pub(crate) fn is_live(&self) -> bool {
         self.state.is_live()
     }
@@ -904,6 +983,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         entity_reconstruction_claim_hook: Option<
             Arc<dyn crate::workerctx::EntityReconstructionClaimHook>,
         >,
+        replay_admission_hook: Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>>,
         filesystem_capability: FilesystemCapability,
         executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
@@ -1207,6 +1287,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owner_execution,
             _owner_resources: owner_resources,
             entity_reconstruction_claim_hook,
+            replay_admission_hook,
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
@@ -1250,13 +1331,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.reset_invocation_call_counts();
     }
 
-    /// Records one outgoing HTTP call against the monthly account quota.
+    /// Records one outgoing HTTP call against the monthly account quota when it is fresh live
+    /// work (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
     /// is exhausted. This trap maps to `RetryDecision::TryStop`; the worker is
     /// suspended and resumed when the registry replenishes the budget.
     pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
-        if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
+        if self.state.durable_call_is_fresh(QuotaClass::Http)
+            && !self.state.resource_limit_entry.record_http_call()
+        {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
             ))
@@ -1265,12 +1349,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Records one outgoing RPC call against the monthly account quota.
+    /// Records one outgoing RPC call against the monthly account quota when it is fresh live work
+    /// (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyRpcCallBudgetExhausted)` if the monthly budget
     /// is exhausted.
     pub fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
-        if self.state.is_live() && !self.state.resource_limit_entry.record_rpc_call() {
+        if self.state.durable_call_is_fresh(QuotaClass::Rpc)
+            && !self.state.resource_limit_entry.record_rpc_call()
+        {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted
             ))
@@ -2664,10 +2751,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if self.is_live() {
                 return Ok(None);
             }
+            if let Some(hook) = &self.replay_admission_hook {
+                hook.before_positional_replay_read(expected);
+            }
             match self
                 .state
                 .replay_state
-                .get_oplog_entry_or_replay_end()
+                .get_oplog_entry_or_replay_end(self.entity_parent_start_index())
                 .await?
             {
                 PositionalRead::Entry(index, entry) => {
@@ -3078,28 +3168,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // and only stored when the scope continues replaying (not when recovery switches to live
             // and re-runs the body, which appends a fresh `End` live).
             let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let result = if self.is_live() {
-                // Durable scopes are siblings rather than nested under other durable scopes. In an
-                // entity body they are direct children of the outer entity invocation; their own
-                // host calls point back at the scope Start through `child_parent_start_index`.
-                let entry = OplogEntry::Start {
-                    timestamp: Timestamp::now_utc(),
-                    parent_start_index: self.entity_parent_start_index(),
-                    function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
-                    invocation_id: None,
-                    observational_owner: None,
-                    request: None,
-                    durable_function_type: function_type.clone(),
-                };
-                let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
-                Ok(begin_index)
+            let scope_name = batched_write_scope_name(None);
+            // A scope opened after the live transition may still own a recorded scope `Start`
+            // the cursor retained for it (see `WorkerState::durable_call_is_live`), so it claims
+            // first and appends a new `Start` only once replay reports none remains.
+            let claimed_scope = if self.state.durable_call_is_live() {
+                None
             } else {
-                let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
-                let (begin_index, scope_handle) = self
-                    .state
-                    .replay_state
-                    .claim_scope_start(&scope_name, function_type, self.entity_parent_start_index())
-                    .await?;
+                self.claim_durable_scope_start(&scope_name, function_type)
+                    .await?
+            };
+            let result = if let Some((begin_index, scope_handle)) = claimed_scope {
                 // The begin-side completion / legality probe stays a non-consuming forward scan: it
                 // decides whether the scope is safe to continue replaying or must be retried *before*
                 // the scope body is replayed. Only the `End` *consumption* moves to the resolver.
@@ -3175,17 +3254,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
                                 end: pending.replay_target().next(), // skipping the Jump entry too
                             };
-
-                            self.public_state
-                                .worker()
-                                .add_and_commit_oplog(OplogEntry::jump(
-                                    self.entity_parent_start_index(),
-                                    deleted_region,
-                                ))
-                                .await;
-
-                            // TODO: this recomputation should not be necessary.
-                            self.public_state.worker().reattach_worker_status().await;
+                            commit_replay_jumps(
+                                &self.public_state.worker(),
+                                &self.state.replay_state,
+                                self.entity_parent_start_index(),
+                                vec![deleted_region],
+                            )
+                            .await?;
 
                             self.finish_switch_to_live(pending).await?.require_live()?;
                             // Switched to live and re-running the body: the scope `End` will be
@@ -3206,6 +3281,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     scope_replay_handle = Some(scope_handle);
                     Ok(begin_index)
                 }
+            } else {
+                // Durable scopes are siblings rather than nested under other durable scopes. In an
+                // entity body they are direct children of the outer entity invocation; their own
+                // host calls point back at the scope Start through `child_parent_start_index`.
+                let entry = OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: self.entity_parent_start_index(),
+                    function_name: scope_name,
+                    invocation_id: None,
+                    observational_owner: None,
+                    request: None,
+                    durable_function_type: function_type.clone(),
+                };
+                let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
+                Ok(begin_index)
             }?;
 
             // A durable scope (remote write / HTTP request) is now open until the matching
@@ -3266,7 +3356,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         if self.state.opens_durable_scope(function_type) {
-            if self.is_live() {
+            if self.state.durable_scope_replays(begin_index) {
+                // The scope `End` was folded into the resolver at scope-open, so consume it
+                // through the resolver (never positionally, which under overlap could steal a
+                // concurrently-replaying sibling call's terminal). This also repairs a
+                // crash-induced half-pair and closes the in-memory scope.
+                self.close_durable_scope_replay(begin_index).await?;
+            } else {
                 let entry = OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
                     start_index: begin_index,
@@ -3276,12 +3372,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state.oplog.add(entry).await;
                 // The durable scope opened in `begin_function` is now closed.
                 self.state.remove_durable_scope(begin_index)?;
-            } else {
-                // The scope `End` was folded into the resolver at scope-open, so consume it
-                // through the resolver (never positionally, which under overlap could steal a
-                // concurrently-replaying sibling call's terminal). This also repairs a
-                // crash-induced half-pair and closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
             }
             Ok(())
         } else {
@@ -3289,10 +3379,57 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    /// Replay-side admission of a durable scope `Start`: claims the recorded scope `Start`
+    /// (including one the cursor retained for this scope), or continues this Store live when
+    /// replay reports that no scope `Start` remains, in which case `None` is returned and the
+    /// caller appends a fresh live scope `Start`. A matching `Start` inside a deleted replay
+    /// region remains divergence, as for every other scope claim.
+    async fn claim_durable_scope_start(
+        &mut self,
+        scope_name: &HostFunctionName,
+        function_type: &DurableFunctionType,
+    ) -> Result<Option<(OplogIndex, concurrent::ReplayCallHandle)>, WorkerExecutorError> {
+        loop {
+            let claim =
+                StartClaim::scope(scope_name, function_type, self.entity_parent_start_index());
+            let expected = claim.expected_description();
+            let store_continued_live = self.state.store_continued_live();
+            match self
+                .state
+                .replay_state
+                .claim_start_for_store(claim, store_continued_live)
+                .await?
+            {
+                ReplayStartClaimOutcome::Claimed { handle, .. } => {
+                    return Ok(Some((handle.start_idx(), handle)));
+                }
+                ReplayStartClaimOutcome::DeletedRegion => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        expected,
+                        "matching Start belongs to a deleted replay region".to_string(),
+                    ));
+                }
+                outcome @ (ReplayStartClaimOutcome::ReplayEnded
+                | ReplayStartClaimOutcome::StoreAlreadyLive) => {
+                    if self
+                        .continue_live_at_replay_tail(
+                            matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
+                            expected,
+                        )
+                        .await?
+                    {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+    }
+
     /// Closes a durable scope during replay by awaiting its `End` through the resolver, then
     /// removing the in-memory scope. The scope `End` was registered as a resolver awaiter when its
-    /// `Start` was claimed (`claim_scope_start`), so it is delivered here whether it is the entry at
-    /// the cursor head or was already auto-drained to this scope's handle by another cursor driver.
+    /// `Start` was claimed (`claim_durable_scope_start`), so it is delivered here whether it is the
+    /// entry at the cursor head or was already auto-drained to this scope's handle by another
+    /// cursor driver.
     ///
     /// A crash between a scope's terminal marker and its `End` (`add_pair` gives contiguity, not
     /// crash atomicity) truncates the oplog at the marker, so the awaited `End` resolves as
@@ -3388,8 +3525,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if self.state.durability_is_suppressed() {
             let (_, tx) = handler.create_new().await?;
             let begin_index = self.state.current_oplog_index().await;
-            Ok((begin_index, tx))
-        } else if self.is_live() {
+            return Ok((begin_index, tx));
+        }
+
+        let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
+        // A transaction begun after the live transition claims first while unclaimed retained
+        // `Start`s exist (see `WorkerState::durable_call_is_live`) and begins a fresh live
+        // transaction only once replay reports that no scope `Start` remains.
+        let claimed_scope = if self.state.durable_call_is_live() {
+            None
+        } else {
+            self.claim_durable_scope_start(
+                &scope_name,
+                &DurableFunctionType::WriteRemoteTransaction(None),
+            )
+            .await?
+        };
+
+        let Some((scope_start_index, scope_handle)) = claimed_scope else {
             let (tx_id, tx) = handler.create_new().await?;
             // A transaction is a durable scope: append the scope `Start` and the
             // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
@@ -3399,7 +3552,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let scope_start = OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: self.entity_parent_start_index(),
-                function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
+                function_name: scope_name,
                 invocation_id: None,
                 observational_owner: None,
                 request: None,
@@ -3425,203 +3578,183 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .push_durable_scope(begin_index, DurableScopeKind::Transaction, None);
             self.state.current_retry_point = begin_index;
 
-            Ok((begin_index, tx))
-        } else {
-            // The transaction scope `Start` is preserved across restarts, so its index is the
-            // stable original begin index that keys every transaction marker. Its `End` is folded
-            // into the resolver: `claim_scope_start` consumes the `Start`, validates the exact
-            // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
-            // interleaved oplog fails here instead of silently driving the recovery logic with the
-            // wrong scope), and registers an awaiter the transaction terminal awaits instead of
-            // reading the scope `End` positionally. The handle is stored only when the transaction
-            // continues replaying (not when recovery restarts it live).
-            let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
-            let (scope_start_index, scope_handle) = self
-                .state
-                .replay_state
-                .claim_scope_start(
-                    &scope_name,
-                    &DurableFunctionType::WriteRemoteTransaction(None),
-                    self.entity_parent_start_index(),
-                )
-                .await?;
-            let (begin_index, begin_entry) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::BeginRemoteTransaction
-            )?;
-            // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
-            // transaction (`original_begin_index: None`) or, after a restart, points back at this
-            // scope `Start`.
-            if let OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(idx),
-                ..
-            } = &begin_entry
-                && *idx != scope_start_index
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
+            return Ok((begin_index, tx));
+        };
+
+        // The transaction scope `Start` is preserved across restarts, so its index is the
+        // stable original begin index that keys every transaction marker. Its `End` is folded
+        // into the resolver: `claim_scope_start` consumes the `Start`, validates the exact
+        // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
+        // interleaved oplog fails here instead of silently driving the recovery logic with the
+        // wrong scope), and registers an awaiter the transaction terminal awaits instead of
+        // reading the scope `End` positionally. The handle is stored only when the transaction
+        // continues replaying (not when recovery restarts it live).
+        let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
+        let (begin_index, begin_entry) =
+            crate::get_oplog_entry!(self, OplogEntry::BeginRemoteTransaction)?;
+        // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
+        // transaction (`original_begin_index: None`) or, after a restart, points back at this
+        // scope `Start`.
+        if let OplogEntry::BeginRemoteTransaction {
+            original_begin_index: Some(idx),
+            ..
+        } = &begin_entry
+            && *idx != scope_start_index
+        {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
                     format!(
                         "BeginRemoteTransaction {{ original_begin_index: None | Some({scope_start_index}) }}"
                     ),
                     format!("BeginRemoteTransaction {{ original_begin_index: Some({idx}) }}"),
                 )
                 .into());
-            }
-            let original_begin_index = scope_start_index;
+        }
+        let original_begin_index = scope_start_index;
 
-            let assume_idempotence = self.state.assume_idempotence;
+        let assume_idempotence = self.state.assume_idempotence;
 
-            let pre_entry = self
-                .state
-                .replay_state
-                .lookup_oplog_entry_with_condition_and_state(
-                    original_begin_index,
-                    OplogEntry::is_pre_remote_transaction_s,
-                    OplogEntry::no_concurrent_side_effect,
-                    ScopeScanState::new(original_begin_index),
-                    OplogEntry::track_scope_membership,
-                )
-                .await;
-
-            let tx_id = try_match!(
-                begin_entry,
-                OplogEntry::BeginRemoteTransaction { transaction_id, .. }
+        let pre_entry = self
+            .state
+            .replay_state
+            .lookup_oplog_entry_with_condition_and_state(
+                original_begin_index,
+                OplogEntry::is_pre_remote_transaction_s,
+                OplogEntry::no_concurrent_side_effect,
+                ScopeScanState::new(original_begin_index),
+                OplogEntry::track_scope_membership,
             )
-            .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
+            .await;
 
-            let (tx_id, tx) = handler.create_replay(&tx_id).await?;
+        let tx_id = try_match!(
+            begin_entry,
+            OplogEntry::BeginRemoteTransaction { transaction_id, .. }
+        )
+        .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
 
-            let mut should_restart = false;
+        let (tx_id, tx) = handler.create_replay(&tx_id).await?;
 
-            match pre_entry {
-                OplogEntryLookupResult::Found {
-                    entry: pre_entry, ..
-                } => {
-                    let end_entry = self
-                        .state
-                        .replay_state
-                        .lookup_oplog_entry_with_condition_and_state(
-                            original_begin_index,
-                            OplogEntry::is_end_remote_transaction_s,
-                            OplogEntry::no_concurrent_side_effect,
-                            ScopeScanState::new(original_begin_index),
-                            OplogEntry::track_scope_membership,
-                        )
-                        .await;
+        let mut should_restart = false;
 
-                    match end_entry {
-                        OplogEntryLookupResult::Found { .. } => {}
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: false,
-                        } => {
-                            if pre_entry.is_pre_commit_remote_transaction(original_begin_index) {
-                                // if we can not confirm the transaction was committed, we need to restart
-                                should_restart = !handler.is_committed(&tx_id).await?;
-                            } else if pre_entry
-                                .is_pre_rollback_remote_transaction(original_begin_index)
-                            {
-                                // if we can not confirm the transaction was rolled back, we need to restart
-                                should_restart = !handler.is_rolled_back(&tx_id).await?;
-                            }
+        match pre_entry {
+            OplogEntryLookupResult::Found {
+                entry: pre_entry, ..
+            } => {
+                let end_entry = self
+                    .state
+                    .replay_state
+                    .lookup_oplog_entry_with_condition_and_state(
+                        original_begin_index,
+                        OplogEntry::is_end_remote_transaction_s,
+                        OplogEntry::no_concurrent_side_effect,
+                        ScopeScanState::new(original_begin_index),
+                        OplogEntry::track_scope_membership,
+                    )
+                    .await;
+
+                match end_entry {
+                    OplogEntryLookupResult::Found { .. } => {}
+                    OplogEntryLookupResult::NotFound {
+                        violates_for_all: false,
+                    } => {
+                        if pre_entry.is_pre_commit_remote_transaction(original_begin_index) {
+                            // if we can not confirm the transaction was committed, we need to restart
+                            should_restart = !handler.is_committed(&tx_id).await?;
+                        } else if pre_entry.is_pre_rollback_remote_transaction(original_begin_index)
+                        {
+                            // if we can not confirm the transaction was rolled back, we need to restart
+                            should_restart = !handler.is_rolled_back(&tx_id).await?;
                         }
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: true,
-                        } => {
-                            // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await?;
-                            return Err(WorkerExecutorError::runtime(
+                    }
+                    OplogEntryLookupResult::NotFound {
+                        violates_for_all: true,
+                    } => {
+                        // Must switch to live mode before failing to be able to commit an Error entry
+                        self.switch_to_live().await?;
+                        return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
-                        }
                     }
                 }
-                OplogEntryLookupResult::NotFound {
-                    violates_for_all: false,
-                } => {
-                    should_restart = true;
-                }
-                OplogEntryLookupResult::NotFound {
-                    violates_for_all: true,
-                } => {
-                    // Must switch to live mode before failing to be able to commit an Error entry
-                    self.switch_to_live().await?;
-                    return Err(WorkerExecutorError::runtime(
+            }
+            OplogEntryLookupResult::NotFound {
+                violates_for_all: false,
+            } => {
+                should_restart = true;
+            }
+            OplogEntryLookupResult::NotFound {
+                violates_for_all: true,
+            } => {
+                // Must switch to live mode before failing to be able to commit an Error entry
+                self.switch_to_live().await?;
+                return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
+            }
+        };
+
+        let (result, tx) = if should_restart {
+            let pending = match self.begin_switch_to_live().await? {
+                BeginReplayToLive::ReplayResumed => {
+                    return Err(WorkerExecutorError::runtime(
+                        "replay target grew while a remote transaction was settling",
+                    )
+                    .into());
                 }
+                BeginReplayToLive::Pending(pending) => pending,
             };
 
-            let (result, tx) = if should_restart {
-                let pending = match self.begin_switch_to_live().await? {
-                    BeginReplayToLive::ReplayResumed => {
-                        return Err(WorkerExecutorError::runtime(
-                            "replay target grew while a remote transaction was settling",
-                        )
-                        .into());
-                    }
-                    BeginReplayToLive::Pending(pending) => pending,
-                };
-
-                if !assume_idempotence {
-                    self.finish_switch_to_live(pending).await?.require_live()?;
-                    Err(WorkerExecutorError::runtime(
-                        "Non-idempotent remote write operation was not completed, cannot retry",
-                    ))
-                } else {
-                    // But this is not enough, because if the retried batched write operation succeeds,
-                    // and later we replay it, we need to skip the first attempt and only replay the second.
-                    // Se we add a Jump entry to the oplog that registers a deleted region.
-                    let deleted_region = OplogRegion {
-                        // Delete the previous `BeginRemoteTransaction` entry (and everything after),
-                        // because we'll get a new tx id. The transaction scope `Start` lives at
-                        // `scope_start_index < begin_index`, so it is preserved.
-                        start: begin_index,
-                        end: pending.replay_target().next(), // skipping the Jump entry too
-                    };
-
-                    self.public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(
-                            self.entity_parent_start_index(),
-                            deleted_region,
-                        ))
-                        .await;
-
-                    // TODO: this recomputation should not be necessary.
-                    self.public_state.worker().reattach_worker_status().await;
-
-                    self.finish_switch_to_live(pending).await?.require_live()?;
-
-                    let (tx_id, tx) = handler.create_new().await?;
-                    let _ = self
-                        .public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
-                            tx_id,
-                            Some(original_begin_index),
-                        ))
-                        .await;
-
-                    // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
-                    // be appended live by the transaction terminal, so do not store the (now
-                    // incomplete) replay handle.
-                    Ok((original_begin_index, tx))
-                }
+            if !assume_idempotence {
+                self.finish_switch_to_live(pending).await?.require_live()?;
+                Err(WorkerExecutorError::runtime(
+                    "Non-idempotent remote write operation was not completed, cannot retry",
+                ))
             } else {
-                scope_replay_handle = Some(scope_handle);
+                // But this is not enough, because if the retried batched write operation succeeds,
+                // and later we replay it, we need to skip the first attempt and only replay the second.
+                // Se we add a Jump entry to the oplog that registers a deleted region.
+                let deleted_region = OplogRegion {
+                    // Delete the previous `BeginRemoteTransaction` entry (and everything after),
+                    // because we'll get a new tx id. The transaction scope `Start` lives at
+                    // `scope_start_index < begin_index`, so it is preserved.
+                    start: begin_index,
+                    end: pending.replay_target().next(), // skipping the Jump entry too
+                };
+                commit_replay_jumps(
+                    &self.public_state.worker(),
+                    &self.state.replay_state,
+                    self.entity_parent_start_index(),
+                    vec![deleted_region],
+                )
+                .await?;
+
+                self.finish_switch_to_live(pending).await?.require_live()?;
+
+                let (tx_id, tx) = handler.create_new().await?;
+                let _ = self
+                    .public_state
+                    .worker()
+                    .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
+                        tx_id,
+                        Some(original_begin_index),
+                    ))
+                    .await;
+
+                // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
+                // be appended live by the transaction terminal, so do not store the (now
+                // incomplete) replay handle.
                 Ok((original_begin_index, tx))
-            }?;
+            }
+        } else {
+            scope_replay_handle = Some(scope_handle);
+            Ok((original_begin_index, tx))
+        }?;
 
-            // The (possibly re-begun) transaction scope is open until commit/rollback.
-            self.state.push_durable_scope(
-                result,
-                DurableScopeKind::Transaction,
-                scope_replay_handle,
-            );
-            self.state.current_retry_point = original_begin_index;
+        // The (possibly re-begun) transaction scope is open until commit/rollback.
+        self.state
+            .push_durable_scope(result, DurableScopeKind::Transaction, scope_replay_handle);
+        self.state.current_retry_point = original_begin_index;
 
-            Ok((result, tx))
-        }
+        Ok((result, tx))
     }
 
     pub async fn pre_commit_transaction_function(
@@ -3645,10 +3778,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .await;
             Ok(())
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::PreCommitRemoteTransaction
-            )?;
+            let (_, _) = crate::get_oplog_entry!(self, OplogEntry::PreCommitRemoteTransaction)?;
             Ok(())
         }
     }
@@ -3674,10 +3804,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .await;
             Ok(())
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::PreRollbackRemoteTransaction
-            )?;
+            let (_, _) = crate::get_oplog_entry!(self, OplogEntry::PreRollbackRemoteTransaction)?;
             Ok(())
         }
     }
@@ -3715,10 +3842,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
                 .await?;
             } else {
-                let (_, _) = crate::get_oplog_entry!(
-                    self.state.replay_state,
-                    OplogEntry::CommittedRemoteTransaction
-                )?;
+                let (_, _) = crate::get_oplog_entry!(self, OplogEntry::CommittedRemoteTransaction)?;
                 unreachable!("the speculative marker read left a matching entry unconsumed");
             }
         }
@@ -3762,10 +3886,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
                 .await?;
             } else {
-                let (_, _) = crate::get_oplog_entry!(
-                    self.state.replay_state,
-                    OplogEntry::RolledBackRemoteTransaction
-                )?;
+                let (_, _) =
+                    crate::get_oplog_entry!(self, OplogEntry::RolledBackRemoteTransaction)?;
                 unreachable!("the speculative marker read left a matching entry unconsumed");
             }
         }
@@ -5413,6 +5535,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 AgentInvocationResult::AgentMethod { .. } => Some(full_function_name.to_string()),
                 _ => None,
             };
+
+            if self.state.entity_execution_mode.is_none() {
+                self.state
+                    .replay_state
+                    .release_retained_starts_at_live_invocation_end()
+                    .await?;
+            }
 
             let finished_index = self
                 .public_state
@@ -10818,6 +10947,21 @@ impl PrivateDurableWorkerState {
             .and_then(|scope| scope.replay_end.take())
     }
 
+    /// Whether the open durable scope at `start_index` closes through the replay resolver (its
+    /// `Start` was claimed during replay and its `End` is awaited) rather than by appending a live
+    /// `End`. A scope claimed by a Store that already published live (a late owner adopting a
+    /// retained scope `Start`) still resolves through the cursor, which is then at its target so
+    /// the awaited `End` is either already delivered or reported incomplete without parking. A
+    /// Store that continued live locally while the shared cursor still replays (an incomplete
+    /// entity past a deleted region) appends its `End` live, as it must not park on cursor
+    /// progress it cannot drive.
+    fn durable_scope_replays(&self, start_index: OplogIndex) -> bool {
+        self.active_durable_scopes
+            .iter()
+            .any(|scope| scope.start_index == start_index && scope.replay_end.is_some())
+            && (!self.is_live() || self.replay_state.is_live())
+    }
+
     fn is_durable_scope_open(&self, start_index: OplogIndex) -> bool {
         self.active_durable_scopes
             .iter()
@@ -11111,14 +11255,18 @@ impl PrivateDurableWorkerState {
         }
     }
 
-    /// Increments the HTTP call counter for the current invocation if in live mode.
+    /// Increments the HTTP call counter for the current invocation if the call is fresh live
+    /// work.
     ///
     /// Returns `Err` if the per-invocation HTTP call limit would be exceeded.
     /// The check and increment are performed only during live execution; replay
     /// mode is a no-op so that recovering workers are not penalised for calls
-    /// already made in a prior execution.
+    /// already made in a prior execution. Call quotas are charged before the
+    /// call's `Start` is claimed or written, so they use
+    /// [`Self::durable_call_is_fresh`]: a call that may still adopt a retained
+    /// recorded `Start` charged to the same quota is not charged again.
     pub fn check_and_increment_http_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.is_live() {
+        if !self.durable_call_is_fresh(QuotaClass::Http) {
             return Ok(());
         }
         if self.per_invocation_http_call_limit != u64::MAX
@@ -11130,11 +11278,13 @@ impl PrivateDurableWorkerState {
         Ok(())
     }
 
-    /// Increments the RPC call counter for the current invocation if in live mode.
+    /// Increments the RPC call counter for the current invocation if the call is fresh live work.
     ///
-    /// Returns `Err` if the per-invocation RPC call limit would be exceeded.
+    /// Returns `Err` if the per-invocation RPC call limit would be exceeded. Uses
+    /// [`Self::durable_call_is_fresh`] for the same reason as
+    /// [`Self::check_and_increment_http_call_count`].
     pub fn check_and_increment_rpc_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.is_live() {
+        if !self.durable_call_is_fresh(QuotaClass::Rpc) {
             return Ok(());
         }
         if self.per_invocation_rpc_call_limit != u64::MAX
@@ -11167,6 +11317,49 @@ impl PrivateDurableWorkerState {
 
     pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {
         self.local_live_tail.clone()
+    }
+
+    /// Whether a durable call that would claim a recorded `Start` may skip replay and record a new
+    /// `Start` directly.
+    ///
+    /// This is stricter than [`Self::is_live`]: while the cursor has retained `Start`s (recorded
+    /// `Start`s that a positional reader stepped over without consuming and that no owner has
+    /// claimed yet), a call arriving after the live transition may still be the replayed owner of
+    /// one of them. Such calls must go through the replay claim path so they can adopt their
+    /// retained `Start` instead of duplicating it. Entity Stores in `Live` mode never replay, so
+    /// they always answer `true` once live.
+    ///
+    /// Positional readers, authorization and snapshot decisions keep using [`Self::is_live`],
+    /// which describes the Store's position, not a call's admission. Per-call quotas use
+    /// [`Self::durable_call_is_fresh`], which narrows the retained-`Start` exception to the
+    /// call's own quota class.
+    pub fn durable_call_is_live(&self) -> bool {
+        self.is_live()
+            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+                || !self.replay_state.has_unclaimed_retained_starts())
+    }
+
+    /// Whether a durable call charged to `quota` that this Store is about to issue is known to
+    /// create fresh work: the Store is live and no unclaimed retained `Start` charged to the same
+    /// quota remains for a late owner to adopt. Per-call quotas are charged before a call is
+    /// admitted (so that a refused call leaves no oplog entry), and use this predicate: a call
+    /// that may still adopt a retained recorded `Start` is not charged again, while retained
+    /// `Start`s charged to other quotas (or to none) never suppress a charge. Retained `Start`s
+    /// of the same quota class but a different owner (another Store of this agent, or a different
+    /// call kind sharing the quota) also suppress the charge; that residual under-charge is
+    /// bounded by the recorded prefix of one recovered invocation.
+    pub fn durable_call_is_fresh(&self, quota: QuotaClass) -> bool {
+        self.is_live()
+            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+                || !self.replay_state.retains_unclaimed_start_charged_to(quota))
+    }
+
+    /// Whether this Store is an incomplete entity that already continued live locally while the
+    /// shared cursor may still replay other owners' records. See
+    /// [`ReplayState::claim_start_for_store`].
+    pub(crate) fn store_continued_live(&self) -> bool {
+        self.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete)
+            && self.is_live()
     }
 
     fn durability_is_suppressed(&self) -> bool {
@@ -11503,7 +11696,8 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtx<Ctx> {
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
-/// replay, while skipping hint entries.
+/// replay, while skipping hint entries. The reader is the `DurableWorkerCtx` performing the
+/// positional read: its entity attribution decides which interleaved entries it may consume.
 /// The macro expression's type is `Result<(OplogIndex, OplogEntry), WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
@@ -11525,8 +11719,8 @@ macro_rules! get_oplog_entry {
             }
         }
     };
-    ($replay_state:expr, $($cases:path),+) => {
-        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry(); $($cases),+)
+    ($ctx:expr, $($cases:path),+) => {
+        $crate::get_oplog_entry!(@reader ($ctx).state.replay_state.get_oplog_entry(($ctx).entity_parent_start_index()); $($cases),+)
     };
 }
 
