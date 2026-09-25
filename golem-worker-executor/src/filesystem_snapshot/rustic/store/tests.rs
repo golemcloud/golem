@@ -1139,6 +1139,29 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
 }
 
 #[test]
+async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
+    // The in-memory storage answers at the first poll, so only the check before the call keeps
+    // the call from the storage.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
+    let files = SnapshotFiles {
+        storage: storage.clone(),
+        namespace: new_scope().0,
+        deadline: LONG_DEADLINE,
+        cancel,
+    };
+
+    let read = files
+        .get("read_ledger", Path::new("golem/prune-ledger"))
+        .await;
+
+    assert!(read.is_err(), "{read:?}");
+    assert_eq!(storage.calls(), Vec::new());
+}
+
+#[test]
 async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_call() {
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
         if op_label == "copy_list" {
