@@ -4305,6 +4305,7 @@ impl StreamSession {
             Err(error) => match self.has_committed_finished().await {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(error),
+                Err(_) if matches!(error, SessionError::Fenced(_)) => Err(error),
                 Err(lookup_error) => Err(SessionError::from(format!(
                     "{error}; committed finish lookup failed: {lookup_error}"
                 ))),
@@ -6180,7 +6181,7 @@ impl DurableInputProducer {
         result: Result<DurableInputRead, SessionError>,
     ) -> anyhow::Result<DurableInputEvent> {
         self.pending = None;
-        let mut read = result.map_err(anyhow::Error::msg)?;
+        let mut read = result.map_err(SessionError::into_trap)?;
         self.input.complete_receive(&mut read);
         let event = read.event.ok_or_else(|| {
             anyhow::anyhow!("durable input stream source closed without a terminal event")
@@ -6641,7 +6642,7 @@ impl DurableInputProducer {
             {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(error)) => {
-                    return Poll::Ready(Err(wasmtime::Error::msg(error)));
+                    return Poll::Ready(Err(wasmtime::Error::from_anyhow(error.into_trap())));
                 }
                 Poll::Ready(Ok(_)) => {
                     self.finished = true;

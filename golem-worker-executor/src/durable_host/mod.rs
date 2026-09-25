@@ -6406,12 +6406,17 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                 && (matches!(trap_type, TrapType::Interrupt(_))
                                                     || store.as_context().data().durable_ctx().is_live())
                                             {
-                                                let _ = worker
+                                                // A refused write means the shard has moved:
+                                                // record it before the startup result is published.
+                                                if let Err(error) = worker
                                                     .fail_durable_streaming_session(
                                                         &idempotency_key,
                                                         details,
                                                     )
-                                                    .await;
+                                                    .await
+                                                {
+                                                    worker.retire_if_shard_lost(&error);
+                                                }
                                             }
                                             // Cannot retry so we need to fail
                                             match trap_type {

@@ -7472,6 +7472,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(pending) => {
                     needs_retry |= pending;
                     if let Err(error) = self.recover_finished_durable_streaming_sessions().await {
+                        if self.retire_if_shard_lost(&error) {
+                            return false;
+                        }
                         needs_retry = true;
                         warn!(
                             agent_id = %self.agent_id(),
@@ -7481,6 +7484,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                 }
                 Err(error) => {
+                    if self.retire_if_shard_lost(&error) {
+                        return false;
+                    }
                     needs_retry = true;
                     warn!(
                         agent_id = %self.agent_id(),
@@ -8046,6 +8052,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         }
         let interval_duration = this.deps.config().durable_stream.reconciliation_interval;
+        // Retirement stops this task and waits for it, so it runs in a task of its own.
+        let retire_lost_shard = |worker: Arc<Self>| {
+            tokio::spawn(async move {
+                let _ = worker.interrupt_and_retire(InterruptKind::ShardLost).await;
+            });
+        };
         let handle = tokio::spawn(async move {
             scope
                 .run(async move {
@@ -8084,6 +8096,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 if slot.is_retired() {
                                     break;
                                 }
+                                if worker.retire_if_shard_lost(&error) {
+                                    retire_lost_shard(worker);
+                                    break;
+                                }
                                 warn!(
                                     agent_id = %worker.agent_id(),
                                     error = %error,
@@ -8105,6 +8121,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         // Remote attachment control may acquire another cold worker that refers back
                         // to us. Only run this after local construction has published readiness.
                         let needs_retry = worker.run_durable_stream_maintenance(&producer).await;
+                        if worker.retired_for_lost_shard() {
+                            retire_lost_shard(worker);
+                            break;
+                        }
                         drop(worker);
 
                         if !wait_for_durable_stream_maintenance(

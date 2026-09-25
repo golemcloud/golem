@@ -203,7 +203,7 @@ type CustomBeginCoordinator =
     tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>;
 
 pub struct CustomBeginLifecycle {
-    start_result: Mutex<Option<Result<OplogIndex, String>>>,
+    start_result: Mutex<Option<Result<OplogIndex, WorkerExecutorError>>>,
     start_ready: Notify,
     verdict: std::sync::Mutex<Option<oneshot::Sender<CustomBeginVerdict>>>,
     coordinator: std::sync::Mutex<Option<CustomBeginCoordinator>>,
@@ -241,12 +241,12 @@ impl CustomBeginLifecycle {
         *self.coordinator.lock().unwrap() = Some(coordinator);
     }
 
-    async fn complete_start(&self, result: Result<OplogIndex, String>) {
+    async fn complete_start(&self, result: Result<OplogIndex, WorkerExecutorError>) {
         *self.start_result.lock().await = Some(result);
         self.start_ready.notify_waiters();
     }
 
-    async fn wait_start(&self) -> Result<OplogIndex, String> {
+    async fn wait_start(&self) -> Result<OplogIndex, WorkerExecutorError> {
         loop {
             let notified = self.start_ready.notified();
             if let Some(result) = self.start_result.lock().await.clone() {
@@ -1881,10 +1881,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let start_function_type = function_type.clone();
             let start_invocation_id = invocation_id;
             let start = tokio::spawn(async move {
-                let persisted_request = oplog
-                    .upload_payload_owned(request)
-                    .await
-                    .map_err(|err| format!("Failed to store durable function request: {err}"))?;
+                let persisted_request =
+                    oplog.upload_payload_owned(request).await.map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed to store durable function request: {err}"
+                        ))
+                    })?;
                 // A refused `Start` fails the begin: the guest must not perform a side effect the
                 // shard's new owner, finding no `Start`, would perform again.
                 worker
@@ -1898,14 +1900,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                         durable_function_type: start_function_type,
                     })
                     .await
-                    .map_err(|err| format!("Failed to record durable function start: {err}"))
+                    .map_err(WorkerExecutorError::from)
             });
             let cancellation_worker =
                 accessor.with(|mut access| access.get().public_state.worker());
             let coordinator = tokio::spawn(async move {
                 let start_result = start
                     .await
-                    .map_err(|err| format!("custom invocation Start recorder task failed: {err}"))
+                    .map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "custom invocation Start recorder task failed: {err}"
+                        ))
+                    })
                     .and_then(|result| result);
                 coordinator_lifecycle
                     .complete_start(start_result.clone())
@@ -1922,9 +1928,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                             .await?;
                         Ok(Some(start_index))
                     }
-                    (_, Err(err)) if matches!(verdict, CustomBeginVerdict::Cancelled) => {
-                        Err(WorkerExecutorError::runtime(err))
-                    }
+                    (_, Err(err)) if matches!(verdict, CustomBeginVerdict::Cancelled) => Err(err),
                     _ => Ok(None),
                 }
             });
@@ -1939,7 +1943,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 .map_err(|err| {
                     anyhow::anyhow!("failed to observe custom invocation begin delivery: {err}")
                 })?;
-            let start_index = lifecycle.wait_start().await.map_err(anyhow::Error::msg)?;
+            let start_index = lifecycle.wait_start().await?;
             accessor.with(|mut access| {
                 access.get().state.active_custom_invocations.insert(
                     start_index,

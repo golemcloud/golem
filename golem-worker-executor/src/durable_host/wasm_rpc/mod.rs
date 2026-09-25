@@ -747,7 +747,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     caller_revision,
                 )
                 .await
-                .map_err(anyhow::Error::msg)?;
+                .map_err(SessionError::into_trap)?;
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(persisted) => {
@@ -755,7 +755,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             Ok(scalar) => Ok(streams
                                 .replay_remote_result()
                                 .await
-                                .map_err(anyhow::Error::msg)?
+                                .map_err(SessionError::into_trap)?
                                 .unwrap_or(scalar)),
                             Err(error) => Err(InternalRpcError::from(error)),
                         };
@@ -785,7 +785,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let attempt_id = streams
                 .caller_attempt_id()
                 .await
-                .map_err(anyhow::Error::msg)?;
+                .map_err(SessionError::into_trap)?;
             let input_mappings = input.proto_mappings();
             let (accepted_inputs, acceptance) = tokio::sync::oneshot::channel();
             let interrupt_signal = self.create_interrupt_signal();
@@ -855,7 +855,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         );
                         tokio::pin!(materialize);
                         match futures::future::select(materialize, interrupt_signal).await {
-                            Either::Left((result, _)) => result.map_err(anyhow::Error::msg)?,
+                            Either::Left((result, _)) => result.map_err(SessionError::into_trap)?,
                             Either::Right((error, _)) => {
                                 return Err(handle.trap(error));
                             }
@@ -1400,11 +1400,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     caller_revision,
                 )
                 .await
-                .map_err(anyhow::Error::msg)?;
+                .map_err(SessionError::into_trap)?;
             let attempt_id = streams
                 .caller_attempt_id()
                 .await
-                .map_err(anyhow::Error::msg)?;
+                .map_err(SessionError::into_trap)?;
             let params = DurableStreamingTaskParams {
                 streams,
                 input_mappings: input.proto_mappings(),
@@ -2709,7 +2709,7 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
     streams
         .recover_session_mappings()
         .await
-        .map_err(anyhow::Error::msg)?;
+        .map_err(SessionError::into_trap)?;
     Ok((streams, origin_invocation))
 }
 
@@ -3632,7 +3632,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         .streams
                         .replay_remote_result()
                         .await
-                        .map_err(anyhow::Error::msg)?
+                        .map_err(SessionError::into_trap)?
                 {
                     response.result = Ok(value);
                 }
