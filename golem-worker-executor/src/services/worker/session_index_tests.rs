@@ -1526,7 +1526,12 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
     .await;
     oplog.commit(CommitLevel::Always).await;
     let from_source = service
-        .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &source)
+        .lookup_durable_stream_control_metadata(
+            &owner,
+            AgentMode::Durable,
+            test_fingerprint(),
+            &source,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -1556,7 +1561,12 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
         Arc::new(GolemConfig::default()),
     );
     let persisted = reopened
-        .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &destination)
+        .lookup_durable_stream_control_metadata(
+            &owner,
+            AgentMode::Durable,
+            test_fingerprint(),
+            &destination,
+        )
         .await
         .unwrap();
     assert_eq!(persisted, local);
