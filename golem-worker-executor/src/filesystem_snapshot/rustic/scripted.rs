@@ -48,6 +48,9 @@ pub(super) enum Script {
     /// Gives no blob to a read of a whole blob, as a delete after a listing does. Each other call
     /// passes.
     Vanish,
+    /// Passes the call, and then answers a write if absent with `AlreadyExists`, as a new try of a
+    /// call whose first answer was lost does. Each other call passes.
+    AnswerAlreadyExists,
     /// Waits until the test gives the storage one step, and then passes the call, or refuses it
     /// when `refuse` is true. A `late` write or delete gives an error at its step, as a call that
     /// got no answer within its deadline, and it reaches the storage when the test lands it.
@@ -204,7 +207,7 @@ impl ScriptedBlobStorage {
                 self.gate.cancelled().await;
                 call.await
             }
-            Script::Vanish => call.await,
+            Script::Vanish | Script::AnswerAlreadyExists => call.await,
             Script::Step { refuse, .. } => {
                 self.waiting.fetch_add(1, Ordering::SeqCst);
                 let permit = self.steps.acquire().await;
@@ -362,6 +365,14 @@ impl BlobStorage for ScriptedBlobStorage {
                         .map(|_| ())
                 })
                 .await;
+        }
+        if script == Script::AnswerAlreadyExists {
+            self.record(op_label, path);
+            let _: PutIfAbsent = self
+                .inner
+                .put_raw_if_absent(target_label, op_label, namespace, path, data)
+                .await?;
+            return Ok(PutIfAbsent::AlreadyExists);
         }
         self.follow(
             script,

@@ -261,7 +261,8 @@ pub(super) fn record_content(snapshots: &[String]) -> String {
 }
 
 /// Reads the snapshot ids from the content of a record. Each line must be an id of 64 hex
-/// characters, and an empty content has no id.
+/// characters. A content without an id does not parse, because a reader can see a record that a
+/// write has not filled yet.
 pub(super) fn parse_record(content: &[u8]) -> Option<Box<[String]>> {
     let text = std::str::from_utf8(content).ok()?;
     text.lines()
@@ -270,20 +271,20 @@ pub(super) fn parse_record(content: &[u8]) -> Option<Box<[String]>> {
             (line.len() == 64 && line.bytes().all(|byte| byte.is_ascii_hexdigit()))
                 .then(|| line.to_string())
         })
-        .collect()
+        .collect::<Option<Box<[String]>>>()
+        .filter(|snapshots| !snapshots.is_empty())
 }
 
-/// Gives the settled records and the sum of their bytes. A record is settled when none of its
-/// snapshot files exists. Any other record counts as zero bytes and stays, and so does a record
-/// whose content does not parse.
+/// Gives the settled records and the sum of their bytes. A record is settled when it names at
+/// least one snapshot file and none of them exists. Any other record counts as zero bytes and
+/// stays, and so does a record whose content does not parse.
 pub(super) fn settle(records: &[FreedRecord], existing: &HashSet<String>) -> FreedRecords {
     let settled = records
         .iter()
         .filter(|record| {
-            record
-                .snapshots
-                .as_ref()
-                .is_some_and(|snapshots| snapshots.iter().all(|id| !existing.contains(id)))
+            record.snapshots.as_ref().is_some_and(|snapshots| {
+                !snapshots.is_empty() && snapshots.iter().all(|id| !existing.contains(id))
+            })
         })
         .collect::<Box<[_]>>();
     FreedRecords {
@@ -311,9 +312,11 @@ pub(super) async fn record_freed(
     snapshots: &[String],
 ) -> anyhow::Result<()> {
     let path = Path::new(FREED_PATH).join(format!("{bytes}-{}", uuid::Uuid::new_v4()));
+    // The name is unique, so `AlreadyExists` means that an earlier try of this call wrote it.
     files
-        .put("write_freed", &path, record_content(snapshots).as_bytes())
+        .put_if_absent("write_freed", &path, record_content(snapshots).as_bytes())
         .await
+        .map(|_| ())
 }
 
 /// Lists and reads the records of freed bytes, lists the snapshot files one time, and gives the
@@ -982,7 +985,6 @@ mod tests {
                 bytes: u64::MAX,
                 counted: Box::new([
                     Path::new(FREED_PATH).join("5-gone").into(),
-                    Path::new(FREED_PATH).join("11-empty").into(),
                     Path::new(FREED_PATH)
                         .join(format!("{}-max", u64::MAX))
                         .into(),
@@ -1005,7 +1007,7 @@ mod tests {
             ],
             [
                 Some(Box::new(ids.clone()) as Box<[String]>),
-                Some(Box::new([]) as Box<[String]>),
+                None,
                 None,
                 None
             ]
@@ -1016,8 +1018,9 @@ mod tests {
     async fn a_record_of_freed_bytes_is_written_and_listed() {
         let files = new_files();
 
-        record_freed(&files, 40, &[]).await.unwrap();
-        record_freed(&files, 2, &[]).await.unwrap();
+        let gone = ["0".repeat(64)];
+        record_freed(&files, 40, &gone).await.unwrap();
+        record_freed(&files, 2, &gone).await.unwrap();
         let listed = list_freed(&files).await.unwrap();
 
         assert_eq!((listed.bytes, listed.counted.len()), (42, 2));

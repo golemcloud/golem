@@ -51,6 +51,9 @@ use std::time::Duration;
 use test_r::core::DynamicTestRegistration;
 use test_r::{test, test_gen, timeout};
 
+/// The id of a snapshot file that no scope holds, as the content of a record of freed bytes.
+const GONE_SNAPSHOT: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
 /// The longest time that a test waits for an operation or for the work of a store to end.
 const LIMIT: Duration = Duration::from_secs(10);
 
@@ -843,7 +846,7 @@ async fn set_last_prune<S: BlobStorage + 'static>(
             "test",
             scope.0.clone(),
             Path::new("golem/prune-freed/1-test"),
-            b"",
+            GONE_SNAPSHOT.as_bytes(),
         )
         .await
         .unwrap();
@@ -1090,7 +1093,7 @@ async fn a_record_that_a_delete_adds_during_a_prune_stays_for_the_next_prune() {
             "test",
             scope.0.clone(),
             Path::new("golem/prune-freed/7-late"),
-            b"",
+            GONE_SNAPSHOT.as_bytes(),
         )
         .await
         .unwrap();
@@ -1652,6 +1655,35 @@ async fn a_record_whose_snapshot_still_exists_counts_nothing_and_does_not_make_a
             None,
             vec!["golem/prune-freed/1000000000-kept".to_string()]
         )
+    );
+}
+
+#[test]
+async fn a_record_write_that_answers_already_exists_counts_as_written() {
+    // A new try of a record write whose first answer was lost finds the record of the first try.
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+        if op_label == "write_freed" {
+            Script::AnswerAlreadyExists
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1"]).await;
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (
+            freed(&storage, &scope).await > 0,
+            listed_names(&store, &scope).await
+        ),
+        (true, Vec::<String>::new())
     );
 }
 
