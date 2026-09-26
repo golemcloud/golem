@@ -1368,6 +1368,53 @@ async fn a_prune_deletes_the_claims_of_old_ledgers() {
 
 #[test]
 #[timeout("60s")]
+async fn a_prune_deletes_an_empty_claim_directory_of_an_old_ledger() {
+    // A listing of the blobs does not find an empty directory, so only a listing of the
+    // directories finds it.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    storage
+        .create_dir(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new("golem/prune-claims/100"),
+        )
+        .await
+        .unwrap();
+    let list_claims = || {
+        storage.list_dir(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new("golem/prune-claims"),
+        )
+    };
+    let before = list_claims().await.unwrap();
+
+    store.delete(&scope, &name("p-1")).await.unwrap();
+
+    assert_eq!(
+        (
+            before,
+            ledger(&storage, &scope).await.last_prune.is_some(),
+            list_claims().await.unwrap(),
+        ),
+        (
+            vec![std::path::PathBuf::from("golem/prune-claims/100")],
+            true,
+            Vec::<std::path::PathBuf>::new()
+        )
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_failed_ledger_write_after_a_prune_keeps_the_claim_so_no_second_prune_runs() {
     // The first prune runs and its ledger write fails. A delete right after it finds the claim
     // and does not prune. When the claim is older than the grace period and the margin, the next
@@ -3755,6 +3802,7 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
                 "delete_ledger",
                 "refresh_claim",
                 "list_claim_directories",
+                "list_claim_blobs",
                 "read_freed",
                 "list_snapshots",
             ]

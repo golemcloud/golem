@@ -20,7 +20,7 @@ use super::backend::answer_or_cancel;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageNamespace, ListedBlob, PutIfAbsent,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -118,6 +118,20 @@ impl SnapshotFiles {
         self.answer(
             self.storage
                 .delete_dir(TARGET_LABEL, op_label, self.namespace.clone(), path),
+        )
+        .await
+    }
+
+    /// Gives each blob directly below the path, and each directory that the storage keeps an
+    /// entry for below the path.
+    pub(super) async fn list_dir(
+        &self,
+        op_label: &'static str,
+        path: &Path,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        self.answer(
+            self.storage
+                .list_dir(TARGET_LABEL, op_label, self.namespace.clone(), path),
         )
         .await
     }

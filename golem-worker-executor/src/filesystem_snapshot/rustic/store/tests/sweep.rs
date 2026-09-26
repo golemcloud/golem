@@ -43,6 +43,7 @@ const STEP_LABELS: &[&str] = &[
     "delete_freed",
     "delete_claim",
     "list_claim_directories",
+    "list_claim_blobs",
     "delete_claims",
 ];
 

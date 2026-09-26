@@ -576,26 +576,44 @@ pub(super) async fn release_claim(files: &SnapshotFiles, directory: &Path, numbe
     }
 }
 
-/// Gives each claim directory of the listed claims, other than the directory to keep.
-pub(super) fn claim_directories_except(listed: &[ListedBlob], keep: &Path) -> Box<[PathBuf]> {
+/// Gives the claim directory of each listed path below the directory of all claims, other than the
+/// directory to keep.
+pub(super) fn claim_directories_except(
+    listed: impl IntoIterator<Item = impl AsRef<Path>>,
+    keep: &Path,
+) -> Box<[Box<Path>]> {
+    let claims = Path::new(CLAIMS_PATH);
     let mut directories = listed
-        .iter()
-        .filter_map(|blob| blob.path.parent().map(Path::to_path_buf))
-        .filter(|directory| directory != keep)
+        .into_iter()
+        .filter_map(|path| {
+            let generation = path
+                .as_ref()
+                .strip_prefix(claims)
+                .ok()?
+                .components()
+                .next()?;
+            Some(claims.join(generation).into_boxed_path())
+        })
+        .filter(|directory| **directory != *keep)
         .collect::<Vec<_>>();
     directories.sort();
     directories.dedup();
     directories.into_boxed_slice()
 }
 
-/// Deletes each claim directory other than the directory of the new ledger. It never deletes the
-/// directory of all claims, so a live claim of the new ledger stays. A failure gives a warning,
-/// because a claim only delays a prune until its grace period passed.
+/// Deletes each claim directory other than the directory of the new ledger. A listing of the
+/// directories finds an empty claim directory, and a listing of the blobs finds a claim directory
+/// that the storage keeps no entry for. It never deletes the directory of all claims, so a live
+/// claim of the new ledger stays. A failure gives a warning, because a claim only delays a prune
+/// until its hold passed.
 pub(super) async fn remove_old_claims(files: &SnapshotFiles, keep: &Path) {
-    let listed = match files
-        .list_below("list_claim_directories", Path::new(CLAIMS_PATH))
-        .await
-    {
+    let claims = Path::new(CLAIMS_PATH);
+    let listed = async {
+        let directories = files.list_dir("list_claim_directories", claims).await?;
+        let blobs = files.list_below("list_claim_blobs", claims).await?;
+        anyhow::Ok((directories, blobs))
+    };
+    let (directories, blobs) = match listed.await {
         Ok(listed) => listed,
         Err(error) => {
             warn!(
@@ -605,7 +623,11 @@ pub(super) async fn remove_old_claims(files: &SnapshotFiles, keep: &Path) {
             return;
         }
     };
-    stream::iter(claim_directories_except(&listed, keep))
+    let listed = directories
+        .iter()
+        .map(AsRef::as_ref)
+        .chain(blobs.iter().map(|blob| blob.path.as_ref()));
+    stream::iter(claim_directories_except(listed, keep))
         .for_each(|directory| async move {
             if let Err(error) = files.delete_dir("delete_claims", &directory).await {
                 warn!(
@@ -634,7 +656,7 @@ mod tests {
     use golem_service_base::storage::blob::ListedBlob;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use pretty_assertions::assert_eq;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
     use test_r::test;
@@ -935,25 +957,28 @@ mod tests {
 
     #[test]
     fn each_claim_directory_other_than_the_new_one_is_old() {
-        let claim = |directory: &str, number: &str| ListedBlob {
-            path: Path::new(CLAIMS_PATH).join(directory).join(number).into(),
-            size: 0,
-        };
+        let claim =
+            |directory: &str, number: &str| Path::new(CLAIMS_PATH).join(directory).join(number);
         let directory = |name: &str| Path::new(CLAIMS_PATH).join(name);
 
         assert_eq!(
             claim_directories_except(
-                &[
+                [
                     claim("none", "0"),
                     claim("100", "0"),
-                    claim("100", "1"),
+                    claim("100", "1@5-a"),
                     claim("200", "3"),
+                    directory("250"),
+                    claim("260", "made/below"),
                     claim("300", "0"),
+                    directory("300"),
+                    Path::new(LEDGERS_PATH).join("5-0-a"),
+                    PathBuf::from(CLAIMS_PATH),
                 ],
                 &directory("300")
             )
             .to_vec(),
-            vec![directory("100"), directory("200"), directory("none")]
+            ["100", "200", "250", "260", "none"].map(|name| directory(name).into_boxed_path())
         );
     }
 
