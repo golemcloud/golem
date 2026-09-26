@@ -1975,6 +1975,130 @@ async fn a_failed_second_read_of_the_ledger_deletes_the_claim_and_a_retry_of_the
     );
 }
 
+/// A storage that refuses the first call after the first claim write, which is the second read of
+/// the ledger. It holds each claim delete, and each ledger read after the claim when `hold_read` is
+/// true, until the gate opens.
+fn failing_after_the_claim(hold_read: bool) -> Arc<ScriptedBlobStorage> {
+    let claimed = Arc::new(AtomicBool::new(false));
+    let refused = Arc::new(AtomicBool::new(false));
+    ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), move |op_label, _| {
+        if op_label == "write_claim" {
+            claimed.store(true, Ordering::SeqCst);
+            Script::Pass
+        } else if op_label == "delete_claim"
+            || (hold_read && op_label == "read_ledger" && claimed.load(Ordering::SeqCst))
+        {
+            Script::WaitForGate
+        } else if !hold_read
+            && claimed.load(Ordering::SeqCst)
+            && !refused.swap(true, Ordering::SeqCst)
+        {
+            Script::Refuse
+        } else {
+            Script::Pass
+        }
+    })
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_dropped_after_a_failed_second_read_still_releases_its_claim() {
+    // The second read of the ledger fails, and the gate holds the delete of the claim. The test
+    // drops the delete there, and then opens the gate.
+    let storage = failing_after_the_claim(false);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let held = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, _)| *op_label == "delete_claim")
+    })
+    .await;
+
+    deleting.abort();
+    let dropped = deleting.await;
+    let claims_at_drop = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
+    storage.open_gate();
+    let ended = eventually(|| store.work_in_flight() == 0).await;
+
+    assert!(
+        dropped.as_ref().is_err_and(|error| error.is_cancelled()),
+        "{dropped:?}"
+    );
+    assert_eq!(
+        (
+            held,
+            claims_at_drop.is_empty(),
+            ended,
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, false, true, Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_shut_down_after_the_claim_still_releases_it() {
+    // The gate holds the second read of the ledger, and the shut down cancels that read. The
+    // gate stays shut for the read, and it opens only for the delete of the claim.
+    let storage = failing_after_the_claim(true);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let held = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .skip_while(|(op_label, _)| *op_label != "write_claim")
+            .any(|(op_label, _)| *op_label == "read_ledger")
+    })
+    .await;
+
+    let shutting_down = tokio::spawn({
+        let store = store.clone();
+        async move { store.shut_down().await }
+    });
+    let reached_release = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, _)| *op_label == "delete_claim")
+    })
+    .await;
+    let claims_at_release = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
+    storage.open_gate();
+    let shut_down = tokio::time::timeout(LIMIT, shutting_down).await;
+    let deleted = tokio::time::timeout(LIMIT, deleting).await;
+
+    assert!(matches!(shut_down, Ok(Ok(()))), "{shut_down:?}");
+    assert!(matches!(deleted, Ok(Ok(Err(_)))), "{deleted:?}");
+    assert_eq!(
+        (
+            held,
+            reached_release,
+            claims_at_release.is_empty(),
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, true, false, Vec::<String>::new())
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_prune_that_fails_keeps_its_claim_so_no_second_prune_runs_within_the_hold() {

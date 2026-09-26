@@ -234,10 +234,10 @@ impl RusticSnapshotStore {
     /// Cancels each operation, so each running storage call ends and no new call starts, and later
     /// operations give `Storage`. A publish that starts before the cancel runs to its end. A save
     /// that reaches its publish after the cancel publishes nothing and gives `Storage`. The call
-    /// waits until no blocking task, backend, blob call of the store, publish or delete of a
-    /// dropped publish remains. A blob call that is not polled holds the wait until it is polled
-    /// again, and then it ends at once. The runtime must not drop before it returns, because a
-    /// storage call after its time driver stops aborts the process.
+    /// waits until no blocking task, backend, blob call of the store, publish, delete of a dropped
+    /// publish or release of a prune claim remains. A blob call that is not polled holds the wait
+    /// until it is polled again, and then it ends at once. The runtime must not drop before it
+    /// returns, because a storage call after its time driver stops aborts the process.
     pub(crate) async fn shut_down(&self) {
         self.root.cancel();
         self.tracker.close();
@@ -372,7 +372,7 @@ impl RusticSnapshotStore {
         let backend = match self.prepare_prune(scope, token, &files, &claim).await {
             Ok(Some(backend)) => backend,
             other => {
-                release_claim(&files, claim.directory, claim.number).await;
+                self.release(&files, &claim).await;
                 return other.map(|_| ());
             }
         };
@@ -406,6 +406,26 @@ impl RusticSnapshotStore {
         });
         remove_old_claims(&files, &new_claims).await;
         Ok(())
+    }
+
+    /// Deletes the claim and then its markers in a task that the tracker counts. The task has a
+    /// token of its own, so a drop of the delete, a cancel or a shut down does not stop it.
+    async fn release(&self, files: &SnapshotFiles, claim: &Claim<'_>) {
+        let files = SnapshotFiles {
+            cancel: CancellationToken::new(),
+            ..files.clone()
+        };
+        let directory: Box<Path> = claim.directory.into();
+        let number = claim.number;
+        let releasing = self
+            .tracker
+            .spawn(async move { release_claim(&files, &directory, number).await });
+        if let Err(error) = releasing.await {
+            warn!(
+                error = %error,
+                "The release of the prune claim of a filesystem snapshot scope did not end"
+            );
+        }
     }
 
     /// Checks the ledger again and builds the backend of the prune. It gives `None` when another
