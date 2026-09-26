@@ -596,8 +596,8 @@ fn a_range_that_is_not_cacheable_is_a_ranged_read_each_time() {
 
 #[test]
 fn two_threads_that_miss_one_pack_make_one_storage_read() {
-    // The first read waits at the gate. The second thread starts while it waits, and the gate
-    // opens only after the second thread had time to ask for the pack.
+    // The first read waits at the gate. The gate opens only when the second thread waits for that
+    // read, or when the second thread reads the pack itself.
     let fixture = PackFixture::new(1024, |op_label, _| {
         if op_label == "read" {
             Script::WaitForGate
@@ -617,17 +617,22 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
         let backend = fixture.backend.clone();
         move || tree_range(&backend, 50, 10).ok()
     });
-    std::thread::sleep(Duration::from_millis(200));
+    let second_asked = (0..1000).any(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        fixture.backend.kept.waiters() == 1 || fixture.pack_calls().len() > 1
+    });
     fixture.storage.open_gate();
 
     assert_eq!(
         (
             first_read_started,
+            second_asked,
             first.recv_timeout(LIMIT).ok().flatten(),
             second.recv_timeout(LIMIT).ok().flatten(),
             fixture.pack_calls()
         ),
         (
+            true,
             true,
             Some(Bytes::from_iter(0..10)),
             Some(Bytes::from_iter(50..60)),

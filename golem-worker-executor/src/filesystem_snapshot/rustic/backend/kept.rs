@@ -36,6 +36,9 @@ struct State {
     packs: HashMap<Id, Bytes>,
     bytes: usize,
     reading: HashSet<Id>,
+    /// The threads that wait for the read of a pack by another thread.
+    #[cfg(test)]
+    waiters: usize,
 }
 
 impl KeptPacks {
@@ -56,10 +59,24 @@ impl KeptPacks {
         id: &Id,
         read: impl FnOnce() -> RusticResult<Bytes>,
     ) -> RusticResult<Bytes> {
+        #[cfg(test)]
+        let mut counted = false;
         let mut state = self
             .read_ended
-            .wait_while(self.state(), |state| state.reading.contains(id))
+            .wait_while(self.state(), |state| {
+                let waits = state.reading.contains(id);
+                #[cfg(test)]
+                if waits && !counted {
+                    state.waiters += 1;
+                    counted = true;
+                }
+                waits
+            })
             .unwrap_or_else(PoisonError::into_inner);
+        #[cfg(test)]
+        if counted {
+            state.waiters -= 1;
+        }
         if let Some(pack) = state.packs.get(id) {
             return Ok(pack.clone());
         }
@@ -74,6 +91,12 @@ impl KeptPacks {
             reading.keep(pack);
         }
         read
+    }
+
+    /// Gives the number of threads that wait for the read of a pack by another thread.
+    #[cfg(test)]
+    pub(super) fn waiters(&self) -> usize {
+        self.state().waiters
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
