@@ -1,0 +1,8308 @@
+{
+ "cases": {
+  "opt date: conversion %#Z": {
+   "script": "bd312e39c444868f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[utc]\n"
+   }
+  },
+  "opt date: conversion %#p": {
+   "script": "c1f87372941b83e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[pm]\n"
+   }
+  },
+  "opt date: conversion %%": {
+   "script": "c4e9700f18884ed2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[%]\n"
+   }
+  },
+  "opt date: conversion %+4Y": {
+   "script": "de25344da1aa626c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2024]\n"
+   }
+  },
+  "opt date: conversion %-I": {
+   "script": "dabfe31add85a853",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\n"
+   }
+  },
+  "opt date: conversion %-d": {
+   "script": "80b1da957ad6d10c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[29]\n"
+   }
+  },
+  "opt date: conversion %-j": {
+   "script": "88fc3320dd3e14bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[60]\n"
+   }
+  },
+  "opt date: conversion %-m/%-d": {
+   "script": "e4f96bd6353a02ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2/29]\n"
+   }
+  },
+  "opt date: conversion %05d": {
+   "script": "72429df151f89fd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[00029]\n"
+   }
+  },
+  "opt date: conversion %0e": {
+   "script": "5bb21b9802dd853e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[29]\n"
+   }
+  },
+  "opt date: conversion %10Y": {
+   "script": "b87ddc550be00b92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0000002024]\n"
+   }
+  },
+  "opt date: conversion %3N": {
+   "script": "268f96b18fcdbb1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[123]\n"
+   }
+  },
+  "opt date: conversion %6N": {
+   "script": "b0d4588e4aed55ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[123456]\n"
+   }
+  },
+  "opt date: conversion %:::z": {
+   "script": "8e926997a0861cc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[+00]\n"
+   }
+  },
+  "opt date: conversion %::z": {
+   "script": "f4cbcd6c5c16669f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[+00:00:00]\n"
+   }
+  },
+  "opt date: conversion %:z": {
+   "script": "22360c4e29d2e6be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[+00:00]\n"
+   }
+  },
+  "opt date: conversion %A": {
+   "script": "af01d02255ea9998",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[Thursday]\n"
+   }
+  },
+  "opt date: conversion %B": {
+   "script": "024f773cc6617294",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[February]\n"
+   }
+  },
+  "opt date: conversion %C": {
+   "script": "9b70684b813370c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[20]\n"
+   }
+  },
+  "opt date: conversion %D": {
+   "script": "038f294ed1264cb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[02/29/24]\n"
+   }
+  },
+  "opt date: conversion %Ey": {
+   "script": "2307379e028c4865",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[24]\n"
+   }
+  },
+  "opt date: conversion %F": {
+   "script": "fa2c61aff047658d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2024-02-29]\n"
+   }
+  },
+  "opt date: conversion %G": {
+   "script": "11ac95fe1294319c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2024]\n"
+   }
+  },
+  "opt date: conversion %H": {
+   "script": "09e72a0c9855c1d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[13]\n"
+   }
+  },
+  "opt date: conversion %I": {
+   "script": "2b732da95e431aa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[01]\n"
+   }
+  },
+  "opt date: conversion %M": {
+   "script": "61e4bf87dc60bd84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[04]\n"
+   }
+  },
+  "opt date: conversion %N": {
+   "script": "1b6949a809297a80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[123456789]\n"
+   }
+  },
+  "opt date: conversion %Od": {
+   "script": "da3d8856cfe71897",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[29]\n"
+   }
+  },
+  "opt date: conversion %P": {
+   "script": "db1917b19159afff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[pm]\n"
+   }
+  },
+  "opt date: conversion %R": {
+   "script": "a9287221ea1271e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[13:04]\n"
+   }
+  },
+  "opt date: conversion %S": {
+   "script": "d5102cde3c5451c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[05]\n"
+   }
+  },
+  "opt date: conversion %T": {
+   "script": "7b66d8caebf6a107",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[13:04:05]\n"
+   }
+  },
+  "opt date: conversion %U": {
+   "script": "f2edbcd8190e6a14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[08]\n"
+   }
+  },
+  "opt date: conversion %V": {
+   "script": "1e5dd3aff843b4ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[09]\n"
+   }
+  },
+  "opt date: conversion %W": {
+   "script": "c38327d4a6ab8af4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[09]\n"
+   }
+  },
+  "opt date: conversion %X": {
+   "script": "219b3c753f516cc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[13:04:05]\n"
+   }
+  },
+  "opt date: conversion %Y": {
+   "script": "89065b88db45e926",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2024]\n"
+   }
+  },
+  "opt date: conversion %Z": {
+   "script": "24fa0e99474b92a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[UTC]\n"
+   }
+  },
+  "opt date: conversion %^B": {
+   "script": "9655f07a025ffb2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[FEBRUARY]\n"
+   }
+  },
+  "opt date: conversion %^a": {
+   "script": "4d131babc10af08d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[THU]\n"
+   }
+  },
+  "opt date: conversion %_10m": {
+   "script": "ce015357b313e0ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[         2]\n"
+   }
+  },
+  "opt date: conversion %_H": {
+   "script": "32183446b2cf000f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[13]\n"
+   }
+  },
+  "opt date: conversion %_d": {
+   "script": "524ef6666841e065",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[29]\n"
+   }
+  },
+  "opt date: conversion %a": {
+   "script": "40a82288fbbcdfad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[Thu]\n"
+   }
+  },
+  "opt date: conversion %b": {
+   "script": "d954f165c200fc7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[Feb]\n"
+   }
+  },
+  "opt date: conversion %c": {
+   "script": "a2931df55d058e89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[Thu Feb 29 13:04:05 2024]\n"
+   }
+  },
+  "opt date: conversion %d": {
+   "script": "4ecee67a444bb6e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[29]\n"
+   }
+  },
+  "opt date: conversion %e": {
+   "script": "6d53a8ef1c178364",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[29]\n"
+   }
+  },
+  "opt date: conversion %g": {
+   "script": "6a2415520b3d7a87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[24]\n"
+   }
+  },
+  "opt date: conversion %h": {
+   "script": "57206ff17e639f84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[Feb]\n"
+   }
+  },
+  "opt date: conversion %j": {
+   "script": "e0119e8cff92256d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[060]\n"
+   }
+  },
+  "opt date: conversion %k": {
+   "script": "bc1deba260860a3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[13]\n"
+   }
+  },
+  "opt date: conversion %l": {
+   "script": "e11ecb354c0b4d07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ 1]\n"
+   }
+  },
+  "opt date: conversion %m": {
+   "script": "b2e396b1e9c191cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[02]\n"
+   }
+  },
+  "opt date: conversion %n": {
+   "script": "b2e343e8d3f9182a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\n]\n"
+   }
+  },
+  "opt date: conversion %p": {
+   "script": "c080cb3e6271987a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[PM]\n"
+   }
+  },
+  "opt date: conversion %q": {
+   "script": "7288573b8cb0f7ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\n"
+   }
+  },
+  "opt date: conversion %r": {
+   "script": "9cddbd4f35c7a651",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[01:04:05 PM]\n"
+   }
+  },
+  "opt date: conversion %s": {
+   "script": "fa678c01af64e0f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1709211845]\n"
+   }
+  },
+  "opt date: conversion %t": {
+   "script": "4b52ebe2f6109dbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\t]\n"
+   }
+  },
+  "opt date: conversion %u": {
+   "script": "c0707328ddd9bf2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[4]\n"
+   }
+  },
+  "opt date: conversion %w": {
+   "script": "ff530ba0830ce01b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[4]\n"
+   }
+  },
+  "opt date: conversion %x": {
+   "script": "da12d31087b1d6bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[02/29/24]\n"
+   }
+  },
+  "opt date: conversion %y": {
+   "script": "4a23fba913f127ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[24]\n"
+   }
+  },
+  "opt date: conversion %z": {
+   "script": "ad7cd56a30a06d16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[+0000]\n"
+   }
+  },
+  "opt date: date and file conflict": {
+   "script": "8ea13ab3c3b06097",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: the options to specify dates for printing are mutually exclusive\nTry 'date --help' for more information.\n"
+   }
+  },
+  "opt date: date long option": {
+   "script": "287946d036874286",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1970-01-01\n"
+   }
+  },
+  "opt date: date string 12/31/2024": {
+   "script": "f4daeaf4ebebc7ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-12-31 00:00:00 Tue\nstatus=0\n"
+   }
+  },
+  "opt date: date string 1970-01-01 00:00:00 UTC +100000 seconds": {
+   "script": "6857ec6b8ece5b73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1970-01-02 03:46:40 Fri\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-01-01 00:00 EST": {
+   "script": "9941e9b28b1a5345",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-01-01 05:00:00 Mon\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-01-01 00:00 Z": {
+   "script": "e22319163d209e93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-01-01 00:00:00 Mon\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-01-01 1 fortnight": {
+   "script": "b86cbcba5d5a5578",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-01-15 00:00:00 Mon\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-01-01 12:00 +3 hours": {
+   "script": "162893a25b792352",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-01-01 10:00:00 Mon\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-01-01 3pm": {
+   "script": "9a496b485b458f70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-01-01 15:00:00 Mon\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-01-01 last friday": {
+   "script": "8f4d362c19773018",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-01-01 00:00:00 Mon\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-01-01 next monday": {
+   "script": "e4cb8afa7654e8ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-01-01 00:00:00 Mon\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-01-31 +1 month": {
+   "script": "656782fe652fab40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-03-02 00:00:00 Sat\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-02-29": {
+   "script": "78f2ce3b53af9505",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 00:00:00 Thu\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-02-29 12:34:56": {
+   "script": "6da2273ece8b31fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 12:34:56 Thu\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-02-29 12:34:56 +0530": {
+   "script": "a8c584d14b570f98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 07:04:56 Thu\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-02-29T12:34:56Z": {
+   "script": "5853725ae09df478",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 12:34:56 Thu\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-03-01 -1 day": {
+   "script": "5113ef7c133f2ac6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 00:00:00 Thu\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-06-15 week": {
+   "script": "f70bc19870152fa8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-06-22 00:00:00 Sat\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-12-31 23:59:59.5": {
+   "script": "453d834143c3eb4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-12-31 23:59:59 Tue\nstatus=0\n"
+   }
+  },
+  "opt date: date string 2024-W09": {
+   "script": "221c0c4aea663e23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: invalid date '2024-W09'\n"
+   }
+  },
+  "opt date: date string 20240229": {
+   "script": "52afcc9be01e9a37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 00:00:00 Thu\nstatus=0\n"
+   }
+  },
+  "opt date: date string 29 Feb 2024": {
+   "script": "ef9b5559ced659f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 00:00:00 Thu\nstatus=0\n"
+   }
+  },
+  "opt date: date string @-1": {
+   "script": "1c1e9d37b64468fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1969-12-31 23:59:59 Wed\nstatus=0\n"
+   }
+  },
+  "opt date: date string @1e3": {
+   "script": "c5fc1eadc8125910",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: invalid date '@1e3'\n"
+   }
+  },
+  "opt date: date string Feb 29 2024": {
+   "script": "6f8c48ed856e37d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 00:00:00 Thu\nstatus=0\n"
+   }
+  },
+  "opt date: date string midnight 2024-01-01": {
+   "script": "3914883b14b56538",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: invalid date 'midnight 2024-01-01'\n"
+   }
+  },
+  "opt date: date string noon 2024-01-01": {
+   "script": "551f8f8135ce0d47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: invalid date 'noon 2024-01-01'\n"
+   }
+  },
+  "opt date: day overflow in string": {
+   "script": "731f927fac8e5ed6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-10\n"
+   }
+  },
+  "opt date: debug": {
+   "script": "f8c9eb18c5d0d194",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-01-01\nstatus=0\ndate: parsed date part: (Y-M-D) 2024-01-01\ndate: parsed time part: 12:00:00\ndate: input timezone: TZ=\"UTC0\" environment value or -u\ndate: using specified time as starting value: '12:00:00'\ndate: starting date/time: '(Y-M-D) 2024-01-01 12:00:00'\ndate: '(Y-M-D) 2024-01-01 12:00:00' = 1704110400 epoch-seconds\ndate: timezone: Universal Time\ndate: final: 1704110400.000000000 (epoch-seconds)\ndate: final: (Y-M-D) 2024-01-01 12:00:00 (UTC)\ndate: final: (Y-M-D) 2024-01-01 12:00:00 (UTC+00)\ndate: output format: '%F'\n"
+   }
+  },
+  "opt date: default format": {
+   "script": "7dca2d0f4f15fe66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Thu Jan  1 00:00:00 UTC 1970\n"
+   }
+  },
+  "opt date: empty format": {
+   "script": "5b3f821de26d52e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n[0]\n"
+   }
+  },
+  "opt date: extra operand": {
+   "script": "6086434ef4bf43a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: extra operand '+%m'\nTry 'date --help' for more information.\n"
+   }
+  },
+  "opt date: feb 30": {
+   "script": "6607d8b37feab6ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: invalid date '2023-02-30'\n"
+   }
+  },
+  "opt date: file from stdin": {
+   "script": "dd967e877585a29d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt date: file missing": {
+   "script": "bb967d89c5bd2a73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt date: file option": {
+   "script": "a462b13635c19255",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1970-01-01\n1970-01-02\n2024-02-29\n"
+   }
+  },
+  "opt date: file option bad line": {
+   "script": "6b994e23e07fa3c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "00:00:00\n00:01:00\nstatus=1\ndate: invalid date 'bogus'\n"
+   }
+  },
+  "opt date: format with newline escape": {
+   "script": "681b9f623c6a0ea5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   1   9   7   0  \\n   0   1  \\t   0   1  \\n\n"
+   }
+  },
+  "opt date: invalid date": {
+   "script": "370054099a17d53b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: invalid date 'not a date'\n"
+   }
+  },
+  "opt date: invalid month": {
+   "script": "0ed1deca49685166",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: invalid date '2024-13-01'\n"
+   }
+  },
+  "opt date: iso bad precision": {
+   "script": "d758730b17eb8ae0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: invalid argument 'weeks' for '--iso-8601'\nValid arguments are:\n  - 'hours'\n  - 'minutes'\n  - 'date'\n  - 'seconds'\n  - 'ns'\nTry 'date --help' for more information.\n"
+   }
+  },
+  "opt date: iso date": {
+   "script": "bbf5dcfea76ab682",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29\n"
+   }
+  },
+  "opt date: iso default": {
+   "script": "6f64f5f3652c2785",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1970-01-01\n"
+   }
+  },
+  "opt date: iso hours": {
+   "script": "e1cd2aa8613e0314",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29T13+00:00\n"
+   }
+  },
+  "opt date: iso minutes": {
+   "script": "7f73fa79de62b961",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29T13:04+00:00\n"
+   }
+  },
+  "opt date: iso ns": {
+   "script": "0d184f6eba6f2985",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29T13:04:05,123456789+00:00\n"
+   }
+  },
+  "opt date: iso seconds": {
+   "script": "a904a8ea6f8f98b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29T13:04:05+00:00\n"
+   }
+  },
+  "opt date: large epoch": {
+   "script": "af1448926c50bedc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2100-01-01\n"
+   }
+  },
+  "opt date: negative epoch": {
+   "script": "13b3139d81b19752",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1969-12-31 Wednesday\n"
+   }
+  },
+  "opt date: operand without plus": {
+   "script": "8cb10f31762c1000",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: the argument 'Y' lacks a leading '+';\nwhen using an option to specify date(s), any non-option\nargument must be a format string beginning with '+'\nTry 'date --help' for more information.\n"
+   }
+  },
+  "opt date: reference file": {
+   "script": "0b5f0a97e573a8a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2001-02-03 04:05:06\n"
+   }
+  },
+  "opt date: reference missing": {
+   "script": "3eba67fce5e18b34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt date: resolution": {
+   "script": "72616db45a176167",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt date: rfc email": {
+   "script": "3a34667eecf4eecc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Thu, 29 Feb 2024 13:04:05 +0000\n"
+   }
+  },
+  "opt date: rfc email long": {
+   "script": "28c6e8756f64928f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Thu, 29 Feb 2024 13:04:05 +0000\n"
+   }
+  },
+  "opt date: rfc-3339 date": {
+   "script": "e86b170eb67e0b5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29\n"
+   }
+  },
+  "opt date: rfc-3339 missing precision": {
+   "script": "918ddbffc3281237",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: option '--rfc-3339' requires an argument\nTry 'date --help' for more information.\n"
+   }
+  },
+  "opt date: rfc-3339 ns": {
+   "script": "046c52ab7aec75b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 13:04:05.123456789+00:00\n"
+   }
+  },
+  "opt date: rfc-3339 seconds": {
+   "script": "2bc973e8e769f527",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2024-02-29 13:04:05+00:00\n"
+   }
+  },
+  "opt date: trailing percent": {
+   "script": "2af3cd9b75d24e61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x%\n"
+   }
+  },
+  "opt date: tz empty": {
+   "script": "e62eb116a051f66f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "00 UTC\n"
+   }
+  },
+  "opt date: tz in date string": {
+   "script": "b0897403f2536dd9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18:30:00\n"
+   }
+  },
+  "opt date: tz named zone": {
+   "script": "7a459a76a3023cf4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "09 JST +0900\n"
+   }
+  },
+  "opt date: tz named zone with dst": {
+   "script": "ebcbe77cfd021c06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "05 EDT -0400\n"
+   }
+  },
+  "opt date: tz posix rule": {
+   "script": "bacdeff662bb75a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "05 EDT -0400\n"
+   }
+  },
+  "opt date: tz variable utc offset": {
+   "script": "f42c2848b3c7f00c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "03 UTC +0300\n"
+   }
+  },
+  "opt date: universal option": {
+   "script": "3248585b4ae974be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "00:00:00\n"
+   }
+  },
+  "opt date: unknown conversion": {
+   "script": "2b63519834e83e90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[%Q]\n"
+   }
+  },
+  "opt date: unknown option": {
+   "script": "ab27ac85fce627fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndate: unrecognized option '--bogus'\nTry 'date --help' for more information.\n"
+   }
+  },
+  "opt date: utc long option": {
+   "script": "49d9ab4950cf4ad0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "00:00:00\n"
+   }
+  },
+  "opt env: argv0": {
+   "script": "d271e57681f1c2a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo\nstatus=0\n"
+   }
+  },
+  "opt env: assignment then command": {
+   "script": "382957e2ec075e39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "opt env: block signal": {
+   "script": "f7feacc19de64590",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt env: chdir": {
+   "script": "6230aa9b424852f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "opt env: chdir long": {
+   "script": "81fe7d28459c94d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "opt env: chdir missing": {
+   "script": "677a7ec6c3cb3e0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=125\nenv: cannot change directory to '/tmp/nosuch': No such file or directory\n"
+   }
+  },
+  "opt env: chdir without command": {
+   "script": "f7e77a2b648c394f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=125\nenv: must specify command with --chdir (-C)\nTry 'env --help' for more information.\n"
+   }
+  },
+  "opt env: command not found": {
+   "script": "d5bd2451fe919df9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\nenv: 'nosuchcommand': No such file or directory\n"
+   }
+  },
+  "opt env: dash alone": {
+   "script": "65f8a3b8499f9f2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A=1\n"
+   }
+  },
+  "opt env: debug": {
+   "script": "cd10a61bce201c2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ncleaning environ\nsetenv:   A=1\nexecuting: true\n   arg[0]= 'true'\n"
+   }
+  },
+  "opt env: default signal": {
+   "script": "f0107e915dd6fcae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt env: double dash": {
+   "script": "fe50a9065d7d1b84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A=1\n"
+   }
+  },
+  "opt env: empty value": {
+   "script": "30cced0ebc423549",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A=\n"
+   }
+  },
+  "opt env: exit status of command": {
+   "script": "9f34f9bc87f39b29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n"
+   }
+  },
+  "opt env: ignore environment": {
+   "script": "1f3096282c7111d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A=1\nB=2\n"
+   }
+  },
+  "opt env: ignore environment long": {
+   "script": "b842106147fa065b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X=y\n"
+   }
+  },
+  "opt env: ignore signal": {
+   "script": "a5f926f14083897d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt env: invalid assignment name": {
+   "script": "060fc1efe0ba2073",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=125\nenv: cannot set '': Invalid argument\n"
+   }
+  },
+  "opt env: invalid signal": {
+   "script": "82e1e5ec45f23cc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=125\nenv: 'NOPE': invalid signal\nTry 'env --help' for more information.\n"
+   }
+  },
+  "opt env: null separated": {
+   "script": "a8443b606489511a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   A   =   1  \\0   B   =   2  \\0\n"
+   }
+  },
+  "opt env: null with command": {
+   "script": "d6bf07c270fe36a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=125\nenv: cannot specify --null (-0) with command\nTry 'env --help' for more information.\n"
+   }
+  },
+  "opt env: split string": {
+   "script": "1221f8b1c83d266c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a-b\n"
+   }
+  },
+  "opt env: split string quotes": {
+   "script": "db1af27e3db7aba9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b|c|\n"
+   }
+  },
+  "opt env: split string with variable": {
+   "script": "5cf408a98609bb7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "opt env: unset": {
+   "script": "b0a22c1b546c5893",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B=2\n"
+   }
+  },
+  "opt env: unset long": {
+   "script": "1906fd930a1a7be4",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt env: unset missing argument": {
+   "script": "95af19a292729dd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=125\nenv: option requires an argument -- 'u'\nTry 'env --help' for more information.\n"
+   }
+  },
+  "opt env: unset with ignore environment": {
+   "script": "5cfcec20f6c1c567",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B=1\n"
+   }
+  },
+  "opt env: value with equals": {
+   "script": "b74948d3abe32edd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A=b=c\n"
+   }
+  },
+  "opt expand: backspace": {
+   "script": "13cf9592d0bd29a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   b  \\b                               c  \\n\n"
+   }
+  },
+  "opt expand: default": {
+   "script": "eedeabae7c0e4571",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a                               b                            \n   c  \\n                                                        \n           x  \\n                                   y  \\n\n"
+   }
+  },
+  "opt expand: initial only": {
+   "script": "e505f94a0903250b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\tc\n                x\n        y\n"
+   }
+  },
+  "opt expand: missing file": {
+   "script": "548b622d5ea7e6df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nexpand: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt expand: multibyte before tab": {
+   "script": "bf355f59692650ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é   x\n"
+   }
+  },
+  "opt expand: obsolete size": {
+   "script": "707b75a3cff3634c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a  b  c\n      x\n   y\n"
+   }
+  },
+  "opt expand: stdin dash": {
+   "script": "181808778075948e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  x\n"
+   }
+  },
+  "opt expand: tab list": {
+   "script": "4299d8b20366af72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b   c\n      x\n      y\n"
+   }
+  },
+  "opt expand: tab list not ascending": {
+   "script": "7b04035e6af0df79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nexpand: tab sizes must be ascending\n"
+   }
+  },
+  "opt expand: tab list plus": {
+   "script": "81b8531f7d89f849",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b    c\n       x\n       y\n"
+   }
+  },
+  "opt expand: tab list slash": {
+   "script": "3bdc2a2a5abca19b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b  c\n     x\n     y\n"
+   }
+  },
+  "opt expand: tab list with spaces": {
+   "script": "a13a4e656715ebac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b   c\n      x\n      y\n"
+   }
+  },
+  "opt expand: tab size 4": {
+   "script": "c088a3852eb0dbb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a   b   c\n        x\n    y\n"
+   }
+  },
+  "opt expand: tab size invalid": {
+   "script": "2a9780119c70581f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nexpand: tab size contains invalid character(s): 'x'\n"
+   }
+  },
+  "opt expand: tab size long": {
+   "script": "28958624f85ebb94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a  b  c\n      x\n   y\n"
+   }
+  },
+  "opt expand: tab size zero": {
+   "script": "68695da1a4a0e7ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nexpand: tab size cannot be 0\n"
+   }
+  },
+  "opt expr: add": {
+   "script": "9138e896ae1bf119",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nstatus=0\n"
+   }
+  },
+  "opt expr: and": {
+   "script": "98cbe615f0dd6fdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt expr: and zero": {
+   "script": "3a23b9c403fe0807",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "opt expr: big numbers": {
+   "script": "b5bea1caac990951",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100000000000000000000\nstatus=0\n"
+   }
+  },
+  "opt expr: divide": {
+   "script": "5153189fe9c85ead",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt expr: division by zero": {
+   "script": "7c36291dd4b91d14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nexpr: division by zero\n"
+   }
+  },
+  "opt expr: double dash": {
+   "script": "983a124c84dcb258",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\nstatus=0\n"
+   }
+  },
+  "opt expr: empty result": {
+   "script": "a46c3612c62e6871",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=1\n"
+   }
+  },
+  "opt expr: equal": {
+   "script": "f6d90f1fe0e7d77e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt expr: extra closing parenthesis": {
+   "script": "29121b334b2dc522",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nexpr: syntax error: unexpected argument ')'\n"
+   }
+  },
+  "opt expr: greater": {
+   "script": "e4b26c01856f1160",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt expr: greater equal": {
+   "script": "7261c16d9d98d91c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "opt expr: index": {
+   "script": "76d42355e1e13484",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt expr: index none": {
+   "script": "b9fbf06da0a3c877",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "opt expr: invalid regex": {
+   "script": "fa708ece54a41b92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nexpr: Unmatched ( or \\(\n"
+   }
+  },
+  "opt expr: leading plus number": {
+   "script": "9756067287c63f1f",
+   "status": 0,
+   "stderr": {
+    "text": "expr: non-integer argument\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt expr: length": {
+   "script": "d4903c00701a19ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\nstatus=0\n"
+   }
+  },
+  "opt expr: length multibyte": {
+   "script": "b270376a7ca90c46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt expr: length of keyword": {
+   "script": "f13dc71ec9a9baa7",
+   "status": 0,
+   "stderr": {
+    "text": "expr: syntax error: missing argument after ‘length’\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt expr: less": {
+   "script": "0396b32e6bbdafb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt expr: less equal": {
+   "script": "159895d94c6cd8d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt expr: match anchored": {
+   "script": "c543f5b2b22b8f6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "opt expr: match count": {
+   "script": "557af42fbd3223d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt expr: match fails": {
+   "script": "7c80dbe7d0762948",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "opt expr: match group": {
+   "script": "bad9518a2c9a6bcb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bcd\nstatus=0\n"
+   }
+  },
+  "opt expr: match keyword": {
+   "script": "b77e32bdc7f12d52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt expr: match multibyte": {
+   "script": "e69c0a26861f02dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt expr: missing argument": {
+   "script": "70d0725d5e47352d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nexpr: missing operand\nTry 'expr --help' for more information.\n"
+   }
+  },
+  "opt expr: mixed less": {
+   "script": "78841405e2c67574",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt expr: modulo": {
+   "script": "bfc0e4dedc8a920c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt expr: modulo by zero": {
+   "script": "83df66f23b052b02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nexpr: division by zero\n"
+   }
+  },
+  "opt expr: multiply": {
+   "script": "48c8fce907a32bf3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "42\nstatus=0\n"
+   }
+  },
+  "opt expr: negative divide": {
+   "script": "621bf4346f86e48d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-3\nstatus=0\n"
+   }
+  },
+  "opt expr: negative modulo": {
+   "script": "8d7dc0ab609a9be2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-2\nstatus=0\n"
+   }
+  },
+  "opt expr: negative zero": {
+   "script": "7a9bd8d8c1b502b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-0\nstatus=1\n"
+   }
+  },
+  "opt expr: non-integer argument": {
+   "script": "ec1c86795a92114c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nexpr: non-integer argument\n"
+   }
+  },
+  "opt expr: not equal": {
+   "script": "7d88a9618120e3bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt expr: numeric equal": {
+   "script": "30af6391efb094e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt expr: numeric not string": {
+   "script": "8cb57b9ecdf6b60f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "opt expr: or empty": {
+   "script": "ac578f60836aeb81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "opt expr: or first": {
+   "script": "72f466437513095f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\nstatus=0\n"
+   }
+  },
+  "opt expr: overflow": {
+   "script": "abe437d3a63a9111",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "85070591730234615847396907784232501249\nstatus=0\n"
+   }
+  },
+  "opt expr: parentheses": {
+   "script": "0b3dd6098db5f3d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20\nstatus=0\n"
+   }
+  },
+  "opt expr: plus token": {
+   "script": "7ce9336c32d1c918",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "match\nstatus=0\n"
+   }
+  },
+  "opt expr: precedence": {
+   "script": "7ebc7dee89f36b6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "14\nstatus=0\n"
+   }
+  },
+  "opt expr: regex anchor literal": {
+   "script": "384f17b37032cb38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "opt expr: regex interval": {
+   "script": "5c7055598535500a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt expr: regex star first": {
+   "script": "fc5358b6b4b768f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "opt expr: string compare numbers with spaces": {
+   "script": "e70617399fac40bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "opt expr: string less": {
+   "script": "fb69c57a6d0caad3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "opt expr: string result": {
+   "script": "dad26ff6ad6e9930",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\nstatus=0\n"
+   }
+  },
+  "opt expr: substr": {
+   "script": "20cb7d821b16a48c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ell\nstatus=0\n"
+   }
+  },
+  "opt expr: substr keyword arg": {
+   "script": "d471a80fe654151b",
+   "status": 0,
+   "stderr": {
+    "text": "expr: syntax error: missing argument after ‘1’\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "opt expr: substr non-numeric": {
+   "script": "8aa894af40647429",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=1\n"
+   }
+  },
+  "opt expr: substr past end": {
+   "script": "fd390326b63edc11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lo\nstatus=0\n"
+   }
+  },
+  "opt expr: substr zero": {
+   "script": "e3e9fbabca1db902",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=1\n"
+   }
+  },
+  "opt expr: subtract": {
+   "script": "e07bd1369dd4d4bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-7\nstatus=0\n"
+   }
+  },
+  "opt expr: syntax error": {
+   "script": "97d26de7f3ea85a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nexpr: syntax error: missing argument after '+'\n"
+   }
+  },
+  "opt expr: unbalanced parenthesis": {
+   "script": "11439130a4f6f599",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nexpr: syntax error: expecting ')' after '1'\n"
+   }
+  },
+  "opt expr: unknown option like": {
+   "script": "7a81e48a48550f35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--bogus\nstatus=0\n"
+   }
+  },
+  "opt expr: zero result": {
+   "script": "a1c900fa91716ad9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "opt factor: 128 bit": {
+   "script": "1aed7321c854ccfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "340282366920938463463374607431768211455: 3 5 17 257 641 65537 274177 6700417 67280421310721\n"
+   }
+  },
+  "opt factor: above 64 bits": {
+   "script": "5dbb1583b4275302",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18446744073709551617: 274177 67280421310721\n"
+   }
+  },
+  "opt factor: continues after invalid": {
+   "script": "e10ea0f444273d29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4: 2 2\n9: 3 3\nstatus=1\nfactor: 'x' is not a valid positive integer\n"
+   }
+  },
+  "opt factor: empty operand": {
+   "script": "3f80f2aa669ebc56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfactor: '' is not a valid positive integer\n"
+   }
+  },
+  "opt factor: exponents": {
+   "script": "246d58be82dfd395",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1024: 2^10\n360: 2^3 3^2 5\n"
+   }
+  },
+  "opt factor: exponents long": {
+   "script": "50a82f7aaedab06c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "72: 2^3 3^2\n"
+   }
+  },
+  "opt factor: large prime": {
+   "script": "52fa9ce18919c7c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18446744073709551557: 18446744073709551557\n"
+   }
+  },
+  "opt factor: leading plus": {
+   "script": "a450a43ef6812626",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "15: 3 5\n"
+   }
+  },
+  "opt factor: negative": {
+   "script": "2eac6ae471c4b756",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfactor: '-5' is not a valid positive integer\n"
+   }
+  },
+  "opt factor: not a number": {
+   "script": "29bc4516beca1f13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfactor: '12x' is not a valid positive integer\n"
+   }
+  },
+  "opt factor: several": {
+   "script": "0b71d6f9581f8f27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1:\n2: 2\n12: 2 2 3\n97: 97\n1001: 7 11 13\n"
+   }
+  },
+  "opt factor: stdin": {
+   "script": "625a767e51b59697",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10: 2 5\n21: 3 7\n33: 3 11\n"
+   }
+  },
+  "opt factor: stdin invalid token": {
+   "script": "393b35fb2aafa25b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6: 2 3\n8: 2 2 2\nstatus=1\nfactor: 'z' is not a valid positive integer\n"
+   }
+  },
+  "opt factor: very large": {
+   "script": "778e9cc8b1c55cbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1000000000000000000000000000000000000000000000000000001: 101 109 9901 153469 999999000001 59779577156334533866654838281\nstatus=0\n"
+   }
+  },
+  "opt factor: whitespace padded": {
+   "script": "41df7775882e97d7",
+   "status": 1,
+   "stderr": {
+    "text": "factor: ‘ 15 ’ is not a valid positive integer\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt factor: zero and one": {
+   "script": "51b67f6633bb3998",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0:\n1:\n"
+   }
+  },
+  "opt fmt: crown margin": {
+   "script": "fbe965cfbdd59c9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown fox\njumps over the lazy\ndog. It barked.\nThen it ran away\nquickly.\n\n  indented line\none second line of\nthe para\n"
+   }
+  },
+  "opt fmt: default": {
+   "script": "7e755e1587570e5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown fox jumps over the lazy dog. It barked.  Then it ran\naway quickly.\n\n  indented line one\nsecond line of the para\n"
+   }
+  },
+  "opt fmt: goal": {
+   "script": "24098988cdef7024",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown fox jumps\nover the lazy dog. It barked.\nThen it ran away quickly.\n\n  indented line one\nsecond line of the para\n"
+   }
+  },
+  "opt fmt: goal above width": {
+   "script": "d7ebc0d4b3cc9df1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfmt: invalid width: '20': Value too large for data type\n"
+   }
+  },
+  "opt fmt: invalid width": {
+   "script": "b7ab6f77164a8bc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfmt: invalid width: 'x'\n"
+   }
+  },
+  "opt fmt: long word": {
+   "script": "6435ba95f1fc397e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aaaaaaaaaaaaaaaaaaaaaaaaa\nb\n"
+   }
+  },
+  "opt fmt: missing file": {
+   "script": "2f2519c939558a5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfmt: cannot open '/tmp/nosuch' for reading: No such file or directory\n"
+   }
+  },
+  "opt fmt: obsolete width": {
+   "script": "9220e51c6411be8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown fox\njumps over the lazy\ndog. It barked.  Then it\nran away quickly.\n\n  indented line one\nsecond line of the para\n"
+   }
+  },
+  "opt fmt: prefix": {
+   "script": "4da06ed73ed7f984",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "# aa bb cc\n# dd ee ff\nplain text here\n"
+   }
+  },
+  "opt fmt: split only": {
+   "script": "def03a399b970d99",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown fox\njumps over the lazy\ndog. It barked.\nThen it ran away\nquickly.\n\n  indented line one\nsecond line of\nthe para\n"
+   }
+  },
+  "opt fmt: stdin": {
+   "script": "251041deea81cd7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\nd e f\n"
+   }
+  },
+  "opt fmt: tabs kept in indent": {
+   "script": "2e332a664d58fcd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\t   o   n   e       t   w   o  \\n  \\t   t   h   r   e   e  \\n\n  \\t   f   o   u   r  \\n\n"
+   }
+  },
+  "opt fmt: tagged paragraph": {
+   "script": "af5e3fa477510fe8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown\n   fox jumps over\n   the lazy dog. It\n   barked.  Then it\n   ran away quickly.\n\n  indented line\none second line of\nthe para\n"
+   }
+  },
+  "opt fmt: uniform spacing": {
+   "script": "41822f6a4bd300a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown fox jumps over the lazy dog. It barked.  Then it ran\naway quickly.\n\n  indented line one\nsecond line of the para\n"
+   }
+  },
+  "opt fmt: width 20": {
+   "script": "9c4ddc1e2918bfb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown fox\njumps over the lazy\ndog. It barked.\nThen it ran away\nquickly.\n\n  indented line one\nsecond line of\nthe para\n"
+   }
+  },
+  "opt fmt: width long": {
+   "script": "0eefaf7d68d7add7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown fox jumps\nover the lazy dog. It barked.\nThen it ran away quickly.\n\n  indented line one\nsecond line of the para\n"
+   }
+  },
+  "opt fold: backspace": {
+   "script": "6ccc7aa6f25fbab3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   b   c  \\b   d   e  \\n   f   g   h  \\n\n"
+   }
+  },
+  "opt fold: bytes": {
+   "script": "9dc4420cc37e1dca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 303 251  \\n 303 251  \\n 303 251  \\n\n"
+   }
+  },
+  "opt fold: carriage return": {
+   "script": "166aa49a9de09d48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   b   c   d  \\n   e   f  \\r   g   h   i   j  \\n   k  \\n\n"
+   }
+  },
+  "opt fold: characters": {
+   "script": "32a30a39ee3255fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ééé\né\n"
+   }
+  },
+  "opt fold: default width": {
+   "script": "bbbbf98ca766a996",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "00000000000000000000000000000000000000000000000000000000000000000000000000000000\n00000000000000000000\n"
+   }
+  },
+  "opt fold: invalid width": {
+   "script": "df744b3f44b462bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfold: invalid number of columns: 'x'\n"
+   }
+  },
+  "opt fold: missing file": {
+   "script": "4b8e29fbc0108ef5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfold: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt fold: no trailing newline": {
+   "script": "d0a7ac5eaaf4ada5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcd\nef\n"
+   }
+  },
+  "opt fold: obsolete width": {
+   "script": "7ae907e3d9e72b7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcdef\nghij k\nlmnop \nqrstuv\nwxyz\n\t\nab\n"
+   }
+  },
+  "opt fold: spaces": {
+   "script": "d39d8691afd8c9ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcdefghij \nklmnop \nqrstuvwxyz\n\tab\n"
+   }
+  },
+  "opt fold: spaces no break point": {
+   "script": "785c46fbef68bf0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcd\nefgh\nij\n"
+   }
+  },
+  "opt fold: tab counts to next stop": {
+   "script": "64f697cbf6c83428",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tbc\ndefghij\n"
+   }
+  },
+  "opt fold: tab with bytes": {
+   "script": "aafb6b31969f0307",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tbc\ndefg\nhij\n"
+   }
+  },
+  "opt fold: width 8": {
+   "script": "6e32a42afbbbb428",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcdefgh\nij klmno\np qrstuv\nwxyz\n\t\nab\n"
+   }
+  },
+  "opt fold: width long": {
+   "script": "c8db55b77e98e11e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcde\nfghij\n klmn\nop qr\nstuvw\nxyz\n\t\nab\n"
+   }
+  },
+  "opt fold: width zero": {
+   "script": "dba142d516fe0c80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nfold: invalid number of columns: '0': Result not representable\n"
+   }
+  },
+  "opt head: directory": {
+   "script": "a1f06aadd8c7e884",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nhead: error reading '/tmp/d': Is a directory\n"
+   }
+  },
+  "opt head: huge count": {
+   "script": "a36e14e0f5bad322",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "21\n22\n23\n24\n25\n"
+   }
+  },
+  "opt head: invalid byte count": {
+   "script": "ff2de93759c7d4b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nhead: invalid number of bytes: '2x'\n"
+   }
+  },
+  "opt head: invalid count": {
+   "script": "13c9f53f10eb8d11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nhead: invalid number of lines: 'x'\n"
+   }
+  },
+  "opt head: lines and bytes last wins": {
+   "script": "3e7b1de1d72eead5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2"
+   }
+  },
+  "opt head: missing file continues": {
+   "script": "e1e87373f6ceab42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /tmp/m <==\n21\nstatus=1\nhead: cannot open '/tmp/nosuch' for reading: No such file or directory\n"
+   }
+  },
+  "opt head: negative lines without trailing newline": {
+   "script": "f259ca9780f156be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt head: no trailing newline": {
+   "script": "071e951c995a5825",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt head: obsolete with suffix": {
+   "script": "3dda699546ed5a65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt head: option --bytes=4": {
+   "script": "7e5dd1bbfbcb9c63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "opt head: option --lines=2": {
+   "script": "207fc56829f13c9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "opt head: option --quiet": {
+   "script": "c3cb915066108489",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
+   }
+  },
+  "opt head: option --silent": {
+   "script": "0ecb07dc35a18738",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
+   }
+  },
+  "opt head: option --verbose": {
+   "script": "7a71eb0b30e3f2dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /tmp/n <==\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
+   }
+  },
+  "opt head: option -3": {
+   "script": "63acad9982fcdd5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "opt head: option -c -45": {
+   "script": "7d2e6001ab903cc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "opt head: option -c 0": {
+   "script": "4dab075e3186af56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt head: option -c 1k": {
+   "script": "cc285b0f684a4db9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"
+   }
+  },
+  "opt head: option -c 2b": {
+   "script": "0e2de49564508354",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"
+   }
+  },
+  "opt head: option -c 5": {
+   "script": "40a6a33ffd265c62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3"
+   }
+  },
+  "opt head: option -c3": {
+   "script": "b116a37edfce681c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2"
+   }
+  },
+  "opt head: option -n +3": {
+   "script": "2966aff6d38c0016",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "opt head: option -n -17": {
+   "script": "cd06afd1ba526015",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "opt head: option -n 0": {
+   "script": "f68259ed5596c7b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt head: option -n 1K": {
+   "script": "8c07806df361789e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"
+   }
+  },
+  "opt head: option -n 1kB": {
+   "script": "c4e2f7d1740931f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"
+   }
+  },
+  "opt head: option -n 2 -v": {
+   "script": "371836f8d986768e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /tmp/n <==\n1\n2\n"
+   }
+  },
+  "opt head: option -n 3": {
+   "script": "c56992034d2fbf97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "opt head: option -n2 -q": {
+   "script": "ed49673547e7d008",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "opt head: option -q": {
+   "script": "4d3f508f0c42d04b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
+   }
+  },
+  "opt head: option -v": {
+   "script": "a757ec5d12321dab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /tmp/n <==\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
+   }
+  },
+  "opt head: stdin and file": {
+   "script": "4448d32eeaaf88ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> standard input <==\nin\n\n==> /tmp/m <==\n21\n"
+   }
+  },
+  "opt head: two files headers": {
+   "script": "8ef6517092324b50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /tmp/n <==\n1\n2\n\n==> /tmp/m <==\n21\n22\n"
+   }
+  },
+  "opt head: two files quiet": {
+   "script": "a5c0459c56148124",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n21\n"
+   }
+  },
+  "opt head: unknown option": {
+   "script": "f176a80f408648fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nhead: unrecognized option '--bogus'\nTry 'head --help' for more information.\n"
+   }
+  },
+  "opt head: zero terminated": {
+   "script": "34ab340fec2feec7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\0   b  \\0\n"
+   }
+  },
+  "opt head: zero terminated negative": {
+   "script": "a2e08ac7ae1d25e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\0   b  \\0\n"
+   }
+  },
+  "opt join: blank separated fields": {
+   "script": "9fe4994195b248f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x\n"
+   }
+  },
+  "opt join: check order": {
+   "script": "82f8e539ef2f0b2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\njoin: /tmp/1:2: is not sorted: 1 b\n"
+   }
+  },
+  "opt join: default": {
+   "script": "123f27e6c95bdb29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x A\n3 c z C\n"
+   }
+  },
+  "opt join: duplicate keys": {
+   "script": "94cbb7ef0a0a75c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x\n1 a y\n1 b x\n1 b y\n"
+   }
+  },
+  "opt join: empty filler": {
+   "script": "f8998289746f73d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a A\nc C\nNONE D\n"
+   }
+  },
+  "opt join: field option": {
+   "script": "c5fb358076f7d9a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x\n2 b y\n"
+   }
+  },
+  "opt join: fields per file": {
+   "script": "6a15ea4213eb90c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x\n2 b y\n"
+   }
+  },
+  "opt join: header": {
+   "script": "44265006c87fcd01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "id n m\n1 a x\n"
+   }
+  },
+  "opt join: ignore case": {
+   "script": "cb5ccb1a6789359b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A 1 x\nb 2 y\n"
+   }
+  },
+  "opt join: invalid field": {
+   "script": "e8f7db1e979ca8e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\njoin: invalid field number: '0'\n"
+   }
+  },
+  "opt join: invalid file number": {
+   "script": "db3d8eec044d519d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\njoin: invalid file number: '3'\n"
+   }
+  },
+  "opt join: invalid output format": {
+   "script": "bab19d08ee583813",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\njoin: invalid file number in field spec: '3.1'\n"
+   }
+  },
+  "opt join: missing file": {
+   "script": "103662eba1bec1d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\njoin: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt join: missing operand": {
+   "script": "ba7516fd7d7a823b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\njoin: missing operand after '/tmp/1'\nTry 'join --help' for more information.\n"
+   }
+  },
+  "opt join: multi-char separator": {
+   "script": "89b97d8f473fe0ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\njoin: multi-character tab 'ab'\n"
+   }
+  },
+  "opt join: nocheck order": {
+   "script": "4ee1e5249c13f38a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 a y\nstatus=0\n"
+   }
+  },
+  "opt join: only unpaired 1": {
+   "script": "83883368dc021ce5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 b y\n"
+   }
+  },
+  "opt join: only unpaired 2": {
+   "script": "c59308585aebc919",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 D\n"
+   }
+  },
+  "opt join: output auto": {
+   "script": "c98a1dd7818e1c8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x A\n2 b y -\n3 c z C\n"
+   }
+  },
+  "opt join: output format": {
+   "script": "8dd8517e68143388",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A x 1\nC z 3\n"
+   }
+  },
+  "opt join: separator": {
+   "script": "fbf7ff073f9c15a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,a,x\n"
+   }
+  },
+  "opt join: stdin": {
+   "script": "9e0d0dc16e3b709e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x A\n3 c z C\n"
+   }
+  },
+  "opt join: tab separator": {
+   "script": "8d56cc14e821c50c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\ta b\tx\n"
+   }
+  },
+  "opt join: unpaired from 1": {
+   "script": "4a656b748a5abc66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x A\n2 b y\n3 c z C\n"
+   }
+  },
+  "opt join: unpaired from both": {
+   "script": "2420d1b9b5728baa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x A\n2 b y\n3 c z C\n4 D\n"
+   }
+  },
+  "opt join: unsorted warns": {
+   "script": "2a2dae8180476ae7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 a y\nstatus=1\njoin: /tmp/1:2: is not sorted: 1 b\njoin: input is not in sorted order\n"
+   }
+  },
+  "opt join: zero terminated": {
+   "script": "8ef6187a665612f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   1       a       b  \\0\n"
+   }
+  },
+  "opt link: creates": {
+   "script": "ab80f4ea782e1b20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x"
+   }
+  },
+  "opt link: directory source": {
+   "script": "efc6e2635c23de10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nlink: cannot create link '/tmp/e' to '/tmp/d': Operation not permitted\n"
+   }
+  },
+  "opt link: existing destination": {
+   "script": "38919a72d08c0d44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nlink: cannot create link 'b' to 'a': File exists\n"
+   }
+  },
+  "opt link: extra operand": {
+   "script": "743b2a8b357307ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nlink: extra operand 'c'\nTry 'link --help' for more information.\n"
+   }
+  },
+  "opt link: missing operand": {
+   "script": "84d76daf1af6001d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nlink: missing operand\nTry 'link --help' for more information.\n"
+   }
+  },
+  "opt link: missing source": {
+   "script": "4ce428641e4c5af5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nlink: cannot create link '/tmp/b' to '/tmp/nosuch': No such file or directory\n"
+   }
+  },
+  "opt link: one operand": {
+   "script": "db75637076083bb1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nlink: missing operand after '/tmp/a'\nTry 'link --help' for more information.\n"
+   }
+  },
+  "opt ln: backup": {
+   "script": "6e8ad50fa11231c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y"
+   }
+  },
+  "opt ln: backup numbered": {
+   "script": "4f755bc9ba0a6d5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb.~1~\n"
+   }
+  },
+  "opt ln: backup suffix": {
+   "script": "8dfe8db1d7857918",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y"
+   }
+  },
+  "opt ln: dangling symlink allowed": {
+   "script": "bd55028dc954999e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nosuch\ndangling\n"
+   }
+  },
+  "opt ln: dereference directory link": {
+   "script": "3aa378b0a6fcb2f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt ln: existing destination": {
+   "script": "13e4fffebcd0a080",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nln: failed to create hard link 'b': File exists\n"
+   }
+  },
+  "opt ln: force": {
+   "script": "4baf323303fb3346",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x"
+   }
+  },
+  "opt ln: force symbolic": {
+   "script": "a49015bf7e0e40aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\n"
+   }
+  },
+  "opt ln: hard link": {
+   "script": "64dc2ac946845c8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x"
+   }
+  },
+  "opt ln: hard link directory": {
+   "script": "a1eccf1d5e81c8e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nln: d: hard link not allowed for directory\n"
+   }
+  },
+  "opt ln: interactive no": {
+   "script": "bdcaf63eb0cb03f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nln: replace 'b'? "
+   }
+  },
+  "opt ln: into directory": {
+   "script": "c7439f73d916706c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt ln: logical": {
+   "script": "f91d22bb00dacbc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x"
+   }
+  },
+  "opt ln: missing operand": {
+   "script": "e62f69bf163f9a02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nln: missing file operand\nTry 'ln --help' for more information.\n"
+   }
+  },
+  "opt ln: missing source": {
+   "script": "04740fe866f4b11c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nln: failed to access 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt ln: no dereference": {
+   "script": "eedd5d421dcf92b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt ln: no target directory": {
+   "script": "d6fc7cd483767441",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nln: failed to create hard link 'd': File exists\n"
+   }
+  },
+  "opt ln: one operand": {
+   "script": "d4a5fb4e34956296",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nd\nstatus=0\nln: failed to create symbolic link './a': File exists\n"
+   }
+  },
+  "opt ln: physical": {
+   "script": "4ca382934d45bcbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt ln: relative": {
+   "script": "19143a854d0ecc55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../a\n"
+   }
+  },
+  "opt ln: relative absolute paths": {
+   "script": "58d621b3a550d863",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../a\n"
+   }
+  },
+  "opt ln: same file": {
+   "script": "2ca5275c7886db39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nln: 'a' and 'a' are the same file\n"
+   }
+  },
+  "opt ln: symbolic into directory": {
+   "script": "70563405fb937e8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../a\n"
+   }
+  },
+  "opt ln: symbolic long": {
+   "script": "dce31f7f3a97b593",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt ln: symbolic relative": {
+   "script": "d6f5866aab25b401",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nx"
+   }
+  },
+  "opt ln: target directory": {
+   "script": "7aaa7bc32d68cc78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt ln: target not directory": {
+   "script": "55bf136fb03a9060",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nln: target 'c': No such file or directory\n"
+   }
+  },
+  "opt ln: unknown option": {
+   "script": "088cf6fba5c13ca5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nln: unrecognized option '--bogus'\nTry 'ln --help' for more information.\n"
+   }
+  },
+  "opt ln: verbose": {
+   "script": "c300b32c260a5155",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'b' => 'a'\n's' -> 'a'\n"
+   }
+  },
+  "opt ls: control characters": {
+   "script": "a4a217da26870805",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a?b\n   a  \\t   b  \\n\n"
+   }
+  },
+  "opt ls: directory operands headers": {
+   "script": "e9329e7a18ab7662",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".:\nC.txt\na.log\nb.txt\nlink\nsub\nwith space\n\nsub:\n"
+   }
+  },
+  "opt ls: directory slash operand": {
+   "script": "3e77602fa873acfc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hid\nsub/\n"
+   }
+  },
+  "opt ls: dotfiles order": {
+   "script": "def3cdad90713f72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\n.a\n.b\nB\na\n"
+   }
+  },
+  "opt ls: empty directory": {
+   "script": "ccbbec3c13d47dbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt ls: ignore backups": {
+   "script": "1a43934aeb136e7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt ls: invalid quoting style": {
+   "script": "06c4ea3c13c0cca1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nls: invalid argument 'nope' for '--quoting-style'\nValid arguments are:\n  - 'literal'\n  - 'shell'\n  - 'shell-always'\n  - 'shell-escape'\n  - 'shell-escape-always'\n  - 'c'\n  - 'c-maybe'\n  - 'escape'\n  - 'locale'\n  - 'clocale'\nTry 'ls --help' for more information.\n"
+   }
+  },
+  "opt ls: invalid sort": {
+   "script": "2592041dfcd87a49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nls: invalid argument 'bogus' for '--sort'\nValid arguments are:\n  - 'none'\n  - 'size'\n  - 'time'\n  - 'version'\n  - 'extension'\n  - 'name'\n  - 'width'\nTry 'ls --help' for more information.\n"
+   }
+  },
+  "opt ls: invalid width": {
+   "script": "1df1d89178914ae2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nls: invalid line width: 'x'\n"
+   }
+  },
+  "opt ls: missing only": {
+   "script": "018cfdb2c87b6418",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nls: cannot access '/tmp/nosuch': No such file or directory\n"
+   }
+  },
+  "opt ls: missing operand": {
+   "script": "816018372e3edefd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt\nstatus=2\nls: cannot access 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt ls: option --classify=never": {
+   "script": "99329c8a8b81344f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option --color=never": {
+   "script": "06c00c8bdabbeab4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option --directory sub": {
+   "script": "30ef242b40158887",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub\n"
+   }
+  },
+  "opt ls: option --escape": {
+   "script": "2d9b3598b61bc83c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith\\ space\n"
+   }
+  },
+  "opt ls: option --file-type": {
+   "script": "05b8554c3f99de31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink@\nsub/\nwith space\n"
+   }
+  },
+  "opt ls: option --format=commas": {
+   "script": "a22a39eb4165ee78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt, a.log, b.txt, link, sub, with space\n"
+   }
+  },
+  "opt ls: option --format=single-column": {
+   "script": "bac668b5aac057e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option --group-directories-first": {
+   "script": "911c31fcaebebe0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub\nC.txt\na.log\nb.txt\nlink\nwith space\n"
+   }
+  },
+  "opt ls: option --hide='*.txt'": {
+   "script": "f27c65786617040a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.log\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option --indicator-style=classify": {
+   "script": "ae6f865fde9c4504",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink@\nsub/\nwith space\n"
+   }
+  },
+  "opt ls: option --indicator-style=file-type": {
+   "script": "816c7e332f1f229d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink@\nsub/\nwith space\n"
+   }
+  },
+  "opt ls: option --indicator-style=slash": {
+   "script": "3664c28828768f8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub/\nwith space\n"
+   }
+  },
+  "opt ls: option --literal": {
+   "script": "e77738f9ad60a82e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option --quote-name": {
+   "script": "ffef73280a175d24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"C.txt\"\n\"a.log\"\n\"b.txt\"\n\"link\"\n\"sub\"\n\"with space\"\n"
+   }
+  },
+  "opt ls: option --quoting-style=c": {
+   "script": "da61aa61e633a574",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"C.txt\"\n\"a.log\"\n\"b.txt\"\n\"link\"\n\"sub\"\n\"with space\"\n"
+   }
+  },
+  "opt ls: option --quoting-style=escape": {
+   "script": "24a2433d891d4f82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith\\ space\n"
+   }
+  },
+  "opt ls: option --quoting-style=literal": {
+   "script": "69b706d0a9f04055",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option --quoting-style=shell": {
+   "script": "6144fa8d239c50f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\n'with space'\n"
+   }
+  },
+  "opt ls: option --quoting-style=shell-always": {
+   "script": "4de32736054c9d5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'C.txt'\n'a.log'\n'b.txt'\n'link'\n'sub'\n'with space'\n"
+   }
+  },
+  "opt ls: option --sort=extension": {
+   "script": "464d98b814a545cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "link\nsub\nwith space\na.log\nC.txt\nb.txt\n"
+   }
+  },
+  "opt ls: option --sort=none | sort": {
+   "script": "bfd93ef4825a57d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option --sort=size C.txt b.txt": {
+   "script": "e7e8c85840bc5735",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt\nC.txt\n"
+   }
+  },
+  "opt ls: option --sort=time": {
+   "script": "8ff1c778bf39d5ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "link\nsub\nC.txt\nb.txt\na.log\nwith space\n"
+   }
+  },
+  "opt ls: option --sort=version": {
+   "script": "cf4d5542e527be99",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option --width=0": {
+   "script": "0acb50273cc0ed75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option --zero | od -An -c": {
+   "script": "a1606ddf655a1682",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   C   .   t   x   t  \\0   a   .   l   o   g  \\0   b   .   t   x\n   t  \\0   l   i   n   k  \\0   s   u   b  \\0   w   i   t   h    \n   s   p   a   c   e  \\0\n"
+   }
+  },
+  "opt ls: option -1": {
+   "script": "a25f4f9e6bd71231",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -1 --dereference-command-line link": {
+   "script": "2d6d41a102b62f36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "link\n"
+   }
+  },
+  "opt ls: option -A": {
+   "script": "8d7fb0efbde1fb49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hid\nC.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -AF": {
+   "script": "a8a2d5429955305a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hid/\nC.txt\na.log\nb.txt\nlink@\nsub/\nwith space\n"
+   }
+  },
+  "opt ls: option -B": {
+   "script": "49bd135055f2d258",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -C -w 30": {
+   "script": "61481452f4d6bee6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt  b.txt  sub\na.log  link   with space\n"
+   }
+  },
+  "opt ls: option -F": {
+   "script": "7788d078f77565d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink@\nsub/\nwith space\n"
+   }
+  },
+  "opt ls: option -I '*.log'": {
+   "script": "c109d4325d04151d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -L": {
+   "script": "cefe830949757763",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -N": {
+   "script": "7a0a90a1a737b269",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -Q": {
+   "script": "d55319d1cdcbaa98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"C.txt\"\n\"a.log\"\n\"b.txt\"\n\"link\"\n\"sub\"\n\"with space\"\n"
+   }
+  },
+  "opt ls: option -R": {
+   "script": "a9e2f74621a5ee14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".:\nC.txt\na.log\nb.txt\nlink\nsub\nwith space\n\n./sub:\n"
+   }
+  },
+  "opt ls: option -S *.txt a.log": {
+   "script": "87088dfd1c41be5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt\nC.txt\na.log\n"
+   }
+  },
+  "opt ls: option -Sr b.txt a.log C.txt": {
+   "script": "3ed2b40497c7b003",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.log\nC.txt\nb.txt\n"
+   }
+  },
+  "opt ls: option -T 4 -C -w 40": {
+   "script": "1dec0bd63652d580",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt  b.txt  sub\na.log  link   with space\n"
+   }
+  },
+  "opt ls: option -U | sort": {
+   "script": "989e6e3d0200750f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -X": {
+   "script": "c80615ce5d367832",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "link\nsub\nwith space\na.log\nC.txt\nb.txt\n"
+   }
+  },
+  "opt ls: option -a": {
+   "script": "962e76b5db8394d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\n.hid\nC.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -aR": {
+   "script": "59cd49347f5e8e59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".:\n.\n..\n.hid\nC.txt\na.log\nb.txt\nlink\nsub\nwith space\n\n./.hid:\n.\n..\n\n./sub:\n.\n..\n"
+   }
+  },
+  "opt ls: option -b": {
+   "script": "0f0b27f631688972",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith\\ space\n"
+   }
+  },
+  "opt ls: option -d": {
+   "script": "ba02b3ef8f69a0dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n"
+   }
+  },
+  "opt ls: option -k": {
+   "script": "d905e6c8acc19d5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -m": {
+   "script": "429d0a528984c70f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt, a.log, b.txt, link, sub, with space\n"
+   }
+  },
+  "opt ls: option -p": {
+   "script": "7cb9fbb642241a5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub/\nwith space\n"
+   }
+  },
+  "opt ls: option -r": {
+   "script": "22656e3246821bc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "with space\nsub\nlink\nb.txt\na.log\nC.txt\n"
+   }
+  },
+  "opt ls: option -t": {
+   "script": "28e007e4ac2e851e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "link\nsub\nC.txt\nb.txt\na.log\nwith space\n"
+   }
+  },
+  "opt ls: option -tr": {
+   "script": "efd023b2ff2f7600",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "with space\na.log\nb.txt\nC.txt\nsub\nlink\n"
+   }
+  },
+  "opt ls: option -v": {
+   "script": "a36e91cbd19de694",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -w 20": {
+   "script": "09f16e3a07ea2169",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: option -x -w 30": {
+   "script": "178f011581010b60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt  a.log  b.txt\nlink   sub    with space\n"
+   }
+  },
+  "opt ls: option none": {
+   "script": "3ac9c4123cbf5ad8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C.txt\na.log\nb.txt\nlink\nsub\nwith space\n"
+   }
+  },
+  "opt ls: recursive nested": {
+   "script": "8289f7661b2d36b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/k:\nx\n\n/tmp/k/x:\ny\n\n/tmp/k/x/y:\nz\n"
+   }
+  },
+  "opt ls: several operands": {
+   "script": "31aeec705111cd77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.log\nb.txt\n\nsub:\n"
+   }
+  },
+  "opt ls: unknown option": {
+   "script": "5877f66b81469006",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nls: unrecognized option '--bogus'\nTry 'ls --help' for more information.\n"
+   }
+  },
+  "opt ls: version sort": {
+   "script": "fd60e7c334023f7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1\nf1.9\nf1.10\nf9\nf10\n"
+   }
+  },
+  "opt mkdir: continues after failure": {
+   "script": "cb570e1aa0d1d69e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err\nz\nstatus=0\nmkdir: cannot create directory '/tmp/x/y': No such file or directory\n"
+   }
+  },
+  "opt mkdir: existing": {
+   "script": "555f46c5f79f32f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmkdir: cannot create directory '/tmp': File exists\n"
+   }
+  },
+  "opt mkdir: file in path": {
+   "script": "44c564856060c927",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmkdir: cannot create directory '/tmp/f': Not a directory\n"
+   }
+  },
+  "opt mkdir: invalid mode": {
+   "script": "5012b1d8dd346d15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmkdir: invalid mode 'zz'\n"
+   }
+  },
+  "opt mkdir: missing operand": {
+   "script": "df81689c729afd6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmkdir: missing operand\nTry 'mkdir --help' for more information.\n"
+   }
+  },
+  "opt mkdir: missing parent": {
+   "script": "e7dfee039d6c5bc7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmkdir: cannot create directory '/tmp/x/y': No such file or directory\n"
+   }
+  },
+  "opt mkdir: mode": {
+   "script": "2d619205b7ce7677",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nmade\n"
+   }
+  },
+  "opt mkdir: mode symbolic": {
+   "script": "c9e5723cfba854ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt mkdir: parents": {
+   "script": "b520df9fa8db1a0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a\n/tmp/a/b\n/tmp/a/b/c\n"
+   }
+  },
+  "opt mkdir: parents existing": {
+   "script": "5a415e1ec360735c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt mkdir: parents with dot dot": {
+   "script": "b796be8d8b6baf6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n/tmp/a\n/tmp/b\n/tmp/b/c\n"
+   }
+  },
+  "opt mkdir: several": {
+   "script": "63f4cec29cb85754",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt mkdir: trailing slash": {
+   "script": "1ef52284e8831bb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a\n"
+   }
+  },
+  "opt mkdir: unknown option": {
+   "script": "170ad6e679b160f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmkdir: unrecognized option '--bogus'\nTry 'mkdir --help' for more information.\n"
+   }
+  },
+  "opt mkdir: verbose": {
+   "script": "c2d0d186dc455d86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "mkdir: created directory '/tmp/a'\nstatus=0\n"
+   }
+  },
+  "opt mkdir: verbose parents": {
+   "script": "65300516337d878f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "mkdir: created directory '/tmp/a'\nmkdir: created directory '/tmp/a/b'\nstatus=0\n"
+   }
+  },
+  "opt mktemp: X in the middle": {
+   "script": "010754431604b642",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\nstatus=0\n"
+   }
+  },
+  "opt mktemp: default creates in tmp": {
+   "script": "8cd233de8f6c03b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt mktemp: directory": {
+   "script": "453caa2c5a96efe1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dir\nprefix\n"
+   }
+  },
+  "opt mktemp: directory dry run": {
+   "script": "31e4a9eefbce5214",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "absent\n"
+   }
+  },
+  "opt mktemp: dry run": {
+   "script": "9bfc473a724c9ebb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\nabsent\n"
+   }
+  },
+  "opt mktemp: files are empty": {
+   "script": "4e7b292b2bbb8a25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "opt mktemp: missing directory": {
+   "script": "5e5d5aa6753a7672",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmktemp: failed to create file via template '/tmp/nosuch/aXXX': No such file or directory\n"
+   }
+  },
+  "opt mktemp: no X": {
+   "script": "87851a6e0adbbc22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmktemp: too few X's in template '/tmp/abc'\n"
+   }
+  },
+  "opt mktemp: quiet failure": {
+   "script": "344ef54dfdbe2df0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt mktemp: slash in suffix": {
+   "script": "effcca3f2795c20f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmktemp: invalid suffix '/x', contains directory separator\n"
+   }
+  },
+  "opt mktemp: suffix": {
+   "script": "fac3c37cb3a354b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shape\n"
+   }
+  },
+  "opt mktemp: suffix in template": {
+   "script": "cb1c42e7d19ac996",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shape\n"
+   }
+  },
+  "opt mktemp: t option": {
+   "script": "39a193b0b47228a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shape\n"
+   }
+  },
+  "opt mktemp: template": {
+   "script": "51740e6834de4584",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\nshape\n"
+   }
+  },
+  "opt mktemp: template in cwd": {
+   "script": "86ed68d6f6caed8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\nthere\n"
+   }
+  },
+  "opt mktemp: template with slash and p": {
+   "script": "d4795d93ae699deb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmktemp: failed to create file via template '/tmp/a/bXXX': No such file or directory\n"
+   }
+  },
+  "opt mktemp: tmpdir env": {
+   "script": "bbdd48796d9b3416",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shape\n"
+   }
+  },
+  "opt mktemp: tmpdir long": {
+   "script": "c393aca473894ea4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shape\n"
+   }
+  },
+  "opt mktemp: tmpdir option": {
+   "script": "f2fef419e1ee3f3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shape\n"
+   }
+  },
+  "opt mktemp: too few X": {
+   "script": "4046fd857787ed41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmktemp: too few X's in template '/tmp/aXX'\n"
+   }
+  },
+  "opt mktemp: too many templates": {
+   "script": "82e6c8419582acba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmktemp: too many templates\nTry 'mktemp --help' for more information.\n"
+   }
+  },
+  "opt mktemp: unknown option": {
+   "script": "59b6914c8400256e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmktemp: unrecognized option '--bogus'\nTry 'mktemp --help' for more information.\n"
+   }
+  },
+  "opt mv: backup": {
+   "script": "f03daaeda809f384",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "onetwo"
+   }
+  },
+  "opt mv: backup numbered": {
+   "script": "15b0982cffa40622",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb.~1~\nd\n"
+   }
+  },
+  "opt mv: backup suffix": {
+   "script": "05e90aa675e3f1cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two"
+   }
+  },
+  "opt mv: directory into itself": {
+   "script": "e0d2a757a1c391d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: cannot move 'd' to a subdirectory of itself, 'd/x'\n"
+   }
+  },
+  "opt mv: directory over file": {
+   "script": "6ce93fc49ce9dec8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: cannot overwrite non-directory 'a' with directory 'd'\n"
+   }
+  },
+  "opt mv: exchange": {
+   "script": "781f864fea34279b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "twoone"
+   }
+  },
+  "opt mv: file over empty directory with T": {
+   "script": "f25fd0f98d6680f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: cannot overwrite directory 'c' with non-directory 'a'\n"
+   }
+  },
+  "opt mv: force": {
+   "script": "585c997b32c511c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one"
+   }
+  },
+  "opt mv: interactive no": {
+   "script": "bc3135d79d58567c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: overwrite 'b'? "
+   }
+  },
+  "opt mv: interactive yes": {
+   "script": "01ba580e433b2680",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "oneb\nd\n"
+   }
+  },
+  "opt mv: into directory": {
+   "script": "abb5306f59877615",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt mv: missing destination": {
+   "script": "b190c995abc6bc0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: missing destination file operand after 'a'\nTry 'mv --help' for more information.\n"
+   }
+  },
+  "opt mv: missing operand": {
+   "script": "4b9552fe6b4f825c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: missing file operand\nTry 'mv --help' for more information.\n"
+   }
+  },
+  "opt mv: missing source": {
+   "script": "5467161109e47e46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: cannot stat 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt mv: no clobber": {
+   "script": "86b897b94fc836fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "twoa\nb\nd\n"
+   }
+  },
+  "opt mv: no target directory": {
+   "script": "e8300ee63655ea0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: cannot overwrite directory 'd' with non-directory 'a'\n"
+   }
+  },
+  "opt mv: no target directory rename dir": {
+   "script": "7200f74f19c48266",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\ne\n"
+   }
+  },
+  "opt mv: overwrite directory with file": {
+   "script": "bf62cbb3344153f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt mv: rename": {
+   "script": "4b176fbc1b1a3a7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "oneb\nc\nd\n"
+   }
+  },
+  "opt mv: rename directory": {
+   "script": "3be60ed7f91ef975",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\n"
+   }
+  },
+  "opt mv: same file": {
+   "script": "9f377a5527340bbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: 'a' and 'a' are the same file\n"
+   }
+  },
+  "opt mv: strip trailing slashes": {
+   "script": "5d3b59edc984afd7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\ne\n"
+   }
+  },
+  "opt mv: target directory": {
+   "script": "c590c6ac5220f78e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt mv: target not directory": {
+   "script": "4257738988f2d3c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: target 'c': No such file or directory\n"
+   }
+  },
+  "opt mv: unknown option": {
+   "script": "9df448e44662e794",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmv: unrecognized option '--bogus'\nTry 'mv --help' for more information.\n"
+   }
+  },
+  "opt mv: update newer source": {
+   "script": "6186a91ea0bf7df2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "oneb\nd\n"
+   }
+  },
+  "opt mv: update none": {
+   "script": "bde61e9122d3082c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two"
+   }
+  },
+  "opt mv: update older source": {
+   "script": "9686fd51d9e23c72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "twoa\nb\nd\n"
+   }
+  },
+  "opt mv: verbose": {
+   "script": "27e00b0eeb34621e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "renamed 'a' -> 'c'\nstatus=0\n"
+   }
+  },
+  "opt nl: invalid format": {
+   "script": "ab7c8e435d2f26cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnl: invalid line numbering format: 'xx'\nTry 'nl --help' for more information.\n"
+   }
+  },
+  "opt nl: invalid regex": {
+   "script": "668e6b8a4e046ed0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnl: Invalid regular expression\n"
+   }
+  },
+  "opt nl: invalid style": {
+   "script": "f95ee86920594e69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnl: invalid body numbering style: 'x'\nTry 'nl --help' for more information.\n"
+   }
+  },
+  "opt nl: invalid width": {
+   "script": "e26ac1e55d624705",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnl: invalid line number field width: '0': Result not representable\n"
+   }
+  },
+  "opt nl: missing file": {
+   "script": "ff4cf1f1eccdd73a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnl: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt nl: no trailing newline": {
+   "script": "3660067ce6c59221",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tx\n     2\ty\n\n"
+   }
+  },
+  "opt nl: option --body-numbering=a": {
+   "script": "2d835396fca2bd0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n     2\t\n     3\tb\n     4\t\n     5\t\n     6\t\n     7\tc\n"
+   }
+  },
+  "opt nl: option --join-blank-lines=2 -ba": {
+   "script": "f0ae95e8957724f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n     2\tb\n       \n     3\t\n       \n     4\tc\n"
+   }
+  },
+  "opt nl: option --line-increment=10": {
+   "script": "e22dd8cd6a13d7b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n    11\tb\n       \n       \n       \n    21\tc\n"
+   }
+  },
+  "opt nl: option --number-format=rz --number-width=3": {
+   "script": "7c4c944488bc9751",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "001\ta\n    \n002\tb\n    \n    \n    \n003\tc\n"
+   }
+  },
+  "opt nl: option --number-separator='|'": {
+   "script": "4da12c2915d1f694",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1|a\n       \n     2|b\n       \n       \n       \n     3|c\n"
+   }
+  },
+  "opt nl: option --starting-line-number=0": {
+   "script": "02d986822232e7f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     0\ta\n       \n     1\tb\n       \n       \n       \n     2\tc\n"
+   }
+  },
+  "opt nl: option -b 'p^[ac]'": {
+   "script": "03ae7b946e3f9c85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n       b\n       \n       \n       \n     2\tc\n"
+   }
+  },
+  "opt nl: option -b a": {
+   "script": "578ce8b47b06fca2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n     2\t\n     3\tb\n     4\t\n     5\t\n     6\t\n     7\tc\n"
+   }
+  },
+  "opt nl: option -b n": {
+   "script": "410c074ba97655fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "       a\n       \n       b\n       \n       \n       \n       c\n"
+   }
+  },
+  "opt nl: option -b pb": {
+   "script": "232b994e3ef6dc1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "       a\n       \n     1\tb\n       \n       \n       \n       c\n"
+   }
+  },
+  "opt nl: option -b t": {
+   "script": "c299315b033a851d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n     2\tb\n       \n       \n       \n     3\tc\n"
+   }
+  },
+  "opt nl: option -ba -nln -w3 -s.": {
+   "script": "ca875f180ca7c8dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1  .a\n2  .\n3  .b\n4  .\n5  .\n6  .\n7  .c\n"
+   }
+  },
+  "opt nl: option -i 3": {
+   "script": "0af89cbe27b890de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n     4\tb\n       \n       \n       \n     7\tc\n"
+   }
+  },
+  "opt nl: option -l 2 -b a": {
+   "script": "8100246f67e22ddb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n     2\tb\n       \n     3\t\n       \n     4\tc\n"
+   }
+  },
+  "opt nl: option -l 3 -b a": {
+   "script": "0b32df0a0ffac9ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n     2\tb\n       \n       \n     3\t\n     4\tc\n"
+   }
+  },
+  "opt nl: option -n ln": {
+   "script": "bdc6891d5ee8e4d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1     \ta\n       \n2     \tb\n       \n       \n       \n3     \tc\n"
+   }
+  },
+  "opt nl: option -n rn": {
+   "script": "f7826472a8e66bc7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n     2\tb\n       \n       \n       \n     3\tc\n"
+   }
+  },
+  "opt nl: option -n rz": {
+   "script": "bc1410aa12c7263e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "000001\ta\n       \n000002\tb\n       \n       \n       \n000003\tc\n"
+   }
+  },
+  "opt nl: option -s ''": {
+   "script": "08a5d8b9a328cd6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1a\n      \n     2b\n      \n      \n      \n     3c\n"
+   }
+  },
+  "opt nl: option -s ': '": {
+   "script": "b8d6baac0930b7ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1: a\n        \n     2: b\n        \n        \n        \n     3: c\n"
+   }
+  },
+  "opt nl: option -v -2": {
+   "script": "da80a525a61725d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    -2\ta\n       \n    -1\tb\n       \n       \n       \n     0\tc\n"
+   }
+  },
+  "opt nl: option -v 5": {
+   "script": "25c5567afd799e79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     5\ta\n       \n     6\tb\n       \n       \n       \n     7\tc\n"
+   }
+  },
+  "opt nl: option -w 1": {
+   "script": "878f380c23a1737a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\ta\n  \n2\tb\n  \n  \n  \n3\tc\n"
+   }
+  },
+  "opt nl: option -w 2": {
+   "script": "206e97c2a57329d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1\ta\n   \n 2\tb\n   \n   \n   \n 3\tc\n"
+   }
+  },
+  "opt nl: section delimiter": {
+   "script": "377573836fd50232",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n     1\tb\n\n       c\n"
+   }
+  },
+  "opt nl: section delimiter one char": {
+   "script": "7f58b39df02415c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n       b\n"
+   }
+  },
+  "opt nl: sections default": {
+   "script": "a8097fdb2ebf12a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n       head\n\n     1\tbody1\n     2\tbody2\n\n       foot\n\n     1\tbody3\n"
+   }
+  },
+  "opt nl: sections header numbering": {
+   "script": "af6c09861654dc47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n     1\thead\n\n     1\tbody1\n     2\tbody2\n\n     1\tfoot\n\n     1\tbody3\n"
+   }
+  },
+  "opt nl: sections no renumber": {
+   "script": "2f8cee23eb2cf87e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n       head\n\n     1\tbody1\n     2\tbody2\n\n       foot\n\n     3\tbody3\n"
+   }
+  },
+  "opt nl: stdin": {
+   "script": "0d12254cca3e9abf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tx\n     2\ty\n"
+   }
+  },
+  "opt nl: two files continue numbering": {
+   "script": "44e6bd89d8a4bbd3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n     2\tb\n       \n       \n       \n     3\tc\n     4\ta\n       \n     5\tb\n       \n       \n       \n     6\tc\n"
+   }
+  },
+  "opt numfmt: debug": {
+   "script": "981a674743267f3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0k\n"
+   }
+  },
+  "opt numfmt: decimal input": {
+   "script": "a104a1645ffed313",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1250\n"
+   }
+  },
+  "opt numfmt: delimiter": {
+   "script": "889761a1999ff2cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x:2.0k:y\n"
+   }
+  },
+  "opt numfmt: field": {
+   "script": "917533bb9ba1f4eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a 2.0k 3000\n"
+   }
+  },
+  "opt numfmt: field all": {
+   "script": "6f844f9cc0b71883",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0k 2.0k\n"
+   }
+  },
+  "opt numfmt: field list": {
+   "script": "2d890c9cd2de47cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0k a 3.0k\n"
+   }
+  },
+  "opt numfmt: field range": {
+   "script": "7aee663e14c217cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a 2.0k 3.0k 4000\n"
+   }
+  },
+  "opt numfmt: format grouping flag": {
+   "script": "9848c24f9a8f2c65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1234567\n"
+   }
+  },
+  "opt numfmt: format left": {
+   "script": "6138ae5ac3ed2690",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "42        |\n"
+   }
+  },
+  "opt numfmt: format precision": {
+   "script": "d177dd62876bb24a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12.345k\n"
+   }
+  },
+  "opt numfmt: format prefix suffix": {
+   "script": "b3fa8592b31158dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x5y\n"
+   }
+  },
+  "opt numfmt: format two directives": {
+   "script": "07dc20d44bff5750",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnumfmt: format '%f %f' has too many % directives\n"
+   }
+  },
+  "opt numfmt: format width": {
+   "script": "96f582e6fcfbda27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "        42\n"
+   }
+  },
+  "opt numfmt: format zero pad": {
+   "script": "ca993b84f314e41c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000042\n"
+   }
+  },
+  "opt numfmt: from and to units": {
+   "script": "780686e6a5470c4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.1M\n"
+   }
+  },
+  "opt numfmt: from auto": {
+   "script": "5406edb62ab66d16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1000\n1024\n2000000\n"
+   }
+  },
+  "opt numfmt: from iec": {
+   "script": "f77b84bcb6c5425b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1024\n1048576\n1610612736\n"
+   }
+  },
+  "opt numfmt: from iec-i": {
+   "script": "7d324442d07760e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1024\n3145728\n"
+   }
+  },
+  "opt numfmt: from none": {
+   "script": "477a52eefbf1fc90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "123\n"
+   }
+  },
+  "opt numfmt: from si": {
+   "script": "5a88fe3efc56c541",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1000\n2500000\n1000000000\n"
+   }
+  },
+  "opt numfmt: from unit": {
+   "script": "26f6e4555c3b869c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2048\n"
+   }
+  },
+  "opt numfmt: grouping": {
+   "script": "9a6f47539d9b33c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1234567\n"
+   }
+  },
+  "opt numfmt: header": {
+   "script": "e78aed8cc84123a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "size\n2.0k\n"
+   }
+  },
+  "opt numfmt: header count": {
+   "script": "69fe59598b987397",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "h1\nh2\n2.0k\n"
+   }
+  },
+  "opt numfmt: iec rounding boundary": {
+   "script": "40bde04eefe64aa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1023\n1.1K\n"
+   }
+  },
+  "opt numfmt: invalid fail": {
+   "script": "20172ce841e1f29b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n1000\nstatus=2\n"
+   }
+  },
+  "opt numfmt: invalid field": {
+   "script": "25c5fb56aab24138",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnumfmt: fields are numbered from 1\nTry 'numfmt --help' for more information.\n"
+   }
+  },
+  "opt numfmt: invalid format": {
+   "script": "437a4ced5b177614",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnumfmt: invalid format '%d', directive must be %[0]['][-][N][.][N]f\n"
+   }
+  },
+  "opt numfmt: invalid header": {
+   "script": "86281cb226500a9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnumfmt: invalid header value '0'\n"
+   }
+  },
+  "opt numfmt: invalid ignore": {
+   "script": "8b2311111d03ee45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n1000\nstatus=0\n"
+   }
+  },
+  "opt numfmt: invalid mode": {
+   "script": "03817b5b64fd141d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnumfmt: invalid argument 'bogus' for '--invalid'\nValid arguments are:\n  - 'abort'\n  - 'fail'\n  - 'warn'\n  - 'ignore'\nTry 'numfmt --help' for more information.\n"
+   }
+  },
+  "opt numfmt: invalid number": {
+   "script": "211e16a47389c9f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nnumfmt: invalid number: 'x'\n"
+   }
+  },
+  "opt numfmt: invalid padding": {
+   "script": "04138e602e32da9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnumfmt: invalid padding value '0'\n"
+   }
+  },
+  "opt numfmt: invalid round": {
+   "script": "e06bdfccdeaa357c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnumfmt: invalid argument 'bogus' for '--round'\nValid arguments are:\n  - 'up'\n  - 'down'\n  - 'from-zero'\n  - 'towards-zero'\n  - 'nearest'\nTry 'numfmt --help' for more information.\n"
+   }
+  },
+  "opt numfmt: invalid suffix": {
+   "script": "a2ee76cb8fa88f5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nnumfmt: invalid suffix in input: '1X'\n"
+   }
+  },
+  "opt numfmt: invalid unit": {
+   "script": "0d56842a5ebe7355",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nnumfmt: invalid argument 'bogus' for '--to'\nValid arguments are:\n  - 'none'\n  - 'si'\n  - 'iec'\n  - 'iec-i'\nTry 'numfmt --help' for more information.\n"
+   }
+  },
+  "opt numfmt: invalid warn": {
+   "script": "e517a5759e91e561",
+   "status": 0,
+   "stderr": {
+    "text": "numfmt: invalid number: ‘x’\n"
+   },
+   "stdout": {
+    "text": "x\n1000\nstatus=0\n"
+   }
+  },
+  "opt numfmt: large": {
+   "script": "a3dfba0944aeae63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "124T\n"
+   }
+  },
+  "opt numfmt: leading spaces kept": {
+   "script": "b2ce92c1708148ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   2.0k\n"
+   }
+  },
+  "opt numfmt: negative": {
+   "script": "2cf8c2adef4817b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-2.0K\n"
+   }
+  },
+  "opt numfmt: padding left": {
+   "script": "84786cefc6ec8612",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "42      \nend\n"
+   }
+  },
+  "opt numfmt: padding right": {
+   "script": "431f6ddda85e9cfe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      42\n"
+   }
+  },
+  "opt numfmt: round down": {
+   "script": "03014ab389907b7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.9k\n"
+   }
+  },
+  "opt numfmt: round from zero": {
+   "script": "b45200197709fd01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-1.1k\n"
+   }
+  },
+  "opt numfmt: round nearest": {
+   "script": "798737417b0606d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.5k\n1.6k\n"
+   }
+  },
+  "opt numfmt: round towards zero": {
+   "script": "b7ede5129cf38106",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-1.9k\n"
+   }
+  },
+  "opt numfmt: round up": {
+   "script": "76ea08adba042814",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.1k\n"
+   }
+  },
+  "opt numfmt: stdin lines": {
+   "script": "879fa3385332eee0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0k\n2.0k\n"
+   }
+  },
+  "opt numfmt: suffix": {
+   "script": "adc1794c5bebbc60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5.0kB\n"
+   }
+  },
+  "opt numfmt: suffix without from": {
+   "script": "b808796aa3e41696",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nnumfmt: rejecting suffix in input: '1K' (consider using --from)\n"
+   }
+  },
+  "opt numfmt: to iec": {
+   "script": "c365fcb9f0909f5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0K\n1.5K\n1.0M\n"
+   }
+  },
+  "opt numfmt: to iec-i": {
+   "script": "4c4e6ce0f4e5251e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2.0Ki\n4.8Mi\n"
+   }
+  },
+  "opt numfmt: to none": {
+   "script": "c9d6297c31fb417d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12345\n"
+   }
+  },
+  "opt numfmt: to si": {
+   "script": "687e31545c874d26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0k\n1.5k\n1.0M\n1.0M\n"
+   }
+  },
+  "opt numfmt: to si small": {
+   "script": "5d579d27147e9e8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "999\n1\n"
+   }
+  },
+  "opt numfmt: to unit": {
+   "script": "02f8830a977ac6ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1024\n"
+   }
+  },
+  "opt numfmt: too large for si": {
+   "script": "77cd19281e62776a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nnumfmt: invalid suffix in input: '1e40'\n"
+   }
+  },
+  "opt numfmt: unit separator": {
+   "script": "cc7c310307d7c254",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5.0 k\n"
+   }
+  },
+  "opt numfmt: whitespace fields": {
+   "script": "58f82191cc0b4544",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1000  2.0k\n"
+   }
+  },
+  "opt numfmt: zero terminated": {
+   "script": "8f6b4c8d92ec4c38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   1   .   0   k  \\0\n"
+   }
+  },
+  "opt od: double values": {
+   "script": "568adb4a8d75e521",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "                        1\n"
+   }
+  },
+  "opt od: duplicate lines collapsed": {
+   "script": "c1409716d8815494",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0\n*\n0000040\n"
+   }
+  },
+  "opt od: duplicate lines shown": {
+   "script": "8de38b29acb6854d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0\n0000020   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0\n0000040\n"
+   }
+  },
+  "opt od: empty input": {
+   "script": "c9e28b586680541b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000\nstatus=0\n"
+   }
+  },
+  "opt od: float values": {
+   "script": "233d2f915d9fd0f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "               1\n"
+   }
+  },
+  "opt od: invalid radix": {
+   "script": "c4027e4fc5b935c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nod: invalid output address radix 'z'; it must be one character from [doxn]\n"
+   }
+  },
+  "opt od: invalid size": {
+   "script": "3d46a95d2fb420b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nod: invalid type string 'x3';\nthis system doesn't provide a 3-byte integral type\n"
+   }
+  },
+  "opt od: invalid skip": {
+   "script": "0eedfb7d420f7028",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nod: invalid -j argument 'x'\n"
+   }
+  },
+  "opt od: invalid type": {
+   "script": "f1535ff2313d015d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nod: invalid character 'q' in type string 'q'\n"
+   }
+  },
+  "opt od: invalid width": {
+   "script": "9d9121e1130f74fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nod: invalid -w argument '0'\n"
+   }
+  },
+  "opt od: missing file": {
+   "script": "1c5f02b12986fd88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nod: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt od: multibyte chars": {
+   "script": "912b306963294e56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 303 251\n0000002\n"
+   }
+  },
+  "opt od: odd length x2": {
+   "script": "0dc2116d88a0af53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 6261 0063\n"
+   }
+  },
+  "opt od: option --address-radix=d -t u1": {
+   "script": "d7376442cc0cb7c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  72 101 108 108 111  44  32  87 111 114 108 100  33  10   1 255\n0000016   0 127  97  98  99 100 101 102 103 104 105 106 107 108 109 110\n0000032 111 112\n0000034\n"
+   }
+  },
+  "opt od: option --endian=big -t x2": {
+   "script": "14b76d3e1f28a23a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 4865 6c6c 6f2c 2057 6f72 6c64 210a 01ff\n0000020 007f 6162 6364 6566 6768 696a 6b6c 6d6e\n0000040 6f70\n0000042\n"
+   }
+  },
+  "opt od: option --endian=little -t x4": {
+   "script": "4d20cb45a25d50e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 6c6c6548 57202c6f 646c726f ff010a21\n0000020 62617f00 66656463 6a696867 6e6d6c6b\n0000040 0000706f\n0000042\n"
+   }
+  },
+  "opt od: option --skip-bytes=5 --read-bytes=3 -t c": {
+   "script": "42ebf643ecff5856",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000005   ,       W\n0000010\n"
+   }
+  },
+  "opt od: option --strings=4": {
+   "script": "0b3d5f542065b50e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt od: option --traditional": {
+   "script": "940c202c6b913ac0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 062510 066154 026157 053440 071157 062154 005041 177401\n0000020 077400 061141 062143 063145 064147 065151 066153 067155\n0000040 070157\n0000042\n"
+   }
+  },
+  "opt od: option -Ad": {
+   "script": "187619a1c6e400a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 062510 066154 026157 053440 071157 062154 005041 177401\n0000016 077400 061141 062143 063145 064147 065151 066153 067155\n0000032 070157\n0000034\n"
+   }
+  },
+  "opt od: option -An": {
+   "script": "6715ca6546c37287",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 062510 066154 026157 053440 071157 062154 005041 177401\n 077400 061141 062143 063145 064147 065151 066153 067155\n 070157\n"
+   }
+  },
+  "opt od: option -An -c": {
+   "script": "c335a7eafbcdb69b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   H   e   l   l   o   ,       W   o   r   l   d   !  \\n 001 377\n  \\0 177   a   b   c   d   e   f   g   h   i   j   k   l   m   n\n   o   p\n"
+   }
+  },
+  "opt od: option -Ao": {
+   "script": "56d20a194149a2d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 062510 066154 026157 053440 071157 062154 005041 177401\n0000020 077400 061141 062143 063145 064147 065151 066153 067155\n0000040 070157\n0000042\n"
+   }
+  },
+  "opt od: option -Ax": {
+   "script": "2b4800e3e5279c9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "000000 062510 066154 026157 053440 071157 062154 005041 177401\n000010 077400 061141 062143 063145 064147 065151 066153 067155\n000020 070157\n000022\n"
+   }
+  },
+  "opt od: option -N 010 -c": {
+   "script": "ddb11d1ee70b8132",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   H   e   l   l   o   ,       W\n0000010\n"
+   }
+  },
+  "opt od: option -N 5 -c": {
+   "script": "ceb4a6078a595d48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   H   e   l   l   o\n0000005\n"
+   }
+  },
+  "opt od: option -S 3": {
+   "script": "64939298537e5a24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt od: option -S 5": {
+   "script": "303184965d542431",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt od: option -a": {
+   "script": "801f0513ff5fcd01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   H   e   l   l   o   ,  sp   W   o   r   l   d   !  nl soh del\n0000020 nul del   a   b   c   d   e   f   g   h   i   j   k   l   m   n\n0000040   o   p\n0000042\n"
+   }
+  },
+  "opt od: option -b": {
+   "script": "cc739a3c0dea27d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 110 145 154 154 157 054 040 127 157 162 154 144 041 012 001 377\n0000020 000 177 141 142 143 144 145 146 147 150 151 152 153 154 155 156\n0000040 157 160\n0000042\n"
+   }
+  },
+  "opt od: option -c": {
+   "script": "d772d72af088af41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   H   e   l   l   o   ,       W   o   r   l   d   !  \\n 001 377\n0000020  \\0 177   a   b   c   d   e   f   g   h   i   j   k   l   m   n\n0000040   o   p\n0000042\n"
+   }
+  },
+  "opt od: option -d": {
+   "script": "6696498d65d04b0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 25928 27756 11375 22304 29295 25708  2593 65281\n0000020 32512 25185 25699 26213 26727 27241 27755 28269\n0000040 28783\n0000042\n"
+   }
+  },
+  "opt od: option -f": {
+   "script": "acd8951fb316ed98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   1.1431391e+27    1.761127e+14    1.744671e+22    -1.71523e+38\n0000020   1.0399172e+21   2.7081843e+23   7.0543186e+25   1.8369754e+28\n0000040      4.0334e-41\n0000042\n"
+   }
+  },
+  "opt od: option -h": {
+   "script": "20708ee3bd6fe4f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 6548 6c6c 2c6f 5720 726f 646c 0a21 ff01\n0000020 7f00 6261 6463 6665 6867 6a69 6c6b 6e6d\n0000040 706f\n0000042\n"
+   }
+  },
+  "opt od: option -i": {
+   "script": "bc2d80a35c44d0b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  1819043144  1461726319  1684828783   -16709087\n0000020  1650556672  1717920867  1785292903  1852664939\n0000040       28783\n0000042\n"
+   }
+  },
+  "opt od: option -j 0x10 -c": {
+   "script": "84dd3a73391b4636",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000020  \\0 177   a   b   c   d   e   f   g   h   i   j   k   l   m   n\n0000040   o   p\n0000042\n"
+   }
+  },
+  "opt od: option -j 1k -c": {
+   "script": "3a032710c557c3e3",
+   "status": 1,
+   "stderr": {
+    "text": "od: cannot skip past end of combined input\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt od: option -j 2 -N 4 -t x1": {
+   "script": "13813827e5fbd665",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000002 6c 6c 6f 2c\n0000006\n"
+   }
+  },
+  "opt od: option -j 3 -c": {
+   "script": "67d372a8ff214358",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000003   l   o   ,       W   o   r   l   d   !  \\n 001 377  \\0 177   a\n0000023   b   c   d   e   f   g   h   i   j   k   l   m   n   o   p\n0000042\n"
+   }
+  },
+  "opt od: option -l": {
+   "script": "ecd11875c74f04bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  6278066737626506568   -71764980526189969\n0000020  7378413942531522304  7957135325236127847\n0000040                28783\n0000042\n"
+   }
+  },
+  "opt od: option -o": {
+   "script": "44e9a1816cf8b259",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 062510 066154 026157 053440 071157 062154 005041 177401\n0000020 077400 061141 062143 063145 064147 065151 066153 067155\n0000040 070157\n0000042\n"
+   }
+  },
+  "opt od: option -s": {
+   "script": "03a90826449bc8ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  25928  27756  11375  22304  29295  25708   2593   -255\n0000020  32512  25185  25699  26213  26727  27241  27755  28269\n0000040  28783\n0000042\n"
+   }
+  },
+  "opt od: option -t a": {
+   "script": "934314e73d854c1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   H   e   l   l   o   ,  sp   W   o   r   l   d   !  nl soh del\n0000020 nul del   a   b   c   d   e   f   g   h   i   j   k   l   m   n\n0000040   o   p\n0000042\n"
+   }
+  },
+  "opt od: option -t c": {
+   "script": "60f070d1428053cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   H   e   l   l   o   ,       W   o   r   l   d   !  \\n 001 377\n0000020  \\0 177   a   b   c   d   e   f   g   h   i   j   k   l   m   n\n0000040   o   p\n0000042\n"
+   }
+  },
+  "opt od: option -t d1": {
+   "script": "58513b779897702e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   72  101  108  108  111   44   32   87  111  114  108  100   33   10    1   -1\n0000020    0  127   97   98   99  100  101  102  103  104  105  106  107  108  109  110\n0000040  111  112\n0000042\n"
+   }
+  },
+  "opt od: option -t d1 -t c": {
+   "script": "412b519da6b7e4dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   72  101  108  108  111   44   32   87  111  114  108  100   33   10    1   -1\n           H    e    l    l    o    ,         W    o    r    l    d    !   \\n  001  377\n0000020    0  127   97   98   99  100  101  102  103  104  105  106  107  108  109  110\n          \\0  177    a    b    c    d    e    f    g    h    i    j    k    l    m    n\n0000040  111  112\n           o    p\n0000042\n"
+   }
+  },
+  "opt od: option -t d2": {
+   "script": "b962ab81d2f23ebf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  25928  27756  11375  22304  29295  25708   2593   -255\n0000020  32512  25185  25699  26213  26727  27241  27755  28269\n0000040  28783\n0000042\n"
+   }
+  },
+  "opt od: option -t d4": {
+   "script": "671ddf19bfb56921",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  1819043144  1461726319  1684828783   -16709087\n0000020  1650556672  1717920867  1785292903  1852664939\n0000040       28783\n0000042\n"
+   }
+  },
+  "opt od: option -t d8": {
+   "script": "7d9bff58d05e0813",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  6278066737626506568   -71764980526189969\n0000020  7378413942531522304  7957135325236127847\n0000040                28783\n0000042\n"
+   }
+  },
+  "opt od: option -t dS": {
+   "script": "84236c6f8f235b01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  25928  27756  11375  22304  29295  25708   2593   -255\n0000020  32512  25185  25699  26213  26727  27241  27755  28269\n0000040  28783\n0000042\n"
+   }
+  },
+  "opt od: option -t f4": {
+   "script": "f0db826f8235f8d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   1.1431391e+27    1.761127e+14    1.744671e+22    -1.71523e+38\n0000020   1.0399172e+21   2.7081843e+23   7.0543186e+25   1.8369754e+28\n0000040      4.0334e-41\n0000042\n"
+   }
+  },
+  "opt od: option -t f8": {
+   "script": "d08c4bcf19f1430f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   4.861994245760871e+111   -5.84257538827681e+303\n0000020  1.8179486543844065e+185   8.508663228786733e+223\n0000040             1.42207e-319\n0000042\n"
+   }
+  },
+  "opt od: option -t o1": {
+   "script": "1b1856e5f42e1b46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 110 145 154 154 157 054 040 127 157 162 154 144 041 012 001 377\n0000020 000 177 141 142 143 144 145 146 147 150 151 152 153 154 155 156\n0000040 157 160\n0000042\n"
+   }
+  },
+  "opt od: option -t o2": {
+   "script": "5e761fa988c73ac2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 062510 066154 026157 053440 071157 062154 005041 177401\n0000020 077400 061141 062143 063145 064147 065151 066153 067155\n0000040 070157\n0000042\n"
+   }
+  },
+  "opt od: option -t oI": {
+   "script": "8a19ce5c3a3ed286",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 15433062510 12710026157 14433071157 37700205041\n0000020 14230277400 14631262143 15232264147 15633266153\n0000040 00000070157\n0000042\n"
+   }
+  },
+  "opt od: option -t u1": {
+   "script": "ce2895c4e2822711",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  72 101 108 108 111  44  32  87 111 114 108 100  33  10   1 255\n0000020   0 127  97  98  99 100 101 102 103 104 105 106 107 108 109 110\n0000040 111 112\n0000042\n"
+   }
+  },
+  "opt od: option -t u2": {
+   "script": "1cc725bbd8614bd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 25928 27756 11375 22304 29295 25708  2593 65281\n0000020 32512 25185 25699 26213 26727 27241 27755 28269\n0000040 28783\n0000042\n"
+   }
+  },
+  "opt od: option -t u4": {
+   "script": "8198f260f86ef71d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 1819043144 1461726319 1684828783 4278258209\n0000020 1650556672 1717920867 1785292903 1852664939\n0000040      28783\n0000042\n"
+   }
+  },
+  "opt od: option -t uL": {
+   "script": "46f92a770388b9fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  6278066737626506568 18374979093183361647\n0000020  7378413942531522304  7957135325236127847\n0000040                28783\n0000042\n"
+   }
+  },
+  "opt od: option -t x1": {
+   "script": "c88e02a15ae61283",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 48 65 6c 6c 6f 2c 20 57 6f 72 6c 64 21 0a 01 ff\n0000020 00 7f 61 62 63 64 65 66 67 68 69 6a 6b 6c 6d 6e\n0000040 6f 70\n0000042\n"
+   }
+  },
+  "opt od: option -t x1 --width=8": {
+   "script": "50871e329588c3bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 48 65 6c 6c 6f 2c 20 57\n0000010 6f 72 6c 64 21 0a 01 ff\n0000020 00 7f 61 62 63 64 65 66\n0000030 67 68 69 6a 6b 6c 6d 6e\n0000040 6f 70\n0000042\n"
+   }
+  },
+  "opt od: option -t x1z": {
+   "script": "a6481356aa69cf7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 48 65 6c 6c 6f 2c 20 57 6f 72 6c 64 21 0a 01 ff  >Hello, World!...<\n0000020 00 7f 61 62 63 64 65 66 67 68 69 6a 6b 6c 6d 6e  >..abcdefghijklmn<\n0000040 6f 70                                            >op<\n0000042\n"
+   }
+  },
+  "opt od: option -t x2": {
+   "script": "5a97809792a5dc29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 6548 6c6c 2c6f 5720 726f 646c 0a21 ff01\n0000020 7f00 6261 6463 6665 6867 6a69 6c6b 6e6d\n0000040 706f\n0000042\n"
+   }
+  },
+  "opt od: option -t x4": {
+   "script": "f26e79ed652e452d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 6c6c6548 57202c6f 646c726f ff010a21\n0000020 62617f00 66656463 6a696867 6e6d6c6b\n0000040 0000706f\n0000042\n"
+   }
+  },
+  "opt od: option -t x8": {
+   "script": "6a89a855fa0b6164",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 57202c6f6c6c6548 ff010a21646c726f\n0000020 6665646362617f00 6e6d6c6b6a696867\n0000040 000000000000706f\n0000042\n"
+   }
+  },
+  "opt od: option -t xC": {
+   "script": "ee061a625041989f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 48 65 6c 6c 6f 2c 20 57 6f 72 6c 64 21 0a 01 ff\n0000020 00 7f 61 62 63 64 65 66 67 68 69 6a 6b 6c 6d 6e\n0000040 6f 70\n0000042\n"
+   }
+  },
+  "opt od: option -t z": {
+   "script": "1378916b8e1f7802",
+   "status": 1,
+   "stderr": {
+    "text": "od: invalid character 'z' in type string ‘z’\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt od: option -tx1 -Ax -N 4": {
+   "script": "a2b8f606104aae31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "000000 48 65 6c 6c\n000004\n"
+   }
+  },
+  "opt od: option -v -c": {
+   "script": "c9af1d7e889568c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   H   e   l   l   o   ,       W   o   r   l   d   !  \\n 001 377\n0000020  \\0 177   a   b   c   d   e   f   g   h   i   j   k   l   m   n\n0000040   o   p\n0000042\n"
+   }
+  },
+  "opt od: option -w -t x1": {
+   "script": "466e746ffb0011a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 48 65 6c 6c 6f 2c 20 57 6f 72 6c 64 21 0a 01 ff 00 7f 61 62 63 64 65 66 67 68 69 6a 6b 6c 6d 6e\n0000040 6f 70\n0000042\n"
+   }
+  },
+  "opt od: option -w4 -c": {
+   "script": "40268372f341047c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   H   e   l   l\n0000004   o   ,       W\n0000010   o   r   l   d\n0000014   !  \\n 001 377\n0000020  \\0 177   a   b\n0000024   c   d   e   f\n0000030   g   h   i   j\n0000034   k   l   m   n\n0000040   o   p\n0000042\n"
+   }
+  },
+  "opt od: option -x": {
+   "script": "2bc4655575b11b3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 6548 6c6c 2c6f 5720 726f 646c 0a21 ff01\n0000020 7f00 6261 6463 6665 6867 6a69 6c6b 6e6d\n0000040 706f\n0000042\n"
+   }
+  },
+  "opt od: option none": {
+   "script": "89c6578e9efe80f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 062510 066154 026157 053440 071157 062154 005041 177401\n0000020 077400 061141 062143 063145 064147 065151 066153 067155\n0000040 070157\n0000042\n"
+   }
+  },
+  "opt od: skip past end": {
+   "script": "d34edd62b085620a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nod: cannot skip past end of combined input\n"
+   }
+  },
+  "opt od: stdin": {
+   "script": "47672c896771915a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62\n"
+   }
+  },
+  "opt od: traditional offset": {
+   "script": "e197c56b258ccae5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000005   ,       W   o   r   l   d   !  \\n 001 377  \\0 177   a   b   c\n0000025   d   e   f   g   h   i   j   k   l   m   n   o   p\n0000042\n"
+   }
+  },
+  "opt od: two files": {
+   "script": "5623f659866e9ab4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a   b   c   d\n0000004\n"
+   }
+  },
+  "opt paste: missing file": {
+   "script": "a10073fb1934cc21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\npaste: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt paste: no trailing newline": {
+   "script": "e1b66850a54b8c74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tc\nb\t\n"
+   }
+  },
+  "opt paste: one file": {
+   "script": "ca5d6d2917b6d97b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "opt paste: option --serial --delimiters=+": {
+   "script": "1a9b06e83d3eab31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   +   b   +   c  \\n   1   +   2  \\n\n"
+   }
+  },
+  "opt paste: option -d ''": {
+   "script": "0ff883f3f2f46275",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   1  \\n   b   2  \\n   c  \\n\n"
+   }
+  },
+  "opt paste: option -d ',;'": {
+   "script": "444dff0311dea1c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   ,   1  \\n   b   ,   2  \\n   c   ,  \\n\n"
+   }
+  },
+  "opt paste: option -d '\\0'": {
+   "script": "5a1c1d0f3a7ba143",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   1  \\n   b   2  \\n   c  \\n\n"
+   }
+  },
+  "opt paste: option -d '\\\\'": {
+   "script": "6cd51f4476992538",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   \\   1  \\n   b   \\   2  \\n   c   \\  \\n\n"
+   }
+  },
+  "opt paste: option -d '\\n'": {
+   "script": "67aea137f9cb012e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   1  \\n   b  \\n   2  \\n   c  \\n  \\n\n"
+   }
+  },
+  "opt paste: option -d '\\t'": {
+   "script": "868a092d04a17a23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\t   1  \\n   b  \\t   2  \\n   c  \\t  \\n\n"
+   }
+  },
+  "opt paste: option -d ,": {
+   "script": "e8e63fb354d0fb2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   ,   1  \\n   b   ,   2  \\n   c   ,  \\n\n"
+   }
+  },
+  "opt paste: option -s": {
+   "script": "d6c768cc9355db05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\t   b  \\t   c  \\n   1  \\t   2  \\n\n"
+   }
+  },
+  "opt paste: option -s -d :": {
+   "script": "ab665d31ca304730",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   :   b   :   c  \\n   1   :   2  \\n\n"
+   }
+  },
+  "opt paste: option -z": {
+   "script": "d894ed4fe7b68431",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   b  \\n   c  \\n  \\t   1  \\n   2  \\n  \\0\n"
+   }
+  },
+  "opt paste: option none": {
+   "script": "850f702561fe9c6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\t   1  \\n   b  \\t   2  \\n   c  \\t  \\n\n"
+   }
+  },
+  "opt paste: serial no trailing newline": {
+   "script": "87094eb370669f89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a,b\n"
+   }
+  },
+  "opt paste: stdin columns": {
+   "script": "7d23c853b42a5698",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\t2\t3\n4\t5\t6\n"
+   }
+  },
+  "opt paste: stdin with file": {
+   "script": "8c182d2ee275cc48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tx\nb\t\nc\t\n"
+   }
+  },
+  "opt paste: trailing backslash delimiter": {
+   "script": "8143016f7c983903",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\npaste: delimiter list ends with an unescaped backslash: a\\\n"
+   }
+  },
+  "opt readlink: missing operand": {
+   "script": "4238c057d921d961",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nreadlink: missing operand\nTry 'readlink --help' for more information.\n"
+   }
+  },
+  "opt readlink: operands --canonicalize l2": {
+   "script": "9de18a13eca74d6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands --canonicalize-existing dl/e": {
+   "script": "372d5c0ead9edf07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/e\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands --canonicalize-missing a/b": {
+   "script": "c194534f79079742",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/a/b\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands --no-newline l1": {
+   "script": "7a14575bf19998f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d/fstatus=0\n"
+   }
+  },
+  "opt readlink: operands --zero -f l1 | od -An -c": {
+   "script": "7e40751d72f74914",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   /   t   m   p   /   r   /   d   /   f  \\0\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -e dangling": {
+   "script": "6d40e2c0bb729c71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readlink: operands -e l2": {
+   "script": "17bc6c3f9921347b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -e nosuch": {
+   "script": "c7e2c4ac74803735",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readlink: operands -f ''": {
+   "script": "57894eae62835ba1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readlink: operands -f .": {
+   "script": "c42519e27f6c0116",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -f ./d/../d/f": {
+   "script": "d974df491eb1e7ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -f /": {
+   "script": "c73a0cb7207a5991",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -f dangling": {
+   "script": "e99e320ebb614ec2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/nosuch\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -f dl/e/..": {
+   "script": "e85f96e001748924",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -f l1 l2": {
+   "script": "6e1a1d41c63c2595",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\n/tmp/r/d/f\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -f l2": {
+   "script": "cc423c946d4da494",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -m dangling/x/y": {
+   "script": "001edf5fac691b72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/nosuch/x/y\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -m l2": {
+   "script": "d7a99ac5366e4e67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -m nosuch/../x": {
+   "script": "91fa043d278c6be5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/x\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands -n l1": {
+   "script": "cc8305820a92e6ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d/fstatus=0\n"
+   }
+  },
+  "opt readlink: operands -q d/f": {
+   "script": "38276927930bb759",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readlink: operands -s d/f": {
+   "script": "95024a151a7d0063",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readlink: operands -v d/f": {
+   "script": "481d2d1fcef09b6e",
+   "status": 0,
+   "stderr": {
+    "text": "readlink: d/f: Invalid argument\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt readlink: operands -z l1 | od -An -c": {
+   "script": "6731e510dbd1dc5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   d   /   f  \\0\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands l1": {
+   "script": "ecb135f5e454a287",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d/f\nstatus=0\n"
+   }
+  },
+  "opt readlink: operands l2": {
+   "script": "8b8d2a049918621a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l1\nstatus=0\n"
+   }
+  },
+  "opt readlink: verbose missing": {
+   "script": "007940c7fdbe931c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nreadlink: nosuch: No such file or directory\n"
+   }
+  },
+  "opt readlink: verbose not a link": {
+   "script": "9e798514c161fe14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nreadlink: d/f: Invalid argument\n"
+   }
+  },
+  "opt realpath: missing file message": {
+   "script": "135a8e3ff92bc36f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrealpath: nosuch/x: No such file or directory\n"
+   }
+  },
+  "opt realpath: missing operand": {
+   "script": "4ec3524cd90f26c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrealpath: missing operand\nTry 'realpath --help' for more information.\n"
+   }
+  },
+  "opt realpath: operands ''": {
+   "script": "b96c3dbc2978f4a7",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: '': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt realpath: operands --no-symlinks l2": {
+   "script": "8211acf6762146fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/l2\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands --relative-base=/tmp/r d/f /": {
+   "script": "fbdf2731bbf30257",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d/f\n/\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands --relative-to=/ /tmp/r/d": {
+   "script": "6e579000163689be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "tmp/r/d\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands --relative-to=/tmp/r/d/e /tmp": {
+   "script": "8eb5389d53dfd81d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../../..\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands --relative-to=d --relative-base=/tmp d/f": {
+   "script": "9d053ba03ceb11b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands --relative-to=d/e d/f": {
+   "script": "1ea58b9f6f2ab2ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../f\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands --relative-to=nosuch d/f": {
+   "script": "d2a9ffebe23d112c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../d/f\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands --strip l2": {
+   "script": "093d1785be1cc892",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/l2\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands -E nosuch/x": {
+   "script": "06c8a3cc4e77c0f6",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: nosuch/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt realpath: operands -E nosuch/x/y": {
+   "script": "add47d8b3f2698cc",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: nosuch/x/y: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt realpath: operands -L dl/e/..": {
+   "script": "9131a3b0f9c3523d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands -P dl/e/..": {
+   "script": "ae7e4a56788f39c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands -e dangling": {
+   "script": "4c21d9640fe6eecb",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: dangling: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt realpath: operands -e nosuch": {
+   "script": "3fffcf6cdcc99c89",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt realpath: operands -m --relative-to=x/y x/z": {
+   "script": "ef8472e3c7b7000e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../z\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands -m nosuch/x": {
+   "script": "c815642bb332c5ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/nosuch/x\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands -q nosuch": {
+   "script": "4830545a3ee9fed6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/nosuch\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands -s dl/e/..": {
+   "script": "291a7b502a86ffa0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/dl\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands -s l1": {
+   "script": "95f2c970297f74c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/l1\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands -z d/f | od -An -c": {
+   "script": "4f994d8fe9baa3c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   /   t   m   p   /   r   /   d   /   f  \\0\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands . ..": {
+   "script": "28a4340e84291ad1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r\n/tmp\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands d/f": {
+   "script": "5846a036bf6653bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands d/f l1 nosuch/x": {
+   "script": "4b45981753028d38",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: nosuch/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\n/tmp/r/d/f\nstatus=1\n"
+   }
+  },
+  "opt realpath: operands dangling": {
+   "script": "38b50dff9f0d23e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/nosuch\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands dl/e/..": {
+   "script": "161444a33131fa1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d\nstatus=0\n"
+   }
+  },
+  "opt realpath: operands l2": {
+   "script": "75b37dc398ce36d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/r/d/f\nstatus=0\n"
+   }
+  },
+  "opt realpath: relative-to missing existing": {
+   "script": "bd0209fe219a8b44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrealpath: nosuch: No such file or directory\n"
+   }
+  },
+  "opt rm: continues after failure": {
+   "script": "e58563de8e9c018d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nempty\ng\nstatus=0\nrm: cannot remove 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt rm: dir option empty": {
+   "script": "d012f86e9146771a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nf\ng\n"
+   }
+  },
+  "opt rm: dir option nonempty": {
+   "script": "ec4667a510699acf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrm: cannot remove 'd': Directory not empty\n"
+   }
+  },
+  "opt rm: directory without recursive": {
+   "script": "3cec6c6a15706891",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrm: cannot remove 'd': Is a directory\n"
+   }
+  },
+  "opt rm: dot dot refused": {
+   "script": "10b83133873ad55c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrm: refusing to remove '.' or '..' directory: skipping 'd/..'\n"
+   }
+  },
+  "opt rm: dot refused": {
+   "script": "4b76652fa4ff2ff9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrm: refusing to remove '.' or '..' directory: skipping '.'\n"
+   }
+  },
+  "opt rm: double dash": {
+   "script": "89e1be64a75f7129",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nempty\nf\ng\n"
+   }
+  },
+  "opt rm: file": {
+   "script": "2e88b89a9a9475d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nempty\ng\n"
+   }
+  },
+  "opt rm: force missing": {
+   "script": "9216e10e7f2d03eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt rm: force no operand": {
+   "script": "14f79d34ccbf99d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt rm: interactive never": {
+   "script": "ded217c1606d0aa9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nempty\ng\n"
+   }
+  },
+  "opt rm: interactive no": {
+   "script": "48e79ea9079a005e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nempty\nf\ng\nstatus=0\nrm: remove regular file 'f'? "
+   }
+  },
+  "opt rm: interactive once": {
+   "script": "613da73dee833394",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nempty\n"
+   }
+  },
+  "opt rm: interactive recursive once": {
+   "script": "26e012f2cc3069b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nempty\nf\ng\nstatus=0\nrm: remove 1 argument recursively? "
+   }
+  },
+  "opt rm: interactive yes": {
+   "script": "8079d3383746ffaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nempty\ng\n"
+   }
+  },
+  "opt rm: missing": {
+   "script": "f8173ec67c85cf40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrm: cannot remove 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt rm: missing operand": {
+   "script": "d2f4cb1c12c054f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrm: missing operand\nTry 'rm --help' for more information.\n"
+   }
+  },
+  "opt rm: one file system": {
+   "script": "64325a37fee92ca3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\nf\ng\n"
+   }
+  },
+  "opt rm: recursive": {
+   "script": "6403beef6c159bfd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\nf\ng\n"
+   }
+  },
+  "opt rm: recursive capital": {
+   "script": "e3722ace7209c717",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\nf\ng\n"
+   }
+  },
+  "opt rm: recursive long": {
+   "script": "af05ad634512b966",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\ng\n"
+   }
+  },
+  "opt rm: several": {
+   "script": "192d13e8870ee245",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nempty\n"
+   }
+  },
+  "opt rm: symlink not target": {
+   "script": "5954c8e5f100e43e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ad\nempty\nf\ng\n"
+   }
+  },
+  "opt rm: trailing slash on file": {
+   "script": "77a4eaf74ba29161",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrm: cannot remove 'f/': Not a directory\n"
+   }
+  },
+  "opt rm: unknown option": {
+   "script": "ae5b0d7f08de90e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrm: unrecognized option '--bogus'\nTry 'rm --help' for more information.\n"
+   }
+  },
+  "opt rm: verbose": {
+   "script": "2e568018474c7436",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "removed 'f'\nremoved 'g'\nstatus=0\n"
+   }
+  },
+  "opt rm: verbose recursive": {
+   "script": "13969ba5235c2f0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "removed 'd/e/h'\nremoved directory 'd'\nremoved directory 'd/e'\nstatus=0\n"
+   }
+  },
+  "opt rmdir: dot": {
+   "script": "72d47cdb76f25fde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrmdir: failed to remove '.': Invalid argument\n"
+   }
+  },
+  "opt rmdir: empty": {
+   "script": "d1985fc5deb7fff9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nf\ng\n"
+   }
+  },
+  "opt rmdir: ignore nonempty": {
+   "script": "c82839f969160abc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt rmdir: missing": {
+   "script": "f4fcc4e7f0161bad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrmdir: failed to remove 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt rmdir: missing operand": {
+   "script": "d468e1fa95a74e9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrmdir: missing operand\nTry 'rmdir --help' for more information.\n"
+   }
+  },
+  "opt rmdir: nonempty": {
+   "script": "70e95770258bb325",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrmdir: failed to remove 'd': Directory not empty\n"
+   }
+  },
+  "opt rmdir: not a directory": {
+   "script": "bc0dda2dbe9306b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nrmdir: failed to remove 'f': Not a directory\n"
+   }
+  },
+  "opt rmdir: parents": {
+   "script": "7d899a1f65f1a498",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\nf\ng\n"
+   }
+  },
+  "opt rmdir: parents stops at nonempty": {
+   "script": "d2bd3646ec41e3a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nd\nempty\nf\ng\n"
+   }
+  },
+  "opt rmdir: trailing slash": {
+   "script": "38ac7d08b3211dfa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nf\ng\n"
+   }
+  },
+  "opt rmdir: verbose": {
+   "script": "bdc3d9ca693519f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rmdir: removing directory, 'empty'\nstatus=0\n"
+   }
+  },
+  "opt rmdir: verbose parents": {
+   "script": "56d05f8067197753",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rmdir: removing directory, 'd/e'\nrmdir: removing directory, 'd'\nstatus=0\n"
+   }
+  },
+  "opt unexpand: all blanks": {
+   "script": "3e29ee9fae3241ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\t   a  \\t   b  \\n                   x  \\t   y  \\n  \\t       z\n  \\n\n"
+   }
+  },
+  "opt unexpand: all long": {
+   "script": "426183448fa86a04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\t   a  \\t   b  \\n                   x  \\t   y  \\n  \\t       z\n  \\n\n"
+   }
+  },
+  "opt unexpand: default leading": {
+   "script": "851c651d93115e13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\t   a                               b  \\n                   x\n               y  \\n  \\t       z  \\n\n"
+   }
+  },
+  "opt unexpand: first only": {
+   "script": "0a50de6fc5d51008",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\t  \\t   a                               b  \\n  \\t   x        \n       y  \\n  \\t       z  \\n\n"
+   }
+  },
+  "opt unexpand: missing file": {
+   "script": "c078e235491dd0f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nunexpand: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt unexpand: obsolete size": {
+   "script": "d59dc3bec10d500e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\t  \\t   a                               b  \\n  \\t   x        \n       y  \\n  \\t       z  \\n\n"
+   }
+  },
+  "opt unexpand: single space not converted": {
+   "script": "db169bc526f17234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a       b  \\n\n"
+   }
+  },
+  "opt unexpand: tab list": {
+   "script": "d6c22e8fce24d5aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\t  \\t   a                               b  \\n  \\t   x  \\t   y\n  \\n  \\t       z  \\n\n"
+   }
+  },
+  "opt unexpand: tab list not ascending": {
+   "script": "6033ee2e45be7d65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nunexpand: tab sizes must be ascending\n"
+   }
+  },
+  "opt unexpand: tab size implies all": {
+   "script": "6c9dedeb7e8be60a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\t  \\t   a  \\t  \\t   b  \\n  \\t   x  \\t   y  \\n  \\t       z  \\n\n"
+   }
+  },
+  "opt unexpand: tab size zero": {
+   "script": "30ab9a8269c3c760",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nunexpand: tab size cannot be 0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

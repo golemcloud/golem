@@ -1,0 +1,7098 @@
+{
+ "cases": {
+  "edge bytes args: IFS invalid": {
+   "script": "cfb0aaf7dce8ec94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes args: array element invalid": {
+   "script": "762e1d22bf0fd411",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff\n"
+   }
+  },
+  "edge bytes args: assoc key invalid": {
+   "script": "cef61d28a6d55be4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff\n"
+   }
+  },
+  "edge bytes args: case invalid pattern": {
+   "script": "0a9363d40718ba46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "match\n"
+   }
+  },
+  "edge bytes args: command substitution nul warning": {
+   "script": "b53c42e68019f48a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: command substitution: ignored null byte in input\n"
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes args: command substitution trailing crlf": {
+   "script": "e6d4dfad98f4df34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 0d\n"
+   }
+  },
+  "edge bytes args: cond invalid pattern": {
+   "script": "6d90ddc63659cb28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "edge bytes args: cond regex invalid": {
+   "script": "45b2e08b8f1695ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "other\n"
+   }
+  },
+  "edge bytes args: cond regex invalid after the match": {
+   "script": "d2eab4366b9879c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0 a\n"
+   }
+  },
+  "edge bytes args: cond regex invalid before the match": {
+   "script": "7911f194133218b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 \n"
+   }
+  },
+  "edge bytes args: cond regex invalid in the pattern": {
+   "script": "b3b95113f1f4cb89",
+   "status": 0,
+   "stderr": {
+    "base64": "YmFzaDogbGluZSAxOiBbWzogaW52YWxpZCByZWd1bGFyIGV4cHJlc3Npb24gYF5h/2IkJzogSW52YWxpZCByZWdleHAKYmFzaDogbGluZSAxOiBbWzogaW52YWxpZCByZWd1bGFyIGV4cHJlc3Npb24gYGH/Yic6IEludmFsaWQgcmVnZXhwCg=="
+   },
+   "stdout": {
+    "text": "2\n2\n"
+   }
+  },
+  "edge bytes args: cond regex invalid with a back-reference": {
+   "script": "23186ad6b1ee919e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 \n"
+   }
+  },
+  "edge bytes args: cut -d invalid": {
+   "script": "14003d226aede6a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge bytes args: declare -p control": {
+   "script": "93f7d58c4b563fe6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=$'\\001\\n\\377'\n"
+   }
+  },
+  "edge bytes args: dollar-quote control-x": {
+   "script": "52ede488b110d202",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 01 7f\n"
+   }
+  },
+  "edge bytes args: dollar-quote nul": {
+   "script": "06f11a7cfe5772ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes args: dollar-quote octal high": {
+   "script": "7415286decacf0fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff fe\n"
+   }
+  },
+  "edge bytes args: echo arg invalid": {
+   "script": "249b50ae2a2523bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " c3 0a\n"
+   }
+  },
+  "edge bytes args: env invalid": {
+   "script": "4d51583695258794",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 56 3d fe 0a\n"
+   }
+  },
+  "edge bytes args: export invalid": {
+   "script": "da1531339c1492ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff\n"
+   }
+  },
+  "edge bytes args: expr length invalid": {
+   "script": "d89ff52018d40020",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge bytes args: function arg invalid": {
+   "script": "4ec9223d1a5054c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff\n"
+   }
+  },
+  "edge bytes args: grep -F invalid pattern": {
+   "script": "1937a5bfaa3dad04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a\n"
+   }
+  },
+  "edge bytes args: grep -a invalid pattern": {
+   "script": "9903380b4828ea6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a\n"
+   }
+  },
+  "edge bytes args: grep invalid pattern": {
+   "script": "0c4302c8e9d94e2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes args: heredoc invalid expansion": {
+   "script": "a47cec0a3e62f59e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff 0a\n"
+   }
+  },
+  "edge bytes args: join -t invalid": {
+   "script": "d96b0530acf1e2e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 6b ff 61 ff 61 0a\n"
+   }
+  },
+  "edge bytes args: jq arg invalid": {
+   "script": "221c7d581f555c19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 ef bf bd 22 0a\n"
+   }
+  },
+  "edge bytes args: jq invalid json string": {
+   "script": "febcd49a3c5ebf81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 61 ef bf bd 62 22 0a\n"
+   }
+  },
+  "edge bytes args: mapfile -d invalid": {
+   "script": "3d8560e98df657c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes args: mapfile crlf": {
+   "script": "97dc5b68bf12a885",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 0d\n"
+   }
+  },
+  "edge bytes args: nl separator invalid": {
+   "script": "894d8dd8e02c0b06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 31 ff 61 0a\n"
+   }
+  },
+  "edge bytes args: paste delimiter invalid": {
+   "script": "bdd25d772d85fd84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 31 ff 32 0a\n"
+   }
+  },
+  "edge bytes args: printf %c invalid": {
+   "script": "44abd8a98b0fdb11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff\n"
+   }
+  },
+  "edge bytes args: printf %q control": {
+   "script": "360bf0b236f29ba3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\001\\177\\tb'\n"
+   }
+  },
+  "edge bytes args: printf arg invalid": {
+   "script": "61d7a5b58abb5970",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff fe 0a\n"
+   }
+  },
+  "edge bytes args: printf char code invalid": {
+   "script": "563bc5616d846383",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "255\n"
+   }
+  },
+  "edge bytes args: read -d invalid": {
+   "script": "6c2e5d1e1c8a7995",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62\n"
+   }
+  },
+  "edge bytes args: read crlf": {
+   "script": "67e4f836747211a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes args: sed invalid pattern": {
+   "script": "f6d74e4b8dc56b6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aXb\n"
+   }
+  },
+  "edge bytes args: sed invalid replacement": {
+   "script": "5c552178e555d61e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff 62 0a\n"
+   }
+  },
+  "edge bytes args: seq separator invalid": {
+   "script": "fac580c2ed4fe5da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 31 ff 32 ff 33 0a\n"
+   }
+  },
+  "edge bytes args: sh -c invalid": {
+   "script": "d8852dcd4e8f01ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff\n"
+   }
+  },
+  "edge bytes args: sort -t invalid": {
+   "script": "664b7cc28f5c6bd9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 ff 61 0a 61 ff 62 0a\n"
+   }
+  },
+  "edge bytes args: test -n invalid": {
+   "script": "07181707077afb58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nonempty\n"
+   }
+  },
+  "edge bytes args: test = invalid": {
+   "script": "7e90375b9f88e316",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "equal\n"
+   }
+  },
+  "edge bytes args: tr invalid set": {
+   "script": "144ce640e9246616",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aXb\n"
+   }
+  },
+  "edge bytes args: transform E": {
+   "script": "6f4b4e0089dab298",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 41 c3 a9 ff\n"
+   }
+  },
+  "edge bytes args: transform Q control": {
+   "script": "964a3fee1dbd49b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\001\\177\\tb'\n"
+   }
+  },
+  "edge bytes args: trim invalid": {
+   "script": "26dfa6180cbec2e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62\n"
+   }
+  },
+  "edge bytes args: xargs -d invalid": {
+   "script": "58e8217b6f130a8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "edge bytes args: xtrace control": {
+   "script": "5b95ac8fbf03fa07",
+   "status": 0,
+   "stderr": {
+    "text": "+ : $'a\\001b\\377'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge bytes names: backslash name": {
+   "script": "246218d99c586172",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\b\n\"a\\\\b\"\n"
+   }
+  },
+  "edge bytes names: basename invalid": {
+   "script": "bc6f17230cc80c84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 fe 0a\n"
+   }
+  },
+  "edge bytes names: cd invalid name": {
+   "script": "4296511e4606f5a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 2f 74 6d 70 2f 64 ff 0a\n"
+   }
+  },
+  "edge bytes names: dash name": {
+   "script": "487db3f91abf8c89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-n\n0\n"
+   }
+  },
+  "edge bytes names: dirname invalid": {
+   "script": "be8e3119094f6112",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 2f 74 6d 70 2f 61 ff 62 0a\n"
+   }
+  },
+  "edge bytes names: escape name": {
+   "script": "c3442f2ef7942c5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a 033   b  \\n\na\\033b\n"
+   }
+  },
+  "edge bytes names: find invalid name": {
+   "script": "9dba72c5e17dccdb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge bytes names: glob chars in name": {
+   "script": "513244ceee02470f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*\n[a]\n[a]\n"
+   }
+  },
+  "edge bytes names: glob invalid name": {
+   "script": "9fcad7d065f39ca3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 6e ff\n"
+   }
+  },
+  "edge bytes names: ls -b invalid name": {
+   "script": "0bb3c428cd8381f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n\\377\n"
+   }
+  },
+  "edge bytes names: ls quoted invalid name": {
+   "script": "3ef127e958c05116",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'n'$'\\377'\n"
+   }
+  },
+  "edge bytes names: mkdir invalid name": {
+   "script": "f76a2cba20c2a16d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n   d 303  \\n\n"
+   }
+  },
+  "edge bytes names: newline name": {
+   "script": "2688ffc85159ffa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   b  \\n\na\\nb\n"
+   }
+  },
+  "edge bytes names: newline name find": {
+   "script": "7b222226cdc1a251",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   .   /   a  \\n   b  \\0\n"
+   }
+  },
+  "edge bytes names: newline name glob": {
+   "script": "a2984149262f1fe1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a\nb]\n"
+   }
+  },
+  "edge bytes names: quote names": {
+   "script": "b100340fe584f386",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "it's\nsay \"hi\"\n\"it's\"\n\"say \\\"hi\\\"\"\n"
+   }
+  },
+  "edge bytes names: redirect invalid name": {
+   "script": "32dc95e69a939b6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n   n 377  \\n\n"
+   }
+  },
+  "edge bytes names: rm invalid name": {
+   "script": "a267e9457e144010",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n0\n"
+   }
+  },
+  "edge bytes names: space-only name": {
+   "script": "dd42a637670111da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      \\n\n"
+   }
+  },
+  "edge bytes names: tab name": {
+   "script": "26e2a9182578cce8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\na\\tb\n"
+   }
+  },
+  "edge bytes names: touch invalid name": {
+   "script": "00e4d00d0be7f405",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n   n 377  \\n\n"
+   }
+  },
+  "edge bytes names: xargs -0 invalid name": {
+   "script": "9a6f6b0c7380473b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "bv8K"
+   }
+  },
+  "edge bytes nul: cut -z": {
+   "script": "d307a75b263d0c33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 00 61 00 63 00\n"
+   }
+  },
+  "edge bytes nul: cut -z unterminated": {
+   "script": "39f1717aeba04c81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 00 61 00 63 00\n"
+   }
+  },
+  "edge bytes nul: grep -z": {
+   "script": "82a1d8130f6deb91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00\n"
+   }
+  },
+  "edge bytes nul: grep -z -c": {
+   "script": "1c37968940181e8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 33 0a\n"
+   }
+  },
+  "edge bytes nul: grep -z -c unterminated": {
+   "script": "2b0e24844f48ee97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 33 0a\n"
+   }
+  },
+  "edge bytes nul: grep -z unterminated": {
+   "script": "c36d42655089a280",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00\n"
+   }
+  },
+  "edge bytes nul: head -z": {
+   "script": "f346c82d57c9152a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 00 61 00\n"
+   }
+  },
+  "edge bytes nul: head -z unterminated": {
+   "script": "89f5db7178230f7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 00 61 00\n"
+   }
+  },
+  "edge bytes nul: jq -R": {
+   "script": "3c7c07b07aad5fda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 62 5c 75 30 30 30 30 61 5c 75 30 30 30 30 63\n 5c 75 30 30 30 30 22 0a\n"
+   }
+  },
+  "edge bytes nul: jq -R unterminated": {
+   "script": "0df2ddf672d761c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 62 5c 75 30 30 30 30 61 5c 75 30 30 30 30 63\n 22 0a\n"
+   }
+  },
+  "edge bytes nul: mapfile -d empty": {
+   "script": "3d684fd6258b8f01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 33 20 63 0a\n"
+   }
+  },
+  "edge bytes nul: mapfile -d empty unterminated": {
+   "script": "bce3527e3dfdb39d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 33 20 63 0a\n"
+   }
+  },
+  "edge bytes nul: nl -z": {
+   "script": "7bcd0dd7f4b80a5c",
+   "status": 0,
+   "stderr": {
+    "text": "nl: invalid option -- 'z'\nTry 'nl --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge bytes nul: nl -z unterminated": {
+   "script": "b0dab796a99286e7",
+   "status": 0,
+   "stderr": {
+    "text": "nl: invalid option -- 'z'\nTry 'nl --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge bytes nul: od": {
+   "script": "5274df00cfca6710",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 62 20 20 5c 30 20 20 20 61 20 20 5c 30\n 20 20 20 63 20 20 5c 30 0a\n"
+   }
+  },
+  "edge bytes nul: od unterminated": {
+   "script": "ed9f8942cf268b9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 62 20 20 5c 30 20 20 20 61 20 20 5c 30\n 20 20 20 63 0a\n"
+   }
+  },
+  "edge bytes nul: paste -z": {
+   "script": "e015c11c006ab916",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 2c 61 2c 63 00\n"
+   }
+  },
+  "edge bytes nul: paste -z unterminated": {
+   "script": "3927054357d485e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 2c 61 2c 63 00\n"
+   }
+  },
+  "edge bytes nul: read -d empty": {
+   "script": "07f43bf79635d374",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 5b 62 5d 0a 5b 61 5d 0a 5b 63 5d 0a\n"
+   }
+  },
+  "edge bytes nul: read -d empty unterminated": {
+   "script": "4ba2247ba0eac348",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 5b 62 5d 0a 5b 61 5d 0a\n"
+   }
+  },
+  "edge bytes nul: sed -z": {
+   "script": "04192254e38fa084",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 3e 62 00 3e 61 00 3e 63 00\n"
+   }
+  },
+  "edge bytes nul: sed -z unterminated": {
+   "script": "953cd9433c46e921",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 3e 62 00 3e 61 00 3e 63\n"
+   }
+  },
+  "edge bytes nul: sort -z": {
+   "script": "ffa033b72f2f521f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 00 63 00\n"
+   }
+  },
+  "edge bytes nul: sort -z -r": {
+   "script": "7a109832cdb934e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 00 62 00 61 00\n"
+   }
+  },
+  "edge bytes nul: sort -z -r unterminated": {
+   "script": "0a1c91088366e6c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 00 62 00 61 00\n"
+   }
+  },
+  "edge bytes nul: sort -z unterminated": {
+   "script": "f3dc673a159246cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 00 63 00\n"
+   }
+  },
+  "edge bytes nul: tac -s": {
+   "script": "c0b2be642cfb8e89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 00 61 00 62 00\n"
+   }
+  },
+  "edge bytes nul: tac -s unterminated": {
+   "script": "5690ce7bd474b113",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 00 62 00\n"
+   }
+  },
+  "edge bytes nul: tail -z": {
+   "script": "6912c6390fae588c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 00\n"
+   }
+  },
+  "edge bytes nul: tail -z unterminated": {
+   "script": "0dab87343fa26334",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63\n"
+   }
+  },
+  "edge bytes nul: tr to newline": {
+   "script": "ba4f60e7d64b6186",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 0a 61 0a 63 0a\n"
+   }
+  },
+  "edge bytes nul: tr to newline unterminated": {
+   "script": "bf443ad1b3f80206",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 0a 61 0a 63\n"
+   }
+  },
+  "edge bytes nul: uniq -z": {
+   "script": "f6a280636a19afb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 20 31 20 61 00 20 20 20 20 20 20\n 31 20 62 00 20 20 20 20 20 20 31 20 63 00\n"
+   }
+  },
+  "edge bytes nul: uniq -z unterminated": {
+   "script": "3b63117dcea81670",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 20 31 20 61 00 20 20 20 20 20 20\n 31 20 62 00 20 20 20 20 20 20 31 20 63 00\n"
+   }
+  },
+  "edge bytes nul: wc -l": {
+   "script": "c228075a7f4bc71e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 30 0a\n"
+   }
+  },
+  "edge bytes nul: wc -l unterminated": {
+   "script": "a8e50bb14e742d90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 30 0a\n"
+   }
+  },
+  "edge bytes nul: xargs -0": {
+   "script": "ec1c12f7b584dc25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 20 61 20 63 0a\n"
+   }
+  },
+  "edge bytes nul: xargs -0 -n1": {
+   "script": "7f93acd497d56fec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 0a 61 0a 63 0a\n"
+   }
+  },
+  "edge bytes nul: xargs -0 -n1 unterminated": {
+   "script": "7136e0ef1f0b197e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 0a 61 0a 63 0a\n"
+   }
+  },
+  "edge bytes nul: xargs -0 unterminated": {
+   "script": "27125898e236fee6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 20 61 20 63 0a\n"
+   }
+  },
+  "edge bytes: ansi-c array controls": {
+   "script": "907390b09d30573a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a 7c\n"
+   }
+  },
+  "edge bytes: ansi-c array crlf": {
+   "script": "2fc1b6f54311ad59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 20 62 0d 0a 7a 7a 0d 0a 7c\n"
+   }
+  },
+  "edge bytes: ansi-c array latin1": {
+   "script": "35bcded26adea013",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a 7c\n"
+   }
+  },
+  "edge bytes: ansi-c array lone ff": {
+   "script": "824f4f1caa45d02a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 ff 62 0a 7a 7a 0a 7c\n"
+   }
+  },
+  "edge bytes: ansi-c array nul": {
+   "script": "e542bf0e0c476bb4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 7c\n"
+   }
+  },
+  "edge bytes: ansi-c array surrogate": {
+   "script": "e509de327aef60ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 ed a0 80 62 0a 7a 7a 0a 7c\n"
+   }
+  },
+  "edge bytes: ansi-c array truncated": {
+   "script": "67ebdbbb0ed885a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 62 c3 0a 7a 7a 0a 7c\n"
+   }
+  },
+  "edge bytes: ansi-c declare -p controls": {
+   "script": "e4d634c301f8503d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=$'a\\001\\E[1mb\\177\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c declare -p crlf": {
+   "script": "06f3a1a1a8a8dcd7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=$'a b\\r\\nzz\\r\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c declare -p latin1": {
+   "script": "d30a69f3c95d9062",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=$'caf\\351 ol\\351\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c declare -p lone ff": {
+   "script": "4fb7ab1780102368",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=$'a\\377b\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c declare -p nul": {
+   "script": "89bddeaccbd88fcd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"a\"\n"
+   }
+  },
+  "edge bytes: ansi-c declare -p surrogate": {
+   "script": "c73a4e12f52a73f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=$'a\\355\\240\\200b\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c declare -p truncated": {
+   "script": "5bd25a382afc2793",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=$'ab\\303\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c echo controls": {
+   "script": "65f6af0908dede0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c echo crlf": {
+   "script": "887c0bb658df3a15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c echo latin1": {
+   "script": "fa891546abe3a700",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c echo lone ff": {
+   "script": "745db68ea70b4358",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c echo nul": {
+   "script": "39c8f657bb33b234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 0a\n"
+   }
+  },
+  "edge bytes: ansi-c echo surrogate": {
+   "script": "479b29357f15180d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c echo truncated": {
+   "script": "f121bef6db397d8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c herestring controls": {
+   "script": "26b05d2b88ba54a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c herestring crlf": {
+   "script": "82acf1e9770529fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c herestring latin1": {
+   "script": "aa084d110b9a7fde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c herestring lone ff": {
+   "script": "e6a30b7062818fd3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c herestring nul": {
+   "script": "213016a737b6470a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 0a\n"
+   }
+  },
+  "edge bytes: ansi-c herestring surrogate": {
+   "script": "7b8f1723581e1053",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c herestring truncated": {
+   "script": "d878037848ab5ea9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c length controls": {
+   "script": "704e049903851171",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: ansi-c length crlf": {
+   "script": "877e5352bdc23629",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: ansi-c length latin1": {
+   "script": "8db1910fd1d09c67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: ansi-c length lone ff": {
+   "script": "e2c54ae4bb1193bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: ansi-c length nul": {
+   "script": "b73672b0e0bfa5e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: ansi-c length surrogate": {
+   "script": "f9d9bdbb7a37fbae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: ansi-c length truncated": {
+   "script": "1dd949c12196c077",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: ansi-c pattern controls": {
+   "script": "ceafa0ce83db45c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "edge bytes: ansi-c pattern crlf": {
+   "script": "3d68a46023eca8d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "edge bytes: ansi-c pattern latin1": {
+   "script": "0b8c7cfb3c932c46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "other\n"
+   }
+  },
+  "edge bytes: ansi-c pattern lone ff": {
+   "script": "7a1de81427893cef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "edge bytes: ansi-c pattern nul": {
+   "script": "37724da6a0b1ce7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "edge bytes: ansi-c pattern surrogate": {
+   "script": "961b06aa4b5ee421",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "edge bytes: ansi-c pattern truncated": {
+   "script": "dc1ee3629a1b9463",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "edge bytes: ansi-c printf q controls": {
+   "script": "f86c9c3ccc03f1f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\001\\E[1mb\\177\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c printf q crlf": {
+   "script": "d323be962995c7eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a b\\r\\nzz\\r\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c printf q latin1": {
+   "script": "c87479c4323a18b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'caf\\351 ol\\351\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c printf q lone ff": {
+   "script": "78f19acfc5039494",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\377b\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c printf q nul": {
+   "script": "f62ad43cd66b1d07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "edge bytes: ansi-c printf q surrogate": {
+   "script": "ce925c63572bf506",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\355\\240\\200b\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c printf q truncated": {
+   "script": "415413114dcf4409",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'ab\\303\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c replace controls": {
+   "script": "15647d0b1dce6b20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c replace crlf": {
+   "script": "f0c662984b429a6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 5a 5a 0d 0a\n"
+   }
+  },
+  "edge bytes: ansi-c replace latin1": {
+   "script": "51c100caa30cf8fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c replace lone ff": {
+   "script": "b84948ad3fe1a93d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c replace nul": {
+   "script": "e5d2ea61e51641b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61\n"
+   }
+  },
+  "edge bytes: ansi-c replace surrogate": {
+   "script": "3be18474491b5a64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c replace truncated": {
+   "script": "81733d7ccf92fb45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c substring controls": {
+   "script": "d08f31e0dbbb9223",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 01 1b\n"
+   }
+  },
+  "edge bytes: ansi-c substring crlf": {
+   "script": "451390d97ada1cbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 62\n"
+   }
+  },
+  "edge bytes: ansi-c substring latin1": {
+   "script": "dcc12300a3da4500",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 66\n"
+   }
+  },
+  "edge bytes: ansi-c substring lone ff": {
+   "script": "5f846b5649dd7bfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff 62\n"
+   }
+  },
+  "edge bytes: ansi-c substring nul": {
+   "script": "6b4ded158d487e45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge bytes: ansi-c substring surrogate": {
+   "script": "43f1d41dabc77a15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ed a0\n"
+   }
+  },
+  "edge bytes: ansi-c substring truncated": {
+   "script": "eb8d9a0c7c44302e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 c3\n"
+   }
+  },
+  "edge bytes: ansi-c to file controls": {
+   "script": "e7ab3ed03c919dc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: ansi-c to file crlf": {
+   "script": "1d484ec3e4ac4211",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: ansi-c to file latin1": {
+   "script": "5ed77d207bcccabb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: ansi-c to file lone ff": {
+   "script": "7fb993c33f76d19e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: ansi-c to file nul": {
+   "script": "7857d917b668622c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: ansi-c to file surrogate": {
+   "script": "8093356760e3b437",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: ansi-c to file truncated": {
+   "script": "44c4fda5e5d8721a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: ansi-c transform Q controls": {
+   "script": "1e052265c2880237",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\001\\E[1mb\\177\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c transform Q crlf": {
+   "script": "536c769ce042fdc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a b\\r\\nzz\\r\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c transform Q latin1": {
+   "script": "f525c3e18ee69f19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'caf\\351 ol\\351\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c transform Q lone ff": {
+   "script": "a2cda348d5ed627f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\377b\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c transform Q nul": {
+   "script": "9c5139a99d4045bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'a'\n"
+   }
+  },
+  "edge bytes: ansi-c transform Q surrogate": {
+   "script": "494c178d0d74a03c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\355\\240\\200b\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c transform Q truncated": {
+   "script": "7f118323656772da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'ab\\303\\nzz\\n'\n"
+   }
+  },
+  "edge bytes: ansi-c upper controls": {
+   "script": "04c31221b953781a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 01 1b 5b 31 4d 42 7f 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c upper crlf": {
+   "script": "8887ef1e40a6442c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 20 42 0d 0a 5a 5a 0d 0a\n"
+   }
+  },
+  "edge bytes: ansi-c upper latin1": {
+   "script": "55da729ff517ada8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 43 41 46 e9 20 4f 4c e9 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c upper lone ff": {
+   "script": "c0b438b5b3bdf530",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 ff 42 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c upper nul": {
+   "script": "439a264f81c7d49d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41\n"
+   }
+  },
+  "edge bytes: ansi-c upper surrogate": {
+   "script": "f6869f895d118645",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 ed a0 80 42 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c upper truncated": {
+   "script": "52c71f36396f1e78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 42 c3 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c variable controls": {
+   "script": "d2b6b8e5300fdd0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c variable crlf": {
+   "script": "fa1f81a8f26e664d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: ansi-c variable latin1": {
+   "script": "5827aa953328b029",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c variable lone ff": {
+   "script": "fca39fc0046f95fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c variable nul": {
+   "script": "033a2d48c260b502",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61\n"
+   }
+  },
+  "edge bytes: ansi-c variable surrogate": {
+   "script": "7a57907358d547f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c variable truncated": {
+   "script": "70f0035557801c6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: ansi-c word split controls": {
+   "script": "22cfe890c86d586c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: ansi-c word split crlf": {
+   "script": "1ae8704409476cbf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge bytes: ansi-c word split latin1": {
+   "script": "1c0d2c50af3d42bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge bytes: ansi-c word split lone ff": {
+   "script": "1302e33a7f4e3724",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: ansi-c word split nul": {
+   "script": "358974345d886028",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: ansi-c word split surrogate": {
+   "script": "d670794035f3910b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: ansi-c word split truncated": {
+   "script": "c3198e8fc6d4ce3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: base64 controls": {
+   "script": "6059165020504b70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YQEbWzFtYn8KenoK\n"
+   }
+  },
+  "edge bytes: base64 crlf": {
+   "script": "e58e2cc43066efa6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YSBiDQp6eg0K\n"
+   }
+  },
+  "edge bytes: base64 latin1": {
+   "script": "dbe04ada72b4a0ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Y2Fm6SBvbOkKenoK\n"
+   }
+  },
+  "edge bytes: base64 lone ff": {
+   "script": "35ea86b712359491",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Yf9iCnp6Cg==\n"
+   }
+  },
+  "edge bytes: base64 nul": {
+   "script": "1ff6b365317dad53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YQBiCnp6Cg==\n"
+   }
+  },
+  "edge bytes: base64 round trip controls": {
+   "script": "ea90a5974e0795e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: base64 round trip crlf": {
+   "script": "578c628b48f95400",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: base64 round trip latin1": {
+   "script": "a43edbf709679800",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: base64 round trip lone ff": {
+   "script": "eeffc1f54a6b616c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: base64 round trip nul": {
+   "script": "3fa43802d1983906",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: base64 round trip surrogate": {
+   "script": "60d580267bca872f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: base64 round trip truncated": {
+   "script": "1605b7d2b412b371",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: base64 surrogate": {
+   "script": "d47abfa6d13193ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Ye2ggGIKenoK\n"
+   }
+  },
+  "edge bytes: base64 truncated": {
+   "script": "7d6034eacf013893",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YWLDCnp6Cg==\n"
+   }
+  },
+  "edge bytes: cat -A controls": {
+   "script": "bab79da735a52ecd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^A^[[1mb^?$\nzz$\n"
+   }
+  },
+  "edge bytes: cat -A crlf": {
+   "script": "259956652da3a71d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b^M$\nzz^M$\n"
+   }
+  },
+  "edge bytes: cat -A latin1": {
+   "script": "2022aab6067251de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cafM-i olM-i$\nzz$\n"
+   }
+  },
+  "edge bytes: cat -A lone ff": {
+   "script": "2da97174cf976a72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aM-^?b$\nzz$\n"
+   }
+  },
+  "edge bytes: cat -A nul": {
+   "script": "91bf8cb945fed940",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^@b$\nzz$\n"
+   }
+  },
+  "edge bytes: cat -A surrogate": {
+   "script": "787790d75f8ece66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aM-mM- M-^@b$\nzz$\n"
+   }
+  },
+  "edge bytes: cat -A truncated": {
+   "script": "708aad3b3874ca05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abM-C$\nzz$\n"
+   }
+  },
+  "edge bytes: cat -v controls": {
+   "script": "43c7745b0323de36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^A^[[1mb^?\nzz\n"
+   }
+  },
+  "edge bytes: cat -v crlf": {
+   "script": "f40f493abf45377d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b^M\nzz^M\n"
+   }
+  },
+  "edge bytes: cat -v latin1": {
+   "script": "a590a13605dd8ea9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cafM-i olM-i\nzz\n"
+   }
+  },
+  "edge bytes: cat -v lone ff": {
+   "script": "1d4c87e4259bf4c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aM-^?b\nzz\n"
+   }
+  },
+  "edge bytes: cat -v nul": {
+   "script": "8e537d7cd042a62b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^@b\nzz\n"
+   }
+  },
+  "edge bytes: cat -v surrogate": {
+   "script": "3dd48fc40dfc9728",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aM-mM- M-^@b\nzz\n"
+   }
+  },
+  "edge bytes: cat -v truncated": {
+   "script": "ee3f8d4c2e9fe129",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abM-C\nzz\n"
+   }
+  },
+  "edge bytes: cat controls": {
+   "script": "19e258c2467f6083",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cat crlf": {
+   "script": "43f0c8199e4c1cdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: cat latin1": {
+   "script": "54c8ce559d7356c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cat lone ff": {
+   "script": "145bacb10a9ce2f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cat nul": {
+   "script": "4d358790f5b00682",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cat surrogate": {
+   "script": "c9fa2de5560c9053",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cat truncated": {
+   "script": "560c9f62dd81b7e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cksum controls": {
+   "script": "43eb201128243b1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1200440520 12\n"
+   }
+  },
+  "edge bytes: cksum crlf": {
+   "script": "f5c67bc0d01511b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3443939477 9\n"
+   }
+  },
+  "edge bytes: cksum latin1": {
+   "script": "ab82f0737c397c74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4232910088 12\n"
+   }
+  },
+  "edge bytes: cksum lone ff": {
+   "script": "abfd4a2f7242427d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4108022642 7\n"
+   }
+  },
+  "edge bytes: cksum nul": {
+   "script": "4a207ff900cab526",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4169735995 7\n"
+   }
+  },
+  "edge bytes: cksum surrogate": {
+   "script": "cf712ba9fa39dfec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1035797516 9\n"
+   }
+  },
+  "edge bytes: cksum truncated": {
+   "script": "db53309a72922de8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3962206893 7\n"
+   }
+  },
+  "edge bytes: cmp controls": {
+   "script": "6d3da68534c60a87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /tmp/b differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "edge bytes: cmp crlf": {
+   "script": "09f1f98d16aa4831",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /tmp/b differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "edge bytes: cmp latin1": {
+   "script": "93cb71d4c894c73d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /tmp/b differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "edge bytes: cmp lone ff": {
+   "script": "bbb2d53c0e9f9f2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /tmp/b differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "edge bytes: cmp nul": {
+   "script": "f67cce8349ba93cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /tmp/b differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "edge bytes: cmp surrogate": {
+   "script": "b445d9a5d8717dac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /tmp/b differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "edge bytes: cmp truncated": {
+   "script": "d35649792f2108d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /tmp/b differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "edge bytes: comm controls": {
+   "script": "9a93760f9a9e4dc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: comm crlf": {
+   "script": "a5d777b44ae07ee9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: comm latin1": {
+   "script": "0e29fb154bea0635",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: comm lone ff": {
+   "script": "c8776b5ca007d98f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: comm nul": {
+   "script": "c59ea3771ba6932e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: comm surrogate": {
+   "script": "9af4911161ab56f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: comm truncated": {
+   "script": "e117164613c74434",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: command substitution controls": {
+   "script": "9b4d5af35b12b977",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: command substitution crlf": {
+   "script": "d1d460e05d0242a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d\n"
+   }
+  },
+  "edge bytes: command substitution latin1": {
+   "script": "c9cf1dd504b32a60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: command substitution length controls": {
+   "script": "1d653875d1584fe2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\n"
+   }
+  },
+  "edge bytes: command substitution length crlf": {
+   "script": "9e9b4b0cd598d63e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge bytes: command substitution length latin1": {
+   "script": "54f95bddc4654519",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\n"
+   }
+  },
+  "edge bytes: command substitution length lone ff": {
+   "script": "a211ca81cbac134f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge bytes: command substitution length nul": {
+   "script": "b611fa0a99154830",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: command substitution: ignored null byte in input\n"
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge bytes: command substitution length surrogate": {
+   "script": "7862625f18e83202",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge bytes: command substitution length truncated": {
+   "script": "5be4a9c9fbfdb629",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge bytes: command substitution lone ff": {
+   "script": "d4cdad5314686c13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: command substitution nul": {
+   "script": "c3e8fb3fa782e735",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: command substitution: ignored null byte in input\n"
+   },
+   "stdout": {
+    "text": " 61 62 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: command substitution surrogate": {
+   "script": "0c5f0d080b1ae21e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: command substitution truncated": {
+   "script": "ff0758d9b58be28c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: cut -b controls": {
+   "script": "35efe50fd970df8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 01 1b 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -b crlf": {
+   "script": "6d0caa511641a53f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 62 0a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: cut -b latin1": {
+   "script": "0b689c0e44af176a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 66 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -b lone ff": {
+   "script": "eb1e56996a98d53d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff 62 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -b nul": {
+   "script": "151377e90f64e91a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 00 62 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -b surrogate": {
+   "script": "8f56b471406ce55c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ed a0 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -b truncated": {
+   "script": "b73d5d476219f237",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 c3 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -c controls": {
+   "script": "a8adab5142e7be78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 01 1b 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -c crlf": {
+   "script": "b200bea66be6b4ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 62 0a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: cut -c latin1": {
+   "script": "38c70c8b58382e85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 66 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -c lone ff": {
+   "script": "44815396ce222ded",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff 62 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -c nul": {
+   "script": "b3abeb63e0d11d2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 00 62 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -c surrogate": {
+   "script": "9f059ea44c14018c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ed a0 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -c truncated": {
+   "script": "0f5762ae254884d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 c3 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -f controls": {
+   "script": "f52ec9c953b49734",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -f crlf": {
+   "script": "1d2ab0fe3518fcff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: cut -f latin1": {
+   "script": "5ac592f2a0b42fcc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -f lone ff": {
+   "script": "1ab2a6dbd094995c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -f nul": {
+   "script": "87182c91f964671c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -f surrogate": {
+   "script": "80cefa6865d968db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: cut -f truncated": {
+   "script": "0d6b597febe075ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: diff -a controls": {
+   "script": "2c09e3c9f2249d9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 31 64 30 0a 3c 20 61 01 1b 5b 31 6d 62 7f 0a\n"
+   }
+  },
+  "edge bytes: diff -a crlf": {
+   "script": "cd5b9e8dd15cc168",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 31 2c 32 63 31 0a 3c 20 61 20 62 0d 0a 3c 20 7a\n 7a 0d 0a 2d 2d 2d 0a 3e 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: diff -a latin1": {
+   "script": "8cd8481e5f688d70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 31 64 30 0a 3c 20 63 61 66 e9 20 6f 6c e9 0a\n"
+   }
+  },
+  "edge bytes: diff -a lone ff": {
+   "script": "645b1dd4743c7c37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 31 64 30 0a 3c 20 61 ff 62 0a\n"
+   }
+  },
+  "edge bytes: diff -a nul": {
+   "script": "adbffddecd94911c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 31 64 30 0a 3c 20 61 00 62 0a\n"
+   }
+  },
+  "edge bytes: diff -a surrogate": {
+   "script": "06c5a336c8db6d84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 31 64 30 0a 3c 20 61 ed a0 80 62 0a\n"
+   }
+  },
+  "edge bytes: diff -a truncated": {
+   "script": "087753553308542c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 31 64 30 0a 3c 20 61 62 c3 0a\n"
+   }
+  },
+  "edge bytes: diff controls": {
+   "script": "6e6dfde031601352",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1d0\n< a\u0001\u001b[1mb\nstatus=1\n"
+   }
+  },
+  "edge bytes: diff crlf": {
+   "script": "28cc13c57e7672ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,2c1\n< a b\r\n< zz\r\n---\n> zz\nstatus=1\n"
+   }
+  },
+  "edge bytes: diff latin1": {
+   "script": "2e5e39c06dad18d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "MWQwCjwgY2Fm6SBvbOkKc3RhdHVzPTEK"
+   }
+  },
+  "edge bytes: diff lone ff": {
+   "script": "6d59f57ecb899655",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "MWQwCjwgYf9iCnN0YXR1cz0xCg=="
+   }
+  },
+  "edge bytes: diff nul": {
+   "script": "3f03ef18782a788f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Binary files /tmp/a and /tmp/b differ\nstatus=1\n"
+   }
+  },
+  "edge bytes: diff surrogate": {
+   "script": "4a2b3aae9b6db003",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "MWQwCjwgYe2ggGIKc3RhdHVzPTEK"
+   }
+  },
+  "edge bytes: diff truncated": {
+   "script": "5a94e82383093082",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "MWQwCjwgYWLDCnN0YXR1cz0xCg=="
+   }
+  },
+  "edge bytes: echo -e controls": {
+   "script": "d0913f4db6462b3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 5c 31 37 37 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: echo -e crlf": {
+   "script": "d1a97b78a951e087",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a 0a\n"
+   }
+  },
+  "edge bytes: echo -e latin1": {
+   "script": "d546e5680876ef4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: echo -e lone ff": {
+   "script": "ded1f889249a9d9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: echo -e nul": {
+   "script": "15a949fbf58157c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: echo -e surrogate": {
+   "script": "d8a736bcfc12d63f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: echo -e truncated": {
+   "script": "7d256e780cf517d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a 0a\n"
+   }
+  },
+  "edge bytes: expand controls": {
+   "script": "26461197a7530aad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: expand crlf": {
+   "script": "d69bb4afca090a7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: expand latin1": {
+   "script": "37a43d2c65b74060",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: expand lone ff": {
+   "script": "123385f009207598",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: expand nul": {
+   "script": "8083058d6ba41ef4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: expand surrogate": {
+   "script": "0d7944ce74773bee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: expand truncated": {
+   "script": "a235f54269a672c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: file controls": {
+   "script": "0ab94e360f376055",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin: data\n"
+   }
+  },
+  "edge bytes: file crlf": {
+   "script": "e5e754e0ecdeb302",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin: ASCII text, with CRLF line terminators\n"
+   }
+  },
+  "edge bytes: file latin1": {
+   "script": "a60387972af9785d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin: ISO-8859 text\n"
+   }
+  },
+  "edge bytes: file lone ff": {
+   "script": "565c295c9701ee05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin: ISO-8859 text\n"
+   }
+  },
+  "edge bytes: file nul": {
+   "script": "21cc3248bd98735b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin: data\n"
+   }
+  },
+  "edge bytes: file operand controls": {
+   "script": "4653fa74a3d68750",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f: data\n"
+   }
+  },
+  "edge bytes: file operand crlf": {
+   "script": "8396ffb9e8fb1586",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f: ASCII text, with CRLF line terminators\n"
+   }
+  },
+  "edge bytes: file operand latin1": {
+   "script": "f07e4b0ce084bff9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f: ISO-8859 text\n"
+   }
+  },
+  "edge bytes: file operand lone ff": {
+   "script": "662e7f7a2b44359e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f: ISO-8859 text\n"
+   }
+  },
+  "edge bytes: file operand nul": {
+   "script": "0e2359cd3c5ab844",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f: data\n"
+   }
+  },
+  "edge bytes: file operand surrogate": {
+   "script": "b1a07f6c6b906337",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f: Non-ISO extended-ASCII text\n"
+   }
+  },
+  "edge bytes: file operand truncated": {
+   "script": "062b5a39f2773acb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f: ISO-8859 text\n"
+   }
+  },
+  "edge bytes: file substitution controls": {
+   "script": "bf3ebff3520fb908",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: file substitution crlf": {
+   "script": "4f4481dc50e62cd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d\n"
+   }
+  },
+  "edge bytes: file substitution latin1": {
+   "script": "e1b961e6a53397c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: file substitution lone ff": {
+   "script": "ccf9c8e3f8a6207f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: file substitution nul": {
+   "script": "04fdef26561d3c7a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: command substitution: ignored null byte in input\n"
+   },
+   "stdout": {
+    "text": " 61 62 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: file substitution surrogate": {
+   "script": "13c9392117424673",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: file substitution truncated": {
+   "script": "898f0a8c182ac1a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a\n"
+   }
+  },
+  "edge bytes: file surrogate": {
+   "script": "753ba7ff1199b9ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin: Non-ISO extended-ASCII text\n"
+   }
+  },
+  "edge bytes: file truncated": {
+   "script": "3507221dc43ecc8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin: ISO-8859 text\n"
+   }
+  },
+  "edge bytes: fold controls": {
+   "script": "b423ff460e600a6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 0a 1b 5b 0a 31 6d 0a 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: fold crlf": {
+   "script": "4c44c8b843bba2a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 0a 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: fold latin1": {
+   "script": "3540b97f9f6aa772",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 0a 66 e9 0a 20 6f 0a 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: fold lone ff": {
+   "script": "12221b8339745b6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 0a 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: fold nul": {
+   "script": "f5f1d441828ce406",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: fold surrogate": {
+   "script": "25a67c1e2dfe0ff5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed 0a a0 80 0a 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: fold truncated": {
+   "script": "799f6e8b61a955ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 0a c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: grep -a controls": {
+   "script": "aa5d94aa9a715098",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a\n"
+   }
+  },
+  "edge bytes: grep -a crlf": {
+   "script": "ecc24b506fd28acf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a\n"
+   }
+  },
+  "edge bytes: grep -a latin1": {
+   "script": "8ab9f505f84553b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a\n"
+   }
+  },
+  "edge bytes: grep -a lone ff": {
+   "script": "d979e7246f63602d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a\n"
+   }
+  },
+  "edge bytes: grep -a nul": {
+   "script": "5b6aab41f3ce229b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a\n"
+   }
+  },
+  "edge bytes: grep -a surrogate": {
+   "script": "a81229eab8e16e79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a\n"
+   }
+  },
+  "edge bytes: grep -a truncated": {
+   "script": "95316f18effd8479",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a\n"
+   }
+  },
+  "edge bytes: grep -c a controls": {
+   "script": "d3c202d358d2b694",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: grep -c a crlf": {
+   "script": "4692bf9c73970abf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: grep -c a latin1": {
+   "script": "054368b95d4b3767",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: grep -c a lone ff": {
+   "script": "6b16f6a0f62efd5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: grep -c a nul": {
+   "script": "8e2fde180ba4568c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: grep -c a surrogate": {
+   "script": "d611c3072ffa1693",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: grep -c a truncated": {
+   "script": "ab8d61e1f0ac4642",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge bytes: grep -c dot controls": {
+   "script": "8a68bf186e1ab98f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: grep -c dot crlf": {
+   "script": "7df585e1cab40a8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: grep -c dot latin1": {
+   "script": "cc840ee7b5f24c76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: grep -c dot lone ff": {
+   "script": "d94922b4748e1a9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: grep -c dot nul": {
+   "script": "108e9a84a010672d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge bytes: grep -c dot surrogate": {
+   "script": "1eaba8a80e3964c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: grep -c dot truncated": {
+   "script": "72d09b81fac27f5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: grep -l controls": {
+   "script": "34fc611501e92265",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "(standard input)\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -l crlf": {
+   "script": "991b4dcc8df4b276",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "(standard input)\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -l latin1": {
+   "script": "f86df9bf96745116",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "(standard input)\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -l lone ff": {
+   "script": "c3f9beb22c3ee4f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "(standard input)\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -l nul": {
+   "script": "ae1348514e318dc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "(standard input)\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -l surrogate": {
+   "script": "c9bb4add1694f45f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "(standard input)\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -l truncated": {
+   "script": "17bf704f4e239632",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "(standard input)\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -n controls": {
+   "script": "a99f61834ba2cd21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2:zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -n crlf": {
+   "script": "0e4826c9a46534fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2:zz\r\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -n latin1": {
+   "script": "21942a6912610d25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2:zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -n lone ff": {
+   "script": "5578bad8203a975f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2:zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -n nul": {
+   "script": "d4b3722d3ead4e81",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -n surrogate": {
+   "script": "3dba408e1c576af2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2:zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -n truncated": {
+   "script": "4bcb1cab875b25fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2:zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -o controls": {
+   "script": "c98bf768aef13a2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nm\nb\nz\nz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -o crlf": {
+   "script": "75c315e24b8a7334",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nz\nz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -o latin1": {
+   "script": "b25a15a1af680ffd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\na\nf\no\nl\nz\nz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -o lone ff": {
+   "script": "30f6b8da7def0053",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nz\nz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -o nul": {
+   "script": "f55ef4d9d2b00b53",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -o surrogate": {
+   "script": "0984d6528e2ce93e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nz\nz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -o truncated": {
+   "script": "54ce6594055259a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nz\nz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -q controls": {
+   "script": "361aa7e7995d5c1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -q crlf": {
+   "script": "abf4ccdfeede8ca9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -q latin1": {
+   "script": "ea4f9640855d3dd0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -q lone ff": {
+   "script": "8dca4dff75a42c91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -q nul": {
+   "script": "54e314ef83deda25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -q surrogate": {
+   "script": "67dabe316d93ec8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -q truncated": {
+   "script": "359e6a3896512b6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -v controls": {
+   "script": "100f4900d7fb1d43",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\u0001\u001b[1mb\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -v crlf": {
+   "script": "0ab8347128fcee4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\r\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep -v latin1": {
+   "script": "665b3a481ae1c6c9",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -v lone ff": {
+   "script": "098e2f9a16380544",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -v nul": {
+   "script": "6e9402de6d75e514",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -v surrogate": {
+   "script": "2dd33cfb72954341",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep -v truncated": {
+   "script": "31ad5006d9b49932",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep a controls": {
+   "script": "24ba8877534609da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\u0001\u001b[1mb\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep a crlf": {
+   "script": "7af37ee91ce3e6a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\r\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep a latin1": {
+   "script": "0b69aeebbdf99e51",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep a lone ff": {
+   "script": "aa5901e9ed348996",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep a nul": {
+   "script": "92597254abb20faa",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep a surrogate": {
+   "script": "0f49f0812acd258f",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep a truncated": {
+   "script": "a48ee0e9045affc3",
+   "status": 0,
+   "stderr": {
+    "text": "grep: (standard input): binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep file controls": {
+   "script": "021b59bb6cf13cde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep file crlf": {
+   "script": "9422faa3677fef6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zz\r\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep file latin1": {
+   "script": "55994bac6ad21d40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep file lone ff": {
+   "script": "02a945985d98c198",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep file nul": {
+   "script": "ff42ae1ad40ce1e1",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /tmp/f: binary file matches\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge bytes: grep file surrogate": {
+   "script": "931fa846d11d9d1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: grep file truncated": {
+   "script": "6c38817ef2f3004c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zz\nstatus=0\n"
+   }
+  },
+  "edge bytes: head -c controls": {
+   "script": "020c83930c2e2729",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b\n"
+   }
+  },
+  "edge bytes: head -c crlf": {
+   "script": "ff67cb9e180a6628",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62\n"
+   }
+  },
+  "edge bytes: head -c latin1": {
+   "script": "c1d05030f0dcb185",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66\n"
+   }
+  },
+  "edge bytes: head -c lone ff": {
+   "script": "032411050fb65fca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62\n"
+   }
+  },
+  "edge bytes: head -c nul": {
+   "script": "3b289775d4a987da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62\n"
+   }
+  },
+  "edge bytes: head -c surrogate": {
+   "script": "25a207699f4e10c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0\n"
+   }
+  },
+  "edge bytes: head -c truncated": {
+   "script": "d048dc13ec500ab0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3\n"
+   }
+  },
+  "edge bytes: head -n controls": {
+   "script": "d181a63fad6b980c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a\n"
+   }
+  },
+  "edge bytes: head -n crlf": {
+   "script": "11fc1d2dcd1a8715",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a\n"
+   }
+  },
+  "edge bytes: head -n latin1": {
+   "script": "e0e9e62d1cd8964b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a\n"
+   }
+  },
+  "edge bytes: head -n lone ff": {
+   "script": "2595854dc87c8018",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a\n"
+   }
+  },
+  "edge bytes: head -n nul": {
+   "script": "f1e6cf78c331d47e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a\n"
+   }
+  },
+  "edge bytes: head -n surrogate": {
+   "script": "fdb5c1e1aa5435e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a\n"
+   }
+  },
+  "edge bytes: head -n truncated": {
+   "script": "697cd3b849899f36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a\n"
+   }
+  },
+  "edge bytes: jq -R controls": {
+   "script": "d7cf2e0181cfa277",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 61 5c 75 30 30 30 31 5c 75 30 30 31 62 5b 31\n 6d 62 5c 75 30 30 37 66 22 0a 22 7a 7a 22 0a\n"
+   }
+  },
+  "edge bytes: jq -R crlf": {
+   "script": "1540315f5fb2c409",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 61 20 62 5c 72 22 0a 22 7a 7a 5c 72 22 0a\n"
+   }
+  },
+  "edge bytes: jq -R latin1": {
+   "script": "e603ec739eaf23d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 63 61 66 ef bf bd 20 6f 6c ef bf bd 22 0a 22\n 7a 7a 22 0a\n"
+   }
+  },
+  "edge bytes: jq -R lone ff": {
+   "script": "6fdb880f0b1b47af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 61 ef bf bd 62 22 0a 22 7a 7a 22 0a\n"
+   }
+  },
+  "edge bytes: jq -R nul": {
+   "script": "1702ae27c9623ab8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 61 5c 75 30 30 30 30 62 22 0a 22 7a 7a 22 0a\n"
+   }
+  },
+  "edge bytes: jq -R surrogate": {
+   "script": "6b9d2847b7b81238",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 61 ef bf bd 62 22 0a 22 7a 7a 22 0a\n"
+   }
+  },
+  "edge bytes: jq -R truncated": {
+   "script": "eb74a9d803541858",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 61 62 ef bf bd 22 0a 22 7a 7a 22 0a\n"
+   }
+  },
+  "edge bytes: jq -Rs length controls": {
+   "script": "194c5aee983e929b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: jq -Rs length crlf": {
+   "script": "44fa72d63bdca1d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: jq -Rs length latin1": {
+   "script": "6d6d313fcb82cbdb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\n"
+   }
+  },
+  "edge bytes: jq -Rs length lone ff": {
+   "script": "08550eb3902a74bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: jq -Rs length nul": {
+   "script": "060802228a70c50f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: jq -Rs length surrogate": {
+   "script": "83c55b2b5cf1324f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: jq -Rs length truncated": {
+   "script": "ddbdcb358c21f9d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: mapfile controls": {
+   "script": "5943b92da9f8edb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n 61 01 1b 5b 31 6d 62 7f\n"
+   }
+  },
+  "edge bytes: mapfile crlf": {
+   "script": "8d345ce6da0c7e4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n 61 20 62 0d\n"
+   }
+  },
+  "edge bytes: mapfile latin1": {
+   "script": "35e749748305f1dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n 63 61 66 e9 20 6f 6c e9\n"
+   }
+  },
+  "edge bytes: mapfile lone ff": {
+   "script": "229732d4f30b015b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n 61 ff 62\n"
+   }
+  },
+  "edge bytes: mapfile nul": {
+   "script": "7784cbd4f6b9ecf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n 61\n"
+   }
+  },
+  "edge bytes: mapfile surrogate": {
+   "script": "24ae547f734d9a13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n 61 ed a0 80 62\n"
+   }
+  },
+  "edge bytes: mapfile truncated": {
+   "script": "a57e70c526cea5a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n 61 62 c3\n"
+   }
+  },
+  "edge bytes: nl controls": {
+   "script": "4531b0bef8a93af0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 31 09 61 01 1b 5b 31 6d 62 7f 0a\n 20 20 20 20 20 32 09 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: nl crlf": {
+   "script": "783e083af49f7eee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 31 09 61 20 62 0d 0a 20 20 20 20\n 20 32 09 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: nl latin1": {
+   "script": "157795b95860e26f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 31 09 63 61 66 e9 20 6f 6c e9 0a\n 20 20 20 20 20 32 09 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: nl lone ff": {
+   "script": "5b4be03523576a3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 31 09 61 ff 62 0a 20 20 20 20 20\n 32 09 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: nl nul": {
+   "script": "307dbdaff91a4ad8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 31 09 61 00 62 0a 20 20 20 20 20\n 32 09 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: nl surrogate": {
+   "script": "862b50b09269920e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 31 09 61 ed a0 80 62 0a 20 20 20\n 20 20 32 09 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: nl truncated": {
+   "script": "a17a6b9a33356b9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 31 09 61 62 c3 0a 20 20 20 20 20\n 32 09 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: od -c controls": {
+   "script": "641a3a825dc1a403",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a 001 033   [   1   m   b 177  \\n   z   z  \\n\n0000014\n"
+   }
+  },
+  "edge bytes: od -c crlf": {
+   "script": "ed7904b26ace55c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a       b  \\r  \\n   z   z  \\r  \\n\n0000011\n"
+   }
+  },
+  "edge bytes: od -c latin1": {
+   "script": "9fdb472f9bf51617",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   c   a   f 351       o   l 351  \\n   z   z  \\n\n0000014\n"
+   }
+  },
+  "edge bytes: od -c lone ff": {
+   "script": "990ab082fdb2273b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a 377   b  \\n   z   z  \\n\n0000007\n"
+   }
+  },
+  "edge bytes: od -c nul": {
+   "script": "18a21e92edfba2f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a  \\0   b  \\n   z   z  \\n\n0000007\n"
+   }
+  },
+  "edge bytes: od -c surrogate": {
+   "script": "4cc2b60dfa9140c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a 355 240 200   b  \\n   z   z  \\n\n0000011\n"
+   }
+  },
+  "edge bytes: od -c truncated": {
+   "script": "7ad0d11e948eb7bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a   b 303  \\n   z   z  \\n\n0000007\n"
+   }
+  },
+  "edge bytes: paste -s controls": {
+   "script": "adb98733acc7d0f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 2c 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: paste -s crlf": {
+   "script": "09470a7bcd9e99cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 2c 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: paste -s latin1": {
+   "script": "595e09e1f61b2437",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 2c 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: paste -s lone ff": {
+   "script": "c0a37b07352177d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 2c 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: paste -s nul": {
+   "script": "444bd1a850fc9a4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 2c 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: paste -s surrogate": {
+   "script": "0200aa1b8a5cab08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 2c 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: paste -s truncated": {
+   "script": "ea8186d5ff01d6bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 2c 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: printf %b controls": {
+   "script": "cc432b7885f9acf9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: printf %b crlf": {
+   "script": "3bdb9a9a9f0b53ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: printf %b latin1": {
+   "script": "b6cd94329b5a1964",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: printf %b lone ff": {
+   "script": "ccf66b01e953768b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: printf %b nul": {
+   "script": "0d38317de78e1469",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: printf %b surrogate": {
+   "script": "d7ab5032ed1f0018",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: printf %b truncated": {
+   "script": "a846c04057bb5bd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: read -a controls": {
+   "script": "dd932f2e8aec6cca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 01 1b 5b 31 6d 62 7f\n"
+   }
+  },
+  "edge bytes: read -a crlf": {
+   "script": "81335ca182eea73f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n 61\n"
+   }
+  },
+  "edge bytes: read -a latin1": {
+   "script": "6d66f0eb5580f86f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n 63 61 66 e9\n"
+   }
+  },
+  "edge bytes: read -a lone ff": {
+   "script": "547f7e27bdc7432f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 ff 62\n"
+   }
+  },
+  "edge bytes: read -a nul": {
+   "script": "6478814a54924c39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 62\n"
+   }
+  },
+  "edge bytes: read -a surrogate": {
+   "script": "de809ce1c7343827",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 ed a0 80 62\n"
+   }
+  },
+  "edge bytes: read -a truncated": {
+   "script": "80d34a9d155298e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n 61 62 c3\n"
+   }
+  },
+  "edge bytes: read -r controls": {
+   "script": "ed9e8bfec6e79a19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f\n"
+   }
+  },
+  "edge bytes: read -r crlf": {
+   "script": "82b7549180e10f75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d\n"
+   }
+  },
+  "edge bytes: read -r latin1": {
+   "script": "d5aff7227cbbb8a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9\n"
+   }
+  },
+  "edge bytes: read -r lone ff": {
+   "script": "34b8fb6ed738fd70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62\n"
+   }
+  },
+  "edge bytes: read -r nul": {
+   "script": "2e260b55b7d3c28c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62\n"
+   }
+  },
+  "edge bytes: read -r surrogate": {
+   "script": "31d9ce179cf83b64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62\n"
+   }
+  },
+  "edge bytes: read -r truncated": {
+   "script": "554cea9ebb53c991",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3\n"
+   }
+  },
+  "edge bytes: read length controls": {
+   "script": "f350adb57bb4bf61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge bytes: read length crlf": {
+   "script": "d4d31352feebf893",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n"
+   }
+  },
+  "edge bytes: read length latin1": {
+   "script": "58db79161eaa1b0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge bytes: read length lone ff": {
+   "script": "9b051882474bff6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge bytes: read length nul": {
+   "script": "3ac63838ecba90cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: read length surrogate": {
+   "script": "eadd9d374d41bb73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge bytes: read length truncated": {
+   "script": "5b65192aba87defa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge bytes: read loop controls": {
+   "script": "4bfe30c21f7ab86c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 7c 7a 7a 7c\n"
+   }
+  },
+  "edge bytes: read loop crlf": {
+   "script": "e310c878d7632217",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 7c 7a 7a 0d 7c\n"
+   }
+  },
+  "edge bytes: read loop latin1": {
+   "script": "648e9e60ab4f1d55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 7c 7a 7a 7c\n"
+   }
+  },
+  "edge bytes: read loop lone ff": {
+   "script": "b2a99f63226bb8a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 7c 7a 7a 7c\n"
+   }
+  },
+  "edge bytes: read loop nul": {
+   "script": "32bcf63fef65f72e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 7c 7a 7a 7c\n"
+   }
+  },
+  "edge bytes: read loop surrogate": {
+   "script": "b76625c3be07699f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 7c 7a 7a 7c\n"
+   }
+  },
+  "edge bytes: read loop truncated": {
+   "script": "dafb9e4e04e9444e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 7c 7a 7a 7c\n"
+   }
+  },
+  "edge bytes: rev controls": {
+   "script": "5f5ef7e3eaefafe3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7f 62 6d 31 5b 1b 01 61 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: rev crlf": {
+   "script": "7430ac30064e97e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 0d 62 20 61 0a 0d 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: rev latin1": {
+   "script": "e9d48ca5633f3c0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: rev lone ff": {
+   "script": "e8a371b6e54c0342",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: rev nul": {
+   "script": "059b4ffa10fb82e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: rev surrogate": {
+   "script": "40b4307320b3b320",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: rev truncated": {
+   "script": "9cfdc34c928ee10e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sed -i controls": {
+   "script": "e4659ecf05390d32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 51 7a 0a\n"
+   }
+  },
+  "edge bytes: sed -i crlf": {
+   "script": "f18cb2ef1688acbf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 51 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: sed -i latin1": {
+   "script": "f0662838fba89513",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 51 7a 0a\n"
+   }
+  },
+  "edge bytes: sed -i lone ff": {
+   "script": "3acea4b47b51bc06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 51 7a 0a\n"
+   }
+  },
+  "edge bytes: sed -i nul": {
+   "script": "c199c8270d1fdf72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 51 7a 0a\n"
+   }
+  },
+  "edge bytes: sed -i surrogate": {
+   "script": "fb2d7f73ea932db8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 51 7a 0a\n"
+   }
+  },
+  "edge bytes: sed -i truncated": {
+   "script": "5884f342cec7aeaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 51 7a 0a\n"
+   }
+  },
+  "edge bytes: sed -n l controls": {
+   "script": "87be6ce0c34b6560",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\001\\033[1mb\\177$\nzz$\n"
+   }
+  },
+  "edge bytes: sed -n l crlf": {
+   "script": "e846e4e5b42fe3ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\\r$\nzz\\r$\n"
+   }
+  },
+  "edge bytes: sed -n l latin1": {
+   "script": "5b1a74e9f0a8397c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caf\\351 ol\\351$\nzz$\n"
+   }
+  },
+  "edge bytes: sed -n l lone ff": {
+   "script": "ac32b1971f0677ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\377b$\nzz$\n"
+   }
+  },
+  "edge bytes: sed -n l nul": {
+   "script": "fa27e1281f5f021d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\000b$\nzz$\n"
+   }
+  },
+  "edge bytes: sed -n l surrogate": {
+   "script": "cdf37669f110468a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\355\\240\\200b$\nzz$\n"
+   }
+  },
+  "edge bytes: sed -n l truncated": {
+   "script": "dd39073b253f8d61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\\303$\nzz$\n"
+   }
+  },
+  "edge bytes: sed any char controls": {
+   "script": "9c1cf235f36f9c45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 58 58 58 58 58 58 58 58 0a 58 58 0a\n"
+   }
+  },
+  "edge bytes: sed any char crlf": {
+   "script": "b1afd67947163ae4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 58 58 58 58 0a 58 58 58 0a\n"
+   }
+  },
+  "edge bytes: sed any char latin1": {
+   "script": "0d3fe312f161523d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 58 58 58 e9 58 58 58 e9 0a 58 58 0a\n"
+   }
+  },
+  "edge bytes: sed any char lone ff": {
+   "script": "d30cce4a21753bd8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 58 ff 58 0a 58 58 0a\n"
+   }
+  },
+  "edge bytes: sed any char nul": {
+   "script": "1ac60138b8268118",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 58 58 58 0a 58 58 0a\n"
+   }
+  },
+  "edge bytes: sed any char surrogate": {
+   "script": "3c1384e68ae890dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 58 58 58 0a 58 58 0a\n"
+   }
+  },
+  "edge bytes: sed any char truncated": {
+   "script": "0a71d770638a01c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 58 58 c3 0a 58 58 0a\n"
+   }
+  },
+  "edge bytes: sed line count controls": {
+   "script": "e407897b26e64791",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: sed line count crlf": {
+   "script": "827382fa394362ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: sed line count latin1": {
+   "script": "43eeaea4262e1dfe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: sed line count lone ff": {
+   "script": "9864b7e27f09140b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: sed line count nul": {
+   "script": "832c7232f0bd0fb1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: sed line count surrogate": {
+   "script": "71ccc2ca07f7db9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: sed line count truncated": {
+   "script": "86b3e1676a712257",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: sed s controls": {
+   "script": "bbd5157c5404b881",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sed s crlf": {
+   "script": "2b648262ca91fa05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: sed s latin1": {
+   "script": "2b0800c2f340338c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 41 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sed s lone ff": {
+   "script": "66f71992a8c3a466",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sed s nul": {
+   "script": "57a88db20941ed12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sed s surrogate": {
+   "script": "47eafba6f0f0fc0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sed s truncated": {
+   "script": "bc69ef263a49b7fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sed y controls": {
+   "script": "b49302ab7f26d47f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 01 1b 5b 31 6d 42 7f 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: sed y crlf": {
+   "script": "fe79b28dc7fa6431",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 20 42 0d 0a 5a 5a 0d 0a\n"
+   }
+  },
+  "edge bytes: sed y latin1": {
+   "script": "159e4d623bcfce7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 41 66 e9 20 6f 6c e9 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: sed y lone ff": {
+   "script": "a2f7db979cc25223",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 ff 42 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: sed y nul": {
+   "script": "e0f561ff01cedb38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 00 42 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: sed y surrogate": {
+   "script": "27998a2f1d0d8581",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 ed a0 80 42 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: sed y truncated": {
+   "script": "a030a73dcee38a98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 42 c3 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: sort -u controls": {
+   "script": "baf3ab2b1dc29887",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort -u crlf": {
+   "script": "3dde2ef203970ee9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: sort -u latin1": {
+   "script": "d72c0d02be55b0c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort -u lone ff": {
+   "script": "7eb25f8c367c731a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort -u nul": {
+   "script": "a89c8d1230b7a878",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort -u surrogate": {
+   "script": "04c339f1c22bbd90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort -u truncated": {
+   "script": "d590ac694a6c340b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort controls": {
+   "script": "791425e5f1164a55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort crlf": {
+   "script": "12db930210d98d4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: sort latin1": {
+   "script": "939d74f89c05a1fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort lone ff": {
+   "script": "1e6e92aad1f09536",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort nul": {
+   "script": "32c1c3b54d0ff385",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort surrogate": {
+   "script": "6db9318b09e628d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: sort truncated": {
+   "script": "55746aef69326e17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: split controls": {
+   "script": "73d470f1adb09821",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: split crlf": {
+   "script": "800d187aee0d21ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: split latin1": {
+   "script": "f6695b1ff068ddb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: split lone ff": {
+   "script": "745100c13f112d10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: split nul": {
+   "script": "ae88d273f0378a85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: split surrogate": {
+   "script": "d80afe13d20777b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: split truncated": {
+   "script": "4afb6ca0482985db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: stat size controls": {
+   "script": "898d3c3a8963f8ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: stat size crlf": {
+   "script": "5727724997f82157",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: stat size latin1": {
+   "script": "4493db80218ce703",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: stat size lone ff": {
+   "script": "6c722fef93fa6e4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: stat size nul": {
+   "script": "9d30729d0b17ce5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: stat size surrogate": {
+   "script": "a241200b4f790cda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: stat size truncated": {
+   "script": "71e3eb6aefa300fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: tac controls": {
+   "script": "7c891d1e68074d3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a 61 01 1b 5b 31 6d 62 7f 0a\n"
+   }
+  },
+  "edge bytes: tac crlf": {
+   "script": "bd0294e48ad39021",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0d 0a 61 20 62 0d 0a\n"
+   }
+  },
+  "edge bytes: tac latin1": {
+   "script": "083033787d40c568",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a 63 61 66 e9 20 6f 6c e9 0a\n"
+   }
+  },
+  "edge bytes: tac lone ff": {
+   "script": "7e26a93242d1b7cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a 61 ff 62 0a\n"
+   }
+  },
+  "edge bytes: tac nul": {
+   "script": "10332986fe46b8fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a 61 00 62 0a\n"
+   }
+  },
+  "edge bytes: tac surrogate": {
+   "script": "d85a0839836d6c18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a 61 ed a0 80 62 0a\n"
+   }
+  },
+  "edge bytes: tac truncated": {
+   "script": "7ac14d1287f024d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a 61 62 c3 0a\n"
+   }
+  },
+  "edge bytes: tail -c controls": {
+   "script": "50297031019c75f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -c crlf": {
+   "script": "3c095d692837456c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: tail -c latin1": {
+   "script": "428bbabf7edc274b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -c lone ff": {
+   "script": "3c5f04bf85cd62ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -c nul": {
+   "script": "cec7fe1f0b7f920e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -c surrogate": {
+   "script": "ec13ba5754119071",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -c truncated": {
+   "script": "955ab66b0386e730",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -n controls": {
+   "script": "9416b6d2e73f9f41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -n crlf": {
+   "script": "85b4fae24f5f848a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: tail -n latin1": {
+   "script": "e32511747ac16004",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -n lone ff": {
+   "script": "da82544f10b114c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -n nul": {
+   "script": "423145f55c680d5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -n surrogate": {
+   "script": "f43f93c4a0e56399",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tail -n truncated": {
+   "script": "8cd64c0a3a76ff3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tee controls": {
+   "script": "d6a215d8ddb5da47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tee crlf": {
+   "script": "cae32b1ec68a89c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: tee latin1": {
+   "script": "5ad0a8e327511316",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tee lone ff": {
+   "script": "cd873e826e3ff05e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tee nul": {
+   "script": "09e2b612136e3548",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tee surrogate": {
+   "script": "ad2dbb5b6de89889",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tee truncated": {
+   "script": "36457847d71f232e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -c controls": {
+   "script": "d4ed118656102cd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a....mb.\nzz\n"
+   }
+  },
+  "edge bytes: tr -c crlf": {
+   "script": "5019a636aed86227",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.b.\nzz.\n"
+   }
+  },
+  "edge bytes: tr -c latin1": {
+   "script": "e8bc39f3ed487aa6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caf..ol.\nzz\n"
+   }
+  },
+  "edge bytes: tr -c lone ff": {
+   "script": "fedb1204ea9e2160",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.b\nzz\n"
+   }
+  },
+  "edge bytes: tr -c nul": {
+   "script": "92c670b1ef3b8b64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.b\nzz\n"
+   }
+  },
+  "edge bytes: tr -c surrogate": {
+   "script": "8c9d29e191450abc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a...b\nzz\n"
+   }
+  },
+  "edge bytes: tr -c truncated": {
+   "script": "47333a00d1170e67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab.\nzz\n"
+   }
+  },
+  "edge bytes: tr -d controls": {
+   "script": "8c0f19f09535508a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -d crlf": {
+   "script": "f128e072753cc0dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: tr -d latin1": {
+   "script": "d52c3df9951c7704",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -d lone ff": {
+   "script": "2259feeb2ce46fc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -d nul": {
+   "script": "682d58a4c9254149",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -d surrogate": {
+   "script": "9267646f3dea8576",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -d truncated": {
+   "script": "895b742b3b7285d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -s controls": {
+   "script": "df0d6462ad5b9724",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -s crlf": {
+   "script": "c4256b1c792783a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 0a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: tr -s latin1": {
+   "script": "c6c6cac08dd28160",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -s lone ff": {
+   "script": "98af030b443c2355",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -s nul": {
+   "script": "efad5cc52c0b3877",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -s surrogate": {
+   "script": "34d9a394bd280948",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr -s truncated": {
+   "script": "48d3ec7629228033",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 0a 7a 0a\n"
+   }
+  },
+  "edge bytes: tr high range controls": {
+   "script": "f9a49774a2012139",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\u0001\u001b[1mb\nzz\n"
+   }
+  },
+  "edge bytes: tr high range crlf": {
+   "script": "020e963bc870adc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\r\nzz\r\n"
+   }
+  },
+  "edge bytes: tr high range latin1": {
+   "script": "b6555700952f4ec4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caf? ol?\nzz\n"
+   }
+  },
+  "edge bytes: tr high range lone ff": {
+   "script": "906f90b86fba2762",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a?b\nzz\n"
+   }
+  },
+  "edge bytes: tr high range nul": {
+   "script": "3c34835efd803cc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\u0000b\nzz\n"
+   }
+  },
+  "edge bytes: tr high range surrogate": {
+   "script": "7b8db918f6e58fd9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a???b\nzz\n"
+   }
+  },
+  "edge bytes: tr high range truncated": {
+   "script": "01bde202b22fd399",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab?\nzz\n"
+   }
+  },
+  "edge bytes: tr upper controls": {
+   "script": "98e92288a36a2edb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 01 1b 5b 31 4d 42 7f 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: tr upper crlf": {
+   "script": "559a9a687f6daedb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 20 42 0d 0a 5a 5a 0d 0a\n"
+   }
+  },
+  "edge bytes: tr upper latin1": {
+   "script": "32708037eaeb3687",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 43 41 46 e9 20 4f 4c e9 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: tr upper lone ff": {
+   "script": "73eec75595c5d448",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 ff 42 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: tr upper nul": {
+   "script": "0ea391c45c1e8d83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 00 42 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: tr upper surrogate": {
+   "script": "e066bf832b3ac3a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 ed a0 80 42 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: tr upper truncated": {
+   "script": "58ee0f2c0c430606",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 42 c3 0a 5a 5a 0a\n"
+   }
+  },
+  "edge bytes: uniq -c controls": {
+   "script": "a86f5cfad5ec31c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 20 31 20 61 01 1b 5b 31 6d 62 7f\n 0a 20 20 20 20 20 20 31 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: uniq -c crlf": {
+   "script": "67f8c598dc5c1a48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 20 31 20 61 20 62 0d 0a 20 20 20\n 20 20 20 31 20 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: uniq -c latin1": {
+   "script": "5b9b542188a18faf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 20 31 20 63 61 66 e9 20 6f 6c e9\n 0a 20 20 20 20 20 20 31 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: uniq -c lone ff": {
+   "script": "25b97c447685f70b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 20 31 20 61 ff 62 0a 20 20 20 20\n 20 20 31 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: uniq -c nul": {
+   "script": "fa5adc2cd46a4a32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 20 31 20 61 00 62 0a 20 20 20 20\n 20 20 31 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: uniq -c surrogate": {
+   "script": "af6cb6d9c61370c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 20 31 20 61 ed a0 80 62 0a 20 20\n 20 20 20 20 31 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: uniq -c truncated": {
+   "script": "593306abe91e3366",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 20 20 20 20 20 31 20 61 62 c3 0a 20 20 20 20\n 20 20 31 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: wc -L controls": {
+   "script": "62d5727089af3871",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge bytes: wc -L crlf": {
+   "script": "9729e42babb1db35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge bytes: wc -L latin1": {
+   "script": "58fe7ceb535791ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge bytes: wc -L lone ff": {
+   "script": "dfb6c0fbfc378b32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -L nul": {
+   "script": "3679b564f09d6836",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -L surrogate": {
+   "script": "4c68062de682c1cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -L truncated": {
+   "script": "219d39b26ba03e17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -c controls": {
+   "script": "af8a9ceec08a8f47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: wc -c crlf": {
+   "script": "35e338ce749283f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: wc -c latin1": {
+   "script": "6c9a7e9455d7dd2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: wc -c lone ff": {
+   "script": "99e1251b86bc80b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: wc -c nul": {
+   "script": "24b08f3a601ab611",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: wc -c surrogate": {
+   "script": "f1cbffc0daf1b345",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: wc -c truncated": {
+   "script": "13d8c416f3bb7046",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: wc -l controls": {
+   "script": "9c8dd0d1c9b2c7ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -l crlf": {
+   "script": "90fcbce9c390be73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -l latin1": {
+   "script": "d39dc0701e02066a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -l lone ff": {
+   "script": "e440cce80fd69611",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -l nul": {
+   "script": "524eef8d561a0b84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -l surrogate": {
+   "script": "2eb83287bc15dac2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -l truncated": {
+   "script": "7706e1f3cb2d5731",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -m controls": {
+   "script": "67ca1c1ee77df216",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge bytes: wc -m crlf": {
+   "script": "702ceca57963d1e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge bytes: wc -m latin1": {
+   "script": "d7fbc012d8375907",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n"
+   }
+  },
+  "edge bytes: wc -m lone ff": {
+   "script": "e4876b7a331e29c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge bytes: wc -m nul": {
+   "script": "e5a06ab79f25a4f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge bytes: wc -m surrogate": {
+   "script": "609c2dc4a414ea83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge bytes: wc -m truncated": {
+   "script": "c8416bacc861fe0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge bytes: wc -w controls": {
+   "script": "9baa09966f59a369",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -w crlf": {
+   "script": "238429d7b81a3234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge bytes: wc -w latin1": {
+   "script": "51a0ca9b3bf9cf70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge bytes: wc -w lone ff": {
+   "script": "fe8f70407e62896b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -w nul": {
+   "script": "938a9f4185ba9927",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -w surrogate": {
+   "script": "b8dc46753fbecc65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: wc -w truncated": {
+   "script": "3b01fc96e9ebdec8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge bytes: xargs controls": {
+   "script": "e66cae2b1e770e16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 1b 5b 31 6d 62 7f 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: xargs crlf": {
+   "script": "9c0e97a8f050ca36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 20 62 0d 20 7a 7a 0d 0a\n"
+   }
+  },
+  "edge bytes: xargs latin1": {
+   "script": "13332d68a84c5120",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 20 6f 6c e9 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: xargs lone ff": {
+   "script": "c9c8833db70365d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: xargs nul": {
+   "script": "4734d74c7577a8dd",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: WARNING: a NUL character occurred in the input.  It cannot be passed through in the argument list.  Did you mean to use the --null option?\n"
+   },
+   "stdout": {
+    "text": " 61 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: xargs surrogate": {
+   "script": "5bb9d5f4cb275be8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ed a0 80 62 20 7a 7a 0a\n"
+   }
+  },
+  "edge bytes: xargs truncated": {
+   "script": "ed38da3a1a59fbaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 62 c3 20 7a 7a 0a\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

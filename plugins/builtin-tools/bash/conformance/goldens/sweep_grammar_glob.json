@@ -1,0 +1,3368 @@
+{
+ "cases": {
+  "gram glob GLOBIGNORE '': *": {
+   "script": "233b37791675bc4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '*': *": {
+   "script": "2f71b77c75e06784",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '*': a*": {
+   "script": "25cc6636e31130c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '*': d/*": {
+   "script": "60fe5d4df5347de4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/*>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '*.txt': *": {
+   "script": "96fc403795538ed7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18 <-> <.hid> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <ab> <abc> <b> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '*.txt': a*": {
+   "script": "40d6f657734d24b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <a> <a*> <ab> <abc>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '*.txt': d/*": {
+   "script": "03b2d07bfc75ea8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <d/.g> <d/e> <d/f>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '.*': *": {
+   "script": "1349a4bd995f85e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '.*': a*": {
+   "script": "cfff0eeb592eb91b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '.*': d/*": {
+   "script": "93278bfe103da636",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <d/.g> <d/e> <d/f>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '?': *": {
+   "script": "a4d7800433b39d83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "13 <.hid> <.hid.txt> <D2> <Xy> <[x]> <a*> <a.txt> <ab> <abc> <b.txt> <c.log> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '?': a*": {
+   "script": "e3233005b5274bb4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '?': d/*": {
+   "script": "7c0ddff128d5391e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <d/.g> <d/e> <d/f>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '[ab]': *": {
+   "script": "fe0f50d049459777",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19 <-> <.hid> <.hid.txt> <D2> <Q> <Xy> <Z> <[x]> <]> <a*> <a.txt> <ab> <abc> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '[ab]': a*": {
+   "script": "0243719b43bc6e7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob GLOBIGNORE '[ab]': d/*": {
+   "script": "a5c4017a5b7a4fb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <d/.g> <d/e> <d/f>\n"
+   }
+  },
+  "gram glob GLOBIGNORE 'a*:b*': *": {
+   "script": "dac43b04ee875fb1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "14 <-> <.hid> <.hid.txt> <D2> <Q> <Xy> <Z> <[x]> <]> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob GLOBIGNORE 'a*:b*': a*": {
+   "script": "e22757a7f4c24df2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*>\n"
+   }
+  },
+  "gram glob GLOBIGNORE 'a*:b*': d/*": {
+   "script": "78c647ab4e2472a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <d/.g> <d/e> <d/f>\n"
+   }
+  },
+  "gram glob GLOBIGNORE 'd/*': *": {
+   "script": "2ae55f3537a16157",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "21 <-> <.hid> <.hid.txt> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob GLOBIGNORE 'd/*': a*": {
+   "script": "b408c33e90ac18b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob GLOBIGNORE 'd/*': d/*": {
+   "script": "c4eb04a8f6f943cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/*>\n"
+   }
+  },
+  "gram glob GLOBIGNORE set implies dotglob": {
+   "script": "327d533d930aea0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <.hid> <.hid.txt>\n"
+   }
+  },
+  "gram glob GLOBIGNORE unset restores dot files": {
+   "script": "ee3d8eac2a0c0fd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <.hid> <.hid.txt>\n2 <.hid> <.hid.txt>\n"
+   }
+  },
+  "gram glob context GLOBSORT by name reversed": {
+   "script": "44d9efd6fd633b32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc ab a.txt a* a\n"
+   }
+  },
+  "gram glob context GLOBSORT nosort is stable": {
+   "script": "1139cad146a41472",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\n"
+   }
+  },
+  "gram glob context absolute with dotdot": {
+   "script": "b2cc94be97c3ea3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g/d/../a /tmp/g/d/../a* /tmp/g/d/../a.txt /tmp/g/d/../ab /tmp/g/d/../abc\n"
+   }
+  },
+  "gram glob context after command substitution": {
+   "script": "cd245af7e7159749",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c.log\n"
+   }
+  },
+  "gram glob context after variable expansion": {
+   "script": "73939db4adc3b2eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt b.txt *.txt\n"
+   }
+  },
+  "gram glob context brace then glob": {
+   "script": "9692149cd0ec0489",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a a* a.txt ab abc b b.txt\n"
+   }
+  },
+  "gram glob context bracket in variable": {
+   "script": "cb4ccadf2e0415b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b [ab]\n"
+   }
+  },
+  "gram glob context dash file name": {
+   "script": "29de64d2a4203e9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "- -\n"
+   }
+  },
+  "gram glob context directories only": {
+   "script": "2937869dd222f694",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "D2/ d/\n"
+   }
+  },
+  "gram glob context dot slash prefix is kept": {
+   "script": "7dffe523bef1dda9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a ./b\n"
+   }
+  },
+  "gram glob context double slash is kept": {
+   "script": "8a4ad019df7cfb72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d//f\n"
+   }
+  },
+  "gram glob context escaped in variable": {
+   "script": "ac9625151470921e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\*\n"
+   }
+  },
+  "gram glob context glob in a loop over a directory": {
+   "script": "4469eb19000442c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dir:D2/\ndir:d/\n"
+   }
+  },
+  "gram glob context globasciiranges": {
+   "script": "afc64a77a640d992",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Q Z ] a b\nQ Z ] a b\n"
+   }
+  },
+  "gram glob context hidden with dot star": {
+   "script": "c08be449b93c5016",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 .hid .hid.txt\n"
+   }
+  },
+  "gram glob context in [[ is literal": {
+   "script": "fa287250eb68cb4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "literal\n"
+   }
+  },
+  "gram glob context in a case word is literal": {
+   "script": "5217085e71e7554f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "literal\n"
+   }
+  },
+  "gram glob context in a for list": {
+   "script": "ff2b636ba97541ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a><a*><a.txt><ab><abc>\n"
+   }
+  },
+  "gram glob context in a function argument": {
+   "script": "f3f3c7180c53df8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19\n"
+   }
+  },
+  "gram glob context in a here-string is literal": {
+   "script": "53e5abb3c8818156",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a*\n"
+   }
+  },
+  "gram glob context in a redirect with no match": {
+   "script": "5e2233193ff5c986",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "gram glob context in a redirect with one match": {
+   "script": "b79317d2b08cd06c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "gram glob context in a redirect with two matches": {
+   "script": "06762f04a9bcf307",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: *.txt: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram glob context in an array": {
+   "script": "cc1f9d1df3c5df5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 b.txt\n"
+   }
+  },
+  "gram glob context in an assignment is literal": {
+   "script": "ffa4edffa551972a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a*\n"
+   }
+  },
+  "gram glob context in declare is literal": {
+   "script": "f02b03b2a033f001",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a*\n"
+   }
+  },
+  "gram glob context match count": {
+   "script": "1cf9ca9a87f59faf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19\n"
+   }
+  },
+  "gram glob context nested directory": {
+   "script": "f3340210adec257f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d/e/h\n"
+   }
+  },
+  "gram glob context nocaseglob brackets": {
+   "script": "0f3171cab9c7d12b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a a* a.txt ab abc\n"
+   }
+  },
+  "gram glob context nocaseglob lower matches upper": {
+   "script": "01608f5b1bd4058c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Q q? Xy Z D2 d\n"
+   }
+  },
+  "gram glob context nullglob array empty": {
+   "script": "14789794e3ebcc62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram glob context nullglob unquoted variable": {
+   "script": "1486aae9e315043c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram glob context parameter default pattern": {
+   "script": "56521eccdf465293",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a a* a.txt ab abc\n"
+   }
+  },
+  "gram glob context pattern with slash in brackets": {
+   "script": "9513bfec2ba89d22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d[/]f\n"
+   }
+  },
+  "gram glob context quoted parts": {
+   "script": "221ed34b599bd720",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a a* a.txt ab abc a* a*\n"
+   }
+  },
+  "gram glob context sorted order": {
+   "script": "08794555441938bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "- D2 Q Xy Z [x] ] a a* a.txt ab abc b b.txt c c.log d q? sp ace\n"
+   }
+  },
+  "gram glob context space in a match": {
+   "script": "7a1cbe7677697f5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[sp ace]\n"
+   }
+  },
+  "gram glob context star matches no leading dot in subdir": {
+   "script": "3c4185365607aa3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d/e d/f\n"
+   }
+  },
+  "gram glob context tilde then glob": {
+   "script": "47f9805b198eb29b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g/a /tmp/g/a* /tmp/g/a.txt /tmp/g/ab /tmp/g/abc\n"
+   }
+  },
+  "gram glob context unset variable pattern": {
+   "script": "1ff998be6aa28cbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "- D2 Q Xy Z [x] ] a a* a.txt ab abc b b.txt c c.log d q? sp ace\n"
+   }
+  },
+  "gram glob extglob !(*)": {
+   "script": "3ad4678d5277cc92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <!(*)>\n"
+   }
+  },
+  "gram glob extglob !(*.txt|*.log)": {
+   "script": "f18e9386a339e430",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "16 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <ab> <abc> <b> <c> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob extglob !(.hid)": {
+   "script": "093f44061412dc42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob extglob !(a)*": {
+   "script": "fdc0ec1f3fd0596f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob extglob !(a*)": {
+   "script": "189ccbb6ca120d5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "14 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob extglob *([!a])": {
+   "script": "dea9576c6e38d3be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "13 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <b> <b.txt> <c> <c.log> <d> <q?>\n"
+   }
+  },
+  "gram glob extglob *(a)": {
+   "script": "7025632dfa810951",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\n"
+   }
+  },
+  "gram glob extglob *(a|b)c": {
+   "script": "2eb277534363e1bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <abc> <c>\n"
+   }
+  },
+  "gram glob extglob *.@(txt|log)": {
+   "script": "8fbd167746177de1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a.txt> <b.txt> <c.log>\n"
+   }
+  },
+  "gram glob extglob +([[:upper:]])": {
+   "script": "6d62868c0c3e81ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <Q> <Z>\n"
+   }
+  },
+  "gram glob extglob +(ab)": {
+   "script": "82715287ea8e0755",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <ab>\n"
+   }
+  },
+  "gram glob extglob +(a|b|c)": {
+   "script": "c719c6810abed88f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <ab> <abc> <b> <c>\n"
+   }
+  },
+  "gram glob extglob ?(a)c": {
+   "script": "69ec1dd203fa70b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <c>\n"
+   }
+  },
+  "gram glob extglob ?(|a)b": {
+   "script": "d4fb8626902cde39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <ab> <b>\n"
+   }
+  },
+  "gram glob extglob @()": {
+   "script": "bec16f93b9fa80bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <@()>\n"
+   }
+  },
+  "gram glob extglob @(\\*|b)": {
+   "script": "3f43dcc75e33237c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <b>\n"
+   }
+  },
+  "gram glob extglob @(ab|abc)": {
+   "script": "5317ca44838cce83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <ab> <abc>\n"
+   }
+  },
+  "gram glob extglob @(a|b)": {
+   "script": "42aabcaf7f02c94d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\n"
+   }
+  },
+  "gram glob extglob @(a|b).txt": {
+   "script": "5c4052ddc170d577",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a.txt> <b.txt>\n"
+   }
+  },
+  "gram glob extglob @(d|D2)/*": {
+   "script": "6c8cf76a24af23db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <D2/i> <d/e> <d/f>\n"
+   }
+  },
+  "gram glob extglob a!(b)": {
+   "script": "45921d759da3c9a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <a> <a*> <a.txt> <abc>\n"
+   }
+  },
+  "gram glob extglob d/@(e|f)": {
+   "script": "4ad12bafece4b2b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <d/e> <d/f>\n"
+   }
+  },
+  "gram glob extglob in case !(a*)": {
+   "script": "d19674b262f644b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a no\nab no\nx.txt yes\n"
+   }
+  },
+  "gram glob extglob in case *.@(txt|log)": {
+   "script": "f0f7bc22eb1675ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a no\nab no\nx.txt yes\n"
+   }
+  },
+  "gram glob extglob in case +(a)": {
+   "script": "5a875a3703dff6e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a yes\nab no\nx.txt no\n"
+   }
+  },
+  "gram glob extglob in case @(a|b)": {
+   "script": "b04b384e7cadca63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a yes\nab no\nx.txt no\n"
+   }
+  },
+  "gram glob extglob in replace !(a*)": {
+   "script": "830fbbc79e74fcbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "XaX\n"
+   }
+  },
+  "gram glob extglob in replace *.@(txt|log)": {
+   "script": "dfcd2cb3a18940a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X ab\n"
+   }
+  },
+  "gram glob extglob in replace +(a)": {
+   "script": "56bd1865b6a27672",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X b.txt Xb\n"
+   }
+  },
+  "gram glob extglob in replace @(a|b)": {
+   "script": "24deb3c94ab08d68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X X.txt XX\n"
+   }
+  },
+  "gram glob extglob in trim !(a*)": {
+   "script": "c106bdc1854fc58c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aab.txt aa\n"
+   }
+  },
+  "gram glob extglob in trim *.@(txt|log)": {
+   "script": "a28b0264e05a4b67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "gram glob extglob in trim +(a)": {
+   "script": "9c5d4a9ab558c0e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt aab.txt\n"
+   }
+  },
+  "gram glob extglob in trim @(a|b)": {
+   "script": "10bb32797e3f8d3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab.txt aab.txt\n"
+   }
+  },
+  "gram glob extglob match !(*)": {
+   "script": "7311eaf0f497ef78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "gram glob extglob match !(*.txt|*.log)": {
+   "script": "f3d1339c5aac64e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a] [b] [ab] [abc] [aab] [] \n"
+   }
+  },
+  "gram glob extglob match !(.hid)": {
+   "script": "cbcf0c2c4bb47c92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a] [b] [ab] [abc] [a.txt] [c.log] [aab] [] \n"
+   }
+  },
+  "gram glob extglob match !(a)*": {
+   "script": "b6de27140bfd2cd0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a] [b] [ab] [abc] [a.txt] [c.log] [aab] [] \n"
+   }
+  },
+  "gram glob extglob match !(a*)": {
+   "script": "b5119b1a3b462ef9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[b] [c.log] [] \n"
+   }
+  },
+  "gram glob extglob match *([!a])": {
+   "script": "0dd78eacdaab10ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[b] [c.log] [] \n"
+   }
+  },
+  "gram glob extglob match *(a)": {
+   "script": "1339c15005aaf083",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a] [] \n"
+   }
+  },
+  "gram glob extglob match *(a|b)c": {
+   "script": "ac32a819138fe8b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[abc] \n"
+   }
+  },
+  "gram glob extglob match *.@(txt|log)": {
+   "script": "2bb073eff773e66f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a.txt] [c.log] \n"
+   }
+  },
+  "gram glob extglob match +([[:upper:]])": {
+   "script": "4c92a54fe9d26070",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "gram glob extglob match +(ab)": {
+   "script": "570fee0f01b67360",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ab] \n"
+   }
+  },
+  "gram glob extglob match +(a|b|c)": {
+   "script": "e041a74a8643c5ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a] [b] [ab] [abc] [aab] \n"
+   }
+  },
+  "gram glob extglob match ?(a)c": {
+   "script": "4219a14852781874",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "gram glob extglob match ?(|a)b": {
+   "script": "172c8080c9bab421",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[b] [ab] \n"
+   }
+  },
+  "gram glob extglob match @()": {
+   "script": "b46543fd5f61a144",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] \n"
+   }
+  },
+  "gram glob extglob match @(\\*|b)": {
+   "script": "0f08fb64c1630479",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[b] \n"
+   }
+  },
+  "gram glob extglob match @(ab|abc)": {
+   "script": "7b84902bc6d783a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ab] [abc] \n"
+   }
+  },
+  "gram glob extglob match @(a|b)": {
+   "script": "bfae504704c4ffef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a] [b] \n"
+   }
+  },
+  "gram glob extglob match @(a|b).txt": {
+   "script": "134f898a411398ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a.txt] \n"
+   }
+  },
+  "gram glob extglob match @(d|D2)/*": {
+   "script": "a5267e6ddadbcd49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "gram glob extglob match a!(b)": {
+   "script": "a600a1e651e62da1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a] [abc] [a.txt] [aab] \n"
+   }
+  },
+  "gram glob extglob match d/@(e|f)": {
+   "script": "b3add7db53479df4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "gram glob extglob turned off again": {
+   "script": "fed990c297c6f49a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt b.txt\n"
+   }
+  },
+  "gram glob extglob with dotglob !(a*)": {
+   "script": "1d77da8abc8c669b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "16 <-> <.hid> <.hid.txt> <D2> <Q> <Xy> <Z> <[x]> <]> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob extglob with dotglob *.@(txt|log)": {
+   "script": "262c8b2a6c7e1ae7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <.hid.txt> <a.txt> <b.txt> <c.log>\n"
+   }
+  },
+  "gram glob extglob with dotglob +(a)": {
+   "script": "68f93b67f1f64b5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\n"
+   }
+  },
+  "gram glob extglob with dotglob @(a|b)": {
+   "script": "7839a1499d45e245",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\n"
+   }
+  },
+  "gram glob failglob *.none": {
+   "script": "7d8318e6aa78a3a6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no match: *.none\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram glob failglob [z]": {
+   "script": "6ed1f9b3e8408599",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no match: [z]\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram glob failglob \\*": {
+   "script": "e31e6eb0e467a6f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "before\n*\nafter status=0\nnext line\n"
+   }
+  },
+  "gram glob failglob a*": {
+   "script": "576c8e419a173819",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "before\na a* a.txt ab abc\nafter status=0\nnext line\n"
+   }
+  },
+  "gram glob failglob d/*": {
+   "script": "a7c56f938616ebaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "before\nd/e d/f\nafter status=0\nnext line\n"
+   }
+  },
+  "gram glob failglob in a for list": {
+   "script": "44088c3ab18423df",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram glob failglob in a function": {
+   "script": "2d4e07ae610cf26c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram glob failglob in a redirection": {
+   "script": "c13ae07c65c04ede",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram glob failglob in a subshell": {
+   "script": "dac2014b92d8c1d3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram glob failglob in an array assignment": {
+   "script": "502311f863234fe1",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram glob failglob nomatch*": {
+   "script": "d66590b30a2a7023",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram glob failglob nomatch*.txt": {
+   "script": "8a7dc4d3e8324dab",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*.txt\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram glob failglob with nullglob": {
+   "script": "a6101637ec696fb8",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram glob failglob x?y": {
+   "script": "8b4646a9b551f0d7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no match: x?y\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram glob globstar **": {
+   "script": "84de1369f7fd5b1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "23 <-> <D2> <D2/i> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <d/e> <d/e/h> <d/f> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob globstar ** dotglob": {
+   "script": "e05309d0c6b425c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "26 <-> <.hid> <.hid.txt> <D2> <D2/i> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <d/.g> <d/e> <d/e/h> <d/f> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob globstar **/": {
+   "script": "1fe6834c841bc878",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <D2/> <d/> <d/e/>\n"
+   }
+  },
+  "gram glob globstar **/*.txt": {
+   "script": "f1bbca5e5e83148f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a.txt> <b.txt>\n"
+   }
+  },
+  "gram glob globstar **/*.txt dotglob": {
+   "script": "a5f5989ea09c77e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <.hid.txt> <a.txt> <b.txt>\n"
+   }
+  },
+  "gram glob globstar **/.g": {
+   "script": "390a570d66152c94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/.g>\n"
+   }
+  },
+  "gram glob globstar **/e/*": {
+   "script": "b4a60e99c799762a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob globstar **/e/* dotglob": {
+   "script": "d1d71a53571aaccd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob globstar **/h": {
+   "script": "658df1a021dc1f9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob globstar **/h dotglob": {
+   "script": "304f44192c29164a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob globstar **x": {
+   "script": "baa0a5ffb098e61d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <**x>\n"
+   }
+  },
+  "gram glob globstar */**": {
+   "script": "db70bd017a218ab1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 <D2> <D2/i> <d> <d/e> <d/e/h> <d/f>\n"
+   }
+  },
+  "gram glob globstar */** dotglob": {
+   "script": "83201207cd084716",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 <D2> <D2/i> <d> <d/.g> <d/e> <d/e/h> <d/f>\n"
+   }
+  },
+  "gram glob globstar a**": {
+   "script": "c1a19b47edd6094a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob globstar d/**": {
+   "script": "6473cee78a975dcf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <d/> <d/e> <d/e/h> <d/f>\n"
+   }
+  },
+  "gram glob globstar d/** dotglob": {
+   "script": "89c5e16ace6e76d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <d/> <d/.g> <d/e> <d/e/h> <d/f>\n"
+   }
+  },
+  "gram glob globstar d/**/": {
+   "script": "766ef1913cd00587",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <d/> <d/e/>\n"
+   }
+  },
+  "gram glob globstar d/**/h": {
+   "script": "ce1366d2cc434b85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob globstar d/**/h dotglob": {
+   "script": "1c42897fe60a7ab4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob globstar off **": {
+   "script": "e7a7d72fc9e262a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob globstar off **/": {
+   "script": "d1c9f99b78fc25fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <D2/> <d/>\n"
+   }
+  },
+  "gram glob globstar off **/*.txt": {
+   "script": "ae30020c5225c0f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <**/*.txt>\n"
+   }
+  },
+  "gram glob globstar off **/.g": {
+   "script": "bf164addc6bb3be1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/.g>\n"
+   }
+  },
+  "gram glob globstar off **/e/*": {
+   "script": "ee8c495b6954706e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob globstar off **/h": {
+   "script": "55f0a66022be1e96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <**/h>\n"
+   }
+  },
+  "gram glob globstar off **x": {
+   "script": "253c01f1ca0947f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <**x>\n"
+   }
+  },
+  "gram glob globstar off */**": {
+   "script": "10d93b2e894f8df2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <D2/i> <d/e> <d/f>\n"
+   }
+  },
+  "gram glob globstar off a**": {
+   "script": "0b92acce4581008a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob globstar off d/**": {
+   "script": "0b0535f29b66670f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <d/e> <d/f>\n"
+   }
+  },
+  "gram glob globstar off d/**/": {
+   "script": "8f8bb956ae0375dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/>\n"
+   }
+  },
+  "gram glob globstar off d/**/h": {
+   "script": "7645fc8879abc0e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob match [[ ]] \"$pat\"": {
+   "script": "3134a5578e71e790",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*\n"
+   }
+  },
+  "gram glob match [[ ]] \"a\"*": {
+   "script": "28fb7e3ff99d2ec5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|a.b\n"
+   }
+  },
+  "gram glob match [[ ]] $pat": {
+   "script": "14c202e79355234a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|a.b\n"
+   }
+  },
+  "gram glob match [[ ]] 'a*'": {
+   "script": "bd834b71f1b9e3cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*\n"
+   }
+  },
+  "gram glob match [[ ]] *": {
+   "script": "96aa08cc25ef5ede",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|b|1x|a b||[x|-y|a.b|]z\n"
+   }
+  },
+  "gram glob match [[ ]] *.*": {
+   "script": "118d0344214fa80d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a.b\n"
+   }
+  },
+  "gram glob match [[ ]] *[[:space:]]*": {
+   "script": "c3c1c704bd3e3e92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a b\n"
+   }
+  },
+  "gram glob match [[ ]] *b": {
+   "script": "c45f7cf8c2083af5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|ab|b|a b|a.b\n"
+   }
+  },
+  "gram glob match [[ ]] ?b": {
+   "script": "60ada507abaf290b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|ab\n"
+   }
+  },
+  "gram glob match [[ ]] [!a]*": {
+   "script": "229150813c370c31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|b|1x|[x|-y|]z\n"
+   }
+  },
+  "gram glob match [[ ]] [[:alpha:][:digit:]]*": {
+   "script": "fc3ad0bfe3d196db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|b|1x|a b|a.b\n"
+   }
+  },
+  "gram glob match [[ ]] [[:digit:]]*": {
+   "script": "f11d94215571a4a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|1x\n"
+   }
+  },
+  "gram glob match [[ ]] []a]*": {
+   "script": "53c67ef3aae2a416",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|a.b|]z\n"
+   }
+  },
+  "gram glob match [[ ]] [^[:alpha:]]*": {
+   "script": "22c99f79dd72ecbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|1x|[x|-y|]z\n"
+   }
+  },
+  "gram glob match [[ ]] [a-]*": {
+   "script": "1176be635eebb435",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|-y|a.b\n"
+   }
+  },
+  "gram glob match [[ ]] [ab]*": {
+   "script": "585a88bf5014dc5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|b|a b|a.b\n"
+   }
+  },
+  "gram glob match [[ ]] \\[*": {
+   "script": "abbc0a89fb967dbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|[x\n"
+   }
+  },
+  "gram glob match [[ ]] a*": {
+   "script": "92b7b1944eb22761",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|a.b\n"
+   }
+  },
+  "gram glob match [[ ]] a\\*": {
+   "script": "8161332b22064206",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*\n"
+   }
+  },
+  "gram glob match [[ ]] empty": {
+   "script": "badbf288ae6e33fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|\n"
+   }
+  },
+  "gram glob match case \"$pat\"": {
+   "script": "b14ce68474380d66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*\n"
+   }
+  },
+  "gram glob match case \"a\"*": {
+   "script": "d305d0d6bd3d5954",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|a.b\n"
+   }
+  },
+  "gram glob match case $pat": {
+   "script": "97eb38e9c31f29f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|a.b\n"
+   }
+  },
+  "gram glob match case 'a*'": {
+   "script": "5bfbbe20572428c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*\n"
+   }
+  },
+  "gram glob match case *": {
+   "script": "f03062e874206cd9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|b|1x|a b||[x|-y|a.b|]z\n"
+   }
+  },
+  "gram glob match case *.*": {
+   "script": "39a2aa90e68a3c66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a.b\n"
+   }
+  },
+  "gram glob match case *[[:space:]]*": {
+   "script": "5d64d62cc3e4816d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a b\n"
+   }
+  },
+  "gram glob match case *b": {
+   "script": "331b06cac807ae75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|ab|b|a b|a.b\n"
+   }
+  },
+  "gram glob match case ?b": {
+   "script": "6999cf84e73d76c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|ab\n"
+   }
+  },
+  "gram glob match case [!a]*": {
+   "script": "43a99eb1d65ced0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|b|1x|[x|-y|]z\n"
+   }
+  },
+  "gram glob match case [[:alpha:][:digit:]]*": {
+   "script": "e53309221f3bf60e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|b|1x|a b|a.b\n"
+   }
+  },
+  "gram glob match case [[:digit:]]*": {
+   "script": "6547d3188e2b8586",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|1x\n"
+   }
+  },
+  "gram glob match case []a]*": {
+   "script": "b9302ecc5ce3f31f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|a.b|]z\n"
+   }
+  },
+  "gram glob match case [^[:alpha:]]*": {
+   "script": "b374c359f279a8ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|1x|[x|-y|]z\n"
+   }
+  },
+  "gram glob match case [a-]*": {
+   "script": "188517247ae005f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|-y|a.b\n"
+   }
+  },
+  "gram glob match case [ab]*": {
+   "script": "e11f7b08e5e66518",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|b|a b|a.b\n"
+   }
+  },
+  "gram glob match case \\[*": {
+   "script": "cabade25c51168c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|[x\n"
+   }
+  },
+  "gram glob match case a*": {
+   "script": "b9b7101c270f95d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*|ab|a b|a.b\n"
+   }
+  },
+  "gram glob match case a\\*": {
+   "script": "a8bf13d7747e5ca6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|a*\n"
+   }
+  },
+  "gram glob match case empty": {
+   "script": "aa7fc89d52a1a52d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|\n"
+   }
+  },
+  "gram glob match nocasematch [[ ]] 'AB'": {
+   "script": "1a0d8b7440876b57",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\nAb\n"
+   }
+  },
+  "gram glob match nocasematch [[ ]] ?B": {
+   "script": "e1a02e7ddef7c127",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\nAb\n"
+   }
+  },
+  "gram glob match nocasematch [[ ]] A*": {
+   "script": "cdf988a4f7090fb2",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\nAb\n"
+   }
+  },
+  "gram glob match nocasematch [[ ]] [a]*": {
+   "script": "5e0c99153d3b84ed",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\nAb\n"
+   }
+  },
+  "gram glob match nocasematch case 'AB'": {
+   "script": "c84ab8feee491643",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\nAb\n"
+   }
+  },
+  "gram glob match nocasematch case ?B": {
+   "script": "69f1e1169da13959",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\nAb\n"
+   }
+  },
+  "gram glob match nocasematch case A*": {
+   "script": "388cb37f5ed4c3a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\nAb\n"
+   }
+  },
+  "gram glob match nocasematch case [a]*": {
+   "script": "d100fe8ba19f3865",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\nAb\n"
+   }
+  },
+  "gram glob match nocasematch regex 'AB'": {
+   "script": "6b00e80f661a9a42",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\n"
+   }
+  },
+  "gram glob match nocasematch regex ?B": {
+   "script": "40c1b64e5abd8046",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\n"
+   }
+  },
+  "gram glob match nocasematch regex A*": {
+   "script": "f63dff79da54687e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\n"
+   }
+  },
+  "gram glob match nocasematch regex [a]*": {
+   "script": "1a40640a47f82cc3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\nAB\n"
+   }
+  },
+  "gram glob noglob *": {
+   "script": "20ba8c5536492878",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*>\n19 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob noglob *.txt": {
+   "script": "5e4bf1f42af5bd2b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*.txt>\n2 <a.txt> <b.txt>\n"
+   }
+  },
+  "gram glob noglob [ab]": {
+   "script": "aa448a5a65da68bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[ab]>\n2 <a> <b>\n"
+   }
+  },
+  "gram glob noglob a?": {
+   "script": "5f80299989e8b024",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a?>\n2 <a*> <ab>\n"
+   }
+  },
+  "gram glob noglob d/*": {
+   "script": "56aeaf0f7ada24e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/*>\n2 <d/e> <d/f>\n"
+   }
+  },
+  "gram glob pattern \"a\"*: default": {
+   "script": "53c68480c4d7b52d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob pattern \"a\"*: nullglob": {
+   "script": "313536dc964a826e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob pattern 'a*': default": {
+   "script": "9fe924fdf90b5833",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*>\n"
+   }
+  },
+  "gram glob pattern 'a*': nullglob": {
+   "script": "4d5b054050da5bbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*>\n"
+   }
+  },
+  "gram glob pattern *.: default": {
+   "script": "7706c628d8b3e7bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*.>\n"
+   }
+  },
+  "gram glob pattern *.: dotglob": {
+   "script": "b05b764e13e5707d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*.>\n"
+   }
+  },
+  "gram glob pattern *.: nocaseglob": {
+   "script": "8f421e81652fc9f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*.>\n"
+   }
+  },
+  "gram glob pattern *.txt: default": {
+   "script": "1f3179a08d8cabb4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a.txt> <b.txt>\n"
+   }
+  },
+  "gram glob pattern *.txt: dotglob": {
+   "script": "7f623ce7fcfd7953",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <.hid.txt> <a.txt> <b.txt>\n"
+   }
+  },
+  "gram glob pattern *.txt: nocaseglob": {
+   "script": "24ce1bcbc6c6a628",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a.txt> <b.txt>\n"
+   }
+  },
+  "gram glob pattern *.{txt,log}: default": {
+   "script": "f153663d5916a32c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a.txt> <b.txt> <c.log>\n"
+   }
+  },
+  "gram glob pattern *.{txt,log}: dotglob": {
+   "script": "9d9f42d6f36d9a62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <.hid.txt> <a.txt> <b.txt> <c.log>\n"
+   }
+  },
+  "gram glob pattern *.{txt,log}: nocaseglob": {
+   "script": "aa1766fa8a7021e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a.txt> <b.txt> <c.log>\n"
+   }
+  },
+  "gram glob pattern */*: default": {
+   "script": "0d8b19098d15ab6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <D2/i> <d/e> <d/f>\n"
+   }
+  },
+  "gram glob pattern */.*: default": {
+   "script": "4a26d450f0bba1e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/.g>\n"
+   }
+  },
+  "gram glob pattern */.*: nullglob": {
+   "script": "247b7176407433f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/.g>\n"
+   }
+  },
+  "gram glob pattern */: default": {
+   "script": "5c5e495ceaf76405",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <D2/> <d/>\n"
+   }
+  },
+  "gram glob pattern */: dotglob": {
+   "script": "cca7ce9edeac736e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <D2/> <d/>\n"
+   }
+  },
+  "gram glob pattern */: nocaseglob": {
+   "script": "f437db2501010b05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <D2/> <d/>\n"
+   }
+  },
+  "gram glob pattern *: default": {
+   "script": "b72d2843b10020b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob pattern *: nullglob": {
+   "script": "94951f629beac407",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19 <-> <D2> <Q> <Xy> <Z> <[x]> <]> <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob pattern *[: default": {
+   "script": "e0612d950dd0ff15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*[>\n"
+   }
+  },
+  "gram glob pattern *[: dotglob": {
+   "script": "72af7273ebd8305b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*[>\n"
+   }
+  },
+  "gram glob pattern *[: nocaseglob": {
+   "script": "80c13ed9f967302a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*[>\n"
+   }
+  },
+  "gram glob pattern *[[:punct:]]*: default": {
+   "script": "1718e373a5f3d746",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8 <-> <[x]> <]> <a*> <a.txt> <b.txt> <c.log> <q?>\n"
+   }
+  },
+  "gram glob pattern *[[:punct:]]*: nullglob": {
+   "script": "ef3b090634790bb6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8 <-> <[x]> <]> <a*> <a.txt> <b.txt> <c.log> <q?>\n"
+   }
+  },
+  "gram glob pattern *[[:space:]]*: default": {
+   "script": "be42c2a24f1318c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <sp ace>\n"
+   }
+  },
+  "gram glob pattern *[[:space:]]*: nullglob": {
+   "script": "b0eb34cd34da8523",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <sp ace>\n"
+   }
+  },
+  "gram glob pattern *\\?: default": {
+   "script": "2e609f107f1f56ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <q?>\n"
+   }
+  },
+  "gram glob pattern *c: default": {
+   "script": "f0caeb703215dba5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <abc> <c>\n"
+   }
+  },
+  "gram glob pattern *c: dotglob": {
+   "script": "e6d1167d1d2c4c17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <abc> <c>\n"
+   }
+  },
+  "gram glob pattern *c: nocaseglob": {
+   "script": "c8cac91a49a50ade",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <abc> <c>\n"
+   }
+  },
+  "gram glob pattern .*: default": {
+   "script": "f8a53ad2460c57c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <.hid> <.hid.txt>\n"
+   }
+  },
+  "gram glob pattern .*: dotglob": {
+   "script": "2401cae9c38f9856",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <.hid> <.hid.txt>\n"
+   }
+  },
+  "gram glob pattern .*: nocaseglob": {
+   "script": "d5228e16f0da161a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <.hid> <.hid.txt>\n"
+   }
+  },
+  "gram glob pattern ../g/a*: default": {
+   "script": "8dd5ee76611c2235",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <../g/a> <../g/a*> <../g/a.txt> <../g/ab> <../g/abc>\n"
+   }
+  },
+  "gram glob pattern ../g/a*: nullglob": {
+   "script": "e9dec71148af93d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <../g/a> <../g/a*> <../g/a.txt> <../g/ab> <../g/abc>\n"
+   }
+  },
+  "gram glob pattern ..: default": {
+   "script": "37ab038ec665c42e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <..>\n"
+   }
+  },
+  "gram glob pattern ..: dotglob": {
+   "script": "8f0c3783331a380f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <..>\n"
+   }
+  },
+  "gram glob pattern ..: nocaseglob": {
+   "script": "b127aad82fce6dff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <..>\n"
+   }
+  },
+  "gram glob pattern ./a*: default": {
+   "script": "9a3c9b73c648c998",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <./a> <./a*> <./a.txt> <./ab> <./abc>\n"
+   }
+  },
+  "gram glob pattern ./a*: nullglob": {
+   "script": "66e55eb87616e55c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <./a> <./a*> <./a.txt> <./ab> <./abc>\n"
+   }
+  },
+  "gram glob pattern .: default": {
+   "script": "e933866c6867c3b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <.>\n"
+   }
+  },
+  "gram glob pattern .: nullglob": {
+   "script": "f1c192dffac46e58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <.>\n"
+   }
+  },
+  "gram glob pattern /tmp/g/a*: default": {
+   "script": "d0d0139311aca34d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 </tmp/g/a> </tmp/g/a*> </tmp/g/a.txt> </tmp/g/ab> </tmp/g/abc>\n"
+   }
+  },
+  "gram glob pattern ?: default": {
+   "script": "f89b8f1f6a434769",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8 <-> <Q> <Z> <]> <a> <b> <c> <d>\n"
+   }
+  },
+  "gram glob pattern ?: nullglob": {
+   "script": "ed43335a39c5bf01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8 <-> <Q> <Z> <]> <a> <b> <c> <d>\n"
+   }
+  },
+  "gram glob pattern ??: default": {
+   "script": "d8758d70445839b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <D2> <Xy> <a*> <ab> <q?>\n"
+   }
+  },
+  "gram glob pattern ??: dotglob": {
+   "script": "bae236f06328ed35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <D2> <Xy> <a*> <ab> <q?>\n"
+   }
+  },
+  "gram glob pattern ??: nocaseglob": {
+   "script": "5cf4df11a52cce3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <D2> <Xy> <a*> <ab> <q?>\n"
+   }
+  },
+  "gram glob pattern ?hid: default": {
+   "script": "3456cd9ba219c077",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <?hid>\n"
+   }
+  },
+  "gram glob pattern ?hid: nullglob": {
+   "script": "9074c64ef9f1e6a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram glob pattern [!]a]: default": {
+   "script": "877adeca9042a481",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 <-> <Q> <Z> <b> <c> <d>\n"
+   }
+  },
+  "gram glob pattern [!]a]: dotglob": {
+   "script": "88b91fedd87de9e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 <-> <Q> <Z> <b> <c> <d>\n"
+   }
+  },
+  "gram glob pattern [!]a]: nocaseglob": {
+   "script": "902eb5a2365f8289",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 <-> <Q> <Z> <b> <c> <d>\n"
+   }
+  },
+  "gram glob pattern [!a]: default": {
+   "script": "aa24433ffb0e227b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 <-> <Q> <Z> <]> <b> <c> <d>\n"
+   }
+  },
+  "gram glob pattern [!a]: nullglob": {
+   "script": "bde40e7095a45f90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 <-> <Q> <Z> <]> <b> <c> <d>\n"
+   }
+  },
+  "gram glob pattern [-]: default": {
+   "script": "ec78464d86d42e72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <->\n"
+   }
+  },
+  "gram glob pattern [.]hid: default": {
+   "script": "9732baea7460f80d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[.]hid>\n"
+   }
+  },
+  "gram glob pattern [: default": {
+   "script": "92ced3cdb82332fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[>\n"
+   }
+  },
+  "gram glob pattern [: nullglob": {
+   "script": "45fb0134fdb0ca92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[>\n"
+   }
+  },
+  "gram glob pattern [[:alpha:]][[:alpha:]]: default": {
+   "script": "aa16ba2784314bbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <Xy> <ab>\n"
+   }
+  },
+  "gram glob pattern [[:alpha:]][[:alpha:]]: nullglob": {
+   "script": "add868d4833dd6dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <Xy> <ab>\n"
+   }
+  },
+  "gram glob pattern [[:lower:]]*: default": {
+   "script": "7128067df2bc41bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12 <a> <a*> <a.txt> <ab> <abc> <b> <b.txt> <c> <c.log> <d> <q?> <sp ace>\n"
+   }
+  },
+  "gram glob pattern [[:nosuch:]]: default": {
+   "script": "9cf6270fc44ddad8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[[:nosuch:]]>\n"
+   }
+  },
+  "gram glob pattern [[:upper:]]: default": {
+   "script": "8eb7f7fccc4d6c7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <Q> <Z>\n"
+   }
+  },
+  "gram glob pattern [[:upper:]]: dotglob": {
+   "script": "b258960e041b3746",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <Q> <Z>\n"
+   }
+  },
+  "gram glob pattern [[:upper:]]: nocaseglob": {
+   "script": "d6d4f4f74b3c693b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <Q> <Z>\n"
+   }
+  },
+  "gram glob pattern [[]x]: default": {
+   "script": "7b6fb8f23e1aafbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[x]>\n"
+   }
+  },
+  "gram glob pattern [[]x]: dotglob": {
+   "script": "360a88c5167a6b67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[x]>\n"
+   }
+  },
+  "gram glob pattern [[]x]: nocaseglob": {
+   "script": "59da2d5bbc089c7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[x]>\n"
+   }
+  },
+  "gram glob pattern []]: default": {
+   "script": "9a454f206d0abfd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <]>\n"
+   }
+  },
+  "gram glob pattern [^a]: default": {
+   "script": "8c12163163028a10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 <-> <Q> <Z> <]> <b> <c> <d>\n"
+   }
+  },
+  "gram glob pattern [^a]: nullglob": {
+   "script": "44bad01ed8b3494b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 <-> <Q> <Z> <]> <b> <c> <d>\n"
+   }
+  },
+  "gram glob pattern [a-: default": {
+   "script": "da5fe0bf17825bd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[a->\n"
+   }
+  },
+  "gram glob pattern [a-]: default": {
+   "script": "92275e2d7831729f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <-> <a>\n"
+   }
+  },
+  "gram glob pattern [a-]: nullglob": {
+   "script": "3eb65c76823a7cf8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <-> <a>\n"
+   }
+  },
+  "gram glob pattern [a-c]: default": {
+   "script": "4ab1033e0799f5d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram glob pattern [a-c]: dotglob": {
+   "script": "337095ab2f32e479",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram glob pattern [a-c]: nocaseglob": {
+   "script": "a2b9835349ad4b68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram glob pattern [a: default": {
+   "script": "abc86f7dee7f3fdb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[a>\n"
+   }
+  },
+  "gram glob pattern [a: dotglob": {
+   "script": "014f99023bfb20c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[a>\n"
+   }
+  },
+  "gram glob pattern [a: nocaseglob": {
+   "script": "70b7b835ff974fc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[a>\n"
+   }
+  },
+  "gram glob pattern [ab]: default": {
+   "script": "450afd8843e7236d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\n"
+   }
+  },
+  "gram glob pattern [ab]: nullglob": {
+   "script": "947463ca7b3ad9b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\n"
+   }
+  },
+  "gram glob pattern [x]: default": {
+   "script": "67adf9b26da6d859",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[x]>\n"
+   }
+  },
+  "gram glob pattern [z-a]: default": {
+   "script": "a5260ec84fecc99b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[z-a]>\n"
+   }
+  },
+  "gram glob pattern [z-a]: dotglob": {
+   "script": "e8d91b9bd4fd746f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[z-a]>\n"
+   }
+  },
+  "gram glob pattern [z-a]: nocaseglob": {
+   "script": "b8a502cff05c6ab9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[z-a]>\n"
+   }
+  },
+  "gram glob pattern \\*: default": {
+   "script": "d2496e6d2492294f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*>\n"
+   }
+  },
+  "gram glob pattern \\*: dotglob": {
+   "script": "7e2cafe99c4eb31d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*>\n"
+   }
+  },
+  "gram glob pattern \\*: nocaseglob": {
+   "script": "f67990ee39666db1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*>\n"
+   }
+  },
+  "gram glob pattern \\[x]: default": {
+   "script": "5df5ffd867d79399",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[x]>\n"
+   }
+  },
+  "gram glob pattern \\[x]: nullglob": {
+   "script": "356a48652039b9fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[x]>\n"
+   }
+  },
+  "gram glob pattern a*/: default": {
+   "script": "790ffc8b4a4282ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*/>\n"
+   }
+  },
+  "gram glob pattern a*: default": {
+   "script": "a92ca79b8b1c83fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob pattern a*: dotglob": {
+   "script": "99d4f6061c98847d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob pattern a*: nocaseglob": {
+   "script": "826cc27f2e5eaac7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <a*> <a.txt> <ab> <abc>\n"
+   }
+  },
+  "gram glob pattern a\\*: default": {
+   "script": "a5a1c31ce0c533d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*>\n"
+   }
+  },
+  "gram glob pattern d*/: default": {
+   "script": "64630b31b2f31c9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/>\n"
+   }
+  },
+  "gram glob pattern d/*/*: default": {
+   "script": "bc3dfec13a9ffabf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob pattern d/*/*: dotglob": {
+   "script": "dbbf5a3259bd62f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob pattern d/*/*: nocaseglob": {
+   "script": "c022319735e3bfdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <d/e/h>\n"
+   }
+  },
+  "gram glob pattern d/*: default": {
+   "script": "756130fa280a2a02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <d/e> <d/f>\n"
+   }
+  },
+  "gram glob pattern nomatch*: default": {
+   "script": "a0bcf2f7d8bc263f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <nomatch*>\n"
+   }
+  },
+  "gram glob pattern nomatch*: dotglob": {
+   "script": "8f6cc5a22d760682",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <nomatch*>\n"
+   }
+  },
+  "gram glob pattern nomatch*: nocaseglob": {
+   "script": "cbd19573a6d0ad6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <nomatch*>\n"
+   }
+  },
+  "gram glob pattern q[?]: default": {
+   "script": "a33200e33e5f857a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <q?>\n"
+   }
+  },
+  "gram glob pattern q[?]: nullglob": {
+   "script": "332385eb8672bf84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <q?>\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

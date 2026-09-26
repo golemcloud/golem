@@ -1,0 +1,3138 @@
+{
+ "cases": {
+  "gram redir compound arith with here-string": {
+   "script": "cc87fe0a4694670a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir compound arith with input": {
+   "script": "b31bbc13b6f0e651",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir compound case with append twice": {
+   "script": "f1de1a4272fe80b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nc\n"
+   }
+  },
+  "gram redir compound case with both": {
+   "script": "b76490795984ffe9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nc\n"
+   }
+  },
+  "gram redir compound case with output": {
+   "script": "236065c9440e6cd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nc\n"
+   }
+  },
+  "gram redir compound case with stderr": {
+   "script": "e7363290905d17ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nstatus=0\n"
+   }
+  },
+  "gram redir compound cond with append twice": {
+   "script": "146025390cc19f48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir compound cond with both": {
+   "script": "9578b5e9a4899db5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir compound cond with output": {
+   "script": "f59d6cb83af39bae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir compound cond with stderr": {
+   "script": "aa5a8fdaeb7c8ee5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir compound for with here-string": {
+   "script": "ef32ca122dc18b1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\nstatus=0\n"
+   }
+  },
+  "gram redir compound for with input": {
+   "script": "6876707db29b309b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\nstatus=0\n"
+   }
+  },
+  "gram redir compound function call with here-string": {
+   "script": "4989d955f09bfbae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fn\nfn:hs\nstatus=0\n"
+   }
+  },
+  "gram redir compound function call with input": {
+   "script": "5b5a88db17b596ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fn\nfn:line1\nstatus=0\n"
+   }
+  },
+  "gram redir compound group with here-string": {
+   "script": "8dd26d397617ed5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "g\nstatus=0\n"
+   }
+  },
+  "gram redir compound group with input": {
+   "script": "70e3e56d1dda0289",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "g\nstatus=0\n"
+   }
+  },
+  "gram redir compound if with append twice": {
+   "script": "7425f5a51b723ed5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ni\n"
+   }
+  },
+  "gram redir compound if with both": {
+   "script": "0b01e181c64b3a20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ni\n"
+   }
+  },
+  "gram redir compound if with output": {
+   "script": "c158fe16ecfebc19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ni\n"
+   }
+  },
+  "gram redir compound if with stderr": {
+   "script": "1bc94daa1c9596d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "i\nstatus=0\n"
+   }
+  },
+  "gram redir compound select with append twice": {
+   "script": "493f8529adde62e5",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n#? "
+   },
+   "stdout": {
+    "text": "status=1\n\n"
+   }
+  },
+  "gram redir compound select with both": {
+   "script": "bae06f9be9b05e2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n1) a\n#? \n"
+   }
+  },
+  "gram redir compound select with output": {
+   "script": "d33b1efbf3857c5c",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n#? "
+   },
+   "stdout": {
+    "text": "status=1\n\n"
+   }
+  },
+  "gram redir compound select with stderr": {
+   "script": "841872237cf43cda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=1\n1) a\n#? "
+   }
+  },
+  "gram redir compound subshell with append twice": {
+   "script": "70fb6231af5b491c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ns\n"
+   }
+  },
+  "gram redir compound subshell with both": {
+   "script": "7dea15159e2fcc55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ns\n"
+   }
+  },
+  "gram redir compound subshell with output": {
+   "script": "f0dbd57515e98667",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ns\n"
+   }
+  },
+  "gram redir compound subshell with stderr": {
+   "script": "d28f4d2a36a39e10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s\nstatus=0\n"
+   }
+  },
+  "gram redir compound while with here-string": {
+   "script": "f52f5c4b06ef14f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "w:hs\nstatus=0\n"
+   }
+  },
+  "gram redir compound while with input": {
+   "script": "ca6498e6f9e37c13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "w:line1\nstatus=0\n"
+   }
+  },
+  "gram redir exec exec closes": {
+   "script": "0193a61ded15f8ea",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 3: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir exec exec in a function persists": {
+   "script": "094ec14eb9540fce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "via4\n"
+   }
+  },
+  "gram redir exec exec in a subshell does not persist": {
+   "script": "bab5429c41a6196c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer\ninner\n"
+   }
+  },
+  "gram redir exec exec input": {
+   "script": "5b1c285bdcc69ce4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "gram redir exec exec move descriptor": {
+   "script": "10499b325852ea43",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 6: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "seven\nstatus=1\n"
+   }
+  },
+  "gram redir exec exec numbered duplicate": {
+   "script": "ccd672c1d67fa42e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "five\n"
+   }
+  },
+  "gram redir exec exec output to a file": {
+   "script": "f9dad0224186d26e",
+   "status": 0,
+   "stderr": {
+    "text": "hidden\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram redir exec exec stderr to stdout": {
+   "script": "6a5c15e0c51fa432",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\n"
+   }
+  },
+  "gram redir exec exec with no command and no redirect": {
+   "script": "32877695567b1180",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "still\n"
+   }
+  },
+  "gram redir fd ambiguous redirect status": {
+   "script": "66f2da035539255b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $v: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd close stdin for cat": {
+   "script": "f78cbbf661b16590",
+   "status": 0,
+   "stderr": {
+    "text": "cat: -: Bad file descriptor\ncat: closing standard input: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd close stdin then read": {
+   "script": "4d08afa23f1e7a44",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: 0: read error: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd command not found redirected": {
+   "script": "f22a59b08dce6a78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\nbash: line 1: nosuchcmd_zz: command not found\n"
+   }
+  },
+  "gram redir fd dev fd of a closed descriptor": {
+   "script": "b5893cfe2868390e",
+   "status": 0,
+   "stderr": {
+    "text": "cat: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd dev fd path of an open descriptor": {
+   "script": "a90ade97106cd275",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "line1\nline2\n"
+   }
+  },
+  "gram redir fd dev stderr in a redirect": {
+   "script": "17c85cec4382237b",
+   "status": 0,
+   "stderr": {
+    "text": "to-err\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram redir fd fd 255": {
+   "script": "7d60c4da0e7db09e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 255: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd fd above 9": {
+   "script": "ee044d1f59fc1254",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ten\n"
+   }
+  },
+  "gram redir fd fd variable close then use": {
+   "script": "126c5c5062c37f9e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $c: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd fd variable for input": {
+   "script": "6fc70c112fc54662",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "line1\n"
+   }
+  },
+  "gram redir fd fd variable invalid name": {
+   "script": "5ac44d6bb45198b0",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: exec: {1bad}: not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram redir fd fd variable on a command": {
+   "script": "950614aae8632940",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "on-cmd\n1\n"
+   }
+  },
+  "gram redir fd fd variable readonly": {
+   "script": "60cfd54eb0df356a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ro: readonly variable\nbash: line 1: ro: cannot assign fd to variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd fd variable with an array element": {
+   "script": "9cbc9630a1759308",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nel\n"
+   }
+  },
+  "gram redir fd here-string to fd 5": {
+   "script": "73f456b28b7632fd",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 5: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram redir fd input dup of stdin": {
+   "script": "7c4906885a3bb751",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dup\n"
+   }
+  },
+  "gram redir fd input from a missing file stops the command": {
+   "script": "d5e913405a95612d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/missing: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd input from dev stdin": {
+   "script": "f91351f2beab339e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "via\n"
+   }
+  },
+  "gram redir fd input redirect before command": {
+   "script": "99ddc7e8a491e382",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "line1\nline2\n"
+   }
+  },
+  "gram redir fd multiple input redirects": {
+   "script": "396c1da4aa4a0cd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "other\n"
+   }
+  },
+  "gram redir fd multiple output redirects": {
+   "script": "5c0bc11e4c143b8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--\nm\n"
+   }
+  },
+  "gram redir fd pipe and stderr operator": {
+   "script": "e1b0c9e766eb293e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<o>\n<e>\n"
+   }
+  },
+  "gram redir fd pipe stderr only": {
+   "script": "47eef2b9f1342313",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<e>\n"
+   }
+  },
+  "gram redir fd read from closed fd": {
+   "script": "69f2565585c49bf8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 3: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd read from fd 3": {
+   "script": "101c139e2158ceb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "line1 line2\n"
+   }
+  },
+  "gram redir fd read write descriptor": {
+   "script": "0dceb75732687e14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "line1\nline1\nappended\n"
+   }
+  },
+  "gram redir fd redirect expansion happens once": {
+   "script": "09387294a5df6061",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx\n"
+   }
+  },
+  "gram redir fd redirect failure on a function call": {
+   "script": "7034fe58729433b9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd redirect failure on a group": {
+   "script": "12063ceac93bdfbe",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd redirect failure on a loop": {
+   "script": "0dec41f92f567378",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd redirect failure on a special builtin in posix mode": {
+   "script": "f200edfffcb73bf3",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram redir fd redirect failure on a subshell": {
+   "script": "0ba45101cc681547",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd redirect failure on exec": {
+   "script": "9d8de5fd35de4369",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "after status=1\n"
+   }
+  },
+  "gram redir fd redirect failure skips an assignment": {
+   "script": "fe437cd5347a0ec2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "[1] 1\n"
+   }
+  },
+  "gram redir fd redirect failure with set -e": {
+   "script": "5c54dbccde2dc174",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram redir fd redirect in the middle of arguments": {
+   "script": "922133d2a0a83570",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\n"
+   }
+  },
+  "gram redir fd redirect inside command substitution": {
+   "script": "e2de78ac4227a897",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\ninner\n"
+   }
+  },
+  "gram redir fd redirect of a pipeline stage": {
+   "script": "70510215225e895e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "gram redir fd redirect on an assignment": {
+   "script": "1d5a71a0a85bc2ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\ncreated\n"
+   }
+  },
+  "gram redir fd redirect only command creates a file": {
+   "script": "d599b50c40673e5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exists\n"
+   }
+  },
+  "gram redir fd redirect only command missing input": {
+   "script": "96c7cbd3d4ea2909",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/missing: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd redirect target with command substitution": {
+   "script": "ba4ed3c05eecba36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub\n"
+   }
+  },
+  "gram redir fd redirect to a quoted empty string": {
+   "script": "c282a93d2c682071",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: : No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd redirect to an fd variable name": {
+   "script": "633b0d2100c8d386",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fd ok 1\ninto\n"
+   }
+  },
+  "gram redir fd stderr of a builtin": {
+   "script": "027f9451f5ba3fb9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbash: line 1: cd: /nonexistent: No such file or directory\n"
+   }
+  },
+  "gram redir fd stderr of a syntax error in eval": {
+   "script": "2b09b1fef00e6c8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nbash: eval: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   }
+  },
+  "gram redir fd stderr of an expansion error": {
+   "script": "1175e893588fd8d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbash: line 1: u: gone\n"
+   }
+  },
+  "gram redir fd stdout to a file and back": {
+   "script": "95f8fd089be483e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "captured\n"
+   }
+  },
+  "gram redir fd unset variable redirect": {
+   "script": "baf1240a5246fb41",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $unset_zz: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir fd varredir_close": {
+   "script": "71f6408f067098a7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $v: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "x\nstatus=1\n"
+   }
+  },
+  "gram redir heredoc backslashed: array": {
+   "script": "69aeeec4e57d2637",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arr=${a[1]} all=${a[*]} count=${#a[@]}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc backslashed: empty": {
+   "script": "29d3bfdfa55a3f43",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir heredoc backslashed: escapes": {
+   "script": "c1afddb8eb59458f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc backslashed: line continuation": {
+   "script": "5292ead806e1d821",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first \\\ncontinued\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc backslashed: tabs": {
+   "script": "ddd06b0f6c8b84ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\tone tab\n\t\ttwo tabs\n    spaces\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc backslashed: variables": {
+   "script": "df9e8c4efecca190",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v=$v braced=${v} default=${u:-d}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc body with a lone backslash at the end": {
+   "script": "48d7103063840193",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 3: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "endEOF\n"
+   }
+  },
+  "gram redir heredoc dash plain: arithmetic": {
+   "script": "978c4c396da131d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sum=3 legacy=4\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash plain: command substitution": {
+   "script": "a97685a006a9af4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub=s back=b\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash plain: delimiter like lines": {
+   "script": "597b93cdca46c233",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "EOF \n EOF\nEOFX\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash plain: escapes": {
+   "script": "de5b17ecdd0ac41d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dollar=$v backslash=\\ backquote=` quote=\\\" other=\\n\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash plain: glob and tilde are literal": {
+   "script": "38832938a9c5ba35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "* ~ {a,b}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash plain: positional": {
+   "script": "e4cf7c3d9e162b6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "args=2 first=p1 all=p1 p2\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash plain: quotes are literal": {
+   "script": "12b5567182bb499c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'single' \"double\" $'ansi'\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash plain: tabs": {
+   "script": "1807692c36bdeb60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one tab\ntwo tabs\n    spaces\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash plain: variables": {
+   "script": "8f575402ff20a944",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v=val braced=val default=d\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash quoted: array": {
+   "script": "3d026ddf664272aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arr=${a[1]} all=${a[*]} count=${#a[@]}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash quoted: empty": {
+   "script": "ead5c52506b6c575",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir heredoc dash quoted: escapes": {
+   "script": "5e2abd34a31f31b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash quoted: line continuation": {
+   "script": "0ef53479021d657f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first \\\ncontinued\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash quoted: tabs": {
+   "script": "476821fe19da3968",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one tab\ntwo tabs\n    spaces\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash quoted: variables": {
+   "script": "dcc552b357b5d056",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v=$v braced=${v} default=${u:-d}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc dash strips only tabs": {
+   "script": "b60fdddf64586ba4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "tabbed\n  spaced\n"
+   }
+  },
+  "gram redir heredoc dash with a tab before delimiter": {
+   "script": "02b286b42cc9cab0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram redir heredoc delimiter is a number": {
+   "script": "f2af9bba7b5885e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram redir heredoc delimiter with a dollar": {
+   "script": "9ab5d23a07790aef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram redir heredoc delimiter with spaces quoted": {
+   "script": "1a85450c4dfc2b59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram redir heredoc delimiter with trailing space does not end it": {
+   "script": "0e011e9090854b93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nEOF \n"
+   }
+  },
+  "gram redir heredoc double quoted: array": {
+   "script": "b4f3ea6f4b41d6a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arr=${a[1]} all=${a[*]} count=${#a[@]}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc double quoted: empty": {
+   "script": "94c5b02a89a7f7b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir heredoc double quoted: escapes": {
+   "script": "7d0606f5443fb90c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc double quoted: line continuation": {
+   "script": "f355a8f2735b8879",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first \\\ncontinued\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc double quoted: tabs": {
+   "script": "caedf193798e95d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\tone tab\n\t\ttwo tabs\n    spaces\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc double quoted: variables": {
+   "script": "ccd9e5ab5e8a383c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v=$v braced=${v} default=${u:-d}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc empty delimiter": {
+   "script": "307db1a6581ee9b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nafter\n"
+   }
+  },
+  "gram redir heredoc followed by more commands on the line": {
+   "script": "0795980d84b1cfe8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nafter\n"
+   }
+  },
+  "gram redir heredoc here-document after a semicolon list": {
+   "script": "2c5e19b99d0b5755",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nmid\nb\n"
+   }
+  },
+  "gram redir heredoc here-document and xtrace": {
+   "script": "c3535507f86a9b94",
+   "status": 0,
+   "stderr": {
+    "text": "+ cat\n"
+   },
+   "stdout": {
+    "text": "traced\n"
+   }
+  },
+  "gram redir heredoc here-document body expansions run once": {
+   "script": "d16fdec0fff13ee0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n"
+   }
+  },
+  "gram redir heredoc here-document in eval": {
+   "script": "97fba1c736dc586b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "evaled\n"
+   }
+  },
+  "gram redir heredoc here-document into a variable with read": {
+   "script": "4222325d8941abdd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "multi\nline\n"
+   }
+  },
+  "gram redir heredoc here-document on a group": {
+   "script": "527c22270d9da1e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "gram redir heredoc here-document to a function": {
+   "script": "9292c06b69698b3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "to-f\n"
+   }
+  },
+  "gram redir heredoc here-document with CRLF delimiter": {
+   "script": "0c61f3bdcaa8d44b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nEOF\r\necho after\n"
+   }
+  },
+  "gram redir heredoc here-document with a comment line": {
+   "script": "9afa4b9b4489f17d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "# not a comment\n"
+   }
+  },
+  "gram redir heredoc here-document with a very long line": {
+   "script": "461688322da134e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3000\n"
+   }
+  },
+  "gram redir heredoc here-document with nested command substitution heredoc": {
+   "script": "31cdc7faf27e3ea2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner\n"
+   }
+  },
+  "gram redir heredoc here-document with unset under set -u": {
+   "script": "b71c2b9eafd015fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fine\n"
+   }
+  },
+  "gram redir heredoc in a command substitution": {
+   "script": "5ee9c4a1e32e9367",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[inside]\n"
+   }
+  },
+  "gram redir heredoc in a function called twice": {
+   "script": "40488ecd01e7ac2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in f one\nin f two\n"
+   }
+  },
+  "gram redir heredoc in a loop": {
+   "script": "e7b63baa9e42b420",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "iter 1\niter 2\n"
+   }
+  },
+  "gram redir heredoc in a pipeline": {
+   "script": "0d50727a2c241b1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "p:x\np:y\n"
+   }
+  },
+  "gram redir heredoc in an if condition": {
+   "script": "223bba79f75fbd84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cond\nyes\n"
+   }
+  },
+  "gram redir heredoc partly quoted: array": {
+   "script": "58ba1828d3b5ff87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arr=${a[1]} all=${a[*]} count=${#a[@]}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc partly quoted: empty": {
+   "script": "76b2900659ac145b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir heredoc partly quoted: escapes": {
+   "script": "1a146ebb65f70a13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc partly quoted: line continuation": {
+   "script": "bce710d0e604d8d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first \\\ncontinued\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc partly quoted: tabs": {
+   "script": "a5f5f5ef8371eba6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\tone tab\n\t\ttwo tabs\n    spaces\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc partly quoted: variables": {
+   "script": "dedc4c407d8cfdc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v=$v braced=${v} default=${u:-d}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc plain: array": {
+   "script": "50d82e96b94da9b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arr=y all=x y z count=3\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc plain: empty": {
+   "script": "af7dc71b33000200",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir heredoc plain: escapes": {
+   "script": "a7e80bbf391e06f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dollar=$v backslash=\\ backquote=` quote=\\\" other=\\n\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc plain: line continuation": {
+   "script": "d05dbd2812a06bd3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first continued\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc plain: tabs": {
+   "script": "a2a88f14ae27ff61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\tone tab\n\t\ttwo tabs\n    spaces\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc plain: variables": {
+   "script": "8f806f5effe6a369",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v=val braced=val default=d\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc single quoted: array": {
+   "script": "96373c804771a7ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arr=${a[1]} all=${a[*]} count=${#a[@]}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc single quoted: empty": {
+   "script": "daee8f3e23c7b9d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir heredoc single quoted: escapes": {
+   "script": "a420621b0930dbe0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dollar=\\$v backslash=\\\\ backquote=\\` quote=\\\" other=\\n\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc single quoted: line continuation": {
+   "script": "d67119c6a66a5996",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first \\\ncontinued\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc single quoted: tabs": {
+   "script": "dfb20724d4c142ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\tone tab\n\t\ttwo tabs\n    spaces\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc single quoted: variables": {
+   "script": "7b9dde6bc0e7deec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v=$v braced=${v} default=${u:-d}\nstatus=0\n"
+   }
+  },
+  "gram redir heredoc to a numbered fd": {
+   "script": "cf89a41e637958bf",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 3: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram redir heredoc to a while loop": {
+   "script": "1c8621bfd295b689",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a>\n<b>\n"
+   }
+  },
+  "gram redir heredoc two on one command": {
+   "script": "194ab0b628c0aeed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "gram redir heredoc two on one line": {
+   "script": "e914cb26a9427f95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\n"
+   }
+  },
+  "gram redir heredoc unquoted body keeps single quotes": {
+   "script": "a72f6ac0e19b6878",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'x'\n"
+   }
+  },
+  "gram redir heredoc unterminated with dash": {
+   "script": "40846c65fc7bf702",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "no end\n"
+   }
+  },
+  "gram redir herestring ansi-c": {
+   "script": "4ccbf6cf721f6f04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a\tb>\n"
+   }
+  },
+  "gram redir herestring arithmetic": {
+   "script": "cec008ecef4eeb5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<42>\n"
+   }
+  },
+  "gram redir herestring array at": {
+   "script": "481759606a2e8326",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<x y z>\n"
+   }
+  },
+  "gram redir herestring array star": {
+   "script": "58c2472db284b2eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<x y z>\n"
+   }
+  },
+  "gram redir herestring brace": {
+   "script": "e72d30949e8e5f89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<{a,b}>\n"
+   }
+  },
+  "gram redir herestring command substitution": {
+   "script": "84763c039896ab9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<x>\n"
+   }
+  },
+  "gram redir herestring dollar at": {
+   "script": "ca1820a81cb09587",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<p q r>\n"
+   }
+  },
+  "gram redir herestring empty": {
+   "script": "4c0c2f85c6075c83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<>\n"
+   }
+  },
+  "gram redir herestring glob": {
+   "script": "06255dbc059dfcf2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<*>\n"
+   }
+  },
+  "gram redir herestring in a loop condition": {
+   "script": "7ee620c8303980b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "loop\n"
+   }
+  },
+  "gram redir herestring large": {
+   "script": "f5069230c32e63cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "500\n"
+   }
+  },
+  "gram redir herestring literal": {
+   "script": "5683dd68447332d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<word>\n"
+   }
+  },
+  "gram redir herestring newline value": {
+   "script": "68374aa195bde739",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<l1><l2>\n"
+   }
+  },
+  "gram redir herestring quoted array at": {
+   "script": "4bb52790d3f75dea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<x y z>\n"
+   }
+  },
+  "gram redir herestring quoted variable": {
+   "script": "bd9cbb2b12e99826",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a  b>\n"
+   }
+  },
+  "gram redir herestring tilde": {
+   "script": "4c7ab2722429d8ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "</h>\n"
+   }
+  },
+  "gram redir herestring to a function": {
+   "script": "4772462f6e063587",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[in-f]\n"
+   }
+  },
+  "gram redir herestring to a numbered fd": {
+   "script": "4765c4d13b304770",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fdfour\n"
+   }
+  },
+  "gram redir herestring to read -a": {
+   "script": "db3a0f76228a74c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram redir herestring trailing newline value": {
+   "script": "c22d60dfce462b4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<t><>\n"
+   }
+  },
+  "gram redir herestring twice on one command": {
+   "script": "b3bd14abb744c8a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "second\n"
+   }
+  },
+  "gram redir herestring unset": {
+   "script": "a6ba90f0a6058ca5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<>\n"
+   }
+  },
+  "gram redir herestring variable with spaces": {
+   "script": "4760e7457ef36cd4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a  b>\n"
+   }
+  },
+  "gram redir herestring with a here-document": {
+   "script": "ad020dcc17e1e734",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hd\n"
+   }
+  },
+  "gram redir noclobber allows a new file": {
+   "script": "fbc8c1783fe32234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n\n"
+   }
+  },
+  "gram redir noclobber allows append": {
+   "script": "d3e4042a55d2530f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "old\nmore\n"
+   }
+  },
+  "gram redir noclobber allows dev null": {
+   "script": "2a2fe9fce527ea8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir noclobber both operator refuses": {
+   "script": "53d790e02e6944a8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ex: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir noclobber clobber operator overrides": {
+   "script": "b2fb674cf3d27607",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "forced\n"
+   }
+  },
+  "gram redir noclobber empty file is refused too": {
+   "script": "f8fa31196e9e11c3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: empty: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir noclobber in a subshell": {
+   "script": "2e9f7520eb551d05",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ex: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir noclobber off again": {
+   "script": "f7f009cc96fb863a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "again\n"
+   }
+  },
+  "gram redir noclobber read write is allowed": {
+   "script": "958492c563677be1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rw\n\n"
+   }
+  },
+  "gram redir noclobber refuses an existing file": {
+   "script": "d087922cc38e1625",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ex: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\nold\n"
+   }
+  },
+  "gram redir noclobber set -o noclobber": {
+   "script": "cc207d202c571b12",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ex: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir noclobber with exec": {
+   "script": "701c8c5172fd5a81",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ex: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir operator append to brace": {
+   "script": "97ba6877f38fd805",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {p,q}: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator append to dev null": {
+   "script": "a93586f90fce5082",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator append to directory": {
+   "script": "a2aac6c4c440795b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: dir: Is a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator append to empty variable": {
+   "script": "a71611ade1e140fb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator append to existing file": {
+   "script": "199c3fe85c5ff2b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old\ndata]\ndir ex\n"
+   }
+  },
+  "gram redir operator append to glob one": {
+   "script": "2162a88fa9438522",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old\ndata]\ndir ex\n"
+   }
+  },
+  "gram redir operator append to glob two": {
+   "script": "765f151dfc01fc63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old\ndata]\ndir ex\n"
+   }
+  },
+  "gram redir operator append to missing directory": {
+   "script": "6487b889ed66f30f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator append to new file": {
+   "script": "669f13add4a50903",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nnew=[data]\nex=[old]\ndir ex new\n"
+   }
+  },
+  "gram redir operator append to quoted spaced variable": {
+   "script": "b5e97a693fb2eaa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\na b dir ex\n"
+   }
+  },
+  "gram redir operator append to spaced variable": {
+   "script": "f63a32a8d5e5aca0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $sp: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator append to tilde": {
+   "script": "4ca26cb51ad0d23c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex t\n"
+   }
+  },
+  "gram redir operator both append to existing file": {
+   "script": "1c720d31e153cfdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old\ndata]\ndir ex\n"
+   }
+  },
+  "gram redir operator both append to quoted spaced variable": {
+   "script": "a554dbf33256101a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\na b dir ex\n"
+   }
+  },
+  "gram redir operator both to brace": {
+   "script": "9584e26e9ad2462f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {p,q}: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator both to dev null": {
+   "script": "198ab38fd17e5367",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator both to empty variable": {
+   "script": "27ca662a234be29f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator both to glob one": {
+   "script": "ee9998b3a199625c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[data]\ndir ex\n"
+   }
+  },
+  "gram redir operator both to glob two": {
+   "script": "979395f7b4652d69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[data]\ndir ex\n"
+   }
+  },
+  "gram redir operator both to missing directory": {
+   "script": "f252fa048f7e66d3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator both to new file": {
+   "script": "4f6e3b09bcf7e5f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nnew=[data]\nex=[old]\ndir ex new\n"
+   }
+  },
+  "gram redir operator both to tilde": {
+   "script": "1e182b9f41f04be5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex t\n"
+   }
+  },
+  "gram redir operator clobber to brace": {
+   "script": "5ca46d403f967dff",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {p,q}: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator clobber to dev null": {
+   "script": "533122a4901dee70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator clobber to empty variable": {
+   "script": "b4f4ee4df483f1c9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator clobber to glob one": {
+   "script": "0d29140ca283d190",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[data]\ndir ex\n"
+   }
+  },
+  "gram redir operator clobber to glob two": {
+   "script": "5215e0db10edd793",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[data]\ndir ex\n"
+   }
+  },
+  "gram redir operator clobber to missing directory": {
+   "script": "23afd5e8d4ac820a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator clobber to new file": {
+   "script": "61da76faf77a39f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nnew=[data]\nex=[old]\ndir ex new\n"
+   }
+  },
+  "gram redir operator clobber to tilde": {
+   "script": "b851257e5b97b02b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex t\n"
+   }
+  },
+  "gram redir operator dup out to brace": {
+   "script": "6475953d303c3812",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {p,q}: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator dup out to dev null": {
+   "script": "7dcef35a4d2e8abe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator dup out to empty variable": {
+   "script": "8e1fda928edbd2a7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator dup out to glob one": {
+   "script": "c09e2fbefcf89322",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[data]\ndir ex\n"
+   }
+  },
+  "gram redir operator dup out to glob two": {
+   "script": "d6c0d4380851a014",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[data]\ndir ex\n"
+   }
+  },
+  "gram redir operator dup out to missing directory": {
+   "script": "82d85969272b01e9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator dup out to new file": {
+   "script": "ce8d87a111ef1cee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nnew=[data]\nex=[old]\ndir ex new\n"
+   }
+  },
+  "gram redir operator dup out to tilde": {
+   "script": "dd802422ea164e66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex t\n"
+   }
+  },
+  "gram redir operator fd0 out to brace": {
+   "script": "1c718948e03cbc53",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {p,q}: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd0 out to dev null": {
+   "script": "f593210a2b6ec362",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd0 out to empty variable": {
+   "script": "c2e493633419b98e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd0 out to glob one": {
+   "script": "02c320b24812e41b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nex=[]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd0 out to glob two": {
+   "script": "658a3895c1987a30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nex=[]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd0 out to missing directory": {
+   "script": "691f3a2793c34303",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd0 out to new file": {
+   "script": "b8c3f606ea6c67f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nnew=[]\nex=[old]\ndir ex new\n"
+   }
+  },
+  "gram redir operator fd0 out to tilde": {
+   "script": "030503594ab87721",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nex=[old]\ndir ex t\n"
+   }
+  },
+  "gram redir operator fd3 out to brace": {
+   "script": "b7d91d0235dc4bff",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {p,q}: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd3 out to dev null": {
+   "script": "b8e4b80ceb0415a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd3 out to empty variable": {
+   "script": "2e21863740d84d6d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd3 out to glob one": {
+   "script": "edec1449374ca78d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nex=[]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd3 out to glob two": {
+   "script": "61e9a4c573e15820",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nex=[]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd3 out to missing directory": {
+   "script": "e57127d5cbccb053",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator fd3 out to new file": {
+   "script": "12752a836fea792a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nnew=[]\nex=[old]\ndir ex new\n"
+   }
+  },
+  "gram redir operator fd3 out to tilde": {
+   "script": "6440d6547adef12b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nstatus=0\nex=[old]\ndir ex t\n"
+   }
+  },
+  "gram redir operator in to brace": {
+   "script": "55ec3d4dd3372cf7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {p,q}: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to dev null": {
+   "script": "a0d3072c640a4d52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to directory": {
+   "script": "82b637b211a6c088",
+   "status": 0,
+   "stderr": {
+    "text": "cat: -: Is a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to empty variable": {
+   "script": "b243f0771b3ec1d5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to existing file": {
+   "script": "466fd45536010463",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "old\nstatus=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to glob one": {
+   "script": "05159d1c2b9ac83f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "old\nstatus=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to glob two": {
+   "script": "195488373d34ca7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "old\nstatus=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to missing directory": {
+   "script": "a45f7c43298333af",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to new file": {
+   "script": "4a6b2f355c506d9d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: new: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to quoted spaced variable": {
+   "script": "e52cf8b2441a9de9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a b: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to spaced variable": {
+   "script": "80719c13327b71bd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $sp: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator in to tilde": {
+   "script": "7a9b24c675f2de1b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/t: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to brace": {
+   "script": "b870a757f66a0cd6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {p,q}: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to dev null": {
+   "script": "c4eb6636affb1286",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to directory": {
+   "script": "9f812e5da8995521",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: dir: Is a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to empty variable": {
+   "script": "74aa1a3e413e06c6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to existing file": {
+   "script": "0fb7426ed57ad699",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[data]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to glob one": {
+   "script": "767a7542d08bd36c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[data]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to glob two": {
+   "script": "f372e232ce291d17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[data]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to missing directory": {
+   "script": "dd046ffb2c97fdd5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to new file": {
+   "script": "081e6444a30e200e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nnew=[data]\nex=[old]\ndir ex new\n"
+   }
+  },
+  "gram redir operator out to quoted spaced variable": {
+   "script": "18f241dfc79125f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\na b dir ex\n"
+   }
+  },
+  "gram redir operator out to spaced variable": {
+   "script": "a369efb87aab0029",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $sp: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator out to tilde": {
+   "script": "7547b1b6020a7f1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex t\n"
+   }
+  },
+  "gram redir operator read write to brace": {
+   "script": "8607b4214b4b776e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {p,q}: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator read write to dev null": {
+   "script": "915397293fe3fd51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator read write to empty variable": {
+   "script": "c578bd149ec0ba72",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: $e: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator read write to glob one": {
+   "script": "6dd3410946e646e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "old\nstatus=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator read write to glob two": {
+   "script": "ae56fb9745b2b43f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "old\nstatus=0\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator read write to missing directory": {
+   "script": "0d9ea6aa5bb600c5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nex=[old]\ndir ex\n"
+   }
+  },
+  "gram redir operator read write to new file": {
+   "script": "ab8c7e5e71e690eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nnew=[]\nex=[old]\ndir ex new\n"
+   }
+  },
+  "gram redir operator read write to tilde": {
+   "script": "28d67b17a7669053",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nex=[old]\ndir ex t\n"
+   }
+  },
+  "gram redir order append both": {
+   "script": "1837478327e8d0ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nfile:\nout\nerr\n"
+   }
+  },
+  "gram redir order both to file": {
+   "script": "ba8c3e2bf0281562",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nfile:\nout\nerr\n"
+   }
+  },
+  "gram redir order dup a negative": {
+   "script": "0bd90e636a204422",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `1'\nbash: -c: line 1: `cd /tmp; fd=2; { echo out; echo err >&2; } >&-1; echo \"status=$?\"; [[ -f f ]] && { echo file:; cat f; }; true'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram redir order dup out of range": {
+   "script": "e1e406801d1ee843",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 99999999999: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir order dup to word": {
+   "script": "ddbae1e6e2a48f5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nfile:\nout\nerr\n"
+   }
+  },
+  "gram redir order dup with variable": {
+   "script": "78a850c691ae4d39",
+   "status": 0,
+   "stderr": {
+    "text": "out\nerr\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir order fd 3 unopened": {
+   "script": "7477302479d1311a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 3: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir order fd 9 then use": {
+   "script": "f57cd7fbcfbfad6b",
+   "status": 0,
+   "stderr": {
+    "text": "err\n"
+   },
+   "stdout": {
+    "text": "status=0\nfile:\nout\n"
+   }
+  },
+  "gram redir order file then stderr to stdout": {
+   "script": "8174a724dffdd60c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nfile:\nout\nerr\n"
+   }
+  },
+  "gram redir order in a pipeline both to file": {
+   "script": "451974f5a693aee8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nerr\n"
+   }
+  },
+  "gram redir order in a pipeline stderr to dev null": {
+   "script": "d542f058d3ea6795",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "piped:out\n"
+   }
+  },
+  "gram redir order move fd": {
+   "script": "76b0352bd9a70132",
+   "status": 0,
+   "stderr": {
+    "text": "err\n"
+   },
+   "stdout": {
+    "text": "status=0\nfile:\nout\n"
+   }
+  },
+  "gram redir order stderr append": {
+   "script": "b950838bb272e041",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nstatus=0\nfile:\nerr\n"
+   }
+  },
+  "gram redir order stderr closed": {
+   "script": "0d29fef3493e2976",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nstatus=1\n"
+   }
+  },
+  "gram redir order stderr to closed stdout": {
+   "script": "b13a5abaa976fbc4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 1: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram redir order stderr to dev null": {
+   "script": "bc5ebfac10ce14fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nstatus=0\n"
+   }
+  },
+  "gram redir order stderr to dev stdout": {
+   "script": "7fcbb4093eca4794",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nerr\nstatus=0\n"
+   }
+  },
+  "gram redir order stderr to file": {
+   "script": "fedbc7785ad02195",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nstatus=0\nfile:\nerr\n"
+   }
+  },
+  "gram redir order stderr to stdout then file": {
+   "script": "9624b5d0fdddfee7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err\nstatus=0\nfile:\nout\n"
+   }
+  },
+  "gram redir order stdout closed": {
+   "script": "460d04d00504c246",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: echo: write error: Bad file descriptor\nerr\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir order stdout to dev stderr": {
+   "script": "9acf42df95168799",
+   "status": 0,
+   "stderr": {
+    "text": "out\nerr\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir order stdout to stderr": {
+   "script": "2441e31053fb5979",
+   "status": 0,
+   "stderr": {
+    "text": "out\nerr\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram redir order stdout to stdout": {
+   "script": "02759e0061756bbd",
+   "status": 0,
+   "stderr": {
+    "text": "err\n"
+   },
+   "stdout": {
+    "text": "out\nstatus=0\n"
+   }
+  },
+  "gram redir order swap through fd 3": {
+   "script": "39dffa90e7de2579",
+   "status": 0,
+   "stderr": {
+    "text": "out\n"
+   },
+   "stdout": {
+    "text": "err\nstatus=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

@@ -1,0 +1,4248 @@
+{
+ "cases": {
+  "edge dev names: capture-like file name survives /dev/null": {
+   "script": "dbab7407de69eeaa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "keep\nstatus=0\n"
+   }
+  },
+  "edge dev names: capture-like file names survive a utility": {
+   "script": "fa2c37b1ce6e36ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "keep0\nkeep1\nkeep2\nkeep3\nkeep4\nkeep5\nstatus=0\n"
+   }
+  },
+  "edge dev names: cat under null": {
+   "script": "8be8b38519a340b5",
+   "status": 0,
+   "stderr": {
+    "text": "cat: /dev/null/x: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: cd null": {
+   "script": "b07a90b812cd64ea",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: /dev/null: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: cd stdin": {
+   "script": "236a74703c02d153",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: /dev/stdin: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: cond -e stdout": {
+   "script": "143b8fb83b7f5dfd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: cp into null dir": {
+   "script": "8abc363120888cd9",
+   "status": 0,
+   "stderr": {
+    "text": "cp: cannot stat '/dev/null/': Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: file -L stdin file": {
+   "script": "66048be78ed85873",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin: ASCII text\n"
+   }
+  },
+  "edge dev names: file null": {
+   "script": "98db2c7693bb8c06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null: character special (1/3)\n"
+   }
+  },
+  "edge dev names: find -name null": {
+   "script": "e52318220f6baef2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\n"
+   }
+  },
+  "edge dev names: find -type c null": {
+   "script": "d1653f7b16c61d29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\n"
+   }
+  },
+  "edge dev names: find stdout": {
+   "script": "50ed5dbab6070bc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdout\nstatus=0\n"
+   }
+  },
+  "edge dev names: find under null": {
+   "script": "8594cb138b2a9139",
+   "status": 0,
+   "stderr": {
+    "text": "find: ‘/dev/null/x’: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: grep -r null": {
+   "script": "5b0f2dc48c69bee9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: ls -d null": {
+   "script": "9b34236be3fb24fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\n"
+   }
+  },
+  "edge dev names: ls fd9": {
+   "script": "b9fad19b8c3c5a7f",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access '/dev/fd/9': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev names: ls null trailing slash": {
+   "script": "32648bf34f754524",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access '/dev/null/': Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev names: ls under null": {
+   "script": "be12e06fa2c88224",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access '/dev/null/x': Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev names: mkdir -p null": {
+   "script": "c435079984dff311",
+   "status": 0,
+   "stderr": {
+    "text": "mkdir: cannot create directory ‘/dev/null’: File exists\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: mkdir null": {
+   "script": "1ca58ccab5e6cb0d",
+   "status": 0,
+   "stderr": {
+    "text": "mkdir: cannot create directory ‘/dev/null’: File exists\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: mkdir under null": {
+   "script": "eb91582b31128ea3",
+   "status": 0,
+   "stderr": {
+    "text": "mkdir: cannot create directory ‘/dev/null/d’: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: process substitution cmp": {
+   "script": "303c42c979e53c99",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/fd/63 /dev/fd/62 differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "edge dev names: process substitution comm": {
+   "script": "fc1b320492a6996c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\t\tb\n\tc\n"
+   }
+  },
+  "edge dev names: process substitution diff": {
+   "script": "c6a39d6012332a15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> c\nstatus=1\n"
+   }
+  },
+  "edge dev names: process substitution exec fd": {
+   "script": "0288135334808fc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from-fd3\n"
+   }
+  },
+  "edge dev names: process substitution grep -H": {
+   "script": "2b0a64e6a38951a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/fd/63:x\n"
+   }
+  },
+  "edge dev names: process substitution head names": {
+   "script": "ca9a0350dac5b483",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /dev/fd/63 <==\n1\n\n==> /dev/fd/62 <==\n4\n"
+   }
+  },
+  "edge dev names: process substitution in array": {
+   "script": "71a12b9746912d4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge dev names: process substitution join": {
+   "script": "b516c3b41c5580ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a b\n"
+   }
+  },
+  "edge dev names: process substitution md5sum name": {
+   "script": "a002126916571f17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "60b725f10c9c85c70d97880dfe8191b3  /dev/fd/63\n"
+   }
+  },
+  "edge dev names: process substitution output redirect": {
+   "script": "18017fd59c68ea62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "z\n"
+   }
+  },
+  "edge dev names: process substitution output tee": {
+   "script": "578d5fa8c1b5cb3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\n"
+   }
+  },
+  "edge dev names: process substitution paste": {
+   "script": "4ac38af857227baf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\t3\n2\t4\n"
+   }
+  },
+  "edge dev names: process substitution path": {
+   "script": "4eff5709bc71a153",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/fd/63 /dev/fd/62\n"
+   }
+  },
+  "edge dev names: process substitution read fd path": {
+   "script": "934ed4382c8e3248",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "via-path\n"
+   }
+  },
+  "edge dev names: process substitution sort -m": {
+   "script": "246033ba70bb0559",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\nd\n"
+   }
+  },
+  "edge dev names: process substitution test -e": {
+   "script": "855bc26d61a8407c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: process substitution test -f": {
+   "script": "fd53bc5406643492",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev names: process substitution test -p": {
+   "script": "938dde6e7374ab97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: process substitution twice same": {
+   "script": "e2e6544bc3d2664f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "edge dev names: process substitution wc name": {
+   "script": "f2c50f8087b7e851",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /dev/fd/63\n"
+   }
+  },
+  "edge dev names: pushd null": {
+   "script": "888871d91f97a45e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: pushd: /dev/null: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: read under null": {
+   "script": "f398aacb9b9636e6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /dev/null/x: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: readlink -e fd9": {
+   "script": "1678c755cc512035",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: readlink -f null": {
+   "script": "3ff50769adfc803f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\n"
+   }
+  },
+  "edge dev names: realpath null": {
+   "script": "568768e61e75200a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\n"
+   }
+  },
+  "edge dev names: redirect under null": {
+   "script": "b718d7a969306f57",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /dev/null/x: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: source under null": {
+   "script": "8c356112b223729f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /dev/null/x: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: stat -L -c %F stdin file": {
+   "script": "ab37b3f0fb8eb6e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "regular file\n"
+   }
+  },
+  "edge dev names: stat -L -c %F stdin pipe": {
+   "script": "4c9f6526a3b37e71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fifo\n"
+   }
+  },
+  "edge dev names: stat -c %F null": {
+   "script": "df57c41b484d717a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "character special file\n"
+   }
+  },
+  "edge dev names: stat -c %s null": {
+   "script": "0663ad123a2fcae8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -b null": {
+   "script": "4265b8f766330820",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev names: test -c null": {
+   "script": "6851eba7f0b65076",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -c stdin null": {
+   "script": "28945d2cd10eb02c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -d null": {
+   "script": "999e6a310a0d14a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev names: test -e fd0": {
+   "script": "70a095484dcca128",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -e fd2": {
+   "script": "65ae37379df5b958",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -e fd9": {
+   "script": "2dc304915391a65f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev names: test -e fd9 open": {
+   "script": "f179584c6479624e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -e null": {
+   "script": "2187dc743e71608e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -e null trailing slash": {
+   "script": "d5537eb8283b44c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev names: test -e stderr": {
+   "script": "67e89e370ef044fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -ef null": {
+   "script": "8edaa8b04a517379",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -ef null file": {
+   "script": "c1772e948e79e0f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev names: test -ef stdin fd0": {
+   "script": "bd2a1a83c77081f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -f null": {
+   "script": "74bdbad3edc2f86f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev names: test -f stdin file": {
+   "script": "465b3b0f02dec35a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -nt null": {
+   "script": "00dffcf62ed54c75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev names: test -p stdin pipe": {
+   "script": "6487551fd0d3456a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev names: test -s null": {
+   "script": "080b04a3f68c4a0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev names: test -t": {
+   "script": "d0ae8c1011217435",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n1\n"
+   }
+  },
+  "edge dev names: touch under null": {
+   "script": "be5fb85d27293506",
+   "status": 0,
+   "stderr": {
+    "text": "touch: cannot touch '/dev/null/x': Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev names: wc -c null": {
+   "script": "50a79fbd592b0867",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 /dev/null\n"
+   }
+  },
+  "edge dev read: cat -n null and file": {
+   "script": "918c64337d9f3e8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n"
+   }
+  },
+  "edge dev read: cmp null against file": {
+   "script": "5c960778df933110",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/dev/null’ which is empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev read: comm null against file": {
+   "script": "87d26dac285a8b61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\ta\n"
+   }
+  },
+  "edge dev read: command substitution from null": {
+   "script": "098abce6b972435e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\n"
+   }
+  },
+  "edge dev read: command substitution from stdin path": {
+   "script": "3ce52bc24795e5df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "edge dev read: diff null against file": {
+   "script": "2313c74fe596569d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0a1,2\n> a\n> b\nstatus=1\n"
+   }
+  },
+  "edge dev read: diff stdin against file": {
+   "script": "9971007415b0fc63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< b\n---\n> a\nstatus=1\n"
+   }
+  },
+  "edge dev read: eval from stdin": {
+   "script": "8618151c55c963af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge dev read: find -exec cat null": {
+   "script": "c793994815579285",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev read: grep -H stdin path": {
+   "script": "d1d72339fa32a44b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin:x\n"
+   }
+  },
+  "edge dev read: grep -L null": {
+   "script": "dfd52ed689655dc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null\nstatus=1\n"
+   }
+  },
+  "edge dev read: grep -c null and file": {
+   "script": "1e65c98187fcf56a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null:0\n/tmp/f:1\n"
+   }
+  },
+  "edge dev read: grep -f null": {
+   "script": "349a82ef424d8267",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev read: grep -f stdin": {
+   "script": "fa4b6662a2f188ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge dev read: head -c stdin path": {
+   "script": "4437c89291a9f3dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab"
+   }
+  },
+  "edge dev read: head two nulls": {
+   "script": "f94685c0902e815c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /dev/null <==\n\n==> /dev/null <==\n"
+   }
+  },
+  "edge dev read: join stdin with file": {
+   "script": "6ddaf385ca61072b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "k w v\n"
+   }
+  },
+  "edge dev read: jq --rawfile stdin": {
+   "script": "8e4dc5c7fc865e57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"raw\\n\"\n"
+   }
+  },
+  "edge dev read: jq --slurpfile null": {
+   "script": "0b380dc93fdd7a92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "edge dev read: jq -f stdin": {
+   "script": "050415691a4c5280",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev read: mapfile from null": {
+   "script": "b47b49999e35af4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev read: md5sum null and stdin": {
+   "script": "7d3892450ad29070",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d41d8cd98f00b204e9800998ecf8427e  /dev/null\n401b30e3b8b5d629635a5c613cdb7919  /dev/stdin\n"
+   }
+  },
+  "edge dev read: paste null and file": {
+   "script": "0888891308b7e3ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\ta\n\tb\n"
+   }
+  },
+  "edge dev read: read from fd path": {
+   "script": "f05c1b738c4bf0ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[value]\n"
+   }
+  },
+  "edge dev read: read from null": {
+   "script": "0d0f2fd3de5c4752",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 []\n"
+   }
+  },
+  "edge dev read: read from stdin path": {
+   "script": "2a06af213dfdbdc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[value]\n"
+   }
+  },
+  "edge dev read: sed -f null": {
+   "script": "459acbe30139c9c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge dev read: sed -f stdin": {
+   "script": "548f1d765489d9f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\n"
+   }
+  },
+  "edge dev read: sed line count null and file": {
+   "script": "e5a08008be1ae14f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge dev read: sha256sum -c against stdin": {
+   "script": "62c7c6dd9def5967",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f: OK\n"
+   }
+  },
+  "edge dev read: sort -c null": {
+   "script": "be3c3dfc265c5b7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev read: sort -m null and file": {
+   "script": "b434e7f04ca043a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "edge dev read: source fd3": {
+   "script": "f88e963c1c410d6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "three\n"
+   }
+  },
+  "edge dev read: source null": {
+   "script": "cafa867b8e4ec5e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev read: source process substitution": {
+   "script": "f70b92d8344a6c61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ps\nx=1\n"
+   }
+  },
+  "edge dev read: source stdin": {
+   "script": "71d53a2c68c829ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sourced\n"
+   }
+  },
+  "edge dev read: tail -c stdin path": {
+   "script": "bf212eb312958fd9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bc\n"
+   }
+  },
+  "edge dev read: tail null and file": {
+   "script": "f5d4f3314a7c53fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /dev/null <==\n\n==> /tmp/f <==\na\n"
+   }
+  },
+  "edge dev read: wc two nulls": {
+   "script": "6bd0651b5b448e04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      0       0       0 /dev/null\n      0       0       0 /dev/null\n      0       0       0 total\n"
+   }
+  },
+  "edge dev read: while read from stdin path": {
+   "script": "81a45c58e5fd60b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\n[b]\n"
+   }
+  },
+  "edge dev read: xargs -a null": {
+   "script": "43808bcff48f02bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=0\n"
+   }
+  },
+  "edge dev read: xargs -a stdin": {
+   "script": "faa6ea4b49f828ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "p q\n"
+   }
+  },
+  "edge dev read: xargs cat null": {
+   "script": "61d70949378142dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev write: append both to null": {
+   "script": "39fae6ecf27656d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev write: append to stdout": {
+   "script": "09fa53f280d967fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge dev write: bad fd duplicate": {
+   "script": "e55202e55f3ac60a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 5: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev write: both to null": {
+   "script": "c347868ed3465e7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev write: cat file to stderr path": {
+   "script": "d847995ead060e4b",
+   "status": 0,
+   "stderr": {
+    "text": "x\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge dev write: closed stderr write": {
+   "script": "91efba03f0b8717e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev write: closed stdout command": {
+   "script": "a5b163fe65de233e",
+   "status": 0,
+   "stderr": {
+    "text": "cat: standard output: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev write: closed stdout printf": {
+   "script": "98fee73f39c30ad9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: printf: write error: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev write: closed stdout write": {
+   "script": "a40415863bd980c1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: echo: write error: Bad file descriptor\nstatus=1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge dev write: command substitution with stderr path": {
+   "script": "5f171b2cd68014b4",
+   "status": 0,
+   "stderr": {
+    "text": "inner\n"
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "edge dev write: command substitution with stdout path": {
+   "script": "2b5464e5919e26fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[inner]\n"
+   }
+  },
+  "edge dev write: cp fd0 to file": {
+   "script": "1b7c0e5bae962614",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "piped\n"
+   }
+  },
+  "edge dev write: cp file to null": {
+   "script": "064393727c2709b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev write: cp null to file": {
+   "script": "0e02acfdc704e5fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge dev write: cp stdin to file": {
+   "script": "d000cfd1af7b5ff4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\n"
+   }
+  },
+  "edge dev write: diff output to null": {
+   "script": "6524e0b6d7a0b8cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev write: echo to fd1": {
+   "script": "092308ac50cd4bc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge dev write: echo to fd2": {
+   "script": "f80033a8c2e0fc62",
+   "status": 0,
+   "stderr": {
+    "text": "x\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge dev write: echo to stderr": {
+   "script": "32b594f37a722a7d",
+   "status": 0,
+   "stderr": {
+    "text": "x\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge dev write: echo to stdout": {
+   "script": "7ac9f2b3c27692fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge dev write: exec fd from null then read": {
+   "script": "778972cd2f76e1f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 []\n"
+   }
+  },
+  "edge dev write: exec fd from stdin path": {
+   "script": "74f46ad49d47ea95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "edge dev write: exec fd to null then write": {
+   "script": "71e8261e17b952ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev write: exec stderr to null": {
+   "script": "c7c4712404e946dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev write: exec stdin from null": {
+   "script": "422efbed6b7bd9af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nend\n"
+   }
+  },
+  "edge dev write: exec stdout to null and back": {
+   "script": "9b789527abe5d4c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shown\n"
+   }
+  },
+  "edge dev write: fd path not open": {
+   "script": "1f1099b3828768b7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /dev/fd/5: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev write: fd1 reopened on a file": {
+   "script": "71978633a7fc65fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge dev write: fd3 dup to stdout path": {
+   "script": "ac8b05b2bee88332",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "three\n"
+   }
+  },
+  "edge dev write: fd3 via fd path": {
+   "script": "6e8ea50e39c4ea0d",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: /dev/fd/3: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge dev write: function output to null": {
+   "script": "10f093caedbf96df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev write: heredoc to stdout path": {
+   "script": "1fb8645b5cf91ab2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hd\n"
+   }
+  },
+  "edge dev write: jq to stderr": {
+   "script": "6057bb2f5c6ec355",
+   "status": 0,
+   "stderr": {
+    "text": "1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge dev write: loop output to null": {
+   "script": "6c73b5dcb6f30757",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev write: pipeline stage to stderr path": {
+   "script": "a53fe445ceb2afa1",
+   "status": 0,
+   "stderr": {
+    "text": "a\n"
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge dev write: printf to fd path": {
+   "script": "7d4e477901a001da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "p\n"
+   }
+  },
+  "edge dev write: read fd path not open": {
+   "script": "8e34778b0f8116ad",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /dev/fd/6: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev write: sed -i null": {
+   "script": "bacdeeb3d452db6b",
+   "status": 0,
+   "stderr": {
+    "text": "sed: couldn't edit /dev/null: not a regular file\n"
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "edge dev write: sed r stdin": {
+   "script": "141e7b78b4a5b941",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\ninserted\n"
+   }
+  },
+  "edge dev write: sed w null": {
+   "script": "0501f341df30f206",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev write: sed w stderr": {
+   "script": "eb778cbbc4d1badc",
+   "status": 0,
+   "stderr": {
+    "text": "x\n"
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge dev write: sort -o null": {
+   "script": "da035793e1d545ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge dev write: sort -o stderr": {
+   "script": "2a8dd64ab1b08196",
+   "status": 0,
+   "stderr": {
+    "text": "a\nb\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge dev write: split to stdout path": {
+   "script": "576008db1dc9ae75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev write: stderr reopened on a file": {
+   "script": "f76ff094c471b3ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge dev write: stderr to stdout path": {
+   "script": "cb68a4308846675d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "piped: ls: cannot access '/tmp/nosuch': No such file or directory\n"
+   }
+  },
+  "edge dev write: stdout appended on a file": {
+   "script": "dc2e36a194bc16d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "edge dev write: stdout reopened on a file": {
+   "script": "05148cc808d124f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge dev write: stdout reopened on append file": {
+   "script": "7558cec177e7660a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge dev write: stdout to stderr path": {
+   "script": "7c64648395313fc1",
+   "status": 0,
+   "stderr": {
+    "text": "moved\n"
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "edge dev write: subshell output to stderr path": {
+   "script": "a56767747311f6e5",
+   "status": 0,
+   "stderr": {
+    "text": "sub\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge dev write: tee -a stderr": {
+   "script": "7ede77c92a36f0fe",
+   "status": 0,
+   "stderr": {
+    "text": "x\n"
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge dev write: tee fd2": {
+   "script": "383c620b5d9a6ea3",
+   "status": 0,
+   "stderr": {
+    "text": "x\n"
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge dev write: tee fd3": {
+   "script": "061d45ad9187f4f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge dev write: tee null": {
+   "script": "9993e37ff19df0e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge dev write: tee stdout twice": {
+   "script": "d4062665350c772e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nx\nx\n"
+   }
+  },
+  "edge dev: base64 dash after partial read of a file": {
+   "script": "c687f0eab1dd7a97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YQpiCg==\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 fd that is not open": {
+   "script": "a3ff259cceb500d9",
+   "status": 0,
+   "stderr": {
+    "text": "base64: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: base64 fd0 from file": {
+   "script": "28f968e2506f4e76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 fd0 from pipe": {
+   "script": "2a4f21bca885cf0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 fd3 from exec": {
+   "script": "cb20e1dbaa090163",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 fd3 on the command": {
+   "script": "b7c9f5ebe6d365d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 process substitution": {
+   "script": "798f654b3ece1382",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 stdin after partial read of a file": {
+   "script": "8bbb00b75089009e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 stdin after partial read of a pipe": {
+   "script": "318fe46500d813c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YQpiCg==\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 stdin closed": {
+   "script": "8403196cbcd0b962",
+   "status": 0,
+   "stderr": {
+    "text": "base64: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: base64 stdin from file": {
+   "script": "9f4654a74ba989a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 stdin from heredoc": {
+   "script": "48c53c01f6cd6bb9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "YgphCmIKRU9GOyBlY2hvICJzdGF0dXM9JD8iCg==\n"
+   }
+  },
+  "edge dev: base64 stdin from herestring": {
+   "script": "d6d0837d0d162f93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YgphCmIK\nstatus=0\n"
+   }
+  },
+  "edge dev: base64 stdin twice": {
+   "script": "ba82ba0af403993a",
+   "status": 0,
+   "stderr": {
+    "text": "base64: extra operand ‘/dev/stdin’\nTry 'base64 --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: cat dash after partial read of a file": {
+   "script": "e43d957967d5397b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat fd that is not open": {
+   "script": "c899aaf99d164b28",
+   "status": 0,
+   "stderr": {
+    "text": "cat: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: cat fd0 from file": {
+   "script": "2bb4c97a767c1eec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat fd0 from pipe": {
+   "script": "22fb4404573eb477",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat fd3 from exec": {
+   "script": "67883bf5541f0792",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat fd3 on the command": {
+   "script": "6cfe069c6d2d9085",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat process substitution": {
+   "script": "b84bb1e109c7057f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat stdin after partial read of a file": {
+   "script": "6feeb2af36f2d24b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat stdin after partial read of a pipe": {
+   "script": "b5ed7ea8ed1a06b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat stdin closed": {
+   "script": "6ccf29d294fc5166",
+   "status": 0,
+   "stderr": {
+    "text": "cat: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: cat stdin from file": {
+   "script": "d7466dbcf7b4e353",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat stdin from heredoc": {
+   "script": "4c5452401d413c34",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "b\na\nb\nEOF; echo \"status=$?\"\n"
+   }
+  },
+  "edge dev: cat stdin from herestring": {
+   "script": "a9b202a8312f0b24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cat stdin twice": {
+   "script": "cb068fe300645551",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut dash after partial read of a file": {
+   "script": "938bfe772f36763e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut fd that is not open": {
+   "script": "67f33bf8eb94aa36",
+   "status": 0,
+   "stderr": {
+    "text": "cut: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: cut fd0 from file": {
+   "script": "9d360cb9774128b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut fd0 from pipe": {
+   "script": "a87f9e857e2c3c35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut fd3 from exec": {
+   "script": "df3dc0e87e0dcb83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut fd3 on the command": {
+   "script": "ee8ed1a959e379f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut process substitution": {
+   "script": "2405f5d31fb7f2b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut stdin after partial read of a file": {
+   "script": "6765811fa8a29c0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut stdin after partial read of a pipe": {
+   "script": "38eda06820a00e1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut stdin closed": {
+   "script": "a0e6918c9cbc0936",
+   "status": 0,
+   "stderr": {
+    "text": "cut: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: cut stdin from file": {
+   "script": "0cbcb89f35d26662",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut stdin from heredoc": {
+   "script": "59c5322a4d2759f4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "b\na\nb\nE\n"
+   }
+  },
+  "edge dev: cut stdin from herestring": {
+   "script": "2cea1ece23e27a4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: cut stdin twice": {
+   "script": "6a368b6f43bd5644",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold dash after partial read of a file": {
+   "script": "b6df76ef62b8092d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold fd that is not open": {
+   "script": "4fbcb8d98c3331bc",
+   "status": 0,
+   "stderr": {
+    "text": "fold: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: fold fd0 from file": {
+   "script": "95c389423a0b15a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold fd0 from pipe": {
+   "script": "3658620ada0d5192",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold fd3 from exec": {
+   "script": "a880194fdd412c75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold fd3 on the command": {
+   "script": "832b9224ea6dd4a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold process substitution": {
+   "script": "d461375d64825fcf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold stdin after partial read of a file": {
+   "script": "c1df6ddefb50d7a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold stdin after partial read of a pipe": {
+   "script": "c13620cec081070b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold stdin closed": {
+   "script": "83cedf359c95435d",
+   "status": 0,
+   "stderr": {
+    "text": "fold: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: fold stdin from file": {
+   "script": "bdc5fffdbde0cac5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold stdin from heredoc": {
+   "script": "cb0bb3d26beadf4f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "b\na\nb\nE\nO\nF\n;\n \ne\nc\nh\no\n \n\"\ns\nt\na\nt\nu\ns\n=\n$\n?\n\"\n"
+   }
+  },
+  "edge dev: fold stdin from herestring": {
+   "script": "c47d51a80b64e647",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: fold stdin twice": {
+   "script": "d89683193ad51474",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: grep dash after partial read of a file": {
+   "script": "fe758a1c9d4350d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: grep fd that is not open": {
+   "script": "c10d4e860f4a91a9",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev: grep fd0 from file": {
+   "script": "a895583f2f7a67ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: grep fd0 from pipe": {
+   "script": "4d0617b910486d67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: grep fd3 from exec": {
+   "script": "7fa2ed85a0e3611a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: grep fd3 on the command": {
+   "script": "bb595e6005052b09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: grep process substitution": {
+   "script": "917d1afefa4f331e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: grep stdin after partial read of a file": {
+   "script": "ed49fd021654495e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: grep stdin after partial read of a pipe": {
+   "script": "3c3192f62868595f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: grep stdin closed": {
+   "script": "c75ea160d9cf92ab",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev: grep stdin from file": {
+   "script": "54c897f237aea75f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: grep stdin from heredoc": {
+   "script": "4c772176bbe8a1e3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "b\nb\n"
+   }
+  },
+  "edge dev: grep stdin from herestring": {
+   "script": "b1d5f1847e63348c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: grep stdin twice": {
+   "script": "141ef01e6d6cdb06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/stdin:b\n/dev/stdin:b\nstatus=0\n"
+   }
+  },
+  "edge dev: head dash after partial read of a file": {
+   "script": "d00166e5f02d744c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=0\n"
+   }
+  },
+  "edge dev: head fd that is not open": {
+   "script": "1a49de3a76748c2c",
+   "status": 0,
+   "stderr": {
+    "text": "head: cannot open '/dev/fd/7' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: head fd0 from file": {
+   "script": "ee6ecde2c2ae4981",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: head fd0 from pipe": {
+   "script": "7294bd96502881d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: head fd3 from exec": {
+   "script": "5bfb09eb0f684870",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: head fd3 on the command": {
+   "script": "2110b673b3a92ed6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: head process substitution": {
+   "script": "6c57c41c8fda0e22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: head stdin after partial read of a file": {
+   "script": "000e09887a478998",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: head stdin after partial read of a pipe": {
+   "script": "1605d673b845a778",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=0\n"
+   }
+  },
+  "edge dev: head stdin closed": {
+   "script": "e439f3d46ab1f366",
+   "status": 0,
+   "stderr": {
+    "text": "head: cannot open '/dev/stdin' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: head stdin from file": {
+   "script": "fb6495066571e1e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: head stdin from heredoc": {
+   "script": "e4389bcaa82df64b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge dev: head stdin from herestring": {
+   "script": "2d6c28aab699217d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: head stdin twice": {
+   "script": "95f6c32c08c3b557",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /dev/stdin <==\nb\n\n==> /dev/stdin <==\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R dash after partial read of a file": {
+   "script": "574294cb29cdc877",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R fd that is not open": {
+   "script": "6af5839d0bf371d7",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: Could not open file /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev: jq -R fd0 from file": {
+   "script": "63e183a609ddf0ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R fd0 from pipe": {
+   "script": "c63e264f0318a4c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R fd3 from exec": {
+   "script": "d67d509ae37ee95f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R fd3 on the command": {
+   "script": "d58bb28bebcba891",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R process substitution": {
+   "script": "9b55d8a5e5d8e2a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R stdin after partial read of a file": {
+   "script": "f53686ed3ed58d0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R stdin after partial read of a pipe": {
+   "script": "643bbdf1e35eb6cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R stdin closed": {
+   "script": "b2b9e523de37e32d",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: Could not open file /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev: jq -R stdin from file": {
+   "script": "a0d70687a515cabd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R stdin from heredoc": {
+   "script": "06f2bd30179b51db",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\n\"EOF; echo \\\"status=$?\\\"\"\n"
+   }
+  },
+  "edge dev: jq -R stdin from herestring": {
+   "script": "9ca2ab5aeb71c8d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: jq -R stdin twice": {
+   "script": "91dc11db1d552c97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b\"\n\"a\"\n\"b\"\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum dash after partial read of a file": {
+   "script": "5515b7e7af626005",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dd8c6a395b5dd36c56d23275028f526c  -\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum fd that is not open": {
+   "script": "da36c22fb3dc2214",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: md5sum fd0 from file": {
+   "script": "00503885b3c34f24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/fd/0\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum fd0 from pipe": {
+   "script": "bc7ce486e6a270e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/fd/0\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum fd3 from exec": {
+   "script": "07eb11540b1639dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/fd/3\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum fd3 on the command": {
+   "script": "514b4a8db3053548",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/fd/3\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum process substitution": {
+   "script": "7176edd1439909a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/fd/63\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum stdin after partial read of a file": {
+   "script": "90d7e5b7ae7bcb9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum stdin after partial read of a pipe": {
+   "script": "2962ac5458ebbee7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dd8c6a395b5dd36c56d23275028f526c  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum stdin closed": {
+   "script": "d5ecf03c6a22da5c",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: md5sum stdin from file": {
+   "script": "95faaf89cb3ee237",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum stdin from heredoc": {
+   "script": "a0bcac165eaf4097",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "296af45cb4e3efbaf9a0de756daf0663  /dev/stdin\n"
+   }
+  },
+  "edge dev: md5sum stdin from herestring": {
+   "script": "bd58a004616b8caf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "edge dev: md5sum stdin twice": {
+   "script": "43129e2f23b6f681",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcc7849c67d08c305cc9aaf2cfd3e80  /dev/stdin\nd41d8cd98f00b204e9800998ecf8427e  /dev/stdin\nstatus=0\n"
+   }
+  },
+  "edge dev: nl dash after partial read of a file": {
+   "script": "d35a26ef2a98609f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n     2\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl fd that is not open": {
+   "script": "7859ae9dc2224075",
+   "status": 0,
+   "stderr": {
+    "text": "nl: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: nl fd0 from file": {
+   "script": "2327122a318b6c90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl fd0 from pipe": {
+   "script": "f95b2b3990be3b76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl fd3 from exec": {
+   "script": "65df2f8acca0c7a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl fd3 on the command": {
+   "script": "ad95b754009454fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl process substitution": {
+   "script": "46dd7473510ee4ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl stdin after partial read of a file": {
+   "script": "501ceea57151c711",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl stdin after partial read of a pipe": {
+   "script": "41f73863fbc652ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n     2\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl stdin closed": {
+   "script": "8b072bacde2d9995",
+   "status": 0,
+   "stderr": {
+    "text": "nl: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: nl stdin from file": {
+   "script": "bdff20cf6689f74d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl stdin from heredoc": {
+   "script": "e0c8d63943415943",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\n     4\tEOF; echo \"status=$?\"\n"
+   }
+  },
+  "edge dev: nl stdin from herestring": {
+   "script": "abaa27793e200a4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: nl stdin twice": {
+   "script": "7a507b25a60072a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb\n     2\ta\n     3\tb\nstatus=0\n"
+   }
+  },
+  "edge dev: od dash after partial read of a file": {
+   "script": "53679b569b18236e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od fd that is not open": {
+   "script": "daff17270ea8a0ef",
+   "status": 0,
+   "stderr": {
+    "text": "od: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: od fd0 from file": {
+   "script": "60fa62d8ec2aa0ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od fd0 from pipe": {
+   "script": "70704170f32790b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od fd3 from exec": {
+   "script": "6f9c559b33a73139",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od fd3 on the command": {
+   "script": "066b76fb3bdee444",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od process substitution": {
+   "script": "a4dc59fa94460b39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od stdin after partial read of a file": {
+   "script": "2dea24e887076258",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od stdin after partial read of a pipe": {
+   "script": "eb84ce0d3ba2ce3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od stdin closed": {
+   "script": "c16e274b83167888",
+   "status": 0,
+   "stderr": {
+    "text": "od: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: od stdin from file": {
+   "script": "da0cf5206c3590c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od stdin from heredoc": {
+   "script": "8eda8afd5190f615",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n   E   O   F   ;       e   c   h   o    \n   \"   s   t   a   t   u   s   =   $   ?   \"  \\n\n"
+   }
+  },
+  "edge dev: od stdin from herestring": {
+   "script": "ce3b1a1d23def0c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: od stdin twice": {
+   "script": "ce60181f51208427",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n   a  \\n   b  \\n\nstatus=0\n"
+   }
+  },
+  "edge dev: paste dash after partial read of a file": {
+   "script": "8951a69282eb6b35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste fd that is not open": {
+   "script": "41d3b5672e92ca15",
+   "status": 0,
+   "stderr": {
+    "text": "paste: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: paste fd0 from file": {
+   "script": "7979394ee597779f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b,a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste fd0 from pipe": {
+   "script": "7b649588b48e82df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b,a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste fd3 from exec": {
+   "script": "f0f86774ab1b2b10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b,a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste fd3 on the command": {
+   "script": "b8999fdedc22647f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b,a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste process substitution": {
+   "script": "2a626e51b379ee09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b,a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste stdin after partial read of a file": {
+   "script": "8456c8cfa5b5e76e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b,a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste stdin after partial read of a pipe": {
+   "script": "6f3b828b6a75a018",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste stdin closed": {
+   "script": "2bac5fdd1040cb4a",
+   "status": 0,
+   "stderr": {
+    "text": "paste: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: paste stdin from file": {
+   "script": "4285a609ccc18938",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b,a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste stdin from heredoc": {
+   "script": "e835fa406becf8b4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "b,a,b,EOF; echo \"status=$?\"\n"
+   }
+  },
+  "edge dev: paste stdin from herestring": {
+   "script": "83ae42a86bba48f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b,a,b\nstatus=0\n"
+   }
+  },
+  "edge dev: paste stdin twice": {
+   "script": "86e115fa3e310e50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b,a,b\n\nstatus=0\n"
+   }
+  },
+  "edge dev: rev dash after partial read of a file": {
+   "script": "7d34fa2581f0487c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev fd that is not open": {
+   "script": "960dea91eecde26f",
+   "status": 0,
+   "stderr": {
+    "text": "rev: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: rev fd0 from file": {
+   "script": "c5933ed7caaf4efd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev fd0 from pipe": {
+   "script": "aee0f7d297cd1419",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev fd3 from exec": {
+   "script": "e15feec2ca2f4da0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev fd3 on the command": {
+   "script": "c51b9d102ae33151",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev process substitution": {
+   "script": "8358661c7879c334",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev stdin after partial read of a file": {
+   "script": "d31de0365b90002c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev stdin after partial read of a pipe": {
+   "script": "f57a982d81daee89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev stdin closed": {
+   "script": "ef83d2720af3767b",
+   "status": 0,
+   "stderr": {
+    "text": "rev: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: rev stdin from file": {
+   "script": "ff56979b9e28d7b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev stdin from heredoc": {
+   "script": "1741f6323071e93b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "b\na\nb\n\"?$=sutats\" ohce ;FOE\n"
+   }
+  },
+  "edge dev: rev stdin from herestring": {
+   "script": "514fae5e900ba1e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: rev stdin twice": {
+   "script": "0cba8a5aedd6659e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sed dash after partial read of a file": {
+   "script": "6727842efd08efc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=0\n"
+   }
+  },
+  "edge dev: sed fd that is not open": {
+   "script": "aeaa39d8d91d4fb9",
+   "status": 0,
+   "stderr": {
+    "text": "sed: can't read /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev: sed fd0 from file": {
+   "script": "fc02d08a32b586d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: sed fd0 from pipe": {
+   "script": "e248e4557b361a75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: sed fd3 from exec": {
+   "script": "df9702de92f30ccd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: sed fd3 on the command": {
+   "script": "b1d4e984bad7dcdd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: sed process substitution": {
+   "script": "c0da2eae9fc111a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: sed stdin after partial read of a file": {
+   "script": "68d17b527526a92d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: sed stdin after partial read of a pipe": {
+   "script": "abad2d17dbf6c348",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=0\n"
+   }
+  },
+  "edge dev: sed stdin closed": {
+   "script": "a85b8013dc2422a3",
+   "status": 0,
+   "stderr": {
+    "text": "sed: can't read /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev: sed stdin from file": {
+   "script": "7f26d516243c6056",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: sed stdin from heredoc": {
+   "script": "b0666fe8b9c38a5e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge dev: sed stdin from herestring": {
+   "script": "23b6489e86eefd74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: sed stdin twice": {
+   "script": "bd2162be9212ff4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: sort dash after partial read of a file": {
+   "script": "c077465485977b25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort fd that is not open": {
+   "script": "4820f625c7700ef0",
+   "status": 0,
+   "stderr": {
+    "text": "sort: cannot read: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev: sort fd0 from file": {
+   "script": "c121b82a609b3930",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort fd0 from pipe": {
+   "script": "a9351fda2bf87c25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort fd3 from exec": {
+   "script": "a2bf7743271e14f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort fd3 on the command": {
+   "script": "764692082b2e9896",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort process substitution": {
+   "script": "dcecf24990c95708",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort stdin after partial read of a file": {
+   "script": "7edd7ece085ceb97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort stdin after partial read of a pipe": {
+   "script": "057f3ad030c0b294",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort stdin closed": {
+   "script": "c2b5afcdc990be13",
+   "status": 0,
+   "stderr": {
+    "text": "sort: cannot read: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge dev: sort stdin from file": {
+   "script": "39e9e531f61e8e40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort stdin from heredoc": {
+   "script": "36cea8967754ea0a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "EOF; echo \"status=$?\"\na\nb\nb\n"
+   }
+  },
+  "edge dev: sort stdin from herestring": {
+   "script": "dc050ee8ec926b81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: sort stdin twice": {
+   "script": "0a11e8b221985290",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac dash after partial read of a file": {
+   "script": "466c18d79c160115",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac fd that is not open": {
+   "script": "dd2718deb94b72cb",
+   "status": 0,
+   "stderr": {
+    "text": "tac: failed to open '/dev/fd/7' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: tac fd0 from file": {
+   "script": "0f03f09c81629f7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac fd0 from pipe": {
+   "script": "d5764ccf7b48aa34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac fd3 from exec": {
+   "script": "ff24ad48b33e0424",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac fd3 on the command": {
+   "script": "02121bc75c063bb6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac process substitution": {
+   "script": "7bfba2b16f58051d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac stdin after partial read of a file": {
+   "script": "bfd6ab9344f9415e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac stdin after partial read of a pipe": {
+   "script": "cee5fc80b83c3481",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nstatus=0\n"
+   }
+  },
+  "edge dev: tac stdin closed": {
+   "script": "4719144e6264d351",
+   "status": 0,
+   "stderr": {
+    "text": "tac: failed to open '/dev/stdin' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: tac stdin from file": {
+   "script": "8db4af99fb3c9311",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac stdin from heredoc": {
+   "script": "f56ab280b3beb2b7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "EOF; echo \"status=$?\"\nb\na\nb\n"
+   }
+  },
+  "edge dev: tac stdin from herestring": {
+   "script": "800f8fe872aaecda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tac stdin twice": {
+   "script": "adaed36a33e7406e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nb\nstatus=0\n"
+   }
+  },
+  "edge dev: tail dash after partial read of a file": {
+   "script": "ac69de126f90dfde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail fd that is not open": {
+   "script": "f8696da272248975",
+   "status": 0,
+   "stderr": {
+    "text": "tail: cannot open '/dev/fd/7' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: tail fd0 from file": {
+   "script": "a4e7f8d918777513",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail fd0 from pipe": {
+   "script": "432666dbfe5f5050",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail fd3 from exec": {
+   "script": "ddfb2b46d3c7ccc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail fd3 on the command": {
+   "script": "531bf04b57ca6f69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail process substitution": {
+   "script": "d3f3bd39b4cf0933",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail stdin after partial read of a file": {
+   "script": "11b20d99b77c3c12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail stdin after partial read of a pipe": {
+   "script": "403ce9a0173c5ef7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail stdin closed": {
+   "script": "6c6eeb54e065a7ba",
+   "status": 0,
+   "stderr": {
+    "text": "tail: cannot open '/dev/stdin' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: tail stdin from file": {
+   "script": "727777c13768cbd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail stdin from heredoc": {
+   "script": "75b3ac22338d8ec4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "EOF; echo \"status=$?\"\n"
+   }
+  },
+  "edge dev: tail stdin from herestring": {
+   "script": "9f726b537a0c9563",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge dev: tail stdin twice": {
+   "script": "20b57061e3742bf6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /dev/stdin <==\nb\n\n==> /dev/stdin <==\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c dash after partial read of a file": {
+   "script": "c252c005ec67feb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c fd that is not open": {
+   "script": "a103a0b460ee6df1",
+   "status": 0,
+   "stderr": {
+    "text": "uniq: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: uniq -c fd0 from file": {
+   "script": "55e6272d5ac0c657",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b\n      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c fd0 from pipe": {
+   "script": "77623b6886c0fa10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b\n      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c fd3 from exec": {
+   "script": "bfcb1d27187f7fc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b\n      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c fd3 on the command": {
+   "script": "85f4bb63198b65fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b\n      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c process substitution": {
+   "script": "7a7cdeafd7fc0fc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b\n      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c stdin after partial read of a file": {
+   "script": "e8be9fecbacb1b88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b\n      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c stdin after partial read of a pipe": {
+   "script": "8e633497d2adaae0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c stdin closed": {
+   "script": "6f99423a1974a4cb",
+   "status": 0,
+   "stderr": {
+    "text": "uniq: /dev/stdin: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: uniq -c stdin from file": {
+   "script": "1a9ea7ec2e73fd4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b\n      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: uniq -c stdin from heredoc": {
+   "script": "9d2c96c77225f02e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "      1 b\n      1 a\n      1 b\n      1 EOF; echo \"status=$?\"\n"
+   }
+  },
+  "edge dev: uniq -c stdin from herestring": {
+   "script": "c293788b40aa6501",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b\n      1 a\n      1 b\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l dash after partial read of a file": {
+   "script": "cea5b9c61ae5cf82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 -\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l fd that is not open": {
+   "script": "ce29ca66670041cc",
+   "status": 0,
+   "stderr": {
+    "text": "wc: /dev/fd/7: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: wc -l fd0 from file": {
+   "script": "c9789061467188f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /dev/fd/0\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l fd0 from pipe": {
+   "script": "d9b4b3a1237b6f8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /dev/fd/0\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l fd3 from exec": {
+   "script": "0734fc6a1cb89cfe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /dev/fd/3\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l fd3 on the command": {
+   "script": "004bce809d0ed01e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /dev/fd/3\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l process substitution": {
+   "script": "45d38d39dc0c2cf6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /dev/fd/63\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l stdin after partial read of a file": {
+   "script": "51792a6962250156",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /dev/stdin\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l stdin after partial read of a pipe": {
+   "script": "907a68fd90798284",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 /dev/stdin\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l stdin closed": {
+   "script": "a1d6f1b993b6c31c",
+   "status": 0,
+   "stderr": {
+    "text": "wc: /dev/stdin: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge dev: wc -l stdin from file": {
+   "script": "49c08e5a96f0d49a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /dev/stdin\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l stdin from heredoc": {
+   "script": "8c6d348bb1fcc5c2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 1 delimited by end-of-file (wanted `EOF')\n"
+   },
+   "stdout": {
+    "text": "4 /dev/stdin\n"
+   }
+  },
+  "edge dev: wc -l stdin from herestring": {
+   "script": "c95daab4df4b4967",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /dev/stdin\nstatus=0\n"
+   }
+  },
+  "edge dev: wc -l stdin twice": {
+   "script": "9c1f1f5b55d724d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      3 /dev/stdin\n      0 /dev/stdin\n      3 total\nstatus=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

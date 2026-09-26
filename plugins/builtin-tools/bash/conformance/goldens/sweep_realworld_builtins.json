@@ -1,0 +1,5928 @@
+{
+ "cases": {
+  "real tldr [: -eq with -3": {
+   "script": "2a2446c931289de2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -eq with 10": {
+   "script": "fa0239523496d5ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -eq with 5": {
+   "script": "1d031dff1e553d13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: -eq with a non-integer ' 7 '": {
+   "script": "aa90f5c467905e7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -eq with a non-integer ''": {
+   "script": "2f54c935233bb298",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: [: : integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr [: -eq with a non-integer '010'": {
+   "script": "f258a261842a7bbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -eq with a non-integer '0x10'": {
+   "script": "846aff81acdce209",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: [: 0x10: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr [: -eq with a non-integer '1.5'": {
+   "script": "4464955686cef4bf",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: [: 1.5: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr [: -eq with a non-integer 'abc'": {
+   "script": "16ce3addd6bfc310",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: [: abc: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr [: -ge with -3": {
+   "script": "fe6643acd84d4bab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -ge with 10": {
+   "script": "e808a59fedd9e18f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: -ge with 5": {
+   "script": "7b0af333cc5b9dad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: -gt with -3": {
+   "script": "1941c19cae75cdf0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -gt with 10": {
+   "script": "78c2d039295a1fdb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: -gt with 5": {
+   "script": "7668f2e660e9b70b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -le with -3": {
+   "script": "623a8fff803d1c70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: -le with 10": {
+   "script": "1a0121a12c86f569",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -le with 5": {
+   "script": "85631c9a11d00d08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: -lt with -3": {
+   "script": "7b2ca7e00deb4808",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: -lt with 10": {
+   "script": "66f48b49e823fafb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -lt with 5": {
+   "script": "bc234958ece88f82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: -ne with -3": {
+   "script": "81fd64a8b9e63640",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: -ne with 10": {
+   "script": "7bc9de116eac21ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: -ne with 5": {
+   "script": "3accf638f183cfca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: empty with a dash": {
+   "script": "e6f7ae3019316946",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: empty with a glob": {
+   "script": "502afcefd4da9243",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: empty with a number": {
+   "script": "9cb0dd4ad572b104",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: empty with a word": {
+   "script": "68b0b30042e469e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: empty with an empty string": {
+   "script": "4b707890e742441b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: empty with spaces": {
+   "script": "6bcb456b0646400f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: equal to a string with a dash": {
+   "script": "b6235da04a604320",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: equal to a string with a glob": {
+   "script": "18f825d902d1712f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: equal to a string with a number": {
+   "script": "58c790d423d553d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: equal to a string with a word": {
+   "script": "2783d7c118bce106",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: equal to a string with an empty string": {
+   "script": "fcc81cac765728ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: equal to a string with spaces": {
+   "script": "ef87460f63880177",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: equal to a string with the variable unset": {
+   "script": "47fca06256a9753d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: file tests on ''": {
+   "script": "3d49dde87cac80cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "real tldr [: file tests on '/dev/null'": {
+   "script": "5e4da713301d2a61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-e -r -w \n"
+   }
+  },
+  "real tldr [: file tests on 'd'": {
+   "script": "6c5b62ac23cfacdd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-d -e -r -w \n"
+   }
+  },
+  "real tldr [: file tests on 'dangling'": {
+   "script": "edb282cc22668047",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-L \n"
+   }
+  },
+  "real tldr [: file tests on 'f'": {
+   "script": "82d5ae0d01fa3574",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-f -e -r -w \n"
+   }
+  },
+  "real tldr [: file tests on 'l'": {
+   "script": "19968860d6886f81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-f -e -L -r -w \n"
+   }
+  },
+  "real tldr [: file tests on 'nope'": {
+   "script": "7be8782842667f34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "real tldr [: missing closing bracket": {
+   "script": "ac190a35660ec327",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: missing `]'\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr [: non-empty with a dash": {
+   "script": "209a3e93ccb4edf7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: non-empty with a glob": {
+   "script": "82d46f6d97ed8893",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: non-empty with a number": {
+   "script": "3c79f598a7779b07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: non-empty with a word": {
+   "script": "5ffaa64c7682c45f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: non-empty with an empty string": {
+   "script": "827c72c4e7716447",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: non-empty with spaces": {
+   "script": "5c11516e61e6902d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: not equal to a string with a dash": {
+   "script": "42fc12f91871abab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: not equal to a string with a glob": {
+   "script": "3455c110b6ebe21e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: not equal to a string with a number": {
+   "script": "c40bcc5a70ccc3fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: not equal to a string with a word": {
+   "script": "39a5a00723b31870",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [: not equal to a string with an empty string": {
+   "script": "9531d8ccb0f54195",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: not equal to a string with spaces": {
+   "script": "a7488b4d67e04f41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: too many arguments": {
+   "script": "a897da312d2785ff",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: b: binary operator expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr [: unknown binary operator": {
+   "script": "ce89e81e5c13aefa",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: -foo: binary operator expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr [: unquoted empty variable": {
+   "script": "06c776259597017c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [: unquoted variable with spaces": {
+   "script": "77abb80eeae400bb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: [: too many arguments\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr [[: -eq with -3": {
+   "script": "b095ae867b7d2aca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -eq with 10": {
+   "script": "f98adea5e819153f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -eq with 5": {
+   "script": "90edfa8ba364fc97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -eq with a non-integer ' 7 '": {
+   "script": "045e957c228527de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -eq with a non-integer ''": {
+   "script": "4ee69107b8195237",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -eq with a non-integer '010'": {
+   "script": "5c2acba46a1c2421",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -eq with a non-integer '0x10'": {
+   "script": "ef3abbfdfb9e9203",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -eq with a non-integer '1.5'": {
+   "script": "5c5d3c32ff3fbd83",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: [[: 1.5: arithmetic syntax error: invalid arithmetic operator (error token is \".5\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -eq with a non-integer 'abc'": {
+   "script": "8fa56c142fe3ef4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -ge with -3": {
+   "script": "93473e05b04d84f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -ge with 10": {
+   "script": "937ab43e52de9957",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -ge with 5": {
+   "script": "872127a3a162ae15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -gt with -3": {
+   "script": "2e476aea1bb41c58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -gt with 10": {
+   "script": "0816032df80844b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -gt with 5": {
+   "script": "edfd5a088b35630f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -le with -3": {
+   "script": "c90ebfbca9547733",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -le with 10": {
+   "script": "713124807d2a047d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -le with 5": {
+   "script": "6e2f0c0b535834d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -lt with -3": {
+   "script": "1cf8e159acdbe296",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -lt with 10": {
+   "script": "2664cb48b968c510",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -lt with 5": {
+   "script": "0183a4ea7cb60413",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: -ne with -3": {
+   "script": "5fd97351a5b1bfcb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -ne with 10": {
+   "script": "5256de309fd38b17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: -ne with 5": {
+   "script": "ff8fb9d63714a0d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: combined conditions": {
+   "script": "e68f707536e71cfa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\n"
+   }
+  },
+  "real tldr [[: empty with a dash": {
+   "script": "9bd1fc3334d929ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: empty with a glob": {
+   "script": "5acce9cf9ea942f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: empty with a number": {
+   "script": "6ed1781d0dfad5e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: empty with a word": {
+   "script": "a64873edc11f11e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: empty with an empty string": {
+   "script": "63bfd824f54f1dac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: empty with spaces": {
+   "script": "4870591f0570da38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: equal to a string or glob with a dash": {
+   "script": "3c7323c3e659927e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "real tldr [[: equal to a string or glob with a glob": {
+   "script": "adf6890f6291f460",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "real tldr [[: equal to a string or glob with a number": {
+   "script": "6419e6fcaf49c49f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "real tldr [[: equal to a string or glob with a word": {
+   "script": "6c061d240255b07c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=0\n"
+   }
+  },
+  "real tldr [[: equal to a string or glob with an empty string": {
+   "script": "4adbfb938f9a91c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "real tldr [[: equal to a string or glob with spaces": {
+   "script": "321e2c5a4d31e986",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "real tldr [[: file tests on ''": {
+   "script": "2c0f420e684b9934",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "real tldr [[: file tests on '/dev/null'": {
+   "script": "50715e0db07b6d6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\nend\n"
+   }
+  },
+  "real tldr [[: file tests on 'd'": {
+   "script": "5d10979902a9f6c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\ne\nend\n"
+   }
+  },
+  "real tldr [[: file tests on 'dangling'": {
+   "script": "217a6be443fdd478",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "real tldr [[: file tests on 'f'": {
+   "script": "ffc05715c24b4753",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\ne\nend\n"
+   }
+  },
+  "real tldr [[: file tests on 'l'": {
+   "script": "57f2068dd89812d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\ne\nend\n"
+   }
+  },
+  "real tldr [[: file tests on 'nope'": {
+   "script": "eed07ec7c9a0b06f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "real tldr [[: invalid regex": {
+   "script": "1e705bbbd1d3abaf",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected EOF while looking for matching `)'\nbash: -c: line 2: unexpected argument to conditional binary operator\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr [[: non-empty with a dash": {
+   "script": "8339f301d9fb7667",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: non-empty with a glob": {
+   "script": "b78cf78e75cf7b12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: non-empty with a number": {
+   "script": "d46a6cc340d9dcc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: non-empty with a word": {
+   "script": "53cfde3bc7105e79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: non-empty with an empty string": {
+   "script": "6ca80a6e7ed7ae1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr [[: non-empty with spaces": {
+   "script": "f7efab6c0c21e43e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr [[: regex quoted literally": {
+   "script": "ba009942ec6b29a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lit\nno\n"
+   }
+  },
+  "real tldr [[: regex with a capture group": {
+   "script": "47670cf66bc5c41c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 22\n"
+   }
+  },
+  "real tldr [[: regex with a dash": {
+   "script": "cae6e0028fa926cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 \n"
+   }
+  },
+  "real tldr [[: regex with a glob": {
+   "script": "1eaa8b358cf7d41d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 \n"
+   }
+  },
+  "real tldr [[: regex with a number": {
+   "script": "725da8ac4153a1e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 \n"
+   }
+  },
+  "real tldr [[: regex with a word": {
+   "script": "cb262c3aab06db6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 word\n"
+   }
+  },
+  "real tldr [[: regex with an empty string": {
+   "script": "5b332047cafa76af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 \n"
+   }
+  },
+  "real tldr [[: regex with spaces": {
+   "script": "b2edf2a087e59660",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 \n"
+   }
+  },
+  "real tldr [[: string ordering": {
+   "script": "cc6815829fa60419",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lt\ngt\n"
+   }
+  },
+  "real tldr alias: alias defined on the same line": {
+   "script": "afa503a471f31817",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: now: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "real tldr alias: alias with a trailing space": {
+   "script": "d7983e50cd45ff0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "expanded\n"
+   }
+  },
+  "real tldr alias: alias with quotes in its value": {
+   "script": "a3686cf3f5e70e2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias q='echo '\\''single'\\'' \"double\"'\nsingle double\n"
+   }
+  },
+  "real tldr alias: create a generic alias": {
+   "script": "d212b2cae4549bb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello world\n"
+   }
+  },
+  "real tldr alias: create without expand_aliases": {
+   "script": "eda28fe6f804e516",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: greet: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "real tldr alias: list all aliases": {
+   "script": "0d011feb3c5c18e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias gs='echo status'\nalias ll='ls -1'\n"
+   }
+  },
+  "real tldr alias: list with none defined": {
+   "script": "b66d7328926d1a81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr alias: remove an aliased command": {
+   "script": "70b2f5d57ab42c85",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 4: alias: greet: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr alias: shortcut for ls --all": {
+   "script": "f1db45b8e9e97e3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\n.hidden\n"
+   }
+  },
+  "real tldr alias: turn rm into an interactive command": {
+   "script": "13567061cedbcb83",
+   "status": 0,
+   "stderr": {
+    "text": "rm: remove regular empty file 'f'? "
+   },
+   "stdout": {
+    "text": "f\n"
+   }
+  },
+  "real tldr alias: view a missing alias": {
+   "script": "a0436a5022e3e1c6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: alias: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr alias: view an alias": {
+   "script": "9fb1bea82a8d9d97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias greet='echo hello'\n"
+   }
+  },
+  "real tldr break: out of a for loop by count": {
+   "script": "e4eafafd0a4f2802",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "real tldr break: out of a single loop": {
+   "script": "c69cdfc5e692b32a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "once\nafter\n"
+   }
+  },
+  "real tldr break: out of nested loops": {
+   "script": "2c71c0f3c9a59205",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner\nafter\n"
+   }
+  },
+  "real tldr break: outside a loop": {
+   "script": "fa60a941359d52b6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr break: with a bad count": {
+   "script": "abc9bdf65d59289f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr break: with a count larger than the nesting": {
+   "script": "f16646c891439faa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr builtin: a non-builtin": {
+   "script": "6a0c559efdfade91",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: builtin: nosuch: not a shell builtin\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr builtin: bypass a function": {
+   "script": "2b78eb2689e412e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fn:x\ny\n"
+   }
+  },
+  "real tldr builtin: cd through builtin": {
+   "script": "e02e0aef75c5d89c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "real tldr builtin: run a shell builtin": {
+   "script": "04bfa8183e6bcd00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\n"
+   }
+  },
+  "real tldr caller: frames beyond the stack": {
+   "script": "95705d2d48fee244",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr caller: line and file of the caller": {
+   "script": "3871c20fada6a7c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 NULL\n"
+   }
+  },
+  "real tldr caller: line function and file": {
+   "script": "660b511b0d735175",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 h bash\n"
+   }
+  },
+  "real tldr caller: n frames back": {
+   "script": "ab5398ca8a008440",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 c bash\n"
+   }
+  },
+  "real tldr caller: outside a function": {
+   "script": "1f4334e8d2be271f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr case: extglob pattern": {
+   "script": "4635170d6033bdaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "real tldr case: fall through with cat": {
+   "script": "af91d90874677c53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "It's a cat\nIt's either a dog or cat fell through\nFallback\n"
+   }
+  },
+  "real tldr case: fall through with cow": {
+   "script": "b94ea8da0e4166c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Fallback\n"
+   }
+  },
+  "real tldr case: fall through with dog": {
+   "script": "1d882cf7e50f7061",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "It's either a dog or cat fell through\nFallback\n"
+   }
+  },
+  "real tldr case: match multiple patterns with cat": {
+   "script": "5430dd9591c06032",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "It's a cat\nIt's a cat or a dog\nFallback\n"
+   }
+  },
+  "real tldr case: match multiple patterns with cow": {
+   "script": "54f923d1bcfe25a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Fallback\n"
+   }
+  },
+  "real tldr case: match multiple patterns with dog": {
+   "script": "e5ef52126e782486",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "It's a cat or a dog\nFallback\n"
+   }
+  },
+  "real tldr case: nocasematch": {
+   "script": "623820f14689766a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "real tldr case: parenthesized pattern": {
+   "script": "9b403c231d5fd99e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "paren\n"
+   }
+  },
+  "real tldr case: patterns and a fallback with ''": {
+   "script": "a611626f6f411342",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "what?\n"
+   }
+  },
+  "real tldr case: patterns and a fallback with 'L'": {
+   "script": "65162d398e068125",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 README\n"
+   }
+  },
+  "real tldr case: patterns and a fallback with 'lines'": {
+   "script": "e5607fa88f2b2fbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 README\n"
+   }
+  },
+  "real tldr case: patterns and a fallback with 'other'": {
+   "script": "be1dd4433e1e68f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "what?\n"
+   }
+  },
+  "real tldr case: patterns and a fallback with 'w'": {
+   "script": "75ce7799823b0334",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 README\n"
+   }
+  },
+  "real tldr case: patterns and a fallback with 'words'": {
+   "script": "3556f781891eea8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 README\n"
+   }
+  },
+  "real tldr case: quoted pattern": {
+   "script": "24d608e67003fdae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "literal-star\n"
+   }
+  },
+  "real tldr case: string literals with ''": {
+   "script": "4d02d21ba09dacec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr case: string literals with 'L'": {
+   "script": "f82bee158248b3f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr case: string literals with 'lines'": {
+   "script": "030f9ad97658aa02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 README\nstatus=0\n"
+   }
+  },
+  "real tldr case: string literals with 'other'": {
+   "script": "17df3f60dfbeb505",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr case: string literals with 'w'": {
+   "script": "0f73093ef01c79c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr case: string literals with 'words'": {
+   "script": "04008838e78ad908",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 README\nstatus=0\n"
+   }
+  },
+  "real tldr cd: OLDPWD and PWD": {
+   "script": "2df05c08ff0fba98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w -> /tmp/w/a\n"
+   }
+  },
+  "real tldr cd: cdpath": {
+   "script": "4a644653c7af0c3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a/b\n/tmp/w/a/b\n"
+   }
+  },
+  "real tldr cd: go to a directory": {
+   "script": "4306177624c85be5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a/b\n"
+   }
+  },
+  "real tldr cd: go to a directory with a space": {
+   "script": "1b6b54778f5f6ec7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/sp ace\n"
+   }
+  },
+  "real tldr cd: go to a file": {
+   "script": "343fdbdcd4d369ba",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: cd: f: Not a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr cd: go to a missing directory": {
+   "script": "dc6efbddeecb009a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: cd: nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n/tmp/w\n"
+   }
+  },
+  "real tldr cd: go to the home directory": {
+   "script": "ac32fbf0a2d77be3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: cd: HOME not set\n"
+   },
+   "stdout": {
+    "text": "status=1\n/tmp/w\n"
+   }
+  },
+  "real tldr cd: go to the home directory with HOME set": {
+   "script": "ab53e65291118bab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/c\n"
+   }
+  },
+  "real tldr cd: go up beyond the root": {
+   "script": "690794ac61de9d1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "real tldr cd: go up to the parent": {
+   "script": "6dc219651c518302",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a\n"
+   }
+  },
+  "real tldr cd: home directory of a user": {
+   "script": "7441c508da26cbdc",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: cd: ~nosuchuser: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr cd: physical through a link": {
+   "script": "27feb51fb460a0ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a/b\n/tmp/w/lnk\n"
+   }
+  },
+  "real tldr cd: the previous directory": {
+   "script": "fd20d62d4bf563f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a\n/tmp/w/a\n"
+   }
+  },
+  "real tldr cd: the previous directory with none": {
+   "script": "c7d8c8007ac61733",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: OLDPWD not set\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr cd: the root directory": {
+   "script": "adc8c3693b732b52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "real tldr cd: too many arguments": {
+   "script": "336a78cd41adeb9c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: cd: too many arguments\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr command: default path": {
+   "script": "88cf4e5451896744",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\n"
+   }
+  },
+  "real tldr command: missing command": {
+   "script": "1aa460c7a342166e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nosuchcmd: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "real tldr command: path of a builtin": {
+   "script": "cca7984a6a83b5a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "echo\n"
+   }
+  },
+  "real tldr command: path of a function": {
+   "script": "156c11f0b0bba605",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\n"
+   }
+  },
+  "real tldr command: path of a keyword": {
+   "script": "725892b9efa29c1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "if\n"
+   }
+  },
+  "real tldr command: path of a missing command": {
+   "script": "19f69342f18b1abd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr command: path of an alias": {
+   "script": "5b05ef1407093dee",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr command: run a command despite a function": {
+   "script": "636b1a87b9af5b3e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "function\n/tmp\n"
+   }
+  },
+  "real tldr command: run a command literally despite an alias": {
+   "script": "5e92fb320b8fa3f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aliased\nf\n"
+   }
+  },
+  "real tldr command: verbose description": {
+   "script": "c102181e47a16d61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f is a function\necho is a shell builtin\n"
+   }
+  },
+  "real tldr compgen: aliases starting with a string": {
+   "script": "f5f173a0e78c6c73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lsx\nlsy\n"
+   }
+  },
+  "real tldr compgen: directories": {
+   "script": "fc082146a5b0b2e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "adir\nbdir\n"
+   }
+  },
+  "real tldr compgen: files": {
+   "script": "499b330ea0b39f72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "adir\nalpha\n"
+   }
+  },
+  "real tldr compgen: into a variable": {
+   "script": "dacc54db110f11b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha album\n"
+   }
+  },
+  "real tldr compgen: keywords": {
+   "script": "50e98c5a188efb73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "if\nthen\nelse\nelif\nfi\ncase\nesac\nfor\nselect\nwhile\nuntil\ndo\ndone\nin\nfunction\ntime\n{\n}\n!\n[[\n]]\ncoproc\n"
+   }
+  },
+  "real tldr compgen: list aliases": {
+   "script": "a97d21c0e917c167",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zz1\nzz2\n"
+   }
+  },
+  "real tldr compgen: list functions": {
+   "script": "eddccc46a262960c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zfa\nzfb\n"
+   }
+  },
+  "real tldr compgen: list functions starting with a string": {
+   "script": "bdcc913d76ad5c07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zfa\nzfb\n"
+   }
+  },
+  "real tldr compgen: match against a wordlist": {
+   "script": "1fc620194f48ff3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple\n"
+   }
+  },
+  "real tldr compgen: match against a wordlist with no match": {
+   "script": "902c945ea0f606ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr compgen: match against a wordlist with no prefix": {
+   "script": "4329b8c0071cea82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple\norange\nbanana\n"
+   }
+  },
+  "real tldr compgen: variables with a prefix": {
+   "script": "4a84e44332eeb5da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ZZVAR_A\nZZVAR_B\n"
+   }
+  },
+  "real tldr compgen: wordlist with expansions": {
+   "script": "66ce211906eec39a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kiwi\nkey\n"
+   }
+  },
+  "real tldr continue: from within a nested loop": {
+   "script": "11bd80ac0c6c03df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "real tldr continue: in an until loop": {
+   "script": "080c5ccea4923080",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "odd 1\nodd 3\n"
+   }
+  },
+  "real tldr continue: outside a loop": {
+   "script": "42edc88dc9ff1b83",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr continue: skip to the next iteration": {
+   "script": "20ccce3a2e5da4b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "real tldr declare: array variable": {
+   "script": "f20cac0b94a1ce9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a variable=([0]=\"item_a\" [1]=\"item_b\" [2]=\"item c\")\n3\n"
+   }
+  },
+  "real tldr declare: associative array": {
+   "script": "439c676bb03bee94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "key_a=item_a\nkey_b=item_b\nkey_c=item_c\n"
+   }
+  },
+  "real tldr declare: associative array printed": {
+   "script": "605f4fad1d826cbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A variable=([k]=\"v\" )\n"
+   }
+  },
+  "real tldr declare: export attribute": {
+   "script": "77731605a6532500",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\n"
+   }
+  },
+  "real tldr declare: function names only": {
+   "script": "81d89fbbc1580691",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -f zz_a\ndeclare -f zz_b\n"
+   }
+  },
+  "real tldr declare: global inside a function": {
+   "script": "0336de9b69ffbc5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[value] []\n"
+   }
+  },
+  "real tldr declare: integer variable": {
+   "script": "851c1a3cbcf0ca50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n0\n3\n"
+   }
+  },
+  "real tldr declare: integer variable with a bad expression": {
+   "script": "71b849f5ee05f057",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: 4 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr declare: lower and upper case attributes": {
+   "script": "17d116d4e8e1723c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "mixed MIXED\n"
+   }
+  },
+  "real tldr declare: nameref": {
+   "script": "5b6acb3cb9cb98f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "real tldr declare: print a function": {
+   "script": "a6c66836aa92b867",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "function_name () \n{ \n    echo hi;\n    local x=1\n}\n"
+   }
+  },
+  "real tldr declare: print a missing function": {
+   "script": "cfe686585c0dac63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr declare: print a missing variable": {
+   "script": "51441399dea89d10",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr declare: print a variable": {
+   "script": "6d124da989c0c829",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- variable_name=\"a \\\"b\\\" \\$c\"\n"
+   }
+  },
+  "real tldr declare: readonly string": {
+   "script": "252a32a9b9c0e4cc",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: variable: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr declare: string variable": {
+   "script": "d6698373cf21e1a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- variable=\"value\"\n"
+   }
+  },
+  "real tldr dirs: clear the stack": {
+   "script": "9295b01b8d2f175f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a\n"
+   }
+  },
+  "real tldr dirs: entry out of range": {
+   "script": "58a0655339c1545a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: dirs: directory stack empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr dirs: nth entry": {
+   "script": "d178ac6add6c9eaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a\n"
+   }
+  },
+  "real tldr dirs: nth entry from the last": {
+   "script": "bc8776ce17dd34dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "real tldr dirs: numbered": {
+   "script": "81a59b83baf94c61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 0  /tmp/w/c\n 1  /tmp/w/a\n 2  /tmp/w\n"
+   }
+  },
+  "real tldr dirs: one entry per line": {
+   "script": "d2956a86528b1af2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/c\n/tmp/w/a\n/tmp/w\n"
+   }
+  },
+  "real tldr dirs: the stack with spaces": {
+   "script": "b6fe99aa7db75752",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/c /tmp/w/a /tmp/w\n"
+   }
+  },
+  "real tldr dirs: without tilde": {
+   "script": "1466095bb2a46e6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "~/a ~\n/tmp/w/a /tmp/w\n"
+   }
+  },
+  "real tldr disown: a missing job": {
+   "script": "c66b21d17c2741bb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: disown: %3: no such job\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr disown: a specific job": {
+   "script": "01b05579d3248382",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "real tldr disown: all jobs": {
+   "script": "72e28b212c36d15a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr disown: mark a job to keep": {
+   "script": "c4f45a7c24889de6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "real tldr disown: the current job": {
+   "script": "778609099de6b4f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr echo: append to a file": {
+   "script": "a828d03d0f61b3af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Hello World\nAgain\n"
+   }
+  },
+  "real tldr echo: backslash escape \\0101": {
+   "script": "ac8f82ed9e88bf7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   x   A   y  \\n\n0000004\n"
+   }
+  },
+  "real tldr echo: backslash escape \\\\": {
+   "script": "6268087a519fd742",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   x   \\   y  \\n\n0000004\n"
+   }
+  },
+  "real tldr echo: backslash escape \\a\\b": {
+   "script": "6c54fc46955dba6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   x  \\a  \\b   y  \\n\n0000005\n"
+   }
+  },
+  "real tldr echo: backslash escape \\c stop": {
+   "script": "d8daa32651bafe70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   x\n0000001\n"
+   }
+  },
+  "real tldr echo: backslash escape \\e[0m": {
+   "script": "eff5c2270c7bcb96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   x 033   [   0   m   y  \\n\n0000007\n"
+   }
+  },
+  "real tldr echo: backslash escape \\n": {
+   "script": "a0227a863a565d6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   x  \\n   y  \\n\n0000004\n"
+   }
+  },
+  "real tldr echo: backslash escape \\q": {
+   "script": "3b54bc5a3cfbce6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   x   \\   q   y  \\n\n0000005\n"
+   }
+  },
+  "real tldr echo: backslash escape \\u00e9": {
+   "script": "fb42437066099110",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   x 303 251   y  \\n\n0000005\n"
+   }
+  },
+  "real tldr echo: backslash escape \\x41\\x4a": {
+   "script": "bf1ff47d82b8f777",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   x   A   J   y  \\n\n0000005\n"
+   }
+  },
+  "real tldr echo: backslash escapes": {
+   "script": "6f7ae4ced81e19bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Column 1\tColumn 2\n"
+   }
+  },
+  "real tldr echo: backslash escapes disabled": {
+   "script": "434a1fb690ad652e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\tb\n"
+   }
+  },
+  "real tldr echo: exit status of the last command": {
+   "script": "37d8878a65dd26dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n"
+   }
+  },
+  "real tldr echo: message with a variable": {
+   "script": "5bb56d679b9650e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "My path is /tmp/w\n"
+   }
+  },
+  "real tldr echo: options that are not options": {
+   "script": "a800346444c4a285",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-x -n- --\n-- -n\n"
+   }
+  },
+  "real tldr echo: pass text to another program": {
+   "script": "5b42ac7931ca6c00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HELLO WORLD\n"
+   }
+  },
+  "real tldr echo: text message": {
+   "script": "3d79dd5f231f248c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Hello World\n"
+   }
+  },
+  "real tldr echo: text message without quotes": {
+   "script": "832d386e19fcc4fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Hello World\n"
+   }
+  },
+  "real tldr echo: without a trailing newline": {
+   "script": "9218c40b6466c462",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Hello World|\n"
+   }
+  },
+  "real tldr echo: xpg_echo": {
+   "script": "2b2a7c0a29c8e739",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\n"
+   }
+  },
+  "real tldr eval: a syntax error": {
+   "script": "7fd6c5ee9e21e56f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 1: syntax error near unexpected token `then'\nbash: eval: line 1: `if then'\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr eval: call echo": {
+   "script": "bc568e7a2928c18b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo\n"
+   }
+  },
+  "real tldr eval: concatenated arguments": {
+   "script": "658dd9e181aa9998",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 a  b\n"
+   }
+  },
+  "real tldr eval: exit status": {
+   "script": "e4e71f891926a7b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=0\n"
+   }
+  },
+  "real tldr eval: indirect variable name": {
+   "script": "d850e19292a0cec9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "42\n"
+   }
+  },
+  "real tldr eval: set a variable": {
+   "script": "90c7c9202ca187a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bar\n"
+   }
+  },
+  "real tldr exec: a command": {
+   "script": "15aa337f2ada5b35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "replaced\n"
+   }
+  },
+  "real tldr exec: a command that fails": {
+   "script": "eaed5a80a59cb7a0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr exec: a missing command": {
+   "script": "f89b350bcec297f1",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: exec: nosuchcmd: not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr exec: in a subshell": {
+   "script": "33cb4ef1823c8849",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-subshell\nafter\n"
+   }
+  },
+  "real tldr exec: redirection only": {
+   "script": "d0ac1e283665836b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "to-three\n"
+   }
+  },
+  "real tldr exit: runs the EXIT trap": {
+   "script": "82820ceccb45aae8",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trapped\n"
+   }
+  },
+  "real tldr exit: with a negative status": {
+   "script": "6b2e9b97a7ad1a2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=255\n"
+   }
+  },
+  "real tldr exit: with a non-numeric status": {
+   "script": "24f614755c48d3ff",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: exit: abc: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr exit: with a specific status": {
+   "script": "8aed2bf0f474a1ff",
+   "status": 42,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr exit: with a status above 255": {
+   "script": "c837883b7fc4cca7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=44\n"
+   }
+  },
+  "real tldr exit: with the last status": {
+   "script": "fe90088618d2a068",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr exit: with the last status of a subshell": {
+   "script": "18e1bee4687393cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr exit: with too many arguments": {
+   "script": "83224c1ab66df283",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: exit: too many arguments\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr export: an invalid name": {
+   "script": "9bf1f6704f66ef7b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: export: `1abc=x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr export: append to PATH": {
+   "script": "fd44bfa0fc6388df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "appended\n"
+   }
+  },
+  "real tldr export: export a function": {
+   "script": "c379c8b0eb5768e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in child: arg\n"
+   }
+  },
+  "real tldr export: print exported variables": {
+   "script": "e362c8ac9c9e1906",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -x ZZ_EXP=\"a b\"\n"
+   }
+  },
+  "real tldr export: set an environment variable": {
+   "script": "d3a44ad6c09823ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "value\n"
+   }
+  },
+  "real tldr export: unset an environment variable": {
+   "script": "4cffef82102c97a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\nvalue\n"
+   }
+  },
+  "real tldr false: ignores arguments": {
+   "script": "32618bbe1eb7e11a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr false: make a command always exit with 1": {
+   "script": "380779099e53a163",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ran\nstatus=1\n"
+   }
+  },
+  "real tldr false: non-zero exit code": {
+   "script": "7ed4f9d331d19eae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr for: arithmetic for": {
+   "script": "16a2c880aba18959",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n2\n"
+   }
+  },
+  "real tldr for: every directory": {
+   "script": "9d46c416bad97d45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in d1/: x\nin d2/: \n"
+   }
+  },
+  "real tldr for: every directory when there are none": {
+   "script": "5f13c833e65d827f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[*/]\n"
+   }
+  },
+  "real tldr for: glob with no match": {
+   "script": "1acb163e476661c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[*.nope]\n"
+   }
+  },
+  "real tldr for: iterate a descending range": {
+   "script": "eeb151039fafba7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n3\n1\n"
+   }
+  },
+  "real tldr for: iterate a letter range": {
+   "script": "ce43674fa63a1e5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcde\n"
+   }
+  },
+  "real tldr for: iterate a range": {
+   "script": "9f0b6131c685e6f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Loop is executed 1\nLoop is executed 4\nLoop is executed 7\nLoop is executed 10\n"
+   }
+  },
+  "real tldr for: iterate a zero-padded range": {
+   "script": "d94e8f16565c6b7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "08\n09\n10\n11\n"
+   }
+  },
+  "real tldr for: iterate an empty list": {
+   "script": "d112ae6577c73954",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr for: iterate command line parameters": {
+   "script": "bdccb8893a82c911",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb c\nd\n"
+   }
+  },
+  "real tldr for: iterate directories": {
+   "script": "f79caa84a2fd196b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Loop is executed dir1/\nLoop is executed dir2/\n"
+   }
+  },
+  "real tldr for: iterate files": {
+   "script": "379507e5d73c9dd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exists: file1\nexists: file 2\nmissing: nope\n"
+   }
+  },
+  "real tldr for: iterate items": {
+   "script": "7277a9b25d96a6a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Loop is executed: item1\nLoop is executed: item 2\nLoop is executed: item3\n"
+   }
+  },
+  "real tldr function: FUNCNAME": {
+   "script": "0c191bad88299d27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner outer\n"
+   }
+  },
+  "real tldr function: a subshell body": {
+   "script": "343e4614f791e298",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n/\n"
+   }
+  },
+  "real tldr function: an invalid name": {
+   "script": "9444ffb35c5b5f06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr function: define with the keyword": {
+   "script": "a271523736325038",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Function contents here\n"
+   }
+  },
+  "real tldr function: define without the keyword": {
+   "script": "c5318caf845bd91f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Function contents here\nfunc_name () \n{ \n    echo \"Function contents here\"\n}\n"
+   }
+  },
+  "real tldr function: keyword with parentheses": {
+   "script": "d6b9cce504d600d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "both\n"
+   }
+  },
+  "real tldr function: recursion": {
+   "script": "a0e835449a3ed986",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "720\n"
+   }
+  },
+  "real tldr function: redefine": {
+   "script": "0495a31cd6674f86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "real tldr function: run a function": {
+   "script": "adaf0fa4f61bae3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ran with 2: a b c\n"
+   }
+  },
+  "real tldr getopts: first set option": {
+   "script": "9861661e7097f46a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "real tldr getopts: first set option when absent": {
+   "script": "241e30bb3e44e261",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 [?]\n"
+   }
+  },
+  "real tldr getopts: grouped options": {
+   "script": "3341359b9735e40f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "z\ny\nx\nrest: rest\n"
+   }
+  },
+  "real tldr getopts: inside a function": {
+   "script": "1dcf995b23b16e25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=1\nn=2\n"
+   }
+  },
+  "real tldr getopts: multiple options": {
+   "script": "a0b7677b50720790",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x is set\ny is set\nz is set\n"
+   }
+  },
+  "real tldr getopts: option in a string": {
+   "script": "885c37114eb546a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nx\n"
+   }
+  },
+  "real tldr getopts: option missing its argument": {
+   "script": "5d4838e4c2be2973",
+   "status": 0,
+   "stderr": {
+    "text": "bash: option requires an argument -- x\n"
+   },
+   "stdout": {
+    "text": "[?] [unset]\n"
+   }
+  },
+  "real tldr getopts: option with an argument": {
+   "script": "88ea9cb3bad88795",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x value\n"
+   }
+  },
+  "real tldr getopts: option with an attached argument": {
+   "script": "18650db0060e6881",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x value\n"
+   }
+  },
+  "real tldr getopts: reset": {
+   "script": "7768c2f6dcb907b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a 2\nb 2\n"
+   }
+  },
+  "real tldr getopts: silent mode handling errors": {
+   "script": "07d45edd3fe32ff6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Argument required\n"
+   }
+  },
+  "real tldr getopts: silent mode with an invalid option": {
+   "script": "fee4ea8741a7a304",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Invalid argument q\n"
+   }
+  },
+  "real tldr getopts: stops at a double dash": {
+   "script": "0c64324c258ac5ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n3\n"
+   }
+  },
+  "real tldr getopts: unknown option": {
+   "script": "c3d1d40c1f626696",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- q\n"
+   },
+   "stdout": {
+    "text": "[?]\n"
+   }
+  },
+  "real tldr hash: a missing command": {
+   "script": "8c3b1929bfc95114",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: hash: nosuchcmd: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr hash: clear the table": {
+   "script": "38f63b6fb2511225",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr hash: delete a missing command": {
+   "script": "90ee423793848e00",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: hash: nosuchcmd: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr hash: view the table when empty": {
+   "script": "bfba1239ad570891",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hash: hash table empty\nstatus=0\n"
+   }
+  },
+  "real tldr if: a variable is defined": {
+   "script": "37aae0f4c87aefe0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is true\n"
+   }
+  },
+  "real tldr if: a variable is not defined": {
+   "script": "2feb760c8a46dc65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "real tldr if: check -d on d": {
+   "script": "2c35902a7afacde9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is true\nstatus=0\n"
+   }
+  },
+  "real tldr if: check -d on f": {
+   "script": "e00c88444b1254d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr if: check -e on f": {
+   "script": "4453787e7b0385d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is true\nstatus=0\n"
+   }
+  },
+  "real tldr if: check -e on nope": {
+   "script": "b056976cb8d74b86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr if: check -f on d": {
+   "script": "28881c6fac13c816",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr if: check -f on f": {
+   "script": "f600b853f39ceb0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is true\nstatus=0\n"
+   }
+  },
+  "real tldr if: command list as condition": {
+   "script": "c69d352872b20029",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "last-wins\n"
+   }
+  },
+  "real tldr if: condition is a grep": {
+   "script": "f7993b9bfec10623",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is true\nstatus=0\n"
+   }
+  },
+  "real tldr if: condition is a missing command": {
+   "script": "6a4ad7a4320f4a54",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nosuchcmd: command not found\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr if: condition is false": {
+   "script": "52c8dd9a0a798c9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr if: condition is true": {
+   "script": "3c0f3171023362f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is true\nstatus=0\n"
+   }
+  },
+  "real tldr if: elif chain": {
+   "script": "f4b01fc8c914b811",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "real tldr if: else branch when a grep": {
+   "script": "57bbfcca5894cb78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is true\n"
+   }
+  },
+  "real tldr if: else branch when a missing command": {
+   "script": "a0fc65c177108597",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nosuchcmd: command not found\n"
+   },
+   "stdout": {
+    "text": "Condition is false\n"
+   }
+  },
+  "real tldr if: else branch when false": {
+   "script": "935a73309f941151",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is false\n"
+   }
+  },
+  "real tldr if: else branch when true": {
+   "script": "c118e625a32bbe66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is true\n"
+   }
+  },
+  "real tldr if: negated condition is a grep": {
+   "script": "9dc70d4aa2160f01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr if: negated condition is a missing command": {
+   "script": "e9a048463d2a5bd1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nosuchcmd: command not found\n"
+   },
+   "stdout": {
+    "text": "Condition is true\n"
+   }
+  },
+  "real tldr if: negated condition is false": {
+   "script": "3e34ad930945acf2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Condition is true\n"
+   }
+  },
+  "real tldr if: negated condition is true": {
+   "script": "34831bba2a76b467",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr if: status when no branch runs": {
+   "script": "f4ad7c1257bca4f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr jobs: after completion": {
+   "script": "5a6014c3b3fa5c6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr jobs: changed status only": {
+   "script": "14901fded9c0742d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr jobs: long listing shape": {
+   "script": "e57eb36429d8d8ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[N]+ N Running sleep N &\n"
+   }
+  },
+  "real tldr jobs: no jobs": {
+   "script": "b7528f4d0452e39a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr jobs: process ids": {
+   "script": "29d9b8e81faa3031",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matches\n"
+   }
+  },
+  "real tldr jobs: running only": {
+   "script": "d97d50132bc5a364",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]+  Running                    sleep 0.3 &\n"
+   }
+  },
+  "real tldr jobs: status of a missing job": {
+   "script": "bdd59544eb8201ab",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: jobs: %3: no such job\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr jobs: status of a particular job": {
+   "script": "ea1dc9a5f98c75ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2]+  Running                    sleep 0.3 &\n"
+   }
+  },
+  "real tldr jobs: status of all jobs": {
+   "script": "2a6d7e56814bd0f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]-  Running                    sleep 0.3 &\n[2]+  Running                    sleep 0.3 &\n"
+   }
+  },
+  "real tldr jobs: stopped only": {
+   "script": "77d878fe6ffa1c09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr kill: a background job by number": {
+   "script": "b29fbb565eacce60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr kill: a bad signal": {
+   "script": "e9476a53d2ff3bfb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: BOGUS: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr kill: a missing job": {
+   "script": "e4b57124e6de767d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: %4: no such job\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr kill: a trapped signal in a job": {
+   "script": "aab36f25ea7e2903",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught\nstatus=7\n"
+   }
+  },
+  "real tldr kill: list signal names": {
+   "script": "0f272cff34f0c350",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 4) SIGILL\t 5) SIGTRAP\n 6) SIGABRT\t 7) SIGBUS\t 8) SIGFPE\t 9) SIGKILL\t10) SIGUSR1\n11) SIGSEGV\t12) SIGUSR2\t13) SIGPIPE\t14) SIGALRM\t15) SIGTERM\n16) SIGSTKFLT\t17) SIGCHLD\t18) SIGCONT\t19) SIGSTOP\t20) SIGTSTP\n21) SIGTTIN\t22) SIGTTOU\t23) SIGURG\t24) SIGXCPU\t25) SIGXFSZ\n26) SIGVTALRM\t27) SIGPROF\t28) SIGWINCH\t29) SIGIO\t30) SIGPWR\n31) SIGSYS\t35) SIGRTMIN\t36) SIGRTMIN+1\t37) SIGRTMIN+2\t38) SIGRTMIN+3\n39) SIGRTMIN+4\t40) SIGRTMIN+5\t41) SIGRTMIN+6\t42) SIGRTMIN+7\t43) SIGRTMIN+8\n44) SIGRTMIN+9\t45) SIGRTMIN+10\t46) SIGRTMIN+11\t47) SIGRTMIN+12\t48) SIGRTMIN+13\n49) SIGRTMIN+14\t50) SIGRTMAX-14\t51) SIGRTMAX-13\t52) SIGRTMAX-12\t53) SIGRTMAX-11\n54) SIGRTMAX-10\t55) SIGRTMAX-9\t56) SIGRTMAX-8\t57) SIGRTMAX-7\t58) SIGRTMAX-6\n59) SIGRTMAX-5\t60) SIGRTMAX-4\t61) SIGRTMAX-3\t62) SIGRTMAX-2\t63) SIGRTMAX-1\n64) SIGRTMAX\t\n"
+   }
+  },
+  "real tldr kill: list the table": {
+   "script": "05b1efc7d8b90e6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 4) SIGILL\t 5) SIGTRAP\n 6) SIGABRT\t 7) SIGBUS\t 8) SIGFPE\t 9) SIGKILL\t10) SIGUSR1\n11) SIGSEGV\t12) SIGUSR2\t13) SIGPIPE\t14) SIGALRM\t15) SIGTERM\n"
+   }
+  },
+  "real tldr kill: name of a signal number": {
+   "script": "058f531af6dc34ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "TERM\nKILL\nTERM\n"
+   }
+  },
+  "real tldr kill: no arguments": {
+   "script": "258960d9bbbb49ff",
+   "status": 0,
+   "stderr": {
+    "text": "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr kill: number of a signal name": {
+   "script": "25308b791577b0d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "15\n1\n"
+   }
+  },
+  "real tldr kill: signal -0": {
+   "script": "588ee92540b5af1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=0\n"
+   }
+  },
+  "real tldr kill: signal -1": {
+   "script": "250323291b134ff3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=129\nbash: line 1: PID Hangup                     sleep 5\n"
+   }
+  },
+  "real tldr kill: signal -10": {
+   "script": "c9a78e672c5938a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=138\nbash: line 1: PID User defined signal 1      sleep 5\n"
+   }
+  },
+  "real tldr kill: signal -2": {
+   "script": "dfbf6814872efac8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=130\n"
+   }
+  },
+  "real tldr kill: signal -9": {
+   "script": "32d899cf075c6f39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=137\nbash: line 1: PID Killed                     sleep 5\n"
+   }
+  },
+  "real tldr kill: signal -HUP": {
+   "script": "8b3970cba9d30461",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=129\nbash: line 1: PID Hangup                     sleep 5\n"
+   }
+  },
+  "real tldr kill: signal -INT": {
+   "script": "868ae3048419195a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=130\n"
+   }
+  },
+  "real tldr kill: signal -KILL": {
+   "script": "e1b65e6e83b48baa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=137\nbash: line 1: PID Killed                     sleep 5\n"
+   }
+  },
+  "real tldr kill: signal -SIGUSR1": {
+   "script": "08b77c3874025fad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=138\nbash: line 1: PID User defined signal 1      sleep 5\n"
+   }
+  },
+  "real tldr kill: signal -s TERM": {
+   "script": "bc38c59ff97e0c10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kill=0\nstatus=143\n"
+   }
+  },
+  "real tldr kill: terminate with SIGTERM": {
+   "script": "7c8d3fc334d56de4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=143\n"
+   }
+  },
+  "real tldr let: bases and bitwise operators": {
+   "script": "b99e197c4132a885",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "15\n8\n"
+   }
+  },
+  "real tldr let: conditional operator": {
+   "script": "40d165360d9da23e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n0\n"
+   }
+  },
+  "real tldr let: division by zero": {
+   "script": "c0e69eb6914d1aad",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: d = 1 / 0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr let: post-increment": {
+   "script": "2afa14a83ec52bd3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n7 6\n"
+   }
+  },
+  "real tldr let: several expressions": {
+   "script": "01335305ca3511fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2 20\n"
+   }
+  },
+  "real tldr let: simple expression": {
+   "script": "8cd4fdb3027eec1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "real tldr let: status when zero": {
+   "script": "ad287cec2dba0df6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=0\n"
+   }
+  },
+  "real tldr let: syntax error": {
+   "script": "06c8c31a7adb32f3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr local: array variable": {
+   "script": "5555ca7393dc6aab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "item_b 3\n"
+   }
+  },
+  "real tldr local: associative array": {
+   "script": "77539d3e81978a7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "item_b\n"
+   }
+  },
+  "real tldr local: integer variable": {
+   "script": "9283eae0b06bf9cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "real tldr local: outside a function": {
+   "script": "f3bd919e7a5ec898",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: local: can only be used in a function\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr local: readonly variable": {
+   "script": "b014f43b1e0c8796",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: variable: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr local: shadows a global": {
+   "script": "fdacb89c717488ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "local\nglobal\n"
+   }
+  },
+  "real tldr local: string variable": {
+   "script": "960ebfab60394720",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "value\n[unset]\n"
+   }
+  },
+  "real tldr mapfile: callback every line": {
+   "script": "381bb08f43aeea97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cb 0 x\ncb 1 y\n"
+   }
+  },
+  "real tldr mapfile: default MAPFILE": {
+   "script": "5c64c610c144e144",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "real tldr mapfile: lines from a process substitution": {
+   "script": "50378178dd12abf0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a lines=([0]=\"a\" [1]=\"b\")\n"
+   }
+  },
+  "real tldr popd: empty stack": {
+   "script": "565d2e5017ca27df",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: popd: directory stack empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr popd: remove the nth from the left": {
+   "script": "482dbf67b7d11cf9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/c /tmp/w\n/tmp/w/c\n"
+   }
+  },
+  "real tldr popd: remove the nth from the right": {
+   "script": "9b617dff16cca93b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/c /tmp/w/a\n/tmp/w/c\n"
+   }
+  },
+  "real tldr popd: remove the top and cd": {
+   "script": "9143f29714916b60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a /tmp/w\n/tmp/w/a\n"
+   }
+  },
+  "real tldr popd: remove without changing directory": {
+   "script": "74a0ed486fafb723",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/c /tmp/w\n/tmp/w/c\n"
+   }
+  },
+  "real tldr pushd: a missing directory": {
+   "script": "75c885880429eb1d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: pushd: nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr pushd: add without changing directory": {
+   "script": "5efe0f661a92ef67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w /tmp/w/c\n/tmp/w\n"
+   }
+  },
+  "real tldr pushd: rotate out of range": {
+   "script": "b6133be03fa918a1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: pushd: +4: directory stack index out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr pushd: rotate the stack": {
+   "script": "eeded7609b071de3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a /tmp/w /tmp/w/a/b /tmp/w/c\n/tmp/w/a\n"
+   }
+  },
+  "real tldr pushd: switch and push": {
+   "script": "9b26abe70253642e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/a /tmp/w\n/tmp/w/a\n"
+   }
+  },
+  "real tldr pushd: switch the top two": {
+   "script": "26ee6ef07a216ad3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w /tmp/w/a\n/tmp/w\n"
+   }
+  },
+  "real tldr pushd: switch with an empty stack": {
+   "script": "15155ed0bc830c70",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: pushd: no other directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr pwd: after the directory is removed": {
+   "script": "6b9dcfff368be053",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/c\nstatus=0\n"
+   }
+  },
+  "real tldr pwd: logical": {
+   "script": "9d1d606d96e96b6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/lnk\n"
+   }
+  },
+  "real tldr pwd: physical": {
+   "script": "f2aec4d8d8cc6afe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/lnk\n/tmp/w/a/b\n"
+   }
+  },
+  "real tldr pwd: print the current directory": {
+   "script": "325ac65fdc0b9222",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "real tldr read: IFS splitting": {
+   "script": "9aefaf96b7378a84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[x] [ y,z]\n"
+   }
+  },
+  "real tldr read: custom delimiter": {
+   "script": "956fb774ca34a66a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\n"
+   }
+  },
+  "real tldr read: default REPLY": {
+   "script": "d4a52bd401128241",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ spaced ]\n"
+   }
+  },
+  "real tldr read: each line of output": {
+   "script": "2d9f908401b471ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a b>\n< c>\n<>\n"
+   }
+  },
+  "real tldr read: each line with the last line lacking a newline": {
+   "script": "2b4c5c70053e901b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a>\n<b>\n"
+   }
+  },
+  "real tldr read: end of input": {
+   "script": "5e30daa411b5901a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 []\n"
+   }
+  },
+  "real tldr read: exact number of characters": {
+   "script": "5ab7c58173a785a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   [   a   b  \\n   c   ]  \\n\n"
+   }
+  },
+  "real tldr read: fewer words than variables": {
+   "script": "e4f36628ed3c55ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[one] [] []\n"
+   }
+  },
+  "real tldr read: into an array with a line": {
+   "script": "b0ca73fad8612036",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 [hello world]\n"
+   }
+  },
+  "real tldr read: into an array with an empty line": {
+   "script": "d706d5212a1416cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 []\n"
+   }
+  },
+  "real tldr read: into an array with backslashes": {
+   "script": "3980ed6949ba72dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 [a\\b c\\]\n"
+   }
+  },
+  "real tldr read: into an array with leading spaces": {
+   "script": "756031a26cebf8cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 [x y]\n"
+   }
+  },
+  "real tldr read: into an array with no newline": {
+   "script": "1c82884a9d9e3862",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 [tail]\n"
+   }
+  },
+  "real tldr read: invalid option": {
+   "script": "f211afb8fe4a87e5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: -z: invalid option\nread: usage: read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr read: more words than variables": {
+   "script": "19dd77fdb6cba0c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[one] [two three four]\n"
+   }
+  },
+  "real tldr read: multiple variables from a here string": {
+   "script": "0473ca691fed6741",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "surname Bond\n"
+   }
+  },
+  "real tldr read: number of characters": {
+   "script": "8edb81a72f47e05d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[abc]\n"
+   }
+  },
+  "real tldr read: number of characters past a newline": {
+   "script": "b1f0c298b9477740",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ab]\n"
+   }
+  },
+  "real tldr read: prompt without a terminal": {
+   "script": "90640f7fae8f524b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[typed]\n"
+   }
+  },
+  "real tldr read: raw with a line": {
+   "script": "17dfe6299eb6ee78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[hello world]\n"
+   }
+  },
+  "real tldr read: raw with an empty line": {
+   "script": "dbdf3e7ab3e92e81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "real tldr read: raw with backslashes": {
+   "script": "402f3160c17893af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a\\\\b c\\\\]\n"
+   }
+  },
+  "real tldr read: raw with leading spaces": {
+   "script": "ba528d4e28afb25e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[x  y]\n"
+   }
+  },
+  "real tldr read: raw with no newline": {
+   "script": "f7ec926a7a970fe5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[tail]\n"
+   }
+  },
+  "real tldr read: silent mode": {
+   "script": "248c978f5afd4700",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[secret]\n"
+   }
+  },
+  "real tldr read: store a line with a line": {
+   "script": "05338ed610897659",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 [hello world]\n"
+   }
+  },
+  "real tldr read: store a line with an empty line": {
+   "script": "8a1b1ef0368dc1e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 []\n"
+   }
+  },
+  "real tldr read: store a line with backslashes": {
+   "script": "e3f35dd73f89663d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 [a\\b c\\]\n"
+   }
+  },
+  "real tldr read: store a line with leading spaces": {
+   "script": "0177b8d24685a9a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 [x  y]\n"
+   }
+  },
+  "real tldr read: store a line with no newline": {
+   "script": "a43e57c8e2ecedaa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 [tail]\n"
+   }
+  },
+  "real tldr read: timeout on available input": {
+   "script": "20ac90fd8d20e4a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 [fast]\n"
+   }
+  },
+  "real tldr readarray: at most n lines": {
+   "script": "b51709f45da59aac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a array_name=([0]=\"one\" [1]=\"two\")\n"
+   }
+  },
+  "real tldr readarray: custom delimiter": {
+   "script": "4c9da750745f1861",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a array_name=([0]=\"a,\" [1]=\"b,\" [2]=\"c\")\n"
+   }
+  },
+  "real tldr readarray: custom delimiter with -t": {
+   "script": "e23886707708fbcf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a array_name=([0]=\"a\" [1]=\"b\" [2]=\"\" [3]=\"c\")\n"
+   }
+  },
+  "real tldr readarray: empty file": {
+   "script": "bdab4968a229bce9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "real tldr readarray: from a pipe with lastpipe": {
+   "script": "e4fa09f346d5cec5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n"
+   }
+  },
+  "real tldr readarray: lines from a file": {
+   "script": "2c79c4ddd471eea1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a array_name=([0]=$'one\\n' [1]=$'two\\n' [2]=$'three\\n' [3]=$'four\\n')\n"
+   }
+  },
+  "real tldr readarray: missing file": {
+   "script": "d4bd7058ab8c498e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/nosuch.txt: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr readarray: origin index": {
+   "script": "3d3dd8d860b02d3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a arr=([0]=\"x\" [1]=\"one\" [2]=\"two\" [3]=\"three\" [4]=\"four\")\n"
+   }
+  },
+  "real tldr readarray: remove trailing delimiters": {
+   "script": "0bb255ea56919e60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a array_name=([0]=\"one\" [1]=\"two\" [2]=\"three\" [3]=\"four\")\n"
+   }
+  },
+  "real tldr readarray: skip n lines": {
+   "script": "40c4b92c5076bad3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a array_name=([0]=\"two\" [1]=\"three\" [2]=\"four\")\n"
+   }
+  },
+  "real tldr readonly: assignment in a subshell does not leak": {
+   "script": "034f0d88781bfd31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 1\n"
+   }
+  },
+  "real tldr readonly: mark an existing variable": {
+   "script": "2df576078765e5a3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unset: existing_variable: cannot unset: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1 1\n"
+   }
+  },
+  "real tldr readonly: print read-only variables": {
+   "script": "25f7b46248277290",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -r zz_ro=\"1\"\n"
+   }
+  },
+  "real tldr readonly: set a read-only variable": {
+   "script": "599a65318b722bdb",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: variable_name: readonly variable\n"
+   },
+   "stdout": {
+    "text": "value\n"
+   }
+  },
+  "real tldr return: a non-numeric value": {
+   "script": "df9f7bc9416049e9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: abc: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr return: a return value": {
+   "script": "5e9f1b32d35238ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "real tldr return: a return value above 255": {
+   "script": "ffa34a86f02e295a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr return: exit a function prematurely": {
+   "script": "d626d2bfe339df6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "This is reached\nstatus=0\n"
+   }
+  },
+  "real tldr return: from a sourced file": {
+   "script": "f1bed17b2b6ede35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in\nstatus=5\n"
+   }
+  },
+  "real tldr return: outside a function": {
+   "script": "4e0f4cb9f3b43e5a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: can only `return' from a function or sourced script\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr return: the last status by default": {
+   "script": "9838780b337bd79d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr select: end of input": {
+   "script": "561b8b8e07f89a64",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n#? "
+   },
+   "stdout": {
+    "text": "\nstatus=1\n"
+   }
+  },
+  "real tldr select: menu from an array": {
+   "script": "9a7947b422ae685e",
+   "status": 0,
+   "stderr": {
+    "text": "1) apple\n2) orange\n3) pear\n4) banana\n#? "
+   },
+   "stdout": {
+    "text": "banana\n"
+   }
+  },
+  "real tldr select: menu from command output": {
+   "script": "196531d2c406ef5f",
+   "status": 0,
+   "stderr": {
+    "text": "1) x\n2) y\n#? "
+   },
+   "stdout": {
+    "text": "y\n"
+   }
+  },
+  "real tldr select: menu of words choosing an empty line": {
+   "script": "eb2c35b47b3219c8",
+   "status": 1,
+   "stderr": {
+    "text": "1) apple\n2) orange\n3) pear\n4) banana\n#? 1) apple\n2) orange\n3) pear\n4) banana\n#? "
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "real tldr select: menu of words choosing not a number": {
+   "script": "2a3eb8872831f2d7",
+   "status": 0,
+   "stderr": {
+    "text": "1) apple\n2) orange\n3) pear\n4) banana\n#? "
+   },
+   "stdout": {
+    "text": "[] [x]\n"
+   }
+  },
+  "real tldr select: menu of words choosing out of range": {
+   "script": "1c92158290138397",
+   "status": 0,
+   "stderr": {
+    "text": "1) apple\n2) orange\n3) pear\n4) banana\n#? "
+   },
+   "stdout": {
+    "text": "[] [9]\n"
+   }
+  },
+  "real tldr select: menu of words choosing the first": {
+   "script": "2e51e123d5756535",
+   "status": 0,
+   "stderr": {
+    "text": "1) apple\n2) orange\n3) pear\n4) banana\n#? "
+   },
+   "stdout": {
+    "text": "[apple] [1]\n"
+   }
+  },
+  "real tldr select: menu of words choosing the third": {
+   "script": "ce28524565da15d9",
+   "status": 0,
+   "stderr": {
+    "text": "1) apple\n2) orange\n3) pear\n4) banana\n#? "
+   },
+   "stdout": {
+    "text": "[pear] [3]\n"
+   }
+  },
+  "real tldr select: prompt and files": {
+   "script": "0ae34f6e7d692066",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\nSelect a file: "
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "real tldr select: several answers": {
+   "script": "35319207ca7c806e",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n#? #? "
+   },
+   "stdout": {
+    "text": "retry 9\ngot a\n"
+   }
+  },
+  "real tldr set: emacs mode": {
+   "script": "75d84cc4513e2f45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "emacs          \ton\nvi             \toff\n"
+   }
+  },
+  "real tldr set: errexit in a condition": {
+   "script": "22fd0f6869a99a74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "handled\nsurvived\n"
+   }
+  },
+  "real tldr set: errexit in a function called from a condition": {
+   "script": "3a81e5cf8e4ba204",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after-false\nok\n"
+   }
+  },
+  "real tldr set: exit when a command fails": {
+   "script": "0e84b48c99110ab2",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr set: export new variables": {
+   "script": "d38690902d0ba36b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exported\n"
+   }
+  },
+  "real tldr set: list all modes": {
+   "script": "7d12002f63537585",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "allexport      \toff\nbraceexpand    \ton\nemacs          \toff\nerrexit        \toff\nerrtrace       \toff\nfunctrace      \toff\nhashall        \ton\nhistexpand     \toff\nhistory        \toff\nignoreeof      \toff\ninteractive-comments\ton\nkeyword        \toff\nmonitor        \toff\nnoclobber      \toff\nnoexec         \toff\nnoglob         \toff\nnolog          \toff\nnotify         \toff\nnounset        \toff\nonecmd         \toff\nphysical       \toff\npipefail       \toff\nposix          \toff\nprivileged     \toff\nverbose        \toff\nvi             \toff\nxtrace         \toff\n"
+   }
+  },
+  "real tldr set: list all modes as commands": {
+   "script": "688b09bd3868a4d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set +o allexport\nset -o braceexpand\nset +o emacs\nset +o errexit\nset +o errtrace\nset +o functrace\nset -o hashall\nset +o histexpand\nset +o history\nset +o ignoreeof\nset -o interactive-comments\nset +o keyword\nset +o monitor\nset +o noclobber\nset +o noexec\nset +o noglob\nset +o nolog\nset +o notify\nset +o nounset\nset +o onecmd\nset +o physical\nset +o pipefail\nset +o posix\nset +o privileged\nset +o verbose\nset +o vi\nset +o xtrace\n"
+   }
+  },
+  "real tldr set: notify of finished jobs": {
+   "script": "3f9e88e09f2cf977",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "notify-on\n"
+   }
+  },
+  "real tldr set: reset positional parameters": {
+   "script": "eb441e3647de5a57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n<argument1><argument 2><argument3>\n"
+   }
+  },
+  "real tldr set: reset to nothing": {
+   "script": "f4821208949f2ba6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "real tldr set: the current flags": {
+   "script": "02a369c3a68dd0a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fhuBc\n"
+   }
+  },
+  "real tldr set: unknown long option": {
+   "script": "cf15879784ff9469",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: set: nosuchoption: invalid option name\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr set: unknown option": {
+   "script": "808d94297ca29bee",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: set: -q: invalid option\nset: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr set: vi mode": {
+   "script": "437362ba8aeee53b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "emacs          \toff\nvi             \ton\n"
+   }
+  },
+  "real tldr shift: in a function": {
+   "script": "a7357970b0fa96fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y z\n"
+   }
+  },
+  "real tldr shift: more than there are": {
+   "script": "bcaf6bfbf67faa9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 2\n"
+   }
+  },
+  "real tldr shift: negative count": {
+   "script": "f4deb497668f27d6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: shift: -1: shift count out of range\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr shift: remove n parameters": {
+   "script": "b665f396fa24f959",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c d 2\n"
+   }
+  },
+  "real tldr shift: remove the first parameter": {
+   "script": "3b738751d8f99d06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b c\n"
+   }
+  },
+  "real tldr shopt: an invalid option": {
+   "script": "a17af0142d9a3618",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: shopt: nosuchopt: invalid shell option name\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr shopt: dotglob": {
+   "script": "64b57e4bf5d8bd96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".h v\n"
+   }
+  },
+  "real tldr shopt: failglob": {
+   "script": "fa73c48f5e21602b",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: *.nope\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr shopt: globstar": {
+   "script": "fbb0cb3c02d3a757",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a/b/deep.txt top.txt\n"
+   }
+  },
+  "real tldr shopt: list all options": {
+   "script": "fd20d4dd4189113f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "array_expand_once   \toff\nassoc_expand_once   \toff\nautocd              \toff\nbash_source_fullpath\toff\ncdable_vars         \toff\ncdspell             \toff\ncheckhash           \toff\ncheckjobs           \toff\ncheckwinsize        \ton\ncmdhist             \ton\ncompat31            \toff\ncompat32            \toff\ncompat40            \toff\ncompat41            \toff\ncompat42            \toff\ncompat43            \toff\ncompat44            \toff\ncomplete_fullquote  \ton\ndirexpand           \toff\ndirspell            \toff\ndotglob             \toff\nexecfail            \toff\nexpand_aliases      \toff\nextdebug            \toff\nextglob             \toff\nextquote            \ton\nfailglob            \toff\nforce_fignore       \ton\nglobasciiranges     \ton\nglobskipdots        \ton\nglobstar            \toff\ngnu_errfmt          \toff\nhistappend          \toff\nhistreedit          \toff\nhistverify          \toff\nhostcomplete        \ton\nhuponexit           \toff\ninherit_errexit     \toff\ninteractive_comments\ton\nlastpipe            \toff\nlithist             \toff\nlocalvar_inherit    \toff\nlocalvar_unset      \toff\nlogin_shell         \toff\nmailwarn            \toff\nno_empty_cmd_completion\toff\nnocaseglob          \toff\nnocasematch         \toff\nnoexpand_translation\toff\nnullglob            \toff\npatsub_replacement  \ton\nprogcomp            \ton\nprogcomp_alias      \toff\npromptvars          \ton\nrestricted_shell    \toff\nshift_verbose       \toff\nsourcepath          \ton\nvarredir_close      \toff\nxpg_echo            \toff\n"
+   }
+  },
+  "real tldr shopt: nocaseglob": {
+   "script": "a06da341a132bf35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "README\n"
+   }
+  },
+  "real tldr shopt: print as runnable commands": {
+   "script": "c6ed4b38d8a06876",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shopt -u array_expand_once\nshopt -u assoc_expand_once\nshopt -u autocd\nshopt -u bash_source_fullpath\nshopt -u cdable_vars\nshopt -u cdspell\nshopt -u checkhash\nshopt -u checkjobs\nshopt -s checkwinsize\nshopt -s cmdhist\nshopt -u compat31\nshopt -u compat32\nshopt -u compat40\nshopt -u compat41\nshopt -u compat42\nshopt -u compat43\nshopt -u compat44\nshopt -s complete_fullquote\nshopt -u direxpand\nshopt -u dirspell\nshopt -u dotglob\nshopt -u execfail\nshopt -u expand_aliases\nshopt -u extdebug\nshopt -u extglob\nshopt -s extquote\nshopt -u failglob\nshopt -s force_fignore\nshopt -s globasciiranges\nshopt -s globskipdots\nshopt -u globstar\nshopt -u gnu_errfmt\nshopt -u histappend\nshopt -u histreedit\nshopt -u histverify\nshopt -s hostcomplete\nshopt -u huponexit\nshopt -u inherit_errexit\nshopt -s interactive_comments\nshopt -u lastpipe\nshopt -u lithist\nshopt -u localvar_inherit\nshopt -u localvar_unset\nshopt -u login_shell\nshopt -u mailwarn\nshopt -u no_empty_cmd_completion\nshopt -u nocaseglob\nshopt -u nocasematch\nshopt -u noexpand_translation\nshopt -u nullglob\nshopt -s patsub_replacement\nshopt -s progcomp\nshopt -u progcomp_alias\nshopt -s promptvars\nshopt -u restricted_shell\nshopt -u shift_verbose\nshopt -s sourcepath\nshopt -u varredir_close\nshopt -u xpg_echo\n"
+   }
+  },
+  "real tldr shopt: print one option": {
+   "script": "e24ddc2abe425f5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shopt -u extglob\nextglob             \toff\nstatus=1\n"
+   }
+  },
+  "real tldr shopt: query quietly": {
+   "script": "e60055fa38c66426",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=0\n"
+   }
+  },
+  "real tldr shopt: set -o options": {
+   "script": "b8bcba96c2e813a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set +o errexit\npipefail       \ton\n"
+   }
+  },
+  "real tldr shopt: set an option": {
+   "script": "082aee5a6df93f47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "real tldr shopt: unset an option": {
+   "script": "718cb4f25912e8cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[*.nope]\n"
+   }
+  },
+  "real tldr source: evaluate a directory": {
+   "script": "72950947a723e616",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: source: /tmp: is a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr source: evaluate a file": {
+   "script": "0169fd8893991e3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from_file\nf got 1 2\n"
+   }
+  },
+  "real tldr source: evaluate a file found on PATH": {
+   "script": "1f9747144297f207",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "found-on-path\n"
+   }
+  },
+  "real tldr source: evaluate a file with a dot": {
+   "script": "7186f6c1c92a8231",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from_file\n"
+   }
+  },
+  "real tldr source: evaluate a file with a syntax error": {
+   "script": "bba47986eb1c9604",
+   "status": 0,
+   "stderr": {
+    "text": "bad.sh: line 2: syntax error near unexpected token `then'\nbad.sh: line 2: `if then'\n"
+   },
+   "stdout": {
+    "text": "before\nstatus=2\n"
+   }
+  },
+  "real tldr source: evaluate a file with arguments": {
+   "script": "0fa5e3cbefa34deb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "args: 2 one\n"
+   }
+  },
+  "real tldr source: evaluate a missing file": {
+   "script": "af1b0e273709d7ee",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/nosuch.sh: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr test: a directory does not exist": {
+   "script": "62827dc2296ad371",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=0\n"
+   }
+  },
+  "real tldr test: a file exists": {
+   "script": "e1171abeb7f0ef46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "real tldr test: and or with -a -o": {
+   "script": "c829089931c9bad3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=0\n"
+   }
+  },
+  "real tldr test: empty with ''": {
+   "script": "6adc35a87f17affa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr test: empty with '-n'": {
+   "script": "c6a2739281836788",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr test: empty with '/bin/zsh'": {
+   "script": "d615b41b2c1f3eb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr test: empty with 'a b'": {
+   "script": "c74cd17c1ebfca4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr test: equal to a string with ''": {
+   "script": "5f5243a8275583d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr test: equal to a string with '-n'": {
+   "script": "45a3a3d7ab5aa258",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr test: equal to a string with '/bin/zsh'": {
+   "script": "c0e79b0380612230",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr test: equal to a string with 'a b'": {
+   "script": "c0c54e2484d20d47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr test: files newer and older": {
+   "script": "468b3c8ba4d984c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\nstatus=0\n"
+   }
+  },
+  "real tldr test: in a conditional statement": {
+   "script": "172f798a91cdc14b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "File exists\nFile does not exist\n"
+   }
+  },
+  "real tldr test: integer expected": {
+   "script": "21904cb9450bc98b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: abc: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr test: no arguments and one argument": {
+   "script": "51a7b357ee612148",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\nstatus=0\n"
+   }
+  },
+  "real tldr test: parentheses": {
+   "script": "d75a5a1aa81326b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr test: string ordering": {
+   "script": "7fd4cfcd0560ed1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "real tldr test: then and else": {
+   "script": "0a744b568bddfee5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\nfalse\n"
+   }
+  },
+  "real tldr test: variable set": {
+   "script": "d7a20bcd3b912b9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "real tldr time: TIMEFORMAT": {
+   "script": "164a6a538b33b2c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "took\n"
+   }
+  },
+  "real tldr time: a command": {
+   "script": "a59263d2cc0f357f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "timed\n"
+   }
+  },
+  "real tldr time: a command's status": {
+   "script": "d2e469fdd8d41d89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr time: a pipeline": {
+   "script": "5581725375a093fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "real tldr time: format shape": {
+   "script": "b049a625156b6929",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nreal\tNmNs\nuser\tNmNs\nsys\tNmNs\n"
+   }
+  },
+  "real tldr time: posix format": {
+   "script": "e873cc900d3d9ed2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "real N\nuser N\nsys N\n"
+   }
+  },
+  "real tldr time: read": {
+   "script": "e7a3bc9561f8456d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[input]\n"
+   }
+  },
+  "real tldr times: print usage shape": {
+   "script": "4c3d71b9e8d5897c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "NmNs NmNs\nNmNs NmNs\n"
+   }
+  },
+  "real tldr trap: ERR": {
+   "script": "1e2b31b3f3cdf765",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err at 1\nend\n"
+   }
+  },
+  "real tldr trap: EXIT in a subshell": {
+   "script": "413e8aab7e6aee24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-sub\nsub-exit\nafter\n"
+   }
+  },
+  "real tldr trap: RETURN": {
+   "script": "85192e591e473d8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "real tldr trap: an invalid signal": {
+   "script": "86468f70697616bf",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: trap: NOSUCHSIG: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr trap: ignore a signal": {
+   "script": "b762ebbfdd9d979e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "still-here\ntrap -- '' SIGINT\n"
+   }
+  },
+  "real tldr trap: ignore a signal named with SIG": {
+   "script": "9ca0672cded4465d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "still-here\n"
+   }
+  },
+  "real tldr trap: list event names": {
+   "script": "43a85a2bbaaa6bf4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 4) SIGILL\t 5) SIGTRAP\n 6) SIGABRT\t 7) SIGBUS\t 8) SIGFPE\t 9) SIGKILL\t10) SIGUSR1\n11) SIGSEGV\t12) SIGUSR2\t13) SIGPIPE\t14) SIGALRM\t15) SIGTERM\n16) SIGSTKFLT\t17) SIGCHLD\t18) SIGCONT\t19) SIGSTOP\t20) SIGTSTP\n21) SIGTTIN\t22) SIGTTOU\t23) SIGURG\t24) SIGXCPU\t25) SIGXFSZ\n26) SIGVTALRM\t27) SIGPROF\t28) SIGWINCH\t29) SIGIO\t30) SIGPWR\n31) SIGSYS\t35) SIGRTMIN\t36) SIGRTMIN+1\t37) SIGRTMIN+2\t38) SIGRTMIN+3\n39) SIGRTMIN+4\t40) SIGRTMIN+5\t41) SIGRTMIN+6\t42) SIGRTMIN+7\t43) SIGRTMIN+8\n44) SIGRTMIN+9\t45) SIGRTMIN+10\t46) SIGRTMIN+11\t47) SIGRTMIN+12\t48) SIGRTMIN+13\n49) SIGRTMIN+14\t50) SIGRTMAX-14\t51) SIGRTMAX-13\t52) SIGRTMAX-12\t53) SIGRTMAX-11\n54) SIGRTMAX-10\t55) SIGRTMAX-9\t56) SIGRTMAX-8\t57) SIGRTMAX-7\t58) SIGRTMAX-6\n59) SIGRTMAX-5\t60) SIGRTMAX-4\t61) SIGRTMAX-3\t62) SIGRTMAX-2\t63) SIGRTMAX-1\n64) SIGRTMAX\t\n"
+   }
+  },
+  "real tldr trap: list traps": {
+   "script": "0248317016939184",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo bye' EXIT\ntrap -- 'echo hup' SIGHUP\nbye\n"
+   }
+  },
+  "real tldr trap: list with none set": {
+   "script": "ce3aad28ecd2da35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr trap: print one trap": {
+   "script": "07de12ee5eccb0c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo x' SIGUSR1\n"
+   }
+  },
+  "real tldr trap: remove commands": {
+   "script": "0b082e352268c187",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr trap: remove with SIG names": {
+   "script": "a082d6f2ba919d4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr trap: run on a signal": {
+   "script": "a4666d4dfc46e064",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Caught signal SIGHUP\nafter\n"
+   }
+  },
+  "real tldr trap: run on a signal named with SIG": {
+   "script": "2edeeb999107ec1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Caught signal SIGHUP\nafter\n"
+   }
+  },
+  "real tldr true: make a command always exit with 0": {
+   "script": "d93afe853520ec35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr true: successful exit code": {
+   "script": "e81c7aff125f5ecf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr true: under set -e": {
+   "script": "b13934cb3b23ead2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "real tldr type: a builtin": {
+   "script": "d25e1561af917605",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "echo is a shell builtin\n"
+   }
+  },
+  "real tldr type: a function": {
+   "script": "232581c7eda3abe7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f is a function\nf () \n{ \n    echo hi\n}\n"
+   }
+  },
+  "real tldr type: a keyword": {
+   "script": "6786774ecc386e71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "if is a shell keyword\n"
+   }
+  },
+  "real tldr type: a missing command": {
+   "script": "8304674073b4ca5b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: type: nosuchcmd: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr type: an alias": {
+   "script": "04800ef51de9f8fd",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: type: ll: not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr type: file name of a builtin": {
+   "script": "a27df9f6542ac52e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr type: type name of each kind": {
+   "script": "1ddddeb8fe9bec77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "function\nkeyword\nbuiltin\nstatus=1\n"
+   }
+  },
+  "real tldr typeset: same as declare": {
+   "script": "6688e0da89973219",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -i n=\"6\"\n"
+   }
+  },
+  "real tldr unalias: remove a missing alias": {
+   "script": "6e523ec339f3d6c2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unalias: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr unalias: remove all aliases": {
+   "script": "b6b5875b29a61052",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr unalias: remove an alias": {
+   "script": "70000f37f4580a3e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr unset: remove a function of the same name": {
+   "script": "586fabbd728ab31a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "real tldr unset: remove a readonly variable": {
+   "script": "df8bbcda239c8ba0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unset: r: cannot unset: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr unset: remove a variable": {
+   "script": "bde99f3b4298e5ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "real tldr unset: remove an array element": {
+   "script": "11a445f9ec77fb96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x z 2 0 2\n"
+   }
+  },
+  "real tldr unset: remove functions": {
+   "script": "fb7a9a7e272c92a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr unset: remove variables": {
+   "script": "f14f73c86c0adf7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[uu]\n"
+   }
+  },
+  "real tldr until: status of an until loop": {
+   "script": "7858fb57659cc472",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr until: until a command succeeds": {
+   "script": "628f956a63e2e15e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "real tldr until: waiting with a sleep": {
+   "script": "14da35b327fa3e5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Waiting...\nWaiting...\nLaunched!\n"
+   }
+  },
+  "real tldr wait: a job number": {
+   "script": "5348dd56ef9f643d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "real tldr wait: a missing process": {
+   "script": "c6626e600d006b5a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: wait: pid 99999 is not a child of this shell\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "real tldr wait: a pid that is not a child": {
+   "script": "40628b572936baae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\nbash: line 1: wait: pid PID is not a child of this shell\n"
+   }
+  },
+  "real tldr wait: a process id": {
+   "script": "6f197101e1c85ea0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "real tldr wait: all processes": {
+   "script": "6842511b22823617",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\none\nstatus=0\n"
+   }
+  },
+  "real tldr wait: any job": {
+   "script": "188ac162a9eaa8fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr while: a command forever with a break": {
+   "script": "52d8f653e3795dbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "real tldr while: read stdin": {
+   "script": "bba2679cd1abc5db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l1\nl2\n"
+   }
+  },
+  "real tldr while: read stdin with backslashes and spaces": {
+   "script": "74b443f20e6e7145",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ab]\n"
+   }
+  },
+  "real tldr while: reading a file with redirection": {
+   "script": "eafe0e77dc894f86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a>\n<b>\n"
+   }
+  },
+  "real tldr while: until a command fails": {
+   "script": "e1dd4df32d26819a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n2\n1\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

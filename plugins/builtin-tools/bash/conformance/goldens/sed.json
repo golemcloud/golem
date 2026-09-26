@@ -1,0 +1,748 @@
+{
+ "cases": {
+  "sed: ampersand and escapes": {
+   "script": "6011316438998cdd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<alpha>\tone\n<beta>\ttwo\n<gamma>\tthree\n<delta>\tfour\n<epsilon>\tfive\n"
+   }
+  },
+  "sed: append insert change": {
+   "script": "e1454bdbb47e34a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first\nalpha one\nbeta two\nafter two\nchanged\ndelta four\nepsilon five\n"
+   }
+  },
+  "sed: backreference in pattern": {
+   "script": "0d57dd8de5b0b500",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X cdce\n"
+   }
+  },
+  "sed: basic alternation and intervals": {
+   "script": "739bb8fb0336f2cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Xa X aX\n"
+   }
+  },
+  "sed: basic escaped plus": {
+   "script": "49f93b96a3b00aa0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a+b X\n"
+   }
+  },
+  "sed: basic groups": {
+   "script": "2963e902288cc323",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one alpha\ntwo beta\nthree gamma\nfour delta\nfive epsilon\n"
+   }
+  },
+  "sed: basic literal plus": {
+   "script": "ccb04bdb54050b12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X aab\n"
+   }
+  },
+  "sed: blocks": {
+   "script": "162a18f64c0432c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "AlphA one\nbetA two\ngAmmA three\ndeltA four\n"
+   }
+  },
+  "sed: branch if not substituted": {
+   "script": "451f6b659a26c29e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Y!\nno\n"
+   }
+  },
+  "sed: branch on substitution": {
+   "script": "f186d4ed9ad4b68c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a-b-c\n"
+   }
+  },
+  "sed: case conversion": {
+   "script": "d0c89b7c174d52d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Hello WORLD!\n"
+   }
+  },
+  "sed: character classes": {
+   "script": "8e5301725a25cda8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a#_b#_c#\n"
+   }
+  },
+  "sed: comments and newlines": {
+   "script": "7112d3686804adb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A\nB\n"
+   }
+  },
+  "sed: count lines": {
+   "script": "56235bad8cb97e11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "sed: crlf": {
+   "script": "35f07272483e3c79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "sed: custom delimiter": {
+   "script": "fd78bd9f1d27480a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/opt/bin\n"
+   }
+  },
+  "sed: delete lines": {
+   "script": "a06f87f357ab3046",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one\ngamma three\nepsilon five\n"
+   }
+  },
+  "sed: delete regex": {
+   "script": "22f468f686883568",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "int main() {\n  return 0; // done\n}\n"
+   }
+  },
+  "sed: empty regex reuses last": {
+   "script": "75a9962d81d6ff30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X bar X\n"
+   }
+  },
+  "sed: endless address quit": {
+   "script": "d4178ce52238b1ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "sed: endless last line lookahead": {
+   "script": "3a3b6f090aa8436a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nx\n"
+   }
+  },
+  "sed: endless quit": {
+   "script": "308bec986dca6e34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nx\n"
+   }
+  },
+  "sed: exec refused": {
+   "script": "9fd7a41bc65b67ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nstatus=0\n"
+   }
+  },
+  "sed: extended groups": {
+   "script": "157673e2cf9e255a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one-alpha\ntwo-beta\nthree-gamma\nfour-delta\nfive-epsilon\n"
+   }
+  },
+  "sed: extended r flag": {
+   "script": "c5e2d5109a459046",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[aa]\n"
+   }
+  },
+  "sed: file operands": {
+   "script": "b6cf82b8ef97287a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\ny\n"
+   }
+  },
+  "sed: filename and stdin dash": {
+   "script": "a834b35fdf6db54a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ":x\n:y\n"
+   }
+  },
+  "sed: first step": {
+   "script": "9423f8733f7cb6de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n3\n5\n"
+   }
+  },
+  "sed: gnu one-line text commands": {
+   "script": "fe93cec4e154eedc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "header\nalpha one\nbeta two\nthree\ndelta four\nepsilon five\nfooter\n"
+   }
+  },
+  "sed: hold and exchange": {
+   "script": "c51edf87ee34f355",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "delta four\n"
+   }
+  },
+  "sed: hold space reverse": {
+   "script": "348f1b3eeeb77a23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "epsilon five\ndelta four\ngamma three\nbeta two\nalpha one\n"
+   }
+  },
+  "sed: in place": {
+   "script": "fdccac48a1cf28ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one\nBETA two\ngamma three\ndelta four\nepsilon five\n"
+   }
+  },
+  "sed: in place clustered": {
+   "script": "2e0e2a86e8cdee5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "beta two\n"
+   }
+  },
+  "sed: in place with suffix": {
+   "script": "af875bd1deb48c3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "beta two\ngamma three\ndelta four\nepsilon five\nalpha one\n"
+   }
+  },
+  "sed: join lines": {
+   "script": "8510d1b9cfee8db9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one,beta two,gamma three,delta four,epsilon five\n"
+   }
+  },
+  "sed: join pairs": {
+   "script": "e9bb5ba1ebdd13ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one + beta two\ngamma three + delta four\nepsilon five\n"
+   }
+  },
+  "sed: last line": {
+   "script": "c65136e0732d90ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "epsilon five\nalpha one\nbeta two\ngamma three\ndelta four\n"
+   }
+  },
+  "sed: last line unterminated": {
+   "script": "fc98b7f406fabca2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nB\nb"
+   }
+  },
+  "sed: line numbers": {
+   "script": "365fa3b1aa179344",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n"
+   }
+  },
+  "sed: line ranges": {
+   "script": "75a72fb61f0fcc5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "beta two\ngamma three\ndelta four\n"
+   }
+  },
+  "sed: list": {
+   "script": "de9bc98d2f4d8d22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\tb\\\\c\\001$\n"
+   }
+  },
+  "sed: missing file": {
+   "script": "7650717d7ca284b7",
+   "status": 0,
+   "stderr": {
+    "text": "sed: can't read /tmp/nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "x\nx\nstatus=2\n"
+   }
+  },
+  "sed: missing script": {
+   "script": "6fbd22928aba0a14",
+   "status": 0,
+   "stderr": {
+    "text": "Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...\n\n  -n, --quiet, --silent\n                 suppress automatic printing of pattern space\n      --debug\n                 annotate program execution\n  -e script, --expression=script\n                 add the script to the commands to be executed\n  -f script-file, --file=script-file\n                 add the contents of script-file to the commands to be executed\n  --follow-symlinks\n                 follow symlinks when processing in place\n  -i[SUFFIX], --in-place[=SUFFIX]\n                 edit files in place (makes backup if SUFFIX supplied)\n  -l N, --line-length=N\n                 specify the desired line-wrap length for the `l' command\n  --posix\n                 disable all GNU extensions.\n  -E, -r, --regexp-extended\n                 use extended regular expressions in the script\n                 (for portability use POSIX -E).\n  -s, --separate\n                 consider files as separate rather than as a single,\n                 continuous long stream.\n      --sandbox\n                 operate in sandbox mode (disable e/r/w commands).\n  -u, --unbuffered\n                 load minimal amounts of data from the input files and flush\n                 the output buffers more often\n  -z, --null-data\n                 separate lines by NUL characters\n      --help     display this help and exit\n      --version  output version information and exit\n\nIf no -e, --expression, -f, or --file option is given, then the first\nnon-option argument is taken as the sed script to interpret.  All\nremaining arguments are names of input files; if no input files are\nspecified, then the standard input is read.\n\nGNU sed home page: <https://www.gnu.org/software/sed/>.\nGeneral help using GNU software: <https://www.gnu.org/gethelp/>.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "sed: multiline delete": {
+   "script": "e95aff8573c835e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\nb\n\nc\n"
+   }
+  },
+  "sed: multiple expressions": {
+   "script": "813cffaba4456177",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Alpha onE\nbEtA two\ngAmma thrEe\ndEltA four\nEpsilon five\n"
+   }
+  },
+  "sed: negation": {
+   "script": "5b447c6d5e715c9e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "epsilon five\n"
+   }
+  },
+  "sed: newline in replacement": {
+   "script": "82b7eeafec6114e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "sed: next line": {
+   "script": "a2f786176e545136",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one\ngamma three\nepsilon five\n"
+   }
+  },
+  "sed: next line quiet": {
+   "script": "25a4c2de236d968e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "beta two\ndelta four\n"
+   }
+  },
+  "sed: null data": {
+   "script": "567544a45ca292ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ">a\n>b\n"
+   }
+  },
+  "sed: print first line of pattern": {
+   "script": "703ab3eb82b414bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one\ngamma three\n"
+   }
+  },
+  "sed: print flag with n": {
+   "script": "373a0553d204622e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "BETA two\n"
+   }
+  },
+  "sed: quit": {
+   "script": "c181341bdd2c66d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one\nbeta two\n"
+   }
+  },
+  "sed: quit silently": {
+   "script": "0cf72ec0cbdfa814",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one\nbeta two\nstatus=0\n"
+   }
+  },
+  "sed: quit with status": {
+   "script": "fe110d41f0627690",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one\nbeta two\ngamma three\nstatus=7\n"
+   }
+  },
+  "sed: read file": {
+   "script": "457f6e50902f40ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nINSERT\nb\n"
+   }
+  },
+  "sed: regex ranges": {
+   "script": "e1356b359511495d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "beta two\ngamma three\ndelta four\n"
+   }
+  },
+  "sed: relative range": {
+   "script": "fa291f2a9c9f3929",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "beta two\ngamma three\n"
+   }
+  },
+  "sed: script file": {
+   "script": "e61765747ce2c184",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha 1\nbeta 2\ngamma three\ndelta four\nepsilon five\n"
+   }
+  },
+  "sed: separate files": {
+   "script": "a46f95bf9e4e8bf8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x2\ny2\n"
+   }
+  },
+  "sed: step addresses": {
+   "script": "63c53a846dd870d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n6\n9\n"
+   }
+  },
+  "sed: strip comments": {
+   "script": "292bed6d093ae745",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "int main() {\n\n  return 0;\n}\n"
+   }
+  },
+  "sed: substitute first": {
+   "script": "c5502aa8b1b0a418",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Alpha one\nbetA two\ngAmma three\ndeltA four\nepsilon five\n"
+   }
+  },
+  "sed: substitute global": {
+   "script": "d799d4796daf7a21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "AlphA one\nbetA two\ngAmmA three\ndeltA four\nepsilon five\n"
+   }
+  },
+  "sed: substitute ignore case": {
+   "script": "234dc5d7f9a8cb2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x x x\n"
+   }
+  },
+  "sed: substitute nth": {
+   "script": "709380adbc8695ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alphA one\nbeta two\ngammA three\ndelta four\nepsilon five\n"
+   }
+  },
+  "sed: substitute nth and after": {
+   "script": "93e01d2ed7966d06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alphA one\nbeta two\ngammA three\ndelta four\nepsilon five\n"
+   }
+  },
+  "sed: transliterate": {
+   "script": "e63f8db00b1a1ed7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ALPHA ONE\nBETA TWO\nGAMMA THREE\nDELTA FOUR\nEPSILON FIVE\n"
+   }
+  },
+  "sed: unicode": {
+   "script": "fb4791533f69c849",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Hllo world\n"
+   }
+  },
+  "sed: unknown command": {
+   "script": "000c0aaff5da5adc",
+   "status": 0,
+   "stderr": {
+    "text": "sed: -e expression #1, char 1: unknown command: `k'\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "sed: unterminated s": {
+   "script": "7b3d39a3e9300256",
+   "status": 0,
+   "stderr": {
+    "text": "sed: -e expression #1, char 5: unterminated `s' command\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "sed: v is a no-op": {
+   "script": "1040c76119b4fabb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "before\na\na\na\nafter\n"
+   }
+  },
+  "sed: write file": {
+   "script": "a8b82fbae2c656be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha one\nbeta two\ngamma three\ndelta four\n"
+   }
+  },
+  "sed: zero address range": {
+   "script": "40855e32f73c487b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Alpha one\nbeta two\ngamma three\ndelta four\nepsilon five\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

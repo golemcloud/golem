@@ -1,0 +1,188 @@
+{
+ "cases": {
+  "option: errexit and command substitution": {
+   "script": "a8ff52d3ef0a5e95",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[sub]\n"
+   }
+  },
+  "option: errexit ignores conditions": {
+   "script": "86256eee18a65d16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "option: errexit in functions and subshells": {
+   "script": "4fe8e67919492c8d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\n"
+   }
+  },
+  "option: errexit in pipelines": {
+   "script": "87c2b6728f42b39f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "last-wins\n"
+   }
+  },
+  "option: errexit stops the script": {
+   "script": "0d57b36df02b0256",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "before\n"
+   }
+  },
+  "option: errexit with local": {
+   "script": "b5625bd643cf9d30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "local-hides\n"
+   }
+  },
+  "option: inherited by children": {
+   "script": "7302c059154af76a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "child-plain\n"
+   }
+  },
+  "option: noexec": {
+   "script": "a8f24ae427dd1c74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "option: noglob": {
+   "script": "0964a42d2903361e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "g*\ng1\n"
+   }
+  },
+  "option: nounset and positionals": {
+   "script": "c7603b40ace36ad6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "none 0\n\nok\n"
+   }
+  },
+  "option: nounset errors": {
+   "script": "951e2d1d06e207c3",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: unset_var: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "option: nounset with arrays": {
+   "script": "1c40e437be34caf3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\ndone\n"
+   }
+  },
+  "option: pipefail status": {
+   "script": "436f32f47836697c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n4\n"
+   }
+  },
+  "option: posix mode": {
+   "script": "f58ef50efd488909",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\nposix\n"
+   }
+  },
+  "option: set -o and +o": {
+   "script": "1403c415e3264018",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "on\noff\n"
+   }
+  },
+  "option: shopt inherit_errexit": {
+   "script": "c43c45d989a99a19",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "option: xtrace": {
+   "script": "3e2ed50c8ef21326",
+   "status": 0,
+   "stderr": {
+    "text": "+ x=1\n+ echo 1 done\n+ f arg\n+ :\n+ set +x\n"
+   },
+   "stdout": {
+    "text": "1 done\nquiet\n"
+   }
+  },
+  "option: xtrace with PS4": {
+   "script": "e2ec994810ef82d2",
+   "status": 0,
+   "stderr": {
+    "text": "> echo traced\n> set +x\n"
+   },
+   "stdout": {
+    "text": "traced\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

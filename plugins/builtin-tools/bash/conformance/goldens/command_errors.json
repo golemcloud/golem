@@ -1,0 +1,168 @@
+{
+ "cases": {
+  "curl: invalid time values": {
+   "script": "28982123fe8503c6",
+   "status": 0,
+   "stderr": {
+    "text": "curl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: too large number\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option --max-time: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option --connect-timeout: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option --retry-delay: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   },
+   "stdout": {
+    "text": "m=[-1] status=2\nm=[-0] status=2\nm=[+3] status=2\nm=[ 3] status=2\nm=[.5] status=2\nm=[5.] status=2\nm=[nan] status=2\nm=[inf] status=2\nm=[abc] status=2\nm=[] status=2\nstatus=2\nstatus=2\nstatus=2\n"
+   }
+  },
+  "curl: malformed URL": {
+   "script": "4c16de1fd0b7ca50",
+   "status": 0,
+   "stderr": {
+    "text": "curl: (3) bad range in position 9:\nhttp://[bad\n        ^\n"
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "curl: missing option argument": {
+   "script": "ebfef401d6b3ed80",
+   "status": 0,
+   "stderr": {
+    "text": "curl: option -o: requires parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "curl: time values too large": {
+   "script": "d626e0ba18e0885d",
+   "status": 0,
+   "stderr": {
+    "text": "curl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: option -m: too large number\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   },
+   "stdout": {
+    "text": "status=2\nstatus=2\nstatus=2\n"
+   }
+  },
+  "curl: unsupported protocol": {
+   "script": "6427355b6f5b488b",
+   "status": 0,
+   "stderr": {
+    "text": "curl: (1) Protocol \"gopher2\" not supported\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "join: unsorted input and missing file": {
+   "script": "d3b7602512942e08",
+   "status": 0,
+   "stderr": {
+    "text": "join: /tmp/l:2: is not sorted: a 2\njoin: input is not in sorted order\njoin: /tmp/nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "ln: missing target and existing link": {
+   "script": "f2d32fb845ce795a",
+   "status": 0,
+   "stderr": {
+    "text": "ln: failed to access '/tmp/nosuch': No such file or directory\nln: failed to create symbolic link '/tmp/s': File exists\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "mkdir: existing and missing parent": {
+   "script": "64047c852612f104",
+   "status": 0,
+   "stderr": {
+    "text": "mkdir: cannot create directory ‘/tmp/d’: File exists\nmkdir: cannot create directory ‘/tmp/a/b/c’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\nstatus=0\n"
+   }
+  },
+  "printf: missing and extra arguments": {
+   "script": "59a0c9fc686bccaa",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: printf: x: invalid number\nprintf: usage: printf [-v var] format [arguments]\n"
+   },
+   "stdout": {
+    "text": "only \n0\nstatus=1\nstatus=2\n"
+   }
+  },
+  "sh: missing script operand": {
+   "script": "a5670a1642519abb",
+   "status": 0,
+   "stderr": {
+    "text": "sh: -c: option requires an argument\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "sh: unreadable script file": {
+   "script": "17bc5a360f89786a",
+   "status": 0,
+   "stderr": {
+    "text": "sh: /tmp/nosuch.sh: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "sleep: invalid intervals": {
+   "script": "f6f4145d122fc854",
+   "status": 0,
+   "stderr": {
+    "text": "sleep: invalid time interval ‘x’\nTry 'sleep --help' for more information.\nsleep: invalid option -- '1'\nTry 'sleep --help' for more information.\nsleep: missing operand\nTry 'sleep --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\nstatus=1\n"
+   }
+  },
+  "split: missing input": {
+   "script": "07712a9b316b0d8c",
+   "status": 0,
+   "stderr": {
+    "text": "split: cannot open '/tmp/nosuch' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "wget: invalid time periods": {
+   "script": "ca6e35e87155ba77",
+   "status": 0,
+   "stderr": {
+    "text": "wget: --timeout: Negative time period '-1'\nwget: --timeout: Negative time period '-1m'\nwget: --timeout: Invalid time period '1e3'\nwget: --timeout: Invalid time period 'nan'\nwget: --timeout: Invalid time period 'inf'\nwget: --timeout: Invalid time period '1e300'\nwget: --timeout: Invalid time period 'abc'\nwget: --timeout: Invalid time period '3x'\nwget: --timeout: Invalid time period ''\nwget: --timeout: Negative time period '-2'\n"
+   },
+   "stdout": {
+    "text": "T=[-1] status=2\nT=[-1m] status=2\nT=[1e3] status=2\nT=[nan] status=2\nT=[inf] status=2\nT=[1e300] status=2\nT=[abc] status=2\nT=[3x] status=2\nT=[] status=2\nstatus=2\n"
+   }
+  },
+  "wget: missing URL": {
+   "script": "4f54bcf210a2e4d5",
+   "status": 0,
+   "stderr": {
+    "text": "wget: missing URL\nUsage: wget [OPTION]... [URL]...\n\nTry `wget --help' for more options.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "yes: write error to a closed pipe": {
+   "script": "81603a8b32ed3309",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\ny\nstatus=141\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

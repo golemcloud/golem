@@ -1,0 +1,1488 @@
+{
+ "cases": {
+  "runtime: $! is kept after wait": {
+   "script": "c48d1fd0c23ffda2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set\nsame\nfine\n"
+   }
+  },
+  "runtime: -ef compares files, not paths": {
+   "script": "168725ec93031e9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "differ\nsame\nhardlink\nmissing\ndir\na\nb\nd\nh\n"
+   }
+  },
+  "runtime: BASH_SUBSHELL counts subshells as bash does": {
+   "script": "4f2221f64dc497ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n1\n1\n1\n1\n1\na\n1\n0\n0\n2\n"
+   }
+  },
+  "runtime: BASH_VERSINFO[5] is MACHTYPE": {
+   "script": "948bc1ac9797224a",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 3: BASH_VERSINFO: readonly variable\n"
+   },
+   "stdout": {
+    "text": "same\n6\nchild same\n"
+   }
+  },
+  "runtime: DEBUG runs before (( )), [[ ]] and each for iteration": {
+   "script": "6ba26c7a143bea5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "D: (( 1 ))\nD: [[ -n x ]]\nD: [[ -z x && -n y ]]\nD: x=1\nD: :\nD: true\nD: :\nD: for i in 1 2\nD: :\nD: for i in 1 2\nD: :\nD: trap - DEBUG\n"
+   }
+  },
+  "runtime: DEBUG runs before each arithmetic for clause": {
+   "script": "2c2f4dae25ba4c79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dbg [((i=0 ))]\ndbg [((i<2))]\ndbg [echo \"b$i\"]\nb0\ndbg [((i++ ))]\ndbg [((i<2))]\ndbg [echo \"b$i\"]\nb1\ndbg [((i++ ))]\ndbg [((i<2))]\ndbg [((1))]\ndbg [((1))]\ndbg [break]\ndbg [((j=0))]\ndbg [((j<1))]\ndbg [echo x]\nx\ndbg [((j++))]\ndbg [((j<1))]\ndbg [((k = 0 ))]\ndbg [((k < 1 ))]\ndbg [:]\ndbg [((k++ ))]\ndbg [((k < 1 ))]\ndbg [trap - DEBUG]\n[echo \"[$BASH_COMMAND]\"]\n"
+   }
+  },
+  "runtime: DEBUG runs for each simple command of a pipeline": {
+   "script": "d4bb099bc4e2544d",
+   "status": 0,
+   "stderr": {
+    "text": "dbg [echo a] 0\ndbg [cat] 0\ndbg [true] 0\ndbg [false] 0\ndbg [true] 0\ndbg [cat] 0\ndbg [echo c] 0\ndbg [set -T] 0\ndbg [echo d] 0\ndbg [cat] 0\ndbg [trap - DEBUG] 0\n"
+   },
+   "stdout": {
+    "text": "a\nb\nc\nd\nn=4\nout\nout\n     1\tx\nout\n"
+   }
+  },
+  "runtime: ERR runs once, for the command that failed": {
+   "script": "e0c49905ed9cf524",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err false\nerr ( false )\nerr false\nerr false\nerr false\nerr (( 0 ))\nerr [[ -z x ]]\nerr false\nend\n"
+   }
+  },
+  "runtime: LINENO in substitutions and eval": {
+   "script": "3118a69b658063c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "top 1\ncmdsub 2\neval 4\ne1 5\ne2 6\nbq 6\nf 8 fc 8\nfe 9\nsub 12\nafter 13\n"
+   }
+  },
+  "runtime: OSTYPE names Linux": {
+   "script": "cf577358c2879919",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "linux\nlinux-musl\n"
+   }
+  },
+  "runtime: PIPESTATUS after compound commands": {
+   "script": "011b2e5bb07fa863",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 20: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "group: 1 0\ngrouppipe: 0 1\nsubshell: 0\nfunc: 0\nfuncret: 3\nif: 0\nif2: 1 1 0\nfor: 1 0\nwhile: 0\nwhilefalse: 1\ncase: 1 0\narith: 1\ncond: 1\nassign: 0\nbang: 1 0\ngroupredir: 0 1\nemptycase: 1 0\nemptyfor: 1 0\nredirfail: 1 0\nfuncdef: 1 0\n"
+   }
+  },
+  "runtime: PS4 is expanded in xtrace": {
+   "script": "7fb202677917a352",
+   "status": 0,
+   "stderr": {
+    "text": "+ line 1: echo traced\n+ line 3: PS4='+${FUNCNAME[0]:-main}:${LINENO}: '\n+main:3: f\n+f:2: echo in-f\n+main:3: set +x\n"
+   },
+   "stdout": {
+    "text": "traced\nin-f\n"
+   }
+  },
+  "runtime: PS4's command substitutions run untraced, and @P leaves $? alone": {
+   "script": "63809af59f6586d6",
+   "status": 0,
+   "stderr": {
+    "text": "x+ echo hi\nx+ set +x\n+2 echo sub\n+1 set +x\n"
+   },
+   "stdout": {
+    "text": "hi\ns=0\ns=0 [z]\nsub\n"
+   }
+  },
+  "runtime: RANDOM=seed repeats bash's sequence": {
+   "script": "c96e546d8fac6881",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "equal\n17772 26794 1435\n20814 24386\n17653\n17772\n17772\n19344\n20189\n"
+   }
+  },
+  "runtime: RETURN sees the status before return, and runs after source": {
+   "script": "6c3456286d5340af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ret 0\ns=4\ngret 1\ns=1\nkret 3\ns=5\nbody\nsret 0\ns=7\nbody2\nsret 0\ns=0\n"
+   }
+  },
+  "runtime: SECONDS=n restarts the count at n": {
+   "script": "b489dfa60afe0824",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hundred\nten\nnegative\nreset\ndeclare -i SECONDS=\n"
+   }
+  },
+  "runtime: SHLVL for a command run in place of the shell": {
+   "script": "0d0f70f312d03114",
+   "status": 0,
+   "stderr": {
+    "text": "bash: warning: shell level (1000) too high, resetting to 1\n"
+   },
+   "stdout": {
+    "text": "env -> SHLVL=1 \ntrue; env -> SHLVL=1 \nenv; true -> SHLVL=2 \ntrue && true && env -> SHLVL=1 \ntrue; true && env -> SHLVL=2 \ntrue & env -> SHLVL=2 \nenv # comment -> SHLVL=1 \nenv; -> SHLVL=1 \nenv\n\n -> SHLVL=2 \nenv\n  -> SHLVL=2 \nenv > /dev/stdout -> SHLVL=2 \n! env -> SHLVL=2 \ntime env -> SHLVL=2 \ncommand env -> SHLVL=1 \nx=1 env -> SHLVL=1 \nSHLVL=5 env -> SHLVL=1 \nSHLVL=5; env -> SHLVL=4 \nSHLVL=abc; env -> SHLVL=0 \nSHLVL=5000; env -> bash: line 1: warning: shell level (4999) too high, resetting to 1 SHLVL=1 \nreadonly SHLVL; env -> bash: line 1: SHLVL: readonly variable SHLVL=2 \nunset SHLVL; env -> SHLVL=0 \nexport -n SHLVL; env -> SHLVL=1 \ntrap \"echo x\" EXIT; env -> SHLVL=2 \ntrap \"echo x\" INT; env -> SHLVL=2 \ntrap \"\" INT; env -> SHLVL=1 \ntrap \"echo x\" DEBUG; env -> SHLVL=1 \nf() { env; }; f -> SHLVL=2 \nexec env -> SHLVL=1 \nSHLVL=5 exec env -> SHLVL=4 \n(exec env) -> SHLVL=2 \nexec env | cat -> SHLVL=1 \n(exec env | cat) -> SHLVL=1 \n(env) -> SHLVL=1 \n(env > /dev/stdout) -> SHLVL=1 \n(true; env) -> SHLVL=1 \n(true; true && env) -> SHLVL=2 \n(trap \"echo x\" INT; env) -> SHLVL=2 \n(env) | cat -> SHLVL=1 \nenv & wait -> SHLVL=1 \n! env & wait -> SHLVL=1 \ntrap \"echo x\" INT; env & wait -> SHLVL=1 \n{ env; } & wait -> SHLVL=2 \nSHLVL=5 env & wait -> SHLVL=4 \nx=$(env); echo \"$x\" -> SHLVL=1 \nx=`env`; echo \"$x\" -> SHLVL=1 \nx=$(env 2>&1); echo \"$x\" -> SHLVL=2 \nx=$(eval env); echo \"$x\" -> SHLVL=2 \necho \"$(env)\" | cat -> SHLVL=2 \n(x=$(env); echo \"$x\") | cat -> SHLVL=1 \nx=$(trap \"echo t\" EXIT; env); echo \"$x\" -> SHLVL=2 \ntrap \"echo t\" EXIT; x=$(env); echo \"$x\" -> SHLVL=1 \ntrap \"x=\\$(env); echo \\\"\\$x\\\"\" EXIT -> SHLVL=2 \ncat <(env) -> SHLVL=1 \nf() { env; }; x=$(f); echo \"$x\" -> SHLVL=1 \nf() { env; true; }; x=$(f); echo \"$x\" -> SHLVL=2 \nf() { g; }; g() { true && env; }; x=$(f); echo \"$x\" -> SHLVL=1 \nf() { env; }; (f) -> SHLVL=2 \nf() { env; }; f & wait -> SHLVL=1 \nbash -c env -> SHLVL=1 \nx=$(bash -c env); echo \"$x\" -> SHLVL=1 \nstartup 1\nsh: warning: shell level (1000) too high, resetting to 1\nstartup 1\nlast 1\n"
+   }
+  },
+  "runtime: TL an error that ends a pipeline stage ends only that stage": {
+   "script": "461d2466cde047db",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: x: gone\n"
+   },
+   "stdout": {
+    "text": "after 0 1 0\nend\n"
+   }
+  },
+  "runtime: TL declarations with expanded names": {
+   "script": "36b3c096a8e38294",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[x]\n[y]\n[z]\n"
+   }
+  },
+  "runtime: TL read and mapfile on closed descriptors": {
+   "script": "b83d0a2dff858056",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: 0: read error: Bad file descriptor\nbash: line 1: read: 0: invalid file descriptor: Bad file descriptor\nbash: line 1: mapfile: 5: invalid file descriptor: Bad file descriptor\nbash: line 1: read: 5: invalid file descriptor: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=0\ndeclare -a m=()\ns=1\ns=1\n"
+   }
+  },
+  "runtime: a PS4 that expands itself is reported and traced as written": {
+   "script": "4a9e0f0c7e105ce9",
+   "status": 139,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "runtime: a bash -c child's options, xtrace, set -u status and SHLVL": {
+   "script": "7829cb7d65f9349b",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo hi\n+ a=1\nbash: line 1: nope: unbound variable\nbash: line 0: bash: bogus: invalid option name\nbash: line 0: bogus: invalid shell option name\nbash: line 0: bash: -c: invalid option name\n+ echo 'a 2 0'\nbash: line 1: nope: unbound variable\nbash: line 1: x: parameter not set\n"
+   },
+   "stdout": {
+    "text": "hi\ns=127\ns=2\ns=2\ns=2\na 2 0\ns=0\nSHLVL=1\n1\n1\ns=127\nyes\ns=0\n"
+   }
+  },
+  "runtime: a circular local nameref uses the global variable": {
+   "script": "4dec8239a4c77dbc",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: local: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: circular name reference\nbash: line 5: local: warning: w: circular name reference\nbash: line 5: warning: w: circular name reference\nbash: line 5: warning: w: maximum nameref depth (8) exceeded\nbash: line 5: warning: w: circular name reference\nbash: line 7: local: warning: v: circular name reference\nbash: line 7: warning: v: circular name reference\nbash: line 7: warning: v: circular name reference\nbash: line 7: warning: v: maximum nameref depth (8) exceeded\nbash: line 8: declare: warning: v: circular name reference\nbash: line 8: warning: v: circular name reference\nbash: line 8: warning: v: maximum nameref depth (8) exceeded\nbash: line 10: warning: a: maximum nameref depth (8) exceeded\nbash: line 10: warning: a: circular name reference\nbash: line 10: warning: b: circular name reference\nbash: line 11: local: warning: v: circular name reference\nbash: line 11: warning: v: circular name reference\nbash: line 11: warning: v: maximum nameref depth (8) exceeded\nbash: line 11: warning: v: circular name reference\nbash: line 11: warning: v: circular name reference\nbash: line 11: warning: v: circular name reference\nbash: line 11: warning: v: circular name reference\nbash: line 11: warning: v: circular name reference\nbash: line 11: warning: v: circular name reference\nbash: line 11: warning: v: circular name reference\nbash: line 12: local: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 12: local: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 12: warning: v: circular name reference\nbash: line 13: local: warning: v: circular name reference\nbash: line 13: warning: v: circular name reference\nbash: line 13: warning: v: circular name reference\n"
+   },
+   "stdout": {
+    "text": "in: [global]\nin2: [set]\ndeclare -n v=\"v\"\nout: [set]\ndeclare -- v=\"set\"\ng: [x]\nafter g: [x]\ndeclare -- w=\"x\"\nk: []\nafter h: [kset]\nafter n: [nn]\nbash: line 9: local: warning: x: circular name reference\nbash: line 9: warning: x: circular name reference\np st=0\nq: [qa] []\nafter q: [qa] [unset]\nr: [baseapp el] [baseapp] 7\ndeclare -a v=([0]=\"baseapp\" [2]=\"el\")\ng g z 1\nx y  0\ndeclare -a v=([0]=\"a\" [1]=\"b\")\ndeclare -a v=([0]=\"rd\" [1]=\"5\")\n"
+   }
+  },
+  "runtime: a circular nameref warns and assigning through it fails": {
+   "script": "87f66fd625bfe569",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: a: circular name reference\nbash: line 2: warning: a: circular name reference\nbash: line 2: warning: a: circular name reference\nbash: line 2: warning: b: circular name reference\n"
+   },
+   "stdout": {
+    "text": "s=0\nnext\n[]\nx=[]\nlast\n"
+   }
+  },
+  "runtime: a dash after >& or <& closes the descriptor": {
+   "script": "05129cf3c23b111a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: echo: write error: Bad file descriptor\nbash: line 1: echo: write error: Bad file descriptor\nbash: line 1: echo: write error: Bad file descriptor\ncat: 1: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "s=1\ny 1\ns=0\ns=1\ns=1\nv\ns=0\ns=1\n"
+   }
+  },
+  "runtime: a failed redirection fails only its compound command": {
+   "script": "4373dd63f825ed58",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\nbash: line 1: /tmp/no/y: No such file or directory\nbash: line 1: /tmp/no/z: No such file or directory\nbash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "after redir: 1\nif: 1\nwhile: 1\n[1] 1\n"
+   }
+  },
+  "runtime: a for loop over a readonly variable fails and carries on": {
+   "script": "7beeb506fc18753f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": "in 1\nafter 0\n"
+   }
+  },
+  "runtime: a here-document before a program's name is expanded in its process": {
+   "script": "80e84842de5b7e1a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nn=0\n1\nm=0\nk=1 v=1\n"
+   }
+  },
+  "runtime: a large associative array grows as bash's does": {
+   "script": "57dae4f77239c5c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2ed08ff6e29e5980982285ee0b4d05cf  -\ned840b3a6f2f35e3e44ffcda529e96cc  -\n601\n"
+   }
+  },
+  "runtime: a local cannot shadow a readonly variable": {
+   "script": "c9d975b0d3591f5c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: local: r: readonly variable\nbash: line 1: declare: r: readonly variable\nbash: line 1: local: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": "a 1 1\nb 1 1\nc 1 1\nafter 0 1\n"
+   }
+  },
+  "runtime: a missing sourced file ends a POSIX-mode shell": {
+   "script": "1aaed5368a994c82",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ./non-existent-file: No such file or directory\nbash: line 1: ./non-existent-file: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "normal 1\n"
+   }
+  },
+  "runtime: a nameref to itself is refused": {
+   "script": "53a5cca85a879f03",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: r: nameref variable self references not allowed\nbash: line 1: declare: warning: q: circular name reference\nbash: line 1: warning: q: circular name reference\n"
+   },
+   "stdout": {
+    "text": "status=1\nbash: line 1: declare: r: not found\nf 0\n"
+   }
+  },
+  "runtime: a pipeline stage's own command leaves $_ as bash does": {
+   "script": "73e1bab2028871ee",
+   "status": 0,
+   "stderr": {
+    "text": "5[last5]\n"
+   },
+   "stdout": {
+    "text": "1[pre1]\n2[last2]\n3[last3]\n4[last4]\n6[last6]\n7[last7]\n8[last8]\n9[:]\n10[EXIT]\n11[last11]\n12[pre12]\n13[pre13]\ntop[last]\n"
+   }
+  },
+  "runtime: a prefix assignment to an integer variable keeps its text": {
+   "script": "911722220e89367d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1+2]\nm=5\nf[2*3]\ndeclare -x m=\"2*3\"\n[x+]\nend\n"
+   }
+  },
+  "runtime: a prompt that cannot be expanded is used as it reads": {
+   "script": "999e82f91c4830f6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\nq\nbash: line 2: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 3: nope: oops\nbash: line 6: 1/0: division by 0 (error token is \"0\")\nbash: line 7: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n+$(( 1 +))\\$ echo hi\nbash: line 7: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n+$(( 1 +))\\$ set +x\nbash: line 1: nope: unbound variable\nbash: line 1: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "[a$(( 1 +))b\\$] st=0\n[$(echo q >&2)a$(( 1 +))b$(fi)] st=0\n[a${nope:?oops}b] st=0\nafter1\n[aa${x/}b${!}cbc] st=0\n[a$((1/0))b] st=0\nhi\nafter2\n[a${nope}b] st=0\nafter3\n[a$(( 1 +))b] st=0\nafter4\n"
+   }
+  },
+  "runtime: a prompt that expands itself stops at the nesting limit": {
+   "script": "abca836dfb94c11d",
+   "status": 139,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "runtime: a quoted declaration is still refused for readonly and +a": {
+   "script": "e4f1630112e1defc",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: var: readonly variable\nbash: line 1: declare: arr: cannot destroy array variables in this way\nbash: line 1: declare: arr: cannot destroy array variables in this way\nbash: line 1: declare: m: cannot destroy array variables in this way\n"
+   },
+   "stdout": {
+    "text": "status: 1 side effect: 0\ns=1\ns=1\ns=1\ns=0\ndeclare -a arr=([0]=\"1\" [1]=\"2\")\ndeclare -A m=([k]=\"v\" )\ndeclare -- x=\"1\"\n"
+   }
+  },
+  "runtime: a readonly variable in arithmetic fails the command": {
+   "script": "71a7559f4c12f4d7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: k: readonly variable\nbash: line 1: k: readonly variable\nbash: line 1: k: readonly variable\n"
+   },
+   "stdout": {
+    "text": "after ro: 1 1\nlet: 1\ninc: 1 1\n"
+   }
+  },
+  "runtime: a refused PS4 is reported and traced as written": {
+   "script": "c84819e30a86d9c3",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo hi\n+ set +x\n"
+   },
+   "stdout": {
+    "text": "hi\ns=0\n"
+   }
+  },
+  "runtime: a refused command named in ${x@P} refuses the expansion": {
+   "script": "5847543e9e0096ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0022\nsame\ns=0\n"
+   }
+  },
+  "runtime: a refused command reached through ${x@P} stops where it is reached": {
+   "script": "5094a924234a0308",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0 [0022]\n"
+   }
+  },
+  "runtime: a refused construct in ${x@P} is refused when it expands": {
+   "script": "069ea79cd98cb81d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "same\ns=0 [in]\n"
+   }
+  },
+  "runtime: a subscript nested past the limit fails on every path": {
+   "script": "5b9178c484b5e282",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "not-reached\ns=0\nnot-reached\ns=0\nnot-reached\ns=0\nnot-reached\ns=0\n\nnot-reached\ns=0\nnot-reached\ns=0\nnot-reached\ns=0\n0\nnot-reached\ns=0\nnot-reached\ns=0\ndeclare -a a=()\n"
+   }
+  },
+  "runtime: a subshell whose prompt expands itself ends with an error": {
+   "script": "a6b8671f78dfb7a3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1:    24 Segmentation fault         ( x='${x@P}'; echo \"[${x@P}]\" )\n"
+   },
+   "stdout": {
+    "text": "sub s=139\n"
+   }
+  },
+  "runtime: a syntax error in a prompt's substitution is reported as bash reports it": {
+   "script": "73ce453ab8c2486a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: command substitution: line 2: syntax error near unexpected token `fi' while looking for matching `)'\nbash: command substitution: line 2: `fi)'\nbash: command substitution: line 1: syntax error near unexpected token `fi'\nbash: command substitution: line 1: `fi'\nbash: command substitution: line 2: syntax error near unexpected token `fi' while looking for matching `)'\nbash: command substitution: line 2: `fi)b'\nbash: command substitution: line 1: syntax error near unexpected token `fi'\nbash: command substitution: line 1: `fi)'\nbash: command substitution: line 2: syntax error near unexpected token `)'\nbash: command substitution: line 2: `if)'\nbash: command substitution: line 2: syntax error: unexpected end of file from `if' command on line 1\nbash: command substitution: line 2: syntax error near unexpected token `done' while looking for matching `)'\nbash: command substitution: line 2: `done)'\nbash: command substitution: line 1: syntax error near unexpected token `done'\nbash: command substitution: line 1: `done'\nbash: command substitution: line 2: syntax error near unexpected token `then' while looking for matching `)'\nbash: command substitution: line 2: `then x)'\nbash: command substitution: line 1: syntax error near unexpected token `then'\nbash: command substitution: line 1: `then x'\nbash: command substitution: line 2: syntax error near unexpected token `;' while looking for matching `)'\nbash: command substitution: line 2: `;)'\nbash: command substitution: line 1: syntax error near unexpected token `;'\nbash: command substitution: line 1: `;'\nbash: command substitution: line 2: syntax error near unexpected token `|' while looking for matching `)'\nbash: command substitution: line 2: `|)'\nbash: command substitution: line 1: syntax error near unexpected token `|'\nbash: command substitution: line 1: `|'\nbash: command substitution: line 2: syntax error near unexpected token `a' while looking for matching `)'\nbash: command substitution: line 2: `echo (a)'\nbash: command substitution: line 1: syntax error near unexpected token `a'\nbash: command substitution: line 1: `echo (a'\nbash: command substitution: line 2: syntax error near unexpected token `fi' while looking for matching `)'\nbash: command substitution: line 2: `fi)r'\nbash: command substitution: line 1: syntax error near unexpected token `fi'\nbash: command substitution: line 1: `fi)'\nbash: command substitution: line 2: syntax error near unexpected token `fi' while looking for matching `)'\nbash: command substitution: line 2: `fi) $(echo z)'\nbash: command substitution: line 1: syntax error near unexpected token `fi'\nbash: command substitution: line 1: `fi) $(echo z'\nbash: command substitution: line 2: unexpected EOF while looking for matching `\"'\nbash: command substitution: line 1: unexpected EOF while looking for matching `\"'\nbash: command substitution: line 3: unexpected EOF while looking for matching `)'\nbash: command substitution: line 3: unexpected EOF while looking for matching `)'\nbash: command substitution: line 3: unexpected EOF while looking for matching `)'\nbash: command substitution: line 2: syntax error: unexpected end of file from `if' command on line 1\nbash: command substitution: line 1: syntax error near unexpected token `then'\nbash: command substitution: line 1: `then'\nbash: command substitution: line 2: syntax error near unexpected token `esac' while looking for matching `)'\nbash: command substitution: line 2: `esac)'\nbash: command substitution: line 1: syntax error near unexpected token `esac'\nbash: command substitution: line 1: `esac'\nbash: command substitution: line 21: syntax error near unexpected token `fi' while looking for matching `)'\nbash: command substitution: line 21: `fi)'\nbash: command substitution: line 20: syntax error near unexpected token `fi'\nbash: command substitution: line 20: `fi'\nbash: command substitution: line 24: syntax error near unexpected token `fi' while looking for matching `)'\nbash: command substitution: line 24: `fi) '\nbash: command substitution: line 23: syntax error near unexpected token `fi'\nbash: command substitution: line 23: `fi)'\n+echo traced\nbash: command substitution: line 25: syntax error near unexpected token `fi' while looking for matching `)'\nbash: command substitution: line 25: `fi) '\nbash: command substitution: line 24: syntax error near unexpected token `fi'\nbash: command substitution: line 24: `fi)'\n+set +x\nbash: command substitution: line 2: syntax error near unexpected token `fi' while looking for matching `)'\nbash: command substitution: line 2: `fi'\nbash: line 1: f: command not found\nbash: command substitution: line 2: syntax error near unexpected token `)'\nbash: command substitution: line 2: `case)'\nbash: command substitution: line 1: syntax error near unexpected token `newline'\nbash: command substitution: line 1: `case'\nbash: command substitution: line 2: syntax error near unexpected token `)'\nbash: command substitution: line 2: `a &&)'\nbash: command substitution: line 2: syntax error: unexpected end of file\n"
+   },
+   "stdout": {
+    "text": "[] 0\n[a] 0\n[] 0\n[] 0\n[] 0\n[] 0\n[] 0\n[] 0\n[pokq] 0\n[] 0\n[] 0\n[h] 0\n[hi] 0\n[] 0\n[x] 0\n[a)] 0\n[1\n2] 0\n\ntraced\ndone\n[]\n[]\n[]\n"
+   }
+  },
+  "runtime: a syntax error names the token bash's grammar rejects": {
+   "script": "b7b33e2518cf933b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 1: syntax error near unexpected token `fi'\nbash: eval: line 1: `fi)'\nbash: eval: line 1: syntax error near unexpected token `then'\nbash: eval: line 1: `then x'\nbash: eval: line 1: syntax error near unexpected token `then'\nbash: eval: line 1: `then'\nbash: eval: line 1: syntax error near unexpected token `fi'\nbash: eval: line 1: `echo hi;fi)'\nbash: eval: line 1: syntax error near unexpected token `a'\nbash: eval: line 1: `echo (a)'\nbash: eval: line 1: syntax error near unexpected token `a'\nbash: eval: line 1: `echo (a'\nbash: eval: line 1: syntax error near unexpected token `fi'\nbash: eval: line 1: `fi) $(echo z'\nbash: eval: line 1: syntax error near unexpected token `)'\nbash: eval: line 1: `{ a; })'\nbash: eval: line 1: syntax error near unexpected token `)'\nbash: eval: line 1: `if a; then b; fi)'\nbash: eval: line 1: syntax error near unexpected token `fi'\nbash: eval: line 1: `fi \"a'\nbash: eval: line 1: syntax error near unexpected token `)'\nbash: eval: line 1: `while a; do if b; then c; fi; done )'\nbash: eval: line 1: syntax error near unexpected token `done'\nbash: eval: line 1: `f() { :; }; done'\nbash: eval: line 1: syntax error near unexpected token `esac'\nbash: eval: line 1: `case x in a) :;; esac; esac'\nbash: eval: line 1: syntax error near unexpected token `fi'\nbash: eval: line 1: `for i in a; do :; done; fi'\nbash: -c: line 1: syntax error near unexpected token `then'\nbash: -c: line 1: `echo hi; then x'\n"
+   },
+   "stdout": {
+    "text": "s=2\ns=2\ns=2\ns=2\ns=2\ns=2\ns=2\ns=2\ns=2\ns=2\ns=2\ns=2\ns=2\ns=2\ns=2\n"
+   }
+  },
+  "runtime: a word that expands to name=value assigns": {
+   "script": "1db809eeffd9defc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nx=1\n[x]\n2 3\nin 2\n[q]\nr=1\nx\n"
+   }
+  },
+  "runtime: aliases in text read while a function runs": {
+   "script": "8b7c1f3896ef2055",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 4: a1: command not found\nbash: line 4: a1: command not found\nbash: line 5: tp: command not found\nbash: line 6: b1: command not found\nbash: line 6: b1: command not found\n"
+   },
+   "stdout": {
+    "text": "k\nhi\ndefined-before\nredefined\nsourced\ndone\n"
+   }
+  },
+  "runtime: an alias is not expanded on its own line or in an earlier function": {
+   "script": "3557eb0a84527650",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 3: hi: command not found\nbash: line 2: hi: command not found\n"
+   },
+   "stdout": {
+    "text": "hi\nhi\nhi\n"
+   }
+  },
+  "runtime: an arithmetic error in an array subscript ends the shell": {
+   "script": "145acfebcd55f95a",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 2: 1+: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\n"
+   }
+  },
+  "runtime: an array written before a command is a string": {
+   "script": "3354df4bdf3c2b32",
+   "status": 1,
+   "stderr": {
+    "text": "+ w='(H x)'\n+ true\n+ set +x\n"
+   },
+   "stdout": {
+    "text": "declare -x w=\"(H a  b [k]=v q r *)\"\ndeclare -x w=\"(1 2)\"\ndeclare -x a=\"(x)(y)\"\ndeclare -x w=\"(a b)\"\nw=(1 2)\nbash: line 1: declare: w: not found\n"
+   }
+  },
+  "runtime: an assignment prefix does not override a readonly variable": {
+   "script": "35d5097d4563b652",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: r: readonly variable\nbash: line 1: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": "in-f\nstill 1\nafter=0\ns=0\n"
+   }
+  },
+  "runtime: an empty associative key is a bad subscript": {
+   "script": "ae7ff751e8c8dd6d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: m[\"\"]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "next 0\n"
+   }
+  },
+  "runtime: an empty indexed subscript is a bad subscript": {
+   "script": "c7ed504d915aad32",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a[]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "next 1\n"
+   }
+  },
+  "runtime: an empty key from an expansion is a bad subscript": {
+   "script": "1bc8604b6b48eef3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: m[$k]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "next 0\n"
+   }
+  },
+  "runtime: an error in a variable's value names that value": {
+   "script": "b7fbbc11fb69680c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1/0: division by 0 (error token is \"0\")\nbash: line 1: 08: value too great for base (error token is \"08\")\nbash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: a: expression recursion level exceeded (error token is \"a\")\nbash: line 1: a: expression recursion level exceeded (error token is \"a\")\n"
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "runtime: an imported function's source, lines and diagnostics": {
+   "script": "8af645c48230ef66",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 8: nosuch: command not found\nenvironment: line 1: nosuch: command not found\n./s.sh: line 2: nosuch1: command not found\nbash: line 10: nosuch2: command not found\n"
+   },
+   "stdout": {
+    "text": "a 4\nb 5\nc 7\ny 8 7 8\na 0\nb 1\nc 2\ny 0 3 1\n[environment] [f] [1]\n[environment bash] [f g] [1 1]\n1 g bash\n"
+   }
+  },
+  "runtime: an integer assignment that does not evaluate ends the shell": {
+   "script": "5f60568248618e9c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: declare: 4 +: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: declare: 2#: invalid integer constant (error token is \"2#\")\nbash: line 1: declare: 1/0: division by 0 (error token is \"0\")\nbash: line 2: declare: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "sub 1\nsub 1\nsub 1\nsub 1\n"
+   }
+  },
+  "runtime: an invalid regular expression fails [[ with status 2": {
+   "script": "d42665e9ced07bcd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [[: invalid regular expression `[': Missing ']'\nbash: line 1: [[: invalid regular expression `(': Missing ')'\nbash: line 1: [[: invalid regular expression `a{': Invalid contents of {}\nbash: line 1: [[: invalid regular expression `[[:foo:]]': Unknown character class name\nbash: line 1: [[: invalid regular expression `(a|': Missing ')'\n"
+   },
+   "stdout": {
+    "text": "2 [[]\n2 [(]\n2 [a{]\n2 [[[:foo:]]]\n2 [(a|]\nok 0\n"
+   }
+  },
+  "runtime: an out-of-range loop count leaves every loop": {
+   "script": "ee3889de8dc7761b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: 0: loop count out of range\nbash: line 2: continue: 0: loop count out of range\nbash: line 3: break: -1: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "end 1\ncend 1\nneg 1\nbig 0\nc2 0\n"
+   }
+  },
+  "runtime: an unset $! is unbound under set -u": {
+   "script": "0d03871cf73694ad",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: $!: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "runtime: an unset variable in $(( )) under set -u ends the shell": {
+   "script": "22a8735621c8e00d",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 2: unset_var: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "runtime: an unset variable in a function body names its line": {
+   "script": "4fc6436e16eaa4d2",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 4: unset_local: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "runtime: an unset variable in arithmetic under set -u ends the shell": {
+   "script": "e40aa54c638b4822",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: y: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "runtime: an unset variable in let under set -u ends the shell": {
+   "script": "f6d2c41730d9184d",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: y: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "runtime: any text defines an alias": {
+   "script": "3887ca8390f6db6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias status=0\nalias q1='a'\\''b'\nalias q1='a'\\''b'\nalias z='echo it'\\''s'\nalias q='it'\\''s'\n"
+   }
+  },
+  "runtime: arithmetic errors fail the command and the list goes on": {
+   "script": "3e2d14516e745687",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: ((: x = 10 / y: division by 0 (error token is \"y\")\nbash: line 3: let: z = 1 / 0: division by 0 (error token is \"0\")\nbash: line 4: [[: 1/0: division by 0 (error token is \"0\")\nbash: line 5: ((: i < 1/0: division by 0 (error token is \"0\")\nbash: line 6: ((: 2**-1: exponent less than 0 (error token is \"1\")\nbash: line 6: ((: 1/0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": "after (( )): 1\nafter let: 1\nafter [[: 1\nafter for: 1\nneg 1\nin f 1\nafter f 0\nend\n"
+   }
+  },
+  "runtime: arithmetic nested past the limit fails without trapping": {
+   "script": "53f2d72177d59256",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nsame\ns=0\ns=0\ns=0\n"
+   }
+  },
+  "runtime: arrays are not exported": {
+   "script": "215c00c7de1e7eba",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset] [unset]\n0\n"
+   }
+  },
+  "runtime: associative arrays iterate in bash's order": {
+   "script": "771cb6ef0c5dc7cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "db=5432\napi=8080\nweb=80\ncache=6379\ndeclare -A port=([db]=\"5432\" [api]=\"8080\" [web]=\"80\" [cache]=\"6379\" )\n5432 8080 80 6379\nfour two three one\ndb api zz web cache\nx5 x4 x7 x6 x1 x3 x2 x9 x8 x32 x33 x30 x31 x36 x37 x34 x35 x38 x39 x40 x18 x19 x14 x15 x16 x17 x10 x11 x12 x13 x25 x24 x27 x26 x21 x20 x23 x22 x29 x28\n"
+   }
+  },
+  "runtime: associative keys that are not identifiers": {
+   "script": "06cd14eba42d170f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10 3\n[ k ]=1\n[foo.txt]=1\n[a-b]=2\n[x.y]=1\n[q]=3\n[z w]=4\n7\n"
+   }
+  },
+  "runtime: blanks inside arithmetic subscripts": {
+   "script": "e3e11e605d7e4845",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0 2\ndeclare -a b=([2]=\"3\")\n4\ndeclare -a c=([2]=\"4\")\n7\n14\ndeclare -a d=([3]=\"1\")\ndeclare -a e=([2]=\"7\")\ndeclare -- i=\"2\"\ndeclare -A m=([\" k \"]=\"1\" )\n8\nst=0 2 3\nset\ni=0\ni=1\n9\ndeclare -a a=([0]=\"2\")\n2\n"
+   }
+  },
+  "runtime: caller and BASH_SOURCE in a command string": {
+   "script": "0781014894082357",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a BASH_SOURCE=([0]=\"bash\" [1]=\"bash\")\ndeclare -a FUNCNAME=([0]=\"f\" [1]=\"g\")\ndeclare -a BASH_LINENO=([0]=\"1\" [1]=\"2\")\n1 bash\nc=0\n1 g bash\nc0=0\nc1=1\ndeclare -a BASH_SOURCE=([0]=\"bash\")\ndeclare -a FUNCNAME=([0]=\"f\")\ndeclare -a BASH_LINENO=([0]=\"3\")\n3 NULL\nc=0\nc0=1\nc1=1\ndeclare -a BASH_SOURCE=()\ndeclare -a FUNCNAME\ndeclare -a BASH_LINENO=()\n2 source ./s.sh\n2 ./s.sh\nsourced\ndeclare -a BASH_SOURCE=([0]=\"bash\")\ndeclare -a FUNCNAME=([0]=\"f\")\ndeclare -a BASH_LINENO=([0]=\"6\")\n6 NULL\nc=0\nc0=1\nc1=1\nmyname myname myname\n1 g myname\n"
+   }
+  },
+  "runtime: cd - without OLDPWD": {
+   "script": "543b47a166a28c37",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: OLDPWD not set\nbash: line 1: cd: null directory\n"
+   },
+   "stdout": {
+    "text": "status=1 [/]\n/\n\ns=0 [/]\ns=1 [/]\n"
+   }
+  },
+  "runtime: cd // keeps two slashes, DIRSTACK and PIPESTATUS start as bash's": {
+   "script": "bc9692b124722f8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n/ 1\n//\n//tmp\n/\n//\n/tmp /\n"
+   }
+  },
+  "runtime: cd follows CDPATH and leaves / at /": {
+   "script": "d766a8b6e1065b59",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 3: cd: ./b: No such file or directory\nbash: line 3: cd: nonexist/..: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=0 /\ns=0 /\ns=0 /\n/tmp/c/sub\ns=0 /tmp/c/sub\n/tmp/a/b\ns=0 /tmp/a/b\ns=0 /tmp/a/b\ns=1\ns=1\n"
+   }
+  },
+  "runtime: chained aliases and a trailing blank": {
+   "script": "04e298c3b65ca237",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 14: ll: command not found\nbash: line 14: ll: command not found\n"
+   },
+   "stdout": {
+    "text": "LL\nG hello\nrun word\n/tmp\nbash: line N: a: command not found\n"
+   }
+  },
+  "runtime: circular nameref warnings and nameref declarations": {
+   "script": "1c80a1b84e0ce0ba",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "== echo \"${v^^}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nGV\n== echo \"${v,,}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v@Q}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n'gv'\n== echo \"${v@U}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nGV\n== echo \"${v%g}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v#g}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nv\n== echo \"${v/g/h}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nhv\n== echo \"${v:1}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nv\n== echo \"${v:1:1}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nv\n== echo \"${#v}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n2\n== echo \"${v-x}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v:=x}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v:?x}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${!v}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: v: invalid indirect expansion\n== echo \"${v[@]}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v[0]}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${#v[@]}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n1\n== echo \"${!v[@]}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n0\n== read v <<< rd; echo \"$v\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: circular name reference\nrd\n== read -a v <<< \"r1 r2\"; echo \"${v[*]}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nr1 r2\n== printf -v v %s pf; echo \"$v\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: circular name reference\npf\n== (( v = 5 )); echo \"$v\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: circular name reference\n5\n== (( v++ )); echo \"$v\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: circular name reference\n1\n== echo $(( v + 1 ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n1\n== let v=7; echo \"$v\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: circular name reference\n7\n== v+=app; echo \"$v\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: circular name reference\ngvapp\n== mapfile -t v <<< \"m1\"; echo \"${v[*]}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nm1\n== unset v; echo \"${v-unset}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nunset\n== [[ -v v ]] && echo set\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nset\n== [[ $v == gv ]] && echo eq\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\neq\n== declare -p v\nbash: line 2: warning: v: circular name reference\ndeclare -n v=\"v\"\n== export v; echo ok\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nok\n== v[1]=el; echo \"${v[*]}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv el\n== for v in a b; do :; done; echo \"$v\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: circular name reference\nb\n== getopts a: v -a; echo \"$v\"\nbash: line 2: warning: v: circular name reference\nbash: option requires an argument -- a\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: circular name reference\n?\n== test -v v && echo set2\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nset2\n== (( v ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== (( v += 1 ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== (( v = v + 1 ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== (( ++v ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== (( v-- ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== (( v *= 2 ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== echo $(( v ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n0\n== echo $(( v + v ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n0\n== echo $(( v = 4 ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n4\n== (( v[1] = 3 ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== echo $(( v[0] ))\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n0\n== let v++\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== let \"v = 2\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== x=$v\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== echo \"$v\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo $v\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v[*]}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v[@]:0}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v@A}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nv='gv'\n== echo \"${v@a}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n\n== echo \"${v@P}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v@E}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v@K}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n'gv'\n== echo \"${v:-d}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v+a}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\na\n== echo \"${v:+a}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\na\n== echo \"${v=d}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v?e}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v^}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nGv\n== echo \"${v~}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nGv\n== echo \"${v##3}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v%%3}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v//3/4}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${v/#3/4}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\ngv\n== echo \"${#v}\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n2\n== read -r v <<< a\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== read -r -N 1 v <<< ab\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== read -r a v <<< \"x y\"\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== printf -v v %s x\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== getopts a v -a\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== for v in a; do :; done\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== for v in a b c; do :; done\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\nbash: line 2: warning: v: maximum nameref depth (8) exceeded\n== select v in a; do break; done <<< 1\nbash: line 2: warning: v: circular name reference\n1) a\n#? bash: line 2: warning: v: maximum nameref depth (8) exceeded\n== unset v\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== unset -v v\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== unset -n v\nbash: line 2: warning: v: circular name reference\n== [[ -v v ]]\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== test -v v\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== [ -v v ]\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== export v\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== readonly v\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== declare -x v\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== mapfile v <<< a\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== read -a v <<< a\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== v=(1 2)\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== v+=(3)\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== v[2]=x\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== : ${v:=d}\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\n== local v=2\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: warning: v: circular name reference\nbash: line 2: local: `2': invalid variable name for name reference\n[x]\nin 2 [x]\ndeclare -i x=\"7\"\nout X\n[x]\nbash: line 100: local: warning: v: circular name reference\nbash: line 100: warning: v: circular name reference\nbash: line 100: v: invalid indirect expansion\n"
+   }
+  },
+  "runtime: clones share state but keep their changes": {
+   "script": "2c6f8c9e7d811baf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub: x=sub a=(p0 sub more) m[k]=sub m[new]=1 n=6 s=unset\nafter-subshell: x=parent a=(p0 p1) m[k]=p m[new]=unset n=5 s=keep\nstage: x=stage a=(stage) m[k]=stage m[new]=unset n=7 s=unset\nafter-stage: x=parent a=(p0 p1) m[k]=p m[new]=unset n=5 s=keep\nread-stage: x=x a=(r) m[k]=r m[new]=unset n=5 s=keep\nafter-read-stage: x=parent a=(p0 p1) m[k]=p m[new]=unset n=5 s=keep\ncmdsub: x=cmdsub a=(p0 p1 c) m[k]=c m[new]=unset n=5 s=keep\nafter-cmdsub: x=parent a=(p0 p1) m[k]=p m[new]=unset n=5 s=keep\nbg: x=bg a=(p0 p1 bg) m[k]=bg m[new]=unset n=5 s=keep\nafter-bg: x=parent a=(p0 p1) m[k]=p m[new]=unset n=5 s=keep\nfn: x=fn a=(p0 fn) m[k]=fn m[new]=unset n=5 s=keep\nafter-fn-stage: x=parent a=(p0 p1) m[k]=p m[new]=unset n=5 s=keep\nprocsub: x=procsub a=(ps p1) m[k]=p m[new]=unset n=5 s=keep\nafter-procsub: x=parent a=(p0 p1) m[k]=p m[new]=unset n=5 s=keep\nparent-writes: x=parent-appended a=(p0 p1-appended) m[k]=p-appended m[new]=unset n=15 s=keep\nsub-sees-writes: x=parent-appended a=(p0 p1-appended) m[k]=p-appended m[new]=unset n=15 s=keep\nend\nsub: 1 s1\nstage: 1 p3\nargs: 3 p1 p 2 p3\nfn-sub: b c\nfn-stage: z\nfn: a b c\nalias-parent\n"
+   }
+  },
+  "runtime: code nested too deeply in ${x@P} is refused": {
+   "script": "393f14fa905895ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "deep 1\ns=0\n"
+   }
+  },
+  "runtime: command_not_found_handle handles an unknown command": {
+   "script": "ff8bd3a24cc4f2fe",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nosuch3: command not found\n"
+   },
+   "stdout": {
+    "text": "handled nosuchcommand [arg]\n9 orig\n127\n"
+   }
+  },
+  "runtime: compgen -C checks the command it runs": {
+   "script": "7cad746a9efbb066",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: compgen: warning: -C option may not work as you expect\nbash: line 1: compgen: warning: -C option may not work as you expect\ncat: compgen: No such file or directory\ncat: x: No such file or directory\ncat: '': No such file or directory\ncat: compgen: No such file or directory\ncat: x: No such file or directory\ncat: '': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\n"
+   }
+  },
+  "runtime: compgen lists keywords, options and functions in bash's order": {
+   "script": "4ebca0101b1cd0cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zfa\nzfb\nif then else elif fi case esac for select while until do done in function time { } ! [[ ]] coproc \nallexport braceexpand emacs errexit errtrace functrace hashall histexpand history ignoreeof interactive-comments keyword monitor noclobber noexec noglob nolog notify nounset onecmd physical pipefail posix privileged verbose vi xtrace \nerrexit\nerrtrace\nextdebug\nextglob\nextquote\n"
+   }
+  },
+  "runtime: counting words in an associative array": {
+   "script": "0e28ccd4fca8285d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "apple=2 pear=1\n10\n"
+   }
+  },
+  "runtime: declarations, let, logout, compopt and history": {
+   "script": "adea5c3ae32f0f7c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: expression expected\nbash: line 1: declare: m: cannot convert associative to indexed array\nbash: line 1: declare: n: cannot convert indexed to associative array\nbash: line 1: declare: `1bad': invalid variable name for name reference\nbash: line 1: logout: not login shell: use `exit'\nbash: line 1: compopt: not currently executing completion function\n"
+   },
+   "stdout": {
+    "text": "let 1\nconvert 1\nconvert2 1\nnameref 1\nelement 0\nlogout 1\ncompopt 1\nhistory 0\n"
+   }
+  },
+  "runtime: declare -lu converts neither way": {
+   "script": "8df4b8ad2902b57b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MiX\nMiX\nmix\n"
+   }
+  },
+  "runtime: declare -r of an array element": {
+   "script": "a89ae3ecefabe939",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: c: readonly variable\nbash: line 1: d: readonly variable\nbash: line 2: e: readonly variable\nbash: line 3: a: readonly variable\nbash: line 3: m: readonly variable\nbash: line 4: t: readonly variable\nbash: line 4: n: readonly variable\n"
+   },
+   "stdout": {
+    "text": "st=0\ndeclare -ar c=()\nst=0\ndeclare -ar d=()\nst=0\ndeclare -ar e\ndeclare -ar g=([2]=\"z\")\nst=0\ndeclare -ar a=([0]=\"1\" [1]=\"2\")\ndeclare -Ar m=([k]=\"1\" )\ndeclare -ar t=()\ndeclare -air n=()\ndeclare -ar x\n"
+   }
+  },
+  "runtime: declare assigns the elements before a bad negative key": {
+   "script": "25c87a38eb73c669",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [-5]=z: bad array subscript\nbash: line 3: [-5]=z: bad array subscript\nbash: line 5: [-3]=q: bad array subscript\nbash: line 7: declare: c: not found\nbash: line 8: [-9]=4: bad array subscript\nbash: line 10: [-3]=q: bad array subscript\nbash: line 11: [-1]=x: bad array subscript\nbash: line 13: [-4]=2: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "st=1\ndeclare -a a=([0]=\"x\" [1]=\"y\")\nst=1\ndeclare -a b=([0]=\"x\" [1]=\"y\")\nst=1\ndeclare -a d=([0]=\"1\" [1]=\"2\" [2]=\"3\")\ndeclare -a h=()\ndeclare -ai n=([0]=\"2\")\n"
+   }
+  },
+  "runtime: dirs, pushd and popd take +N and -N": {
+   "script": "bb42e4fff6722b53",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: dirs: directory stack empty\nbash: line 1: popd: directory stack empty\nbash: line 1: pushd: no other directory\nbash: line 1: dirs: 5: directory stack index out of range\nbash: line 1: popd: +9: directory stack index out of range\nbash: line 1: pushd: -9: directory stack index out of range\nbash: line 1: popd: directory stack empty\nbash: line 1: popd: directory stack empty\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\n/tmp/d3 /tmp/d2 /tmp/d1 /\n/tmp/d2\n/\ns=1\n/tmp/d1 / /tmp/d3 /tmp/d2\ns=0\n 0  /tmp/d1\n 1  /\n 2  /tmp/d3\n 3  /tmp/d2\n/tmp/d1 /tmp/d3 /tmp/d2\ns=0\n/tmp/d1 /tmp/d3\ns=0\n/tmp/d3 /tmp/d1\ns=0\ns=1\ns=1\n/tmp/d1\ns=1\n"
+   }
+  },
+  "runtime: each subshell reseeds RANDOM": {
+   "script": "bd3d1c0aa1204087",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "varied\nvaried\nparent-kept\n19344 26956\n20189\n"
+   }
+  },
+  "runtime: echo follows xpg_echo and the last of -e and -E": {
+   "script": "b2b168098a42010f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\tb\na\tb\nx\n-x\n--\ny\n-nq z\na\tb\na\\tb\ncd\n"
+   }
+  },
+  "runtime: empty and blank arithmetic is zero": {
+   "script": "f9c4288216c26767",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 0 0\n1\ns=1\n"
+   }
+  },
+  "runtime: env lists exported functions as bash exports them": {
+   "script": "90e3d736923c5487",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "BASH_FUNC_f%%=() {  echo hi;\n local x=1;\n if true; then\n echo y;\n fi\n}\nBASH_FUNC_g%%=() {  :\n}\n1\n0\nhi\ny\n"
+   }
+  },
+  "runtime: errors inside a substitution name their line": {
+   "script": "eb2649729c27f9d1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: /tmp/nope: No such file or directory\nbash: line 3: cd: /nowhere: No such file or directory\nbash: line 4: cd: /nowhere2: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "\nend\n"
+   }
+  },
+  "runtime: execfail keeps the shell after a failed exec": {
+   "script": "1e2f7dd5cae88775",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: /nonexistent: No such file or directory\nbash: line 1: exec: nosuch: not found\nbash: line 1: /tmp: Is a directory\nbash: line 2: exec: nosuch2: not found\nbash: line 2: exec: nosuch3: not found\nbash: line 3: exec: nosuch4: not found\nbash: line 1: exec: nosuch7: not found\nbash: line 4: exec: nosuch8: not found\nbash: line 5: exec: nosuch9: not found\nbash: line 6: exec: nosuch6: not found\n"
+   },
+   "stdout": {
+    "text": "st=127\nst=127\nst=126\nsub st=127\nfn continued 127\nx=[]\nst=127\nchild continued\npipe 127 0\nbg st=127\n"
+   }
+  },
+  "runtime: exit with a word that is not a number fails": {
+   "script": "11ff74b3a58dea7e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: exit: abc: numeric argument required\nbash: line 1: exit: 3a: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "after 2\nsub 2\nneg 255\n"
+   }
+  },
+  "runtime: exit with too many operands ends the shell": {
+   "script": "37adc09a844af350",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: exit: too many arguments\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "runtime: expansion diagnostics name the parameter": {
+   "script": "f84df49f5f0ff436",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: $1: cannot assign in this way\nbash: line 2: a b: invalid variable name\nbash: line 3: 1: need\n"
+   },
+   "stdout": {
+    "text": "next\nnext2\n"
+   }
+  },
+  "runtime: export before assignment": {
+   "script": "4e3565135d6f3afb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: export: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "declare -x ev\n0\nev=1\n0\n[1] [unset]\ns=1\n"
+   }
+  },
+  "runtime: extra operands: ignored, usage errors, or too many": {
+   "script": "9ee829bf3a622fbd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: pushd: too many arguments\nbash: line 1: popd: a: invalid argument\npopd: usage: popd [-n] [+N | -N]\nbash: line 1: popd: x: invalid argument\npopd: usage: popd [-n] [+N | -N]\nbash: line 1: dirs: x: invalid option\ndirs: usage: dirs [-clpv] [+N] [-N]\nbash: line 1: dirs: y: invalid option\ndirs: usage: dirs [-clpv] [+N] [-N]\ngetopts: usage: getopts optstring name [arg ...]\ngetopts: usage: getopts optstring name [arg ...]\nbash: line 1: break: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "/\npwd 0\n/\ntimes 0\npushd 1\npopd 2\npopd2 2\ndirs 2\ndirs2 2\ngetopts 2\ngetopts1 2\noutside 0\n"
+   }
+  },
+  "runtime: file tests answer for existing and missing paths": {
+   "script": "2997ac80ff61e44f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test -e a\n[ -e a\ntest -e d\n[ -e d\ntest -r a\n[ -r a\ntest -r d\n[ -r d\ntest -w a\n[ -w a\ntest -w d\n[ -w d\ntest -x d\n[ -x d\ntest -O a\n[ -O a\ntest -O d\n[ -O d\ntest -G a\n[ -G a\ntest -G d\n[ -G d\ndouble\n"
+   }
+  },
+  "runtime: here-document side effects stay in the program's child": {
+   "script": "5738ae028479cff5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nhs n=0\narg n=10\nhd n=10 m=unset\n1010\nfn n=1010\n11010\ngrp n=11010\nread n=11015 x=11015\n"
+   }
+  },
+  "runtime: indexed array literal keys are evaluated arithmetically": {
+   "script": "4cb1b707d3bc0f7c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: [2-3]=x: bad array subscript\nbash: line 4: [-5]=w: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "declare -a a=([2]=\"x\")\ndeclare -a b=([6]=\"y\")\ndeclare -a c=([2]=\"z\")\ndeclare -a d=([3]=\"w\")\ndeclare -a e=([3]=\"v\")\ndeclare -a h=([2]=\"s\" [3]=\"t\")\ndeclare -A m=([1+1]=\"k\" )\ndeclare -a n=([0]=\"a\" [1]=\"b\")\nnext 1\ndeclare -a a=()\ndeclare -a b=([0]=\"1\" [1]=\"2\" [2]=\"z\")\ndeclare -a d=([0]=\"1\" [1]=\"e\")\ndeclare -a f=([0]=\"1\" [1]=\"2\" [2]=\"r\" [3]=\"q\")\n"
+   }
+  },
+  "runtime: indexed subscripts in arithmetic are still evaluated": {
+   "script": "56892fad33b96a7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 6 6\n5 7 17\ndeclare -A m=([k]=\"4\" )\nx=2\nkey=2 2\n"
+   }
+  },
+  "runtime: invalid names and options fail": {
+   "script": "9b5f104af3576300",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: set: -Z: invalid option\nset: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\nbash: line 1: set: -q: invalid option\nset: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\nbash: line 1: export: `1x': not a valid identifier\nbash: line 1: read: `1abc': not a valid identifier\nbash: line 1: read: `2b': not a valid identifier\nbash: line 1: mapfile: `1bad': not a valid identifier\nbash: line 1: alias: `a b': invalid alias name\nbash: line 1: alias: `a/b': invalid alias name\nbash: line 1: alias: `c d': invalid alias name\nbash: line 1: m[]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "2\n2\n1\n1\n1 a=x\n1\n1\n1\n1\nalias p='b'\nalias f='g'\nnext\n"
+   }
+  },
+  "runtime: invalid options are reported with the builtin's usage": {
+   "script": "4125d40bf7f03ddb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: -Z: invalid option\ncd: usage: cd [-L|[-P [-e]]] [-@] [dir]\nbash: line 1: pwd: -Q: invalid option\npwd: usage: pwd [-LP]\nbash: line 1: hash: -Q: invalid option\nhash: usage: hash [-lr] [-p pathname] [-dt] [name ...]\nbash: line 1: type: -Q: invalid option\ntype: usage: type [-afptP] name [name ...]\nbash: line 1: wait: -Q: invalid option\nwait: usage: wait [-fn] [-p var] [id ...]\nbash: line 1: trap: -Q: invalid option\ntrap: usage: trap [-Plp] [[action] signal_spec ...]\nbash: line 1: set: -Q: invalid option\nset: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\nbash: line 1: shopt: -Q: invalid option\nshopt: usage: shopt [-pqsu] [-o] [optname ...]\nbash: line 1: cd: too many arguments\n"
+   },
+   "stdout": {
+    "text": "cd 2\npwd 2\nhash 2\ntype 2\nwait 2\ntrap 2\nset 2\nshopt 2\ncd2 2\n"
+   }
+  },
+  "runtime: kill, wait and getopts diagnostics": {
+   "script": "a5716cc6c2f8cd09",
+   "status": 0,
+   "stderr": {
+    "text": "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\nbash: line 1: kill: `abc': not a pid or valid job spec\nbash: line 1: kill: (999999) - No such process\nbash: line 1: wait: `abc': not a pid or valid job spec\nbash: line 1: getopts: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "s=2\ns=1\ns=1\ns=1\ns=1\n"
+   }
+  },
+  "runtime: let, (( )) and a division by zero": {
+   "script": "a6d26271cc245aae",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: let: z = 1 / 0: division by 0 (error token is \"0\")\nbash: line 1: ((: x = 10 / y: division by 0 (error token is \"y\")\nbash: line 1: ((: 3 4: arithmetic syntax error in expression (error token is \"4\")\nbash: line 1: 1/0+1: division by 0 (error token is \"0+1\")\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\ns=1\nafter\n"
+   }
+  },
+  "runtime: line numbers in functions, compound commands and substitutions": {
+   "script": "5ad8b20937d7a089",
+   "status": 127,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "== f() {⏎  nosuch1⏎  echo \"${x:?unset1}\"⏎}⏎f\nbash: line 2: nosuch1: command not found\nbash: line 3: x: unset1\n== g() {⏎  local a⏎  (( 1 / 0 ))⏎  echo $(( 2 / 0 ))⏎}⏎g\nbash: line 3: ((: 1 / 0 : division by 0 (error token is \"0 \")\nbash: line 4: 2 / 0 : division by 0 (error token is \"0 \")\n== if true; then⏎  nosuch2⏎  : \"${y?unset2}\"⏎fi\nbash: line 2: nosuch2: command not found\nbash: line 3: y: unset2\n== for i in 1; do⏎  nosuch3⏎  : $(( 1 +⏎  ))⏎done\nbash: line 2: nosuch3: command not found\nbash: line 3: 1 +\n  : arithmetic syntax error: operand expected (error token is \"+\n  \")\n== while true; do⏎  cd /nonexistent⏎  break⏎done\nbash: line 2: cd: /nonexistent: No such file or directory\n== {⏎  nosuch4⏎  a=(1 2⏎  3); echo ${a[5]:?bad}⏎}\nbash: line 2: nosuch4: command not found\nbash: line 4: a[5]: bad\n== case x in⏎  x) nosuch5⏎     echo ${q:?unset}⏎     ;;⏎esac\nbash: line 2: nosuch5: command not found\nbash: line 3: q: unset\n== h() { nosuch6; }; h\nbash: line 1: nosuch6: command not found\n== k()⏎{⏎  echo one⏎  echo \"${z:?unset3}\"⏎}⏎k\none\nbash: line 4: z: unset3\n== (⏎  nosuch7⏎)\nbash: line 2: nosuch7: command not found\n== m() {⏎  for j in 1; do⏎    nosuch8⏎  done⏎}⏎m\nbash: line 3: nosuch8: command not found\n== readonly r=1⏎n() {⏎  r=2⏎  declare -i q=1/0⏎}⏎n\nbash: line 3: r: readonly variable\n== p() {⏎  echo a |⏎    nosuch9⏎}⏎p\nbash: line 3: nosuch9: command not found\n== if nosuch10⏎then :⏎fi\nbash: line 1: nosuch10: command not found\n== while nosuch11⏎do :⏎done\nbash: line 1: nosuch11: command not found\n== for i in $(nosuch12)⏎do :⏎done\nbash: line 1: nosuch12: command not found\n== f() {⏎  local x=$(nosuch13)⏎}⏎f\nbash: line 2: nosuch13: command not found\n== echo a \\⏎  b; nosuch14 \\⏎  arg\na b\nbash: line 2: nosuch14: command not found\n== x=$(⏎  nosuch15⏎)\nbash: line 3: nosuch15: command not found\n== f() {⏎  return 1⏎}⏎set -e⏎f⏎echo after\n== trap 'echo \"trap $LINENO\"; nosuch16' EXIT⏎true⏎⏎true\ntrap 1\nbash: line 1: nosuch16: command not found\n== f() { echo \"L $LINENO\"; }⏎⏎f⏎g() {⏎⏎  echo \"G $LINENO\"⏎}⏎g\nL 1\nG 6\n== if true; then⏎  echo \"I $LINENO\"⏎fi; echo \"after $LINENO\"\nI 2\nafter 3\n== f() {⏎  cat <<E⏎$(nosuch17)⏎E⏎}⏎f\nbash: line 2: nosuch17: command not found\n\n== select v in a; do⏎  nosuch19⏎  break⏎done <<< 1\n1) a\n#? bash: line 2: nosuch19: command not found\n== until nosuch20⏎do break; done\nbash: line 1: nosuch20: command not found\n== f() {⏎  nosuch21 2>&1 |⏎  cat⏎}⏎f\nbash: line 2: nosuch21: command not found\n== { nosuch22⏎} 2>&1\nbash: line 1: nosuch22: command not found\n== f() {⏎  :⏎} >/nonexistent/x⏎f\nbash: line 1: /nonexistent/x: No such file or directory\n== f() {⏎  :⏎}⏎f >/nonexistent/y\nbash: line 4: /nonexistent/y: No such file or directory\n== while read -r l; do⏎  nosuch23⏎done <<< x\nbash: line 2: nosuch23: command not found\n== f() {⏎  echo $(( 2 / 0 ))⏎  echo after⏎}⏎f\nbash: line 2: 2 / 0 : division by 0 (error token is \"0 \")\n== f() {⏎  x=$(( 2 / 0 ))⏎}⏎f\nbash: line 2: 2 / 0 : division by 0 (error token is \"0 \")\n== f() {⏎  echo ${a[1/0]}⏎}⏎f\nbash: line 2: 1/0: division by 0 (error token is \"0\")\n== f() {⏎  echo \"$(⏎    nosuch24⏎  )\"⏎}⏎f\nbash: line 2: nosuch24: command not found\n\n== y=`⏎nosuch25⏎`\nbash: line 4: nosuch25: command not found\n== y=$(nosuch26⏎)\nbash: line 2: nosuch26: command not found\n== y=$(⏎⏎  nosuch27⏎⏎)\nbash: line 5: nosuch27: command not found\n== echo \"$(⏎  nosuch28⏎)\" \"$(⏎ nosuch29⏎)\"\nbash: line 1: nosuch28: command not found\nbash: line 1: nosuch29: command not found\n \n== f() {⏎  :⏎}  2>/nonexistent/z⏎⏎f\nbash: line 1: /nonexistent/z: No such file or directory\n== f()⏎{⏎  :⏎} >/nonexistent/w⏎f\nbash: line 2: /nonexistent/w: No such file or directory\n== f() { :; } >/nonexistent/v⏎⏎⏎f\nbash: line 1: /nonexistent/v: No such file or directory\n== cat <(⏎  nosuch30⏎)\nbash: line 1: nosuch30: command not found\n== (( 1 +⏎  1 / 0 ))\nbash: line 2: ((: 1 +\n  1 / 0 : division by 0 (error token is \"0 \")\n== echo $(( 1 +⏎  1 / 0 ))\nbash: line 1: 1 +\n  1 / 0 : division by 0 (error token is \"0 \")\n== if (( 1 / 0 )); then :; fi\nbash: line 1: ((: 1 / 0 : division by 0 (error token is \"0 \")\n== for (( i = 0;⏎  i < 1 / 0; i++ )); do :; done\nbash: line 1: ((: \n  i < 1 / 0: division by 0 (error token is \"0\")\n== case $((1/0)) in *) ;; esac\nbash: line 1: 1/0: division by 0 (error token is \"0\")\n== x=$(⏎  true⏎  nosuchA⏎)\nbash: line 5: nosuchA: command not found\n== x=$(true; nosuchB)\nbash: line 1: nosuchB: command not found\n== x=$(true⏎⏎⏎nosuchC)\nbash: line 5: nosuchC: command not found\n== x=$(if true; then⏎ nosuchD⏎fi)\nbash: line 4: nosuchD: command not found\n== x=$(# comment⏎  nosuchF⏎)\nbash: line 3: nosuchF: command not found\n== x=$(echo \"a⏎b\"; nosuchK)\nbash: line 3: nosuchK: command not found\n== x=$(echo $LINENO⏎  echo $LINENO)⏎echo \"$x\"\n2\n3\n== echo x \\⏎$(nosuchL)\nbash: line 1: nosuchL: command not found\nx\n== echo x\\⏎$(nosuchM)\nbash: line 1: nosuchM: command not found\nx\n== >/dev/null \\⏎  $(nosuchN)\nbash: line 1: nosuchN: command not found\n== a=1 \\⏎  b=$(nosuchO) \\⏎  true\nbash: line 1: nosuchO: command not found\n== echo $(⏎  echo $LINENO⏎)\n1\n== x=$(⏎  echo $LINENO⏎); echo $x\n3\n== x=`⏎echo $LINENO⏎`; echo $x\n4\n== for i in 1; do⏎  x=$(⏎    nosuchP⏎  )⏎done\nbash: line 4: nosuchP: command not found\n== f() {⏎  x=$(⏎    nosuchQ⏎  )⏎}⏎f\nbash: line 4: nosuchQ: command not found\n== echo $((⏎  1/0 ))\nbash: line 1: \n  1/0 : division by 0 (error token is \"0 \")\n== x=$((⏎  1/0⏎))\nbash: line 3: \n  1/0\n: division by 0 (error token is \"0\n\")\n== {⏎  :⏎} >/nonexistent/a\nbash: line 3: /nonexistent/a: No such file or directory\n== (⏎  :⏎) >/nonexistent/b\nbash: line 3: /nonexistent/b: No such file or directory\n== while false⏎do⏎  :⏎done >/nonexistent/c\nbash: line 4: /nonexistent/c: No such file or directory\n== for i in 1⏎do⏎  :⏎done >/nonexistent/d\nbash: line 4: /nonexistent/d: No such file or directory\n== if true⏎then⏎  :⏎fi >/nonexistent/e\nbash: line 4: /nonexistent/e: No such file or directory\n== case x in⏎  x) :⏎esac >/nonexistent/f\nbash: line 3: /nonexistent/f: No such file or directory\n== ((⏎ 1 )) >/nonexistent/g\nbash: line 2: /nonexistent/g: No such file or directory\n== [[ 1 &&⏎ 1 ]] >/nonexistent/h\nbash: line 2: /nonexistent/h: No such file or directory\n== echo $LINENO \\⏎  $LINENO\n1 1\n== a=\"x⏎y\" echo $LINENO\n2\n== a=\"x⏎y\" b=$LINENO; echo $b\n2\n== \"ec\"'ho' $LINENO \"a⏎b\" $LINENO\n1 a\nb 1\n== x=1 \\⏎ y=$LINENO; echo $y\n1\n== >/dev/null \\⏎ echo $LINENO >&2\n1\n== f() {⏎  :⏎}⏎⏎f; echo \"f $LINENO\"\nf 5\n== { echo \"g $LINENO\"⏎}\ng 1\n== if⏎  nosuchR⏎then :; fi\nbash: line 2: nosuchR: command not found\n== nosuchS \\⏎  a\nbash: line 1: nosuchS: command not found\n== x=\"a⏎b\" nosuchT\nbash: line 2: nosuchT: command not found\n== x=\"a⏎b\"\\⏎ nosuchU\nbash: line 3: nosuchU: command not found\n== declare -i n⏎n=\"1⏎+⏎1/0\"\nbash: line 4: 1\n+\n1/0: division by 0 (error token is \"0\")\n== echo \"$((⏎ 1/0 ))\" $LINENO\nbash: line 1: \n 1/0 : division by 0 (error token is \"0 \")\n== f() { echo \"${x?⏎}\"; }⏎f\nbash: line 1: x: \n\n"
+   }
+  },
+  "runtime: long arithmetic chains and 100 levels of nesting": {
+   "script": "6b1702263d95c0ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "30001\n1\n1\n2\n30001 1\n"
+   }
+  },
+  "runtime: malformed numbers are named as bash names them": {
+   "script": "b31af89204f0d91b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 08: value too great for base (error token is \"08\")\nbash: line 1: 09: value too great for base (error token is \"09\")\nbash: line 1: 1 + 08: value too great for base (error token is \"08\")\nbash: line 1: 2#3: value too great for base (error token is \"2#3\")\nbash: line 1: 0xg: value too great for base (error token is \"0xg\")\nbash: line 1: 0x1g: value too great for base (error token is \"0x1g\")\nbash: line 1: 1a: value too great for base (error token is \"1a\")\nbash: line 1: 65#1: invalid arithmetic base (error token is \"65#1\")\nbash: line 1: 1#: invalid arithmetic base (error token is \"1#\")\nbash: line 1: 0#1: invalid number (error token is \"0#1\")\nbash: line 1: 2#1#1: invalid number (error token is \"2#1#1\")\nbash: line 1: 10#: invalid integer constant (error token is \"10#\")\nbash: line 1: 2#: invalid integer constant (error token is \"2#\")\nbash: line 1: 10#12a: value too great for base (error token is \"10#12a\")\nbash: line 1: 37#Z: value too great for base (error token is \"37#Z\")\nbash: line 1: 1_0: value too great for base (error token is \"1_0\")\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\n"
+   }
+  },
+  "runtime: noclobber refuses &> and >&word over a file": {
+   "script": "3a5977e5fe905f02",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: cannot overwrite existing file\nbash: line 1: f: cannot overwrite existing file\nbash: line 1: /tmp/f: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "s1=1\ns2=1\ns3=1\ns4=0\ns5=0\ns6=0\ns7=0\ny\nz\n"
+   }
+  },
+  "runtime: overflowing literals wrap and a bare 0x is 0": {
+   "script": "3694cf737f73f052",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7766279631452241919 0 -1 -1 0 2 1 5 5 4094\n"
+   }
+  },
+  "runtime: promptvars is on by default and can be restored": {
+   "script": "99434cd0d0a14da5",
+   "status": 0,
+   "stderr": {
+    "text": "$x : off\n$x set +x\nX : on\nX set +x\n"
+   },
+   "stdout": {
+    "text": "promptvars          \ton\ns=0\nlisted\ns=0\n"
+   }
+  },
+  "runtime: read -n 0 reads nothing": {
+   "script": "4f72d7b25966da15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0 []\ns=0 []\n"
+   }
+  },
+  "runtime: read and mapfile keep control bytes and end strings at NUL": {
+   "script": "5e61b30f536ac3a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ab]\n[a]\n   a 001   b 033   c 003   d 004   e\n   a 001   b 003   c 004   d  \\n\n2\n   a\ndeclare -a m=([0]=\"a\" [1]=\"b\")\ndeclare -a m=([0]=\"a\" [1]=\"b\")\n"
+   }
+  },
+  "runtime: read evaluates a subscript, readonly refuses one, mapfile -O takes a number": {
+   "script": "4fb0d760db34ad23",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: readonly: `b[1]': not a valid identifier\nbash: line 2: readonly: `b2[1+1]': not a valid identifier\nbash: line 3: mapfile: 1+1: invalid array origin\nbash: line 3: mapfile: -1: invalid array origin\nbash: line 3: mapfile: x: invalid array origin\nbash: line 4: 1+: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "declare -a a=([2]=\"v\")\ndeclare -a k=([2]=\"u\")\nr=1\nbash: line 2: declare: b: not found\nr2=1\ndeclare -a d=([2]=$'x\\n')\nm=1\nm2=1\nm3=1\ns=1\n"
+   }
+  },
+  "runtime: read splits fields as bash does": {
+   "script": "2ce07d2162231b3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[key]|[value]|[]| arr(2):[key][value]\n[key]|[value]|[more : x]| arr(4):[key][value][more][x]\n[a]|[b]|[c]| arr(3):[a][b][c]\n[a]|[b]|[c,d,]| arr(4):[a][b][c][d]\n[a]|[]|[b]| arr(3):[a][][b]\n[]|[a]|[]| arr(2):[][a]\n[a]|[]|[b]| arr(3):[a][][b]\n[a]|[b]|[c,d ,]| arr(4):[a][b][c][d]\n[x]|[]|[y]| arr(3):[x][][y]\n[x]|[]|[y::]| arr(4):[x][][y][]\n[a]|[b]|[c  d]| arr(4):[a][b][c][d]\n[a]|[]|[b]| arr(3):[a][][b]\n[a]|[b]|[]| arr(2):[a][b]\n[a]|[b]|[]| arr(2):[a][b]\n[a]|[b]|[c]| arr(3):[a][b][c]\n[]|[]|[]| arr(1):[]\n[]|[]|[]| arr(2):[][]\n"
+   }
+  },
+  "runtime: read, source, printf and command usage errors": {
+   "script": "0e2aaaa0420cce0f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: x: invalid number\nbash: line 1: read: 9: invalid file descriptor: Bad file descriptor\nbash: line 1: source: filename argument required\nsource: usage: source [-p path] filename [arguments]\nbash: line 1: .: filename argument required\n.: usage: . [-p path] filename [arguments]\nbash: line 1: printf: `1bad': not a valid identifier\nbash: line 1: nosuchcmd: command not found\n"
+   },
+   "stdout": {
+    "text": "readn 1\nreadu 1\nsrc 2\ndot 2\nprintf 2\ncmd 127\n"
+   }
+  },
+  "runtime: readonly array element assignment abandons the line": {
+   "script": "3c923a8a5a7361d5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: readonly variable\n"
+   },
+   "stdout": {
+    "text": "next=1 1 2\n"
+   }
+  },
+  "runtime: readonly array element in a function and an associative array": {
+   "script": "b86d8ff75973cebb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: readonly variable\nbash: line 2: m: readonly variable\n"
+   },
+   "stdout": {
+    "text": "x 1\n"
+   }
+  },
+  "runtime: readonly elements refuse read and printf -v": {
+   "script": "2d34b7fe04dcda0c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: m: readonly variable\nbash: line 1: declare: m: readonly variable\nbash: line 1: m: readonly variable\n"
+   },
+   "stdout": {
+    "text": "s=1 1\ns=1\ns=1 1\n"
+   }
+  },
+  "runtime: readonly functions cannot be redefined or unset": {
+   "script": "6c3955ff8d141164",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: readonly function\nbash: line 1: unset: f: cannot unset: readonly function\nbash: line 1: unset: f: cannot unset: readonly function\n"
+   },
+   "stdout": {
+    "text": "s=1\nf\ns=1\ns=1\nf\nf () \n{ \n    echo f\n}\ndeclare -fr f\ndeclare -fr f\ndeclare -fx g\ndeclare -fx g\n"
+   }
+  },
+  "runtime: readonly variables refuse builtins that assign them": {
+   "script": "6cb82add2c29b855",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: r: readonly variable\nbash: line 1: r: readonly variable\nbash: line 1: declare: r: readonly variable\nbash: line 1: r: readonly variable\nbash: line 1: r: readonly variable\nbash: line 1: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": "s=1 1\ns=1 1\ns=1\ns=1\ns=1\ns=1\nr=1\n"
+   }
+  },
+  "runtime: redirection diagnostics name what the script wrote": {
+   "script": "ff3e54e27f363cf2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: : No such file or directory\nbash: line 1: : No such file or directory\nbash: line 1: : No such file or directory\nbash: line 1: : No such file or directory\nbash: line 1: : No such file or directory\nbash: line 1: fd: ambiguous redirect\nbash: line 1: $fd: Bad file descriptor\nbash: line 1: \"$fd\": Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\n"
+   }
+  },
+  "runtime: return operands": {
+   "script": "dc2235cf65c2da05",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: abc: numeric argument required\nbash: line 1: return: can only `return' from a function or sourced script\n"
+   },
+   "stdout": {
+    "text": "neg 255\nabc 2\ntop 2\n"
+   }
+  },
+  "runtime: return with too many operands ends the shell": {
+   "script": "5c76f7d81a326f20",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: return: too many arguments\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "runtime: set - turns off xtrace and verbose, and set -k passes assignments to the command": {
+   "script": "72f4f0a078d59353",
+   "status": 0,
+   "stderr": {
+    "text": "+ set -\n"
+   },
+   "stdout": {
+    "text": "quiet\nhBc\n2 a b\n2 -x hBc\nhBc\n[1] 1\nb\n[] 1\n[] 1\n"
+   }
+  },
+  "runtime: set -v echoes each input line as it is read": {
+   "script": "8d6438e954c4d639",
+   "status": 0,
+   "stderr": {
+    "text": "eval \"echo e1\necho e2\"\necho e1\necho e2\n. ./f.sh\necho in-file\necho two\nf() { echo fn; }\nf\nbash -c \"echo child\"\ncat <<EOF\nhere\nEOF\nif true; then\n  echo inif\nfi\necho a; set +v; echo b\n"
+   },
+   "stdout": {
+    "text": "e1\ne2\nin-file\ntwo\nfn\nchild\nhere\ninif\na\nb\nc\n"
+   }
+  },
+  "runtime: set -v echoes here-documents in substitutions as bash does": {
+   "script": "30eefa1ba0168dc5",
+   "status": 0,
+   "stderr": {
+    "text": "x=$(cat <<EOF\nbody1\nbody2\nEOF\nbody1\nbody2\nEOF\necho \"$x\"\ny=$(echo a\nz=$(cat <<EOF; echo c\nb3\nEOF\nb3\nEOF\nw=$(\nb4\nEOF\nb4\nEOF\ne=$(cat <<EOF\nEOF\nEOF\ntwo=$(cat <<A; cat <<-B\n1\nA\n\t2\n\tB\n1\nA\n2\nB\nseq=$(cat <<A\n3\nA\n4\nB\n3\nA\n4\nB\nq=\"$(cat <<X\nq1\nX\nq1\nX\nq1\nX\nf() {\n  v=$(cat <<E\nfbody\nE\n}\necho end\n"
+   },
+   "stdout": {
+    "text": "body1\nbody2\nend\n"
+   }
+  },
+  "runtime: set -v skips the continuation lines of a multi-line command substitution": {
+   "script": "8dbc88cee3696b2c",
+   "status": 0,
+   "stderr": {
+    "text": "x=$(echo a\ny=`echo c\necho d`\nz=$((1+\n2))\necho \"e\nf\"\nw=$(echo $(echo g\nu=$( # comment )\nt=$(case x in x) echo j;;\necho end\n"
+   },
+   "stdout": {
+    "text": "after\ne\nf\ng h\nend\n"
+   }
+  },
+  "runtime: special builtin errors in POSIX mode": {
+   "script": "57611559f5626448",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[set -Z] -> 2\n[export 1x=2] -> 1\n[readonly 2y] -> 1\n[unset -Q x] -> 2\n  continued\n[shift 5] -> 0\n[shift x] -> 2\n[trap -Q] -> 2\n  continued\n[trap x BOGUS] -> 0\n[eval \"if\"] -> 2\n[export -Q] -> 2\n[times -Q] -> 2\n  continued\n[break] -> 0\n[: > /nonexistent/f] -> 1\n[set -o bogus] -> 2\n[exec 3</nonexistent] -> 1\n[unset r] -> 1\n[r=2 :] -> 1\n[export r=2] -> 1\n[readonly r=3] -> 1\n[. /nonexistent] -> 1\n[return] -> 2\n[exit x] -> 2\n  continued\n[continue 0] -> 0\n[set +o bogus] -> 2\n[eval \": > /nonexistent/g\"] -> 1\n  continued\n[shift -1] -> 0\n  continued\n[f() { return 2; }; f] -> 0\n  continued\n[eval false] -> 0\n[eval \"exit 3\"] -> 3\n"
+   }
+  },
+  "runtime: substitutions run and print as bash prints them back": {
+   "script": "d8709a015cac3142",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    a=$(true\nnosuchA);\n    b=$(true; nosuchB);\n    c=$(true\nnosuchC);\n    d=$(if true; then\n    nosuchD;\nfi);\n    e=$(true; if true; then\n    nosuchE;\nfi);\n    g=$(nosuchF);\n    h=$(true && nosuchG);\n    i=$(for i in 1;\ndo\n    true\nnosuchI;\ndone);\n    j=$(cat <<E\nhi\nE\n\nnosuchJ);\n    k=$(echo \"a\nb\"; nosuchK);\n    l=$(if true; then\n    a; b\nc;\nfi);\n    m=`\nx\ny`;\n    n=\"$(x\ny)\" o=$(function g () \n{ \n    x\n\n    y\n});\n    p=$(case q in q)\n        r\n    ;;\n    s | t)\n        u\n    ;&\nesac);\n    w=$( ( a; b ));\n    z=$(a | b && c || d);\n    cat <(e1\nf1);\n    echo $(( 1 +\n2 ))\n}\n  bash: line 5: nosuchA: command not found\n  bash: line 4: nosuchB: command not found\n  bash: line 8: nosuchC: command not found\n  bash: line 10: nosuchD: command not found\n  bash: line 10: nosuchE: command not found\n  bash: line 11: nosuchF: command not found\n  bash: line 12: nosuchG: command not found\n  bash: line 18: nosuchI: command not found\n  bash: line 22: nosuchJ: command not found\n  bash: line 20: nosuchK: command not found\n  bash: line 21: a: command not found\n  bash: line 21: b: command not found\n  bash: line 22: c: command not found\n  bash: line 23: x: command not found\n  bash: line 24: y: command not found\n  bash: line 23: x: command not found\n  bash: line 24: y: command not found\n  bash: line 27: r: command not found\n  bash: line 26: a: command not found\n  bash: line 26: b: command not found\n  bash: line 27: a: command not found\n  bash: line 27: b: command not found\n  bash: line 27: d: command not found\n  bash: line 27: e1: command not found\n  bash: line 28: f1: command not found\n  3\nno-in a\nno-in b\nk () \n{ \n    for v in ;\n    do\n        :;\n    done;\n    for v in \"$@\";\n    do\n        :;\n    done;\n    select v in ;\n    do\n        :;\n    done\n}\n[x=$(echo 1\necho 2)]\n[trap - DEBUG]\n36 37 36\nps 39\nps 40\n"
+   }
+  },
+  "runtime: syntax errors name the token bash stops at": {
+   "script": "09e756892751262c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: 1 @ 2: arithmetic syntax error: invalid arithmetic operator (error token is \"@ 2\")\nbash: line 1: 3 4: arithmetic syntax error in expression (error token is \"4\")\nbash: line 1: a b c: arithmetic syntax error in expression (error token is \"b c\")\nbash: line 1: 1=2: attempted assignment to non-variable (error token is \"=2\")\nbash: line 1: b = 3 = 4: attempted assignment to non-variable (error token is \"= 4\")\nbash: line 1: x++=7: attempted assignment to non-variable (error token is \"=7\")\nbash: line 1: 1 <<= 2: attempted assignment to non-variable (error token is \"<<= 2\")\nbash: line 1: 1 ? 2: `:' expected for conditional expression (error token is \"2\")\nbash: line 1: 1 ? : 3: expression expected (error token is \": 3\")\nbash: line 1: 1 ? 2 : : expression expected (error token is \": \")\nbash: line 1: (1: missing `)' (error token is \"1\")\nbash: line 1: 1 +* 2: arithmetic syntax error: operand expected (error token is \"* 2\")\nbash: line 1: !: arithmetic syntax error: operand expected (error token is \"!\")\nbash: line 1: 1 < : arithmetic syntax error: operand expected (error token is \"< \")\nbash: line 1: 1.5: arithmetic syntax error: invalid arithmetic operator (error token is \".5\")\nbash: line 1: x=: arithmetic syntax error: operand expected (error token is \"=\")\nbash: line 1: 1++: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: --4++: arithmetic syntax error: operand expected (error token is \"+\")\nbash: line 1: a[: bad array subscript (error token is \"a[\")\nbash: line 1: a[1: bad array subscript (error token is \"a[1\")\nbash: line 1: 'a': arithmetic syntax error: operand expected (error token is \"'a'\")\nbash: line 1: (a)=1: attempted assignment to non-variable (error token is \"=1\")\nbash: line 1: -a=1: attempted assignment to non-variable (error token is \"=1\")\nbash: line 1: 1 ? a : b = 2: attempted assignment to non-variable (error token is \"= 2\")\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\ns=1\n"
+   }
+  },
+  "runtime: test -a binds tighter than -o": {
+   "script": "c4fd4a34d55aeebc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n0\n0\n0\n"
+   }
+  },
+  "runtime: the P transform expands a prompt string": {
+   "script": "5f89bf9bfb8411bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a$ val\n"
+   }
+  },
+  "runtime: time follows TIMEFORMAT": {
+   "script": "8f2a97ecc3d6be11",
+   "status": 0,
+   "stderr": {
+    "text": "a%b [0m0s] [%\nbash: line 1: TIMEFORMAT: `x': invalid format character\n"
+   },
+   "stdout": {
+    "text": "took\nreal \n"
+   }
+  },
+  "runtime: too many operands to break, continue, shift and suspend end the shell": {
+   "script": "a789fa2421a17cdf",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: break: too many arguments\nbash: line 1: continue: too many arguments\nbash: line 1: shift: too many arguments\nbash: line 1: suspend: too many arguments\nbash: line 2: shift: too many arguments\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\ns=1\n"
+   }
+  },
+  "runtime: trap -p lists traps in bash's order": {
+   "script": "e2d9d1aa34b8ee39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nd\nd\nd\nd\ntrap -- 'echo x' EXIT\ntrap -- 'echo h' SIGHUP\ntrap -- 'echo t' SIGINT\ntrap -- 'echo t' SIGTERM\ntrap -- 'echo d' DEBUG\ntrap -- 'echo e' ERR\ntrap -- 'echo r' RETURN\nd\ntrap -- 'echo x' EXIT\ntrap -- 'echo h' SIGHUP\ntrap -- 'echo t' SIGINT\ntrap -- 'echo t' SIGTERM\ntrap -- 'echo d' DEBUG\ntrap -- 'echo e' ERR\ntrap -- 'echo r' RETURN\nd\n"
+   }
+  },
+  "runtime: unset of every element of an indexed array": {
+   "script": "060e6a65c20d65e5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unset: x: not an array variable\nbash: line 1: unset: z: not an array variable\n"
+   },
+   "stdout": {
+    "text": "0 []\ndeclare -a a=()\n0\ndeclare -a a=([0]=\"z\")\n2\ns=1 [1]\n[unset]\ns=1 [1]\n"
+   }
+  },
+  "runtime: unset refuses readonly variables and elements": {
+   "script": "f804ec9a39ee9cb8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unset: a: cannot unset: readonly variable\nbash: line 1: unset: a: cannot unset: readonly variable\nbash: line 1: unset: a: cannot unset: readonly variable\nbash: line 1: unset: m: cannot unset: readonly variable\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\ns=1\ndeclare -ar a=([0]=\"1\" [1]=\"2\")\ndeclare -Ar m=([k]=\"1\" )\n"
+   }
+  },
+  "runtime: unset removes quotes around an associative key": {
+   "script": "a08f915bcba96f1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "runtime: words, assignments, then redirections": {
+   "script": "a117a02d79302726",
+   "status": 0,
+   "stderr": {
+    "text": "A\nR\nA3\nR3\nW4\nW5\nR4\nW6\nR6\nW2\nA\nR2\n"
+   },
+   "stdout": {
+    "text": "r_A\ns_A\nA\n\n[]\n"
+   }
+  },
+  "runtime: write errors and the NUL warning carry the diagnostic prefix": {
+   "script": "ff3ecde2dba1f875",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: echo: write error: Broken pipe\nbash: line 1: warning: command substitution: ignored null byte in input\n"
+   },
+   "stdout": {
+    "text": "[ab]\n"
+   }
+  },
+  "runtime: xtrace ignores the traced command's redirections": {
+   "script": "2cfc44596be40bf1",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo hi\n++ echo captured\n+ v=captured\n+ x=1\n+ f\n+ y=2\n+ echo pre\n+ set +x\n"
+   },
+   "stdout": {
+    "text": "grp\ninf\npre\nhi\nv=captured\n"
+   }
+  },
+  "runtime: xtrace levels: stages, subshells, eval, source, substitutions and traps": {
+   "script": "c80a179a298b00a6",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo s\n+ set +x\n+ echo b\n++ echo d\n+ x=d\n+ eval 'echo e'\n++ echo e\n+ f\n+ echo g\n+ . /tmp/s\n++ echo h\n++ eval 'echo h2'\n+++ echo h2\n++ echo i\n+ y=i\n+++ echo k\n++ echo k\n+ echo k\n+ eval 'eval \"echo m\"'\n++ eval 'echo m'\n+++ echo m\n+ false\n++ echo err\n+ trap 'echo dbg' DEBUG\n++ echo dbg\n+ : one\n++ echo dbg\n+ trap - DEBUG\n+ trap 'echo x' EXIT\n+ echo in\n++ echo x\n"
+   },
+   "stdout": {
+    "text": "s\nb\ne\ng\nh\nh2\nk\nm\nerr\ndbg\ndbg\nin\nx\n"
+   }
+  },
+  "runtime: xtrace of declaration builtins' assignments": {
+   "script": "d06dfda75f6511a1",
+   "status": 0,
+   "stderr": {
+    "text": "+ export a=1\n+ a=1\n+ export e= g=1\n+ e=\n+ g=1\n+ declare x=1\n+ n=()\n+ o=('')\n+ declare -a n o\n+ m=(['k']='v' ['c']='x y')\n+ declare -A m\n+ readonly r=1\n+ r=1\n+ f\n+ k=('1' '2')\n+ local l=1 k\n+ export p\n+ ra=('1' '2')\n+ readonly -a ra\n+ export -n a2=1\n+ a2=1\n+ export b+=2 'c=x y'\n+ b+=2\n+ c='x y'\n+ readonly r2 r3=3\n+ r3=3\n+ n2+=('a' 'b')\n+ declare -a n2\n+ e1=('a b' 'c\td' 'it'\\''s')\n+ declare -a e1\n+ declare 'u=(1 2)'\n+ x=5\n+ export y=6\n+ y=6\n+ readonly ro=1\n+ ro=1\n+ export ro=2\n+ ro=2\nbash: line 18: ro: readonly variable\n+ echo done\n"
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "runtime: xtrace prints empty assignments and (( )) as bash does": {
+   "script": "47b682466c2b998e",
+   "status": 0,
+   "stderr": {
+    "text": "+ a=\n+ b=\n+ c=1\n+ x='p q'\n+ (( x=1+2 ))\n+ (( x > 2 ))\n+ (( i=0 ))\n+ (( i<1 ))\n+ :\n+ (( i++ ))\n+ (( i<1 ))\n+ PS4=\necho end\n"
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

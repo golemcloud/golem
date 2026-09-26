@@ -1,0 +1,138 @@
+{
+ "cases": {
+  "bash: -c with positional arguments": {
+   "script": "cc9b5d498a409afb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<one>\n<two words>\n"
+   }
+  },
+  "bash: -e stops at the first failure": {
+   "script": "b7dd2eb4363d5e73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "bash: -o pipefail": {
+   "script": "93848069ff230673",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "bash: -u sets the nounset option": {
+   "script": "b6971e1800db3edf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nounset\ndefault\n"
+   }
+  },
+  "bash: stdin reaches the script": {
+   "script": "fd33fb54c84763a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "piped\ndone\n"
+   }
+  },
+  "find: exec bash -c batch": {
+   "script": "a7e484463f5f2088",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "find: exec sh -c per file": {
+   "script": "ed70016fcce8404c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<./a b>\n<./c>\n"
+   }
+  },
+  "sh: -c with positional arguments": {
+   "script": "1d97c1839c7c7bb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a-b c 2\n"
+   }
+  },
+  "sh: child exit status, cwd and variables stay inside": {
+   "script": "592f3178414a3963",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pwd=/tmp x=unset\n"
+   }
+  },
+  "sh: nested sh -c": {
+   "script": "7efd88231dc85e90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner deep\n"
+   }
+  },
+  "sh: script read from stdin with -s": {
+   "script": "05586eb70930a755",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from-stdin arg\n"
+   }
+  },
+  "xargs: bash -c per item": {
+   "script": "d2ca4dbd376ff040",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n20\n30\n"
+   }
+  },
+  "xargs: sh -c exit status": {
+   "script": "c52f7c93ad6576be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=123\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

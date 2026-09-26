@@ -1,0 +1,1518 @@
+{
+ "cases": {
+  "dd: tool-layer error paths": {
+   "script": "355360eeee9bb10e",
+   "status": 0,
+   "stderr": {
+    "text": "dd: failed to open '/nonexistent': No such file or directory\ndd: invalid number: '0'\ndd: unrecognized operand 'foo=1'\nTry 'dd --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\nst=1\n"
+   }
+  },
+  "du: tool-layer error paths": {
+   "script": "51cf22f56d8bd75f",
+   "status": 0,
+   "stderr": {
+    "text": "du: cannot access '/nonexistent': No such file or directory\ndu: unrecognized option '--bogus'\nTry 'du --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\n"
+   }
+  },
+  "hostname: tool-layer error paths": {
+   "script": "f890a880cf3d1e57",
+   "status": 0,
+   "stderr": {
+    "text": "hostname: unrecognized option: x\nBusyBox v1.37.0 (2026-01-10 15:38:28 UTC) multi-call binary.\n\nUsage: hostname [-sidf] [HOSTNAME | -F FILE]\n\nShow or set hostname or DNS domain name\n\n\t-s\tShort\n\t-i\tAddresses for the hostname\n\t-d\tDNS domain name\n\t-f\tFully qualified domain name\n\t-F FILE\tUse FILE's content as hostname\n"
+   },
+   "stdout": {
+    "text": "st=1\n"
+   }
+  },
+  "nproc: tool-layer error paths": {
+   "script": "ed9d35b62898435c",
+   "status": 0,
+   "stderr": {
+    "text": "nproc: unrecognized option '--bogus'\nTry 'nproc --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "st=1\n"
+   }
+  },
+  "printenv: tool-layer options and their errors": {
+   "script": "9a89ef5e88cce633",
+   "status": 0,
+   "stderr": {
+    "text": "printenv: invalid option -- 'x'\nTry 'printenv --help' for more information.\nprintenv: unrecognized option '--bogus'\nTry 'printenv --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "st=2\nst=2\nUsage: printenv [OPTION] [VARIABLE]...\n"
+   }
+  },
+  "timeout: its own errors": {
+   "script": "9fdb1459dfc5b580",
+   "status": 0,
+   "stderr": {
+    "text": "Try 'timeout --help' for more information.\nTry 'timeout --help' for more information.\ntimeout: invalid time interval ‘x’\nTry 'timeout --help' for more information.\ntimeout: invalid option -- '1'\nTry 'timeout --help' for more information.\ntimeout: invalid time interval ‘1z’\nTry 'timeout --help' for more information.\ntimeout: ‘FOO’: invalid signal\nTry 'timeout --help' for more information.\ntimeout: ‘99’: invalid signal\nTry 'timeout --help' for more information.\ntimeout: unrecognized option '--bogus'\nTry 'timeout --help' for more information.\ntimeout: invalid option -- 'x'\nTry 'timeout --help' for more information.\nTry 'timeout --help' for more information.\ntimeout: invalid time interval ‘x’\nTry 'timeout --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "st=125\nst=125\nst=125\nst=125\nst=125\nst=125\nst=125\nst=125\nst=125\nst=125\nst=125\n"
+   }
+  },
+  "tool-layer: -x holds for a program path": {
+   "script": "fd528cdf68a5e51b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n/bin/cat ok\n/usr/bin/head ok\n"
+   }
+  },
+  "tool-layer: -x on a directory and on other files": {
+   "script": "67906390cc397094",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dir\nnotx\nnotx2\nnone\nno-cd\nno-export\n"
+   }
+  },
+  "tool-layer: /dev/fd/3 opens the file again": {
+   "script": "7ad0514f30e0b84d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "file\nend\n"
+   }
+  },
+  "tool-layer: /dev/stdin for diff, cmp, sed and grep": {
+   "script": "f6bc42bd4cc0a51c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< c\n---\n> b\nst=1\nst=0\na\nx\nb\nst=0\na\nst=0\n"
+   }
+  },
+  "tool-layer: /usr/bin and /bin both hold every command": {
+   "script": "64418c69eb22295b",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: /usr/bin/cat: No such file or directory\nenv: ‘/usr/bin/printenv’: No such file or directory\nbash: line 1: /bin/bash: No such file or directory\nbash: line 1: /usr/bin/sed: No such file or directory\nbash: line 1: /usr/bin/./cat: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "st=127\n"
+   }
+  },
+  "tool-layer: 400 nested braces": {
+   "script": "9218568d7c63b6b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "tool-layer: FUNCNEST": {
+   "script": "6174ba71045bf2d6",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: f: maximum function nesting level exceeded (50)\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "tool-layer: FUNCNEST in a substitution": {
+   "script": "c35bdcacded2531e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: maximum function nesting level exceeded (3)\n"
+   },
+   "stdout": {
+    "text": "st=1 x=\nend\n"
+   }
+  },
+  "tool-layer: FUNCNEST=5": {
+   "script": "0474abfe1f508be3",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: f: maximum function nesting level exceeded (5)\n"
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n"
+   }
+  },
+  "tool-layer: TMPDIR reaches mktemp": {
+   "script": "7b4ea093fff93e40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/mine/tmp\n/tmp/mine/tmp\n"
+   }
+  },
+  "tool-layer: TZ reaches date": {
+   "script": "fe64134762a50749",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "09:00\n19\n03\n00\n"
+   }
+  },
+  "tool-layer: a builtin only a shell can be has no program path": {
+   "script": "36cba2e0597742f4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /bin/read: No such file or directory\nbash: line 1: /bin/cd: No such file or directory\nbash: line 1: /bin/export: No such file or directory\nbash: line 1: /bin/declare: No such file or directory\nbash: line 1: /usr/bin/read: No such file or directory\nxargs: read: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "st=127 x=\nst=127\nst=127\nst=127\nst=127\nno-read\n/bin/echo\nst=1\nst=127\ngot x\n"
+   }
+  },
+  "tool-layer: a device is no directory": {
+   "script": "c9968993cda99b9c",
+   "status": 0,
+   "stderr": {
+    "text": "cat: /dev/null/: Not a directory\ncat: /dev/null/.: Not a directory\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\n"
+   }
+  },
+  "tool-layer: a file as a command": {
+   "script": "3658b005c38c4616",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/s.sh: Permission denied\n"
+   },
+   "stdout": {
+    "text": "st=126\n"
+   }
+  },
+  "tool-layer: a file operand leaves standard input alone": {
+   "script": "bb2ced4875d72255",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\ndata\n"
+   }
+  },
+  "tool-layer: a path that names no command is no program": {
+   "script": "72cb343bfe32c69a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /bin/nosuchcommand: No such file or directory\nbash: line 1: /bin/cd: No such file or directory\nbash: line 1: /bin/export: No such file or directory\ncat: nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "st=127\nst=127\nst=127\nst=1\n"
+   }
+  },
+  "tool-layer: a program path is resolved as a path": {
+   "script": "0da60b41ecb21379",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nx\nvia-exec\n"
+   }
+  },
+  "tool-layer: a program path runs the command": {
+   "script": "af02a8c8b75fa507",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nhi\n2\n1\na\nst=0\n"
+   }
+  },
+  "tool-layer: a user file named like a capture survives": {
+   "script": "4463f8baf8f9ab06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n     1\tx\nkeep\n"
+   }
+  },
+  "tool-layer: an empty operand names nothing": {
+   "script": "0d7b452b49133b6b",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access '': No such file or directory\ncat: '': No such file or directory\nwc: invalid zero-length file name\n"
+   },
+   "stdout": {
+    "text": "st=2\nst=1\nst=1\n"
+   }
+  },
+  "tool-layer: answers to rm -i": {
+   "script": "bf28b7f693faa0ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ls: cannot access 'f': No such file or directory\ng\n"
+   }
+  },
+  "tool-layer: arithmetic recursion 31 deep": {
+   "script": "b8fb80bb60af756a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "tool-layer: arithmetic variable recursion": {
+   "script": "91516824e0be6e16",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a+1: expression recursion level exceeded (error token is \"a+1\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "tool-layer: backup suffix reaches cp": {
+   "script": "d3eab7137ab3c192",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nb.bak\n"
+   }
+  },
+  "tool-layer: bash builtins that are programs run by path": {
+   "script": "3c68a38e297b1a20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\np\nt\nt2\nf\n/\nk\nx-echo\nx-test\n"
+   }
+  },
+  "tool-layer: builtin runs only a shell builtin": {
+   "script": "55bb2385e12384f1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: builtin: env: not a shell builtin\nbash: line 1: builtin: cat: not a shell builtin\nbash: line 1: builtin: jq: not a shell builtin\nbash: line 1: builtin: sh: not a shell builtin\nbash: line 1: builtin: timeout: not a shell builtin\nbash: line 1: builtin: nosuch: not a shell builtin\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\nst=1\nst=1\nst=1\nhi\nst=0\nst=1\nfile\nt\n"
+   }
+  },
+  "tool-layer: cat f >> f": {
+   "script": "ba887d29981fe1ef",
+   "status": 0,
+   "stderr": {
+    "text": "cat: /tmp/o: input file is output file\n"
+   },
+   "stdout": {
+    "text": "st=1\nx\nst=0\n0\n"
+   }
+  },
+  "tool-layer: cd /dev then rm": {
+   "script": "71bee89a2e3bc0e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rm=0\nproject\n"
+   }
+  },
+  "tool-layer: changing devices": {
+   "script": "af32963949f17f46",
+   "status": 0,
+   "stderr": {
+    "text": "rm: cannot remove '/dev/null': Permission denied\nln: failed to create hard link '/tmp/link' => '/dev/null': Cross-device link\nrmdir: failed to remove '/dev/fd': Permission denied\ntouch: cannot touch 'x': Permission denied\n"
+   },
+   "stdout": {
+    "text": "st=0\nst=1\nst=1\nst=0\nst=1\nst=1\n"
+   }
+  },
+  "tool-layer: closed descriptors do not exist": {
+   "script": "8cd0873e2d2ca1ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e-false\nw-false\ne7-true\nst=0\n"
+   }
+  },
+  "tool-layer: closed standard input": {
+   "script": "d44445a73dffe242",
+   "status": 0,
+   "stderr": {
+    "text": "cat: -: Bad file descriptor\ncat: closing standard input: Bad file descriptor\nnl: -: Bad file descriptor\nnl: -: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\n"
+   }
+  },
+  "tool-layer: command -v and type report a program's file": {
+   "script": "97d4c34e8d19260d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/bin/cat\necho\ncd\ncat is /bin/cat\necho is a shell builtin\ncat is /bin/cat\necho is a shell builtin\nfile\nbuiltin\nbuiltin\n/bin/cat\nst=0\n/bin/echo\n/bin/cat\n"
+   }
+  },
+  "tool-layer: command runs a program path": {
+   "script": "264580b4e42117a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "via-command\nst=0\n"
+   }
+  },
+  "tool-layer: command substitution over the limit": {
+   "script": "542582ee9bbbcf2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0 67999999\nafter\n"
+   }
+  },
+  "tool-layer: command substitution under the limit": {
+   "script": "6a2050d2bcce160a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0 66999999\n"
+   }
+  },
+  "tool-layer: compgen -b lists only shell builtins": {
+   "script": "31ed8ed49b2d0bad",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n:\n[\nalias\nbg\nbind\nbreak\nbuiltin\ncaller\ncd\ncommand\ncompgen\ncomplete\ncompopt\ncontinue\ndeclare\ndirs\ndisown\necho\nenable\neval\nexec\nexit\nexport\nfalse\nfc\nfg\ngetopts\nhash\nhelp\nhistory\njobs\nkill\nlet\nlocal\nlogout\nmapfile\npopd\nprintf\npushd\npwd\nread\nreadarray\nreadonly\nreturn\nset\nshift\nshopt\nsource\nsuspend\ntest\ntimes\ntrap\ntrue\ntype\ntypeset\nulimit\numask\nunalias\nunset\nwait\ncaller\ncd\ncommand\ncompgen\ncomplete\ncompopt\ncontinue\n61\n0\n0\n"
+   }
+  },
+  "tool-layer: compgen -c lists this shell's commands": {
+   "script": "b51b7785e9684811",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cat\ncase\njq\ntimeout\ncaller\n"
+   }
+  },
+  "tool-layer: csplit reads standard input": {
+   "script": "1ec81397bb44a5e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\n14 xx00\n16 xx01\n30 total\n"
+   }
+  },
+  "tool-layer: curl --data-urlencode forms": {
+   "script": "b2ef13e53afb2356",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "http://127.0.0.1:1/p?a=b+c%26d&%C3%A9&x+y&k=\nstatus=7\n"
+   }
+  },
+  "tool-layer: curl --data-urlencode from a file": {
+   "script": "48fab876da74fba0",
+   "status": 0,
+   "stderr": {
+    "text": "curl: Failed to open /tmp/nosuch\ncurl: option --data-urlencode: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   },
+   "stdout": {
+    "text": "http://127.0.0.1:1/p?n=q+r%0A&q+r%0A\nstatus=7\nstatus=26\n"
+   }
+  },
+  "tool-layer: curl -K file errors": {
+   "script": "ba2f0ebf79548b57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "curl: /tmp/c:1 config file option 'bogus' is unknown\ncurl: option -K: found an unknown config option\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: /tmp/c:1 config file option 'max-time' requires parameter\ncurl: option -K: requires parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: /tmp/c:1 config file option '' is unknown\ncurl: option -K: found an unknown config option\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: Max config file recursion level reached (5)\ncurl: /tmp/c:1 config file option '-K' is badly used here\ncurl: /tmp/c:1 config file option '-K' is badly used here\ncurl: /tmp/c:1 config file option '-K' is badly used here\ncurl: /tmp/c:1 config file option '-K' is badly used here\ncurl: /tmp/c:1 config file option '-K' is badly used here\ncurl: option -K: is badly used here\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: /tmp/c:1 config file option 's' is unknown\ncurl: option -K: found an unknown config option\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: cannot read config from '/tmp/nosuch'\ncurl: option -K: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=26\ncurl: option -K: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=26\n"
+   }
+  },
+  "tool-layer: curl -K reads options from a file": {
+   "script": "81dc29fc3aa3f176",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[000]\nstatus=7\n<7>status=7\n"
+   }
+  },
+  "tool-layer: curl -w on a refused connection": {
+   "script": "8ef61189514865a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "curl: unknown --write-out variable: 'bogus'\n[000]7\nstatus=7\ncurl: (7) Failed to connect to 127.0.0.1:1 after N ms: Could not connect to server\ncurl: unknown --write-out variable: 'nope'\n000\nstatus=7\n"
+   }
+  },
+  "tool-layer: curl badly used and blank arguments": {
+   "script": "5678d6551a26165c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Warning: Illegally formatted input field\ncurl: option --form: is badly used here\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: option -F: is badly used here\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: option -o: blank argument where content is expected\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: option : blank argument where content is expected\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: option : blank argument where content is expected\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: (7) Failed to connect to 127.0.0.1:1 after N ms: Could not connect to server\ncurl: option --retry: expected a positive numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: option --retry: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\ncurl: option -Q: requires parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=2\n"
+   }
+  },
+  "tool-layer: curl sets up its output before connecting": {
+   "script": "1b9665fbac12a551",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "curl: (7) Failed to connect to 127.0.0.1:1 after N ms: Could not connect to server\nWarning: No remote filename, uses \"curl_response\"\ncurl: (7) Failed to connect to 127.0.0.1:1 after N ms: Could not connect to server\nWarning: No remote filename, uses \"curl_response\"\ncurl: (7) Failed to connect to 127.0.0.1:1 after N ms: Could not connect to server\ncurl: (7) Failed to connect to 127.0.0.1:1 after N ms: Could not connect to server\nstatus=7\ncurl: (7) Failed to connect to 127.0.0.1:1 after N ms: Could not connect to server\n# Netscape HTTP Cookie File\n# https://curl.se/docs/http-cookies.html\n# This file was generated by libcurl! Edit at your own risk.\n\n/tmp:\na\njar\n\n/tmp/a:\nb\n\n/tmp/a/b:\n"
+   }
+  },
+  "tool-layer: curl several URLs pair with their outputs": {
+   "script": "2d04f8f867a92bba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 http://127.0.0.1:1/\n7 http://127.0.0.1:1/\n7 http://127.0.0.1:1/\nstatus=7\n"
+   }
+  },
+  "tool-layer: curl unreadable data files": {
+   "script": "25cd105d1e324602",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "curl: Failed to open /tmp/nosuch\ncurl: option -d: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=26\ncurl: option --data: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=26\ncurl: Failed to open /tmp/nosuch\ncurl: option --data-binary: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\nstatus=26\ncurl: cannot open '/tmp/nosuch'\ncurl: try 'curl --help' or 'curl --manual' for more information\ncurl: (26) Failed to open/read local data from file/application\nstatus=26\ncurl: (26) Failed to open/read local data from file/application\nstatus=26\nstatus=26\n"
+   }
+  },
+  "tool-layer: declare -p into a pipe": {
+   "script": "a888a2eb32727160",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100016\n0 0\n"
+   }
+  },
+  "tool-layer: declare -p round trip": {
+   "script": "1422b2cf83b5e878",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20000\n"
+   }
+  },
+  "tool-layer: deleted working directory": {
+   "script": "f9dcc7eb80b5c6f6",
+   "status": 2,
+   "stderr": {
+    "text": "touch: cannot touch 'newfile': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "st=1\nls: cannot access '/newfile': No such file or directory\n"
+   }
+  },
+  "tool-layer: device statuses": {
+   "script": "23531538b39196ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=1\nst=1\nst=1\nst=1\nf\n"
+   }
+  },
+  "tool-layer: directory on standard input": {
+   "script": "839757da9c188666",
+   "status": 0,
+   "stderr": {
+    "text": "tr: read error: Is a directory\nuniq: error reading '-': Is a directory\ncut: -: Is a directory\nsort: read failed: -: Is a directory\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\nst=1\nst=2\n"
+   }
+  },
+  "tool-layer: directory operands": {
+   "script": "35a14f4926f26fa0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "uniq: error reading '/tmp/d': Is a directory\nuniq st=1\ncut: /tmp/d: Is a directory\ncut -c1 st=1\n==> /tmp/d <==\ntail: error reading '/tmp/d': Is a directory\n\n==> /tmp/f <==\ntail -n1 st=1\nrev st=0\ntac: /tmp/d: read error: Invalid argument\ntac st=1\njq: error: Is a directory\njq . st=2\n==> /tmp/d <==\nhead: error reading '/tmp/d': Is a directory\n\n==> /tmp/f <==\nhead -c1 st=1\nsort: read failed: /tmp/d: Is a directory\nsort st=2\nod: /tmp/d: Is a directory\nod -c st=1\nsed: read error on /tmp/d: Is a directory\nsed p st=4\nnl: /tmp/d: Is a directory\nnl st=1\ngrep: /tmp/d: Is a directory\ngrep x st=2\n"
+   }
+  },
+  "tool-layer: enable lists only shell builtins": {
+   "script": "e94418b76542e165",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "enable .\nenable :\nenable [\nenable alias\nenable bg\nenable bind\nenable break\nenable builtin\nenable caller\nenable cd\nenable command\nenable compgen\nenable complete\nenable compopt\nenable continue\nenable declare\nenable dirs\nenable disown\nenable echo\nenable enable\nenable eval\nenable exec\nenable exit\nenable export\nenable false\nenable fc\nenable fg\nenable getopts\nenable hash\nenable help\nenable history\nenable jobs\nenable kill\nenable let\nenable local\nenable logout\nenable mapfile\nenable popd\nenable printf\nenable pushd\nenable pwd\nenable read\nenable readarray\nenable readonly\nenable return\nenable set\nenable shift\nenable shopt\nenable source\nenable suspend\nenable test\nenable times\nenable trap\nenable true\nenable type\nenable typeset\nenable ulimit\nenable umask\nenable unalias\nenable unset\nenable wait\n61\n61\nenable .\nenable :\nenable break\nenable continue\nenable eval\nenable exec\nenable exit\nenable export\nenable readonly\nenable return\nenable set\nenable shift\nenable source\nenable times\nenable trap\nenable unset\n0\n0\n"
+   }
+  },
+  "tool-layer: enable names only a shell builtin": {
+   "script": "4150d61de2de1d7c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: enable: cat: not a shell builtin\nbash: line 1: enable: cat: not a shell builtin\nbash: line 1: enable: nosuch: not a shell builtin\nbash: line 1: enable: cat: not a shell builtin\nbash: line 1: enable: cat: not a shell builtin\nbash: line 1: enable: jq: not a shell builtin\nbash: line 1: enable: nosuch: not a shell builtin\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\nst=1\nst=1\nst=1\n"
+   }
+  },
+  "tool-layer: endless recursion ends loudly": {
+   "script": "0a85ef1c5aab726c",
+   "status": 139,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "tool-layer: endless shuf into head": {
+   "script": "0625e1524e651626",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nst=141 0 0\n"
+   }
+  },
+  "tool-layer: env -S errors": {
+   "script": "c3c621a40a2a0ccb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "env: only ${VARNAME} expansion is supported, error at: $X\nst=125\nenv: no terminating quote in -S string\nst=125\n\\\nst=0\nenv: invalid sequence '\\q' in -S\nst=125\nenv: option requires an argument -- 'S'\nTry 'env --help' for more information.\nst=125\n"
+   }
+  },
+  "tool-layer: env -S splits as GNU env does": {
+   "script": "6ce6d59f43a2f527",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi|a|b\nc d||\na'b|x\\y|q\"r|\t|\na#b x\nB=2\nx\nst=0\n"
+   }
+  },
+  "tool-layer: env -S splits its string": {
+   "script": "f0119900fa1e7480",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nst=0\n"
+   }
+  },
+  "tool-layer: env -a names bash -c's $0": {
+   "script": "a182991aeb488a1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "custom\nlong\nx y\nenv: option requires an argument -- 'a'\nTry 'env --help' for more information.\nst=125\n"
+   }
+  },
+  "tool-layer: env -v traces each step": {
+   "script": "c19264724db4274e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cleaning environ\nsetenv:   A=1\nchdir:    '/'\nexecuting: true\n   arg[0]= ‘true’\nunset:    HOME\nexecuting: true\n   arg[0]= ‘true’\nsplit -S:  ‘echo \"a b\" c’\n into:    ‘echo’\n     &    ‘a b’\n     &    ‘c’\nexecuting: echo\n   arg[0]= ‘echo’\n   arg[1]= ‘a b’\n   arg[2]= ‘c’\n   arg[3]= ‘x’\na b c x\n"
+   }
+  },
+  "tool-layer: env command errors": {
+   "script": "29db8b46f66374bc",
+   "status": 0,
+   "stderr": {
+    "text": "env: cannot specify --null (-0) with command\nTry 'env --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "st=127\nst=126\nst=125\n"
+   }
+  },
+  "tool-layer: env diagnostics quote as GNU does": {
+   "script": "788d0b11695b3277",
+   "status": 0,
+   "stderr": {
+    "text": "env: cannot set ‘’: Invalid argument\nenv: ‘nosuch’: No such file or directory\nenv: cannot change directory to '/nosuch': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "st=125\nst=127\nst=125\n"
+   }
+  },
+  "tool-layer: env prints value bytes": {
+   "script": "b7ad7411e4456827",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   V   = 377  \\n\n0000004\n0000000   W   = 377  \\n\n0000004\n"
+   }
+  },
+  "tool-layer: env signal options": {
+   "script": "9b1f527cd97d05cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "INT        ( 2): IGNORE\nHUP        ( 1): BLOCK\nINT        ( 2): IGNORE\nTERM       (15): BLOCK,IGNORE\nenv: failed to set signal action for signal 9: Invalid argument\nst=125\nenv: ‘NOPE’: invalid signal\nTry 'env --help' for more information.\nst=125\nst=0\n59\nINT        ( 2): IGNORE\n"
+   }
+  },
+  "tool-layer: env signal options reach the command": {
+   "script": "afdfaf135cf5c484",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- '' SIGTERM\n[default]\ntrap -- '' SIGINT\n"
+   }
+  },
+  "tool-layer: env with a command": {
+   "script": "8f7dec0577aa4b9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bar\nst=0\n[][]\n[]\n/tmp\n2\n3\nHI\nst=1\n"
+   }
+  },
+  "tool-layer: env, xargs and find -exec run a program path": {
+   "script": "816f889afd219cad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nX a b\nn 1\nn 2\ngot d/a\nd/a\n"
+   }
+  },
+  "tool-layer: factor, split and date read standard input": {
+   "script": "6b6362ca157f6ebc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12: 2 2 3\nst=0\nst=0\nxaa\nxab\nxac\n9\n10\n2024\nst=0\n"
+   }
+  },
+  "tool-layer: fib through command substitution": {
+   "script": "190acf39f9dd236d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "377\n"
+   }
+  },
+  "tool-layer: find -printf and stat -c write format bytes": {
+   "script": "2ee6dbf4266aed8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   /   t   m   p 377  \\n\n0000006\n0000000   /   t   m   p 377  \\n\n0000006\n"
+   }
+  },
+  "tool-layer: hash a program": {
+   "script": "663a610b3a6b3b2c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: hash: nosuch: not found\nbash: line 1: hash: cat: not found\n"
+   },
+   "stdout": {
+    "text": "st=0\n/bin/cat\nst=0\nst=0\nst=1\nst=0\nst=1\n"
+   }
+  },
+  "tool-layer: help knows only shell builtins": {
+   "script": "e4345f58ceeee467",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: help: no help topics match `cat'.  Try `help help' or `man -k cat' or `info cat'.\nbash: line 1: help: no help topics match `sed'.  Try `help help' or `man -k sed' or `info sed'.\nbash: line 1: help: no help topics match `cat'.  Try `help help' or `man -k cat' or `info cat'.\nbash: line 1: help: no help topics match `cat'.  Try `help help' or `man -k cat' or `info cat'.\nbash: line 1: help: no help topics match `nosuch'.  Try `help help' or `man -k nosuch' or `info nosuch'.\nbash: line 1: help: no help topics match `cat'.  Try `help help' or `man -k cat' or `info cat'.\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\nst=1\nst=1\nst=1\nst=1\nst=0\nst=0\n"
+   }
+  },
+  "tool-layer: jq reads argument bytes as text": {
+   "script": "1bddd71c95f284d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   \"   a 357 277 275   b   \"  \\n\n0000010\n0000000 357 277 275  \\n\n0000004\n"
+   }
+  },
+  "tool-layer: large output through a pipe": {
+   "script": "d495a9f26499da47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "30000000\n"
+   }
+  },
+  "tool-layer: listing /dev": {
+   "script": "aa8138d3436a9183",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "core\nfd\nfull\nmqueue\nnull\nptmx\npts\nrandom\nshm\nstderr\nstdin\nstdout\ntty\nurandom\nzero\nst=0\n"
+   }
+  },
+  "tool-layer: missing and directory path commands": {
+   "script": "0c307d7e63d9bf3b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ./missing.sh: No such file or directory\nbash: line 1: /non/existent: No such file or directory\nbash: line 1: /tmp: Is a directory\nbash: line 1: nosuchcmd: command not found\n"
+   },
+   "stdout": {
+    "text": "st=127\nst=127\n127 0\nst=126\nst=127\n"
+   }
+  },
+  "tool-layer: naming /dev/stdin does not drain it": {
+   "script": "cdf403d12d8d41a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\n"
+   }
+  },
+  "tool-layer: null device keeps nothing": {
+   "script": "6e9688a13af8063a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nst=0\n"
+   }
+  },
+  "tool-layer: output into a file is not limited": {
+   "script": "521bf7bca88f4349",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "68894737\nsame\n"
+   }
+  },
+  "tool-layer: output process substitution": {
+   "script": "8ce0c7192c29881d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\nst=141\n"
+   }
+  },
+  "tool-layer: paste reads /dev/stdin twice as one pipe": {
+   "script": "6b933be3a03a8aac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\t\n2\t\n3\t\n4\t\n"
+   }
+  },
+  "tool-layer: piped input over the limit": {
+   "script": "94b668084b15490f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e2085025f5c19d0b5d567708dad160db  -\nst=141 0 0\n"
+   }
+  },
+  "tool-layer: piped input under the limit": {
+   "script": "b1ce0a9051e4bfb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5a1c8e692322c08fe357a36f7a26ae3f  -\nst=141 0 0\n"
+   }
+  },
+  "tool-layer: planted capture names": {
+   "script": "c077252db415d6ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "planted\nhi\nb\nst=0\neAo=\nst=0\n"
+   }
+  },
+  "tool-layer: printenv prints named variables": {
+   "script": "a2acb0b857a397e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x y\nx y\nst=1\nst=1\nst=1\nst=1\n2\nx y\n0000000   x       y  \\0   l   o   c   a   l  \\0\n0000012\n"
+   }
+  },
+  "tool-layer: printenv prints the environment": {
+   "script": "5e81fd6212b31b77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A=1\nB=2\nst=0\n0000000   A   =   1  \\0\n0000004\n"
+   }
+  },
+  "tool-layer: printenv writes value bytes": {
+   "script": "c14cb4436cf2583b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a 377   b  \\n\n0000004\n"
+   }
+  },
+  "tool-layer: printf of many items": {
+   "script": "f18614f1014a84a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10001\n10000\n"
+   }
+  },
+  "tool-layer: process substitution read by head": {
+   "script": "7d85e408820d1190",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\nst=141 0\n"
+   }
+  },
+  "tool-layer: process substitution read to the end": {
+   "script": "fd893e6c2a7a1695",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "68000000\nst=0 0\n"
+   }
+  },
+  "tool-layer: process substitution under the limit": {
+   "script": "861142ddc891634b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "67000000\nst=0 0\n"
+   }
+  },
+  "tool-layer: program paths in a pipeline and a substitution": {
+   "script": "eedcb2082e3b6fab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\ny\nsub\n     1\ta\n     2\tb\nb\na\n"
+   }
+  },
+  "tool-layer: recursion 30 deep": {
+   "script": "71dffa760117354d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bottom\nstatus=0\n"
+   }
+  },
+  "tool-layer: recursion 60 deep": {
+   "script": "1904911564b853c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bottom\nstatus=0\n"
+   }
+  },
+  "tool-layer: rev of a line that is not UTF-8": {
+   "script": "1f756f04de751ed0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a   b 377   c   d  \\n   y   x  \\n\n0000011\n0000000   x 377\n0000002\n"
+   }
+  },
+  "tool-layer: running a program hashes it": {
+   "script": "d0a8fbb5708622e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cat is hashed (/bin/cat)\n/bin/cat\ncat is /bin/cat\necho is a shell builtin\necho is /bin/echo\n"
+   }
+  },
+  "tool-layer: sh reads script bytes from standard input": {
+   "script": "5f598940244e93d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a 377   b  \\n\n0000004\n0000000 377\n0000001\n"
+   }
+  },
+  "tool-layer: sort -o /dev/fd/4": {
+   "script": "fab69a72cb3a2173",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\na\nb\n"
+   }
+  },
+  "tool-layer: sort of a file over the limit": {
+   "script": "962e9200399768db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\nst=141 0\n"
+   }
+  },
+  "tool-layer: sort reads /dev/stdin twice as one pipe": {
+   "script": "51f6ab5f74fbdc76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "tool-layer: split --filter": {
+   "script": "1ee6b1b8bbe43ef2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in\nxaa.f\nxab.f\nxac.f\npartaa\n1\n2\npartab\n3\n4\n"
+   }
+  },
+  "tool-layer: split --filter failing": {
+   "script": "88d2d317ce780df8",
+   "status": 0,
+   "stderr": {
+    "text": "split: with FILE=xaa, exit 3 from command: exit 3\n"
+   },
+   "stdout": {
+    "text": "st=3\n5\n5\nst=0\n"
+   }
+  },
+  "tool-layer: split -u and empty input": {
+   "script": "9db25587a3bf1b30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nxaa\nxab\nxac\nst=0\nn=2\n"
+   }
+  },
+  "tool-layer: tac keeps records across blocks": {
+   "script": "bf23cbce8778845a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3398594623 396618\n3398594623 396618\n"
+   }
+  },
+  "tool-layer: tac of a large file": {
+   "script": "8fc5c784b2cab55e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "last\ny\nlast\nst=141 0\n"
+   }
+  },
+  "tool-layer: the command -v idiom finds a program": {
+   "script": "bb07294c981dabd3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "have-cat\nbuiltin\nno-tool\n"
+   }
+  },
+  "tool-layer: the path which and type -P print runs the command": {
+   "script": "11b7e2795e3ae872",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nhi\n1\n"
+   }
+  },
+  "tool-layer: the program directories are not directories": {
+   "script": "29751638d68e2acf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "tool-layer: thirty nested substitutions": {
+   "script": "64fb9855618658cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "deep\n"
+   }
+  },
+  "tool-layer: timeout --help": {
+   "script": "00f07170adc7fcae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Usage: timeout [OPTION]... DURATION COMMAND [ARG]...\nStart COMMAND, and kill it if still running after DURATION.\n\nMandatory arguments to long options are mandatory for short options too.\n  -f, --foreground\n         when not running timeout directly from a shell prompt,\n         allow COMMAND to read from the TTY and get TTY signals;\n         in this mode, children of COMMAND will not be timed out\n  -k, --kill-after=DURATION\n         also send a KILL signal if COMMAND is still running\n         this long after the initial signal was sent\n  -p, --preserve-status\n         exit with the same status as COMMAND,\n         even when the command times out\n  -s, --signal=SIGNAL\n         specify the signal to be sent on timeout;\n         SIGNAL may be a name like 'HUP' or a number;\n         see 'kill -l' for a list of signals\n  -v, --verbose\n         diagnose to standard error any signal sent upon timeout\n      --help\n         display this help and exit\n      --version\n         output version information and exit\n\nDURATION is a floating point number with an optional suffix:\n's' for seconds (the default), 'm' for minutes, 'h' for hours or 'd' for days.\nA duration of 0 disables the associated timeout.\n\nUpon timeout, send the TERM signal to COMMAND, if no other SIGNAL specified.\nThe TERM signal kills any process that does not block or catch that signal.\nIt may be necessary to use the KILL signal, since this signal can't be caught.\n\nExit status:\n  124  if COMMAND times out, and --preserve-status is not specified\n  125  if the timeout command itself fails\n  126  if COMMAND is found but cannot be invoked\n  127  if COMMAND cannot be found\n  137  if COMMAND (or timeout itself) is sent the KILL (9) signal (128+9)\n  -    the exit status of COMMAND otherwise\nUsage: timeout [OPTION]... DURATION COMMAND [ARG]...\nst=0\n"
+   }
+  },
+  "tool-layer: timeout durations": {
+   "script": "68d9db5907fd5ef8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nst=124\nst=0\n"
+   }
+  },
+  "tool-layer: timeout of a command that cannot run": {
+   "script": "af686578cc167aef",
+   "status": 0,
+   "stderr": {
+    "text": "timeout: failed to run command ‘nosuch’: No such file or directory\ntimeout: failed to run command ‘/tmp’: Permission denied\ntimeout: failed to run command ‘cd’: No such file or directory\ntimeout: failed to run command ‘./nofile’: No such file or directory\ntimeout: failed to run command ‘f’: No such file or directory\nsleep: invalid option -- '5'\nTry 'sleep --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "st=127\nst=126\nst=127\nst=127\nst=127\nst=1\n"
+   }
+  },
+  "tool-layer: timeout of a shell with its own TERM handling": {
+   "script": "fd57f619752c7ae3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1:    26 Killed                     timeout -k 0.3 0.3 sh -c 'trap \"\" TERM; sleep 5'\n"
+   },
+   "stdout": {
+    "text": "caught\nst=124\nst=137\n"
+   }
+  },
+  "tool-layer: timeout passes on the command's status and output": {
+   "script": "30b41b672fdb1721",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=3\nhi there\na\nb\nin\nx\nran\nst=0\nst=0\n"
+   }
+  },
+  "tool-layer: timeout runs the command as a new process": {
+   "script": "ee3d2a0c4ceb8542",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "unset\n5\n/tmp\na b\nst=0\n"
+   }
+  },
+  "tool-layer: timeout signals and statuses": {
+   "script": "da587900cc19f4dd",
+   "status": 0,
+   "stderr": {
+    "text": "timeout: sending signal TERM to command ‘sleep’\n"
+   },
+   "stdout": {
+    "text": "st=143\nst=124\nst=124\nst=124\nst=124\nst=124\n"
+   }
+  },
+  "tool-layer: timeout stops a command": {
+   "script": "0de7ef4138dd5f38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=124\nst=0\nst=124\nst=124\n"
+   }
+  },
+  "tool-layer: timeout that KILLs": {
+   "script": "3a4071fad94e8237",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1:    24 Killed                     timeout -s KILL 0.3 sleep 5\n"
+   },
+   "stdout": {
+    "text": "st=137\n"
+   }
+  },
+  "tool-layer: touch -d offsets and local time": {
+   "script": "34e14e4bcc75aec3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2023-12-31_23:00\n2023-12-31_15:00\n"
+   }
+  },
+  "tool-layer: tree walk 21 deep": {
+   "script": "2b04b802249bb34f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "22\n"
+   }
+  },
+  "tool-layer: type of a large function into a pipe": {
+   "script": "60b36ed2e83b40d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3004\n    echo 3000\n}\n"
+   }
+  },
+  "tool-layer: uniq output that cannot be opened": {
+   "script": "801f1f62fdb8c476",
+   "status": 0,
+   "stderr": {
+    "text": "uniq: /no/such/dir/out: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "st=1\n"
+   }
+  },
+  "tool-layer: utilities writing to /dev/null": {
+   "script": "c35a0a7b9982df7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nst=0\nst=0\n"
+   }
+  },
+  "tool-layer: wget -i and -nc": {
+   "script": "c80ee76d46caabc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERROR: could not open HSTS store. HSTS will be disabled.\n/tmp/nosuch: No such file or directory\nNo URLs found in /tmp/nosuch.\nstatus=0\nERROR: could not open HSTS store. HSTS will be disabled.\nConnecting to 127.0.0.1:1... failed: Connection refused.\nstatus=4\nERROR: could not open HSTS store. HSTS will be disabled.\nNo URLs found in u.\nstatus=0\nERROR: could not open HSTS store. HSTS will be disabled.\nFile 'index.html' already there; not retrieving.\n\nstatus=0\nstatus=0\n"
+   }
+  },
+  "tool-layer: wget URLs it cannot use": {
+   "script": "0f0db76f282691d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERROR: could not open HSTS store. HSTS will be disabled.\nftpx://x/: Unsupported scheme.\nstatus=1\nERROR: could not open HSTS store. HSTS will be disabled.\nhttp://127.0.0.1:99999/: Bad port number.\nstatus=1\nERROR: could not open HSTS store. HSTS will be disabled.\nhttp://: Invalid host name.\nstatus=1\nERROR: could not open HSTS store. HSTS will be disabled.\nPrepended http:// to ''\nhttp://: Invalid host name.\nstatus=1\nERROR: could not open HSTS store. HSTS will be disabled.\nhttp://h:x/: Bad port number.\nstatus=1\nstatus=1\nPrepended http:// to ''\nstatus=1\n"
+   }
+  },
+  "tool-layer: wget option errors": {
+   "script": "096f3d15792b4d47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "wget: --tries: Invalid number '-2'.\nstatus=2\nwget: --max-redirect: Invalid number '-1'.\nstatus=2\nstatus=4\nYou cannot specify both --post-data and --post-file.\nstatus=1\nERROR: could not open HSTS store. HSTS will be disabled.\nBODY data file '/tmp/nosuch' missing: No such file or directory\nstatus=3\nstatus=0\n"
+   }
+  },
+  "tool-layer: wget refused and spider": {
+   "script": "b0355a7233179abd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERROR: could not open HSTS store. HSTS will be disabled.\nConnecting to 127.0.0.1:1... failed: Connection refused.\nstatus=4\nERROR: could not open HSTS store. HSTS will be disabled.\nSpider mode enabled. Check if remote file exists.\nConnecting to 127.0.0.1:1... failed: Connection refused.\nstatus=4\n"
+   }
+  },
+  "tool-layer: wget sets up its output before connecting": {
+   "script": "85a799fa75a3e034",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/nosuch/x: No such file or directory\nstatus=1\nstatus=4\nstatus=4\n0\nout\n"
+   }
+  },
+  "tool-layer: wget several URLs and their statuses": {
+   "script": "da016cd1dbcd7c37",
+   "status": 0,
+   "stderr": {
+    "text": "Prepended http:// to ''\n"
+   },
+   "stdout": {
+    "text": "status=4\nstatus=4\nstatus=1\nERROR: could not open HSTS store. HSTS will be disabled.\nConnecting to 127.0.0.1:1... failed: Connection refused.\nftpx://x/: Unsupported scheme.\nstatus=4\n"
+   }
+  },
+  "tool-layer: wget's HSTS store needs HOME": {
+   "script": "93d05eafa9784662",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERROR: could not open HSTS store. HSTS will be disabled.\nftpx://x/: Unsupported scheme.\nftpx://x/: Unsupported scheme.\nftpx://x/: Unsupported scheme.\nftpx://x/: Unsupported scheme.\n.\n..\n"
+   }
+  },
+  "tool-layer: which and type name a program path": {
+   "script": "7e7956bd57af8e67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/bin/cat\n/bin/sed\n/bin/cat\nst=0\nst=1\nst=1\n/bin/cat\n/bin/cat is /bin/cat\n"
+   }
+  },
+  "tool-layer: which, type -P and command -v name the commands": {
+   "script": "89e8b9592a28db3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/usr/bin/jq\n/usr/bin/jq\n/usr/bin/jq\njq is /usr/bin/jq\n/usr/bin/jq\njq is hashed (/usr/bin/jq)\n"
+   }
+  },
+  "tool-layer: writing to /dev/fd/3": {
+   "script": "04eec6da9ca2903d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\n[src]\n"
+   }
+  },
+  "tool-layer: xargs -0 and -I keep bytes": {
+   "script": "bf9e13fb0db76b3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a 377   b  \\n\n0000004\n0000000   [   a 377   b   ]  \\n\n0000006\n"
+   }
+  },
+  "tool-layer: xargs -d and -E take bytes": {
+   "script": "b26843aacd31e6ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   [   a   ]   [   b  \\n   ]\n0000007\n0000000   a  \\n\n0000002\n"
+   }
+  },
+  "tool-layer: xargs -t quotes a byte": {
+   "script": "5e3a6435da5c04ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   e   c   h   o       '   '   $   '   \\   3   7   7   '       a\n0000020  \\n 377       a  \\n\n0000025\n"
+   }
+  },
+  "tool-layer: xargs keeps an item's bytes": {
+   "script": "1a3128e253e6a0a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000 377  \\n\n0000002\n0000000   a 377   b  \\n\n0000004\n"
+   }
+  },
+  "tool-layer: yes --version ends": {
+   "script": "1af4f7d88c78978f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nUsage: yes [STRING]...\n"
+   }
+  },
+  "tool-layer: yes and seq write argument bytes": {
+   "script": "ec54ee25e09cb740",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a 377   b  \\n\n0000004\n0000000   1 377   2 377   3  \\n\n0000006\n0000000   1 377  \\n   2 377  \\n\n0000006\n"
+   }
+  },
+  "tool-layer: yes into base64 into head": {
+   "script": "f54066d36ce26c7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "eQp5CnkKeQp5CnkKeQp5\nst=0\n"
+   }
+  },
+  "tool-layer: yes into nl into head": {
+   "script": "b9a5fa58b9bfcc2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ty\nst=141 141 0\n"
+   }
+  },
+  "tool-layer: yes options": {
+   "script": "9f07f449284d6758",
+   "status": 0,
+   "stderr": {
+    "text": "yes: invalid option -- 'a'\nTry 'yes --help' for more information.\nyes: unrecognized option '--bogus'\nTry 'yes --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "-a\n-a\nst=1 0\nst=1 0\na b\n-\ny\n"
+   }
+  },
+  "uname: tool-layer error paths": {
+   "script": "01ff47fa2efbdc98",
+   "status": 0,
+   "stderr": {
+    "text": "uname: invalid option -- 'x'\nTry 'uname --help' for more information.\nuname: unrecognized option '--bogus'\nTry 'uname --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

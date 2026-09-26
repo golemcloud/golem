@@ -1,0 +1,718 @@
+{
+ "cases": {
+  "b2sum: hashes fixed content": {
+   "script": "939ddc9e24e2554e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e4cfa39a3d37be31c59609e807970799caa68a19bfaa15135f165085e01d41a65ba1e1b146aeb6bd0092b49eac214c103ccfa3a365954bbbe52f74a2b3620c94  -\n"
+   }
+  },
+  "base32: encodes to the expected alphabet": {
+   "script": "47f0901ca0037a43",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "NBSWY3DP\n"
+   }
+  },
+  "base64: round-trips through encode and decode": {
+   "script": "de23f058a98d30db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aGVsbG8=\nhello"
+   }
+  },
+  "basename: strips directory and suffix": {
+   "script": "863435844f8e9460",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sort\nfoo\n"
+   }
+  },
+  "basenc: base64 mode matches base64": {
+   "script": "c38f4f7005901e30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aGVsbG8=\n"
+   }
+  },
+  "cksum: checksums and counts a file": {
+   "script": "dd46dcea5268eb2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3287646509 5\n"
+   }
+  },
+  "comm: three-column set comparison": {
+   "script": "11eb05d7624cc9f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\t\tb\n\t\tc\n\td\n"
+   }
+  },
+  "csplit: splits a file at a line number": {
+   "script": "8e60820b87c05234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n4\n1\n2\n---\n3\n4\n"
+   }
+  },
+  "date: +%s round-trips through -d @": {
+   "script": "3337ff359cb186af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "date: --resolution": {
+   "script": "fe2ebac79ec96a63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0.000000001\nstatus=0\n"
+   }
+  },
+  "date: -s cannot set the clock": {
+   "script": "4b58f3ccf18fc08f",
+   "status": 0,
+   "stderr": {
+    "text": "date: cannot set date: Operation not permitted\ndate: cannot set date: Operation not permitted\n"
+   },
+   "stdout": {
+    "text": "Thu Jan  1 00:00:00 UTC 1970\nstatus=1\nWed Jan  1 00:00:00 UTC 2020\nstatus=1\n"
+   }
+  },
+  "date: formats a fixed epoch in UTC": {
+   "script": "168dab8fb5b4cb84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1970-01-01 00:00:00\n2023-11-14\n"
+   }
+  },
+  "dirname: strips the last component": {
+   "script": "4c4d82b01bdf82d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/usr/bin\na/b\n"
+   }
+  },
+  "expand: tabs become spaces": {
+   "script": "cd5db8087d8c602b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a   b   c\n"
+   }
+  },
+  "expr: arithmetic and string length": {
+   "script": "045df5d5dcabad38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n3\n5\n"
+   }
+  },
+  "factor: prints the prime factorization": {
+   "script": "00af063b64ec8071",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "60: 2 2 3 5\n"
+   }
+  },
+  "fmt: fills short lines into a paragraph": {
+   "script": "e7862958d4dd6b94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one two\nthree four\nfive six\n"
+   }
+  },
+  "fold: wraps at a fixed width": {
+   "script": "75af4b0f30eb63de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1234\n5678\n90\n"
+   }
+  },
+  "join: merges on a common sorted field": {
+   "script": "78200853875dacc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a x\n2 b y\n"
+   }
+  },
+  "link: creates a second directory entry for the same file": {
+   "script": "3c1968ba18b2c307",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x"
+   }
+  },
+  "ln: hard link shares content": {
+   "script": "8b58bd9a94774df7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hard"
+   }
+  },
+  "ln: symlink resolves via readlink": {
+   "script": "8d81f00ebf9c5a3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lns-target\nsoft"
+   }
+  },
+  "md5sum: hashes fixed content": {
+   "script": "f4d14b0942f14121",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5d41402abc4b2a76b9719d911017c592  -\n"
+   }
+  },
+  "mktemp: creates a fresh file and directory": {
+   "script": "34b82dc98a384df3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "file-ok\ndir-ok\n"
+   }
+  },
+  "nl: numbers non-blank lines": {
+   "script": "dde8d95391520245",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n       \n     2\tb\n     3\tc\n"
+   }
+  },
+  "numfmt: reformats to human-readable IEC units": {
+   "script": "6f15d9443389d758",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.5M\n"
+   }
+  },
+  "od: dumps bytes as hex with no offset column": {
+   "script": "a878bb9bb0f931af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 41 42\n"
+   }
+  },
+  "paste: merges lines of two files column-wise": {
+   "script": "8eea112bdb4ae141",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\t1\nb\t2\n"
+   }
+  },
+  "readlink: prints a symlink target": {
+   "script": "642266d1a98acb0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rl-target\n"
+   }
+  },
+  "realpath: resolves relative and .. components": {
+   "script": "ee454e73e8c87fae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/rp/a/b\n/tmp/rp/a/b\n"
+   }
+  },
+  "rev: continues past a missing file without the os-error suffix": {
+   "script": "972056951c2126d6",
+   "status": 0,
+   "stderr": {
+    "text": "rev: /nonexist: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "ba\nba\nstatus=1\n"
+   }
+  },
+  "rev: reverses UTF-8 characters, not bytes": {
+   "script": "f171b9ee6b9a874c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "olléh\n"
+   }
+  },
+  "rev: reverses ascii lines": {
+   "script": "51b30fb6bf58443a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "olleh\ndlrow\n"
+   }
+  },
+  "rev: terminates against an endless producer": {
+   "script": "0a5b35ea29e38332",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "rmdir: removes an empty directory": {
+   "script": "e9e4179b8f353d9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "gone\n"
+   }
+  },
+  "seq: -f exponential format matches C printf": {
+   "script": "a41e352aefcb114d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.000000e+00\n2.000000e+00\n"
+   }
+  },
+  "seq: -f general format strips trailing zeros": {
+   "script": "a600e372ce75cd79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n1.1\n1.2\n1.3\n"
+   }
+  },
+  "seq: custom separator only appears between terms": {
+   "script": "a202c9e4686c2471",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,2,3,4,5\n"
+   }
+  },
+  "seq: decimal increment": {
+   "script": "9b1bc4ec4dc78496",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0\n1.5\n2.0\n"
+   }
+  },
+  "seq: default disposition still yields the synthetic 141 status": {
+   "script": "ca92d2164f2b0585",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n141 141 0\n"
+   }
+  },
+  "seq: default integer range": {
+   "script": "3d05908fe5e2efeb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n"
+   }
+  },
+  "seq: descending range with a negative increment": {
+   "script": "683a0bdc41f24d0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n4\n3\n2\n1\n"
+   }
+  },
+  "seq: equal-width zero pads to the widest endpoint": {
+   "script": "d14c83c311b615f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n"
+   }
+  },
+  "seq: extra operand diagnostic matches GNU": {
+   "script": "87a4127ba53e8232",
+   "status": 0,
+   "stderr": {
+    "text": "seq: extra operand ‘4’\nTry 'seq --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "seq: invalid float argument diagnostic matches GNU": {
+   "script": "16e443b75baebb5e",
+   "status": 0,
+   "stderr": {
+    "text": "seq: invalid floating point argument: ‘x’\nTry 'seq --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "seq: missing operand diagnostic matches GNU": {
+   "script": "1913a91ff925782b",
+   "status": 0,
+   "stderr": {
+    "text": "seq: missing operand\nTry 'seq --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "seq: reports broken pipe when SIGPIPE is ignored": {
+   "script": "8dcfae29e2c8f84c",
+   "status": 0,
+   "stderr": {
+    "text": "seq: write error: Broken pipe\n"
+   },
+   "stdout": {
+    "text": "1\n1 0\n"
+   }
+  },
+  "seq: single-argument form counts from 1": {
+   "script": "a389d9d2ff985867",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "seq: streams instead of materializing a huge range": {
+   "script": "b3a3d3abdf1548eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "seq: zero increment diagnostic matches GNU": {
+   "script": "bfa5292294b74c6a",
+   "status": 0,
+   "stderr": {
+    "text": "seq: invalid Zero increment value: ‘0’\nTry 'seq --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "sha1sum: hashes fixed content": {
+   "script": "967fafd753768347",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d  -\n"
+   }
+  },
+  "sha256sum: hashes and self-checks": {
+   "script": "3ae138c6f46b6d81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/sha-f: OK\n"
+   }
+  },
+  "sha512sum: hashes fixed content": {
+   "script": "5bca4d251f786347",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043  -\n"
+   }
+  },
+  "shuf: permutes without changing the multiset": {
+   "script": "4cbed94b6865e1a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "sort: -C is silent": {
+   "script": "9d4a46ea62d28c8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=0\n"
+   }
+  },
+  "sort: -c reports the first disorder": {
+   "script": "bf0ae07d0a499dbb",
+   "status": 0,
+   "stderr": {
+    "text": "sort: -:3: disorder: b\nsort: -:2: disorder: a\n"
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\nstatus=1\nstatus=0\nstatus=0\n"
+   }
+  },
+  "sort: -m merges sorted inputs": {
+   "script": "86de84cd678d19fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n3\n4\n5\nstatus=0\n1\n2\n3\n4\n5\nstatus=0\n5\n4\n3\n2\n1\nstatus=0\n"
+   }
+  },
+  "split: splits a file into fixed-size line chunks": {
+   "script": "db2f4522541a2010",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n---\n3\n4\n"
+   }
+  },
+  "tac: a missing final newline fuses onto the previous line": {
+   "script": "0895588ecd754116",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cb\na\n"
+   }
+  },
+  "tac: reports a missing file and keeps going": {
+   "script": "e89398c7d25b8846",
+   "status": 0,
+   "stderr": {
+    "text": "tac: failed to open '/nonexist' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "b\na\nstatus=1\n"
+   }
+  },
+  "tac: reverses line order": {
+   "script": "b04a34fb7af28a6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nb\na\n"
+   }
+  },
+  "tac: reverses several files independently in operand order": {
+   "script": "93312a8415a4ae32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nd\nc\n"
+   }
+  },
+  "tac: unsupported regex separator refuses": {
+   "script": "2eaa45ed20368cae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\n"
+   }
+  },
+  "truncate: shrinks a file to an exact size": {
+   "script": "5c9889e1c3375c28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1234\n4\n"
+   }
+  },
+  "tsort: topological order of a DAG": {
+   "script": "d6a3d6a1fd8227fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "unexpand: runs of spaces become tabs": {
+   "script": "8eed3709b52f4c05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^Ib$\n"
+   }
+  },
+  "unlink: removes exactly one file": {
+   "script": "3f9f0f66ede2270b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "gone\n"
+   }
+  },
+  "yes: default disposition still yields the synthetic 141 status": {
+   "script": "c84764986588e757",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\ny\n141 141 0\n"
+   }
+  },
+  "yes: repeats the given words": {
+   "script": "def2c757aef421e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\na b c\n"
+   }
+  },
+  "yes: repeats y forever until the reader stops": {
+   "script": "7e311acc8ec2585e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\ny\ny\n"
+   }
+  },
+  "yes: reports broken pipe when SIGPIPE is ignored": {
+   "script": "b9928247daff44af",
+   "status": 0,
+   "stderr": {
+    "text": "yes: standard output: Broken pipe\n"
+   },
+   "stdout": {
+    "text": "y\n1 0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

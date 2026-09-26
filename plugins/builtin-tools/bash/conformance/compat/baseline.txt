@@ -1,0 +1,319 @@
+$_ - external command exports resolved path via env
+-- before a script path
+-- before a script path with a later --
+-c with -- separator and command
+-c with -- separator only
+-c with -i is interactive but still runs the -c command
+-ec with -- separator and command
+-i -s with positional args is interactive
+-i with a named script still runs the script
+-is with positional args
+-o with -- is not an option terminator
+-s -e with -- separator
+-s followed by -c runs the -c command
+-s reports the stdin flag in \$-
+-s with -- before positional args
+-s with -- separator followed by literal --
+-s with a lone --
+-s with no positional args
+-s with positional args is interactive on a terminal
+-s with positional args loads the rc file on a terminal
+-si with positional args
+ANSI-C quotes
+ANSI-C quotes with escape sequences
+Array assignment with tilde expansion
+Backslash adjacent to unrecognized escape sequence
+Backslash before dollar escapes parameter expansion
+Backslash before escaped dollar
+Backslash before newline is line continuation
+Backslash before non-special char preserves backslash
+Backslash before trailing whitespace is not a continuation
+Backslash followed by working-dir prompt piece
+Backslash-CR survives prompt expansion (issue #1119)
+Bare \$ leaves no protective backslash (issue #1167)
+Basic -i usage with commands via stdin
+Basic -s usage with -c
+Basic case statement with double semi
+Basic cd usage
+Basic function invocation
+Basic here doc in a script
+Basic interactive test
+Basic process
+Basic pushd usage
+Basic pwd usage
+Basic script execution
+Brackets and var
+Brackets and var (interactive mode)
+COPROC array read FD is functional
+Command found in PATH is a directory shadowing a later executable
+Command found in PATH is not executable
+Command line -u
+Command not found (interactive)
+Command substitution in prompt and exit code
+Compound command redirection error (interactive)
+Coproc body with command substitution
+Coproc body with pipeline
+Coproc body with stderr redirection
+Coproc body writing to a file
+Coproc cannot modify parent variables
+Coproc inherits aliases
+Coproc inherits functions
+Coproc inherits non-exported variables
+Coproc inherits parent environment
+Coproc inside a conditional
+Coproc inside a function
+Coproc inside a loop body
+Coproc output filtered with case
+Coproc producing empty output
+Coproc producing multiple lines of output
+Coproc running a for loop
+Coproc running a while loop
+Coproc statement returns 0
+Coproc with arithmetic operations
+Coproc with case statement
+Coproc with conditionals
+Coproc with failing body returns 0 immediately
+Coproc with multi-statement brace group
+Coproc with multiline string output
+Default options
+Disable builtins
+Disabled declare uses ordinary argument expansion
+Disabled export uses ordinary argument expansion
+Display not-yet-hashed program
+Double backslash before dollar yields backslash + expansion
+Double quotes: escaping
+Error: newline before && after bare word
+Error: newline before ) after bare word
+Error: newline before ) after not of bare word
+Error: newline before ]] after bare word
+Escaped dollar-sign
+Exec a command
+Exec with no arguments and redirection in a script
+Exit codes for piped commands
+Expansion error (interactive)
+Expansion error (non-interactive)
+Exported unset variable errors
+Failing special built-in (POSIX mode, interactive)
+Failing special built-in (non-POSIX mode, interactive)
+Fatal error (interactive/command substitution)
+Fatal error (interactive/executed script)
+Fatal error (interactive/sourced file)
+Fatal error (interactive/subshell)
+Fatal error (non-interactive/executed script)
+Fatal error (non-interactive/sourced file)
+Fifo test
+File executable tests
+File sticky bit tests
+File writable tests
+Files refer to same device and inode tests
+Function invocation with args
+Function redirection error (interactive)
+Glob with trailing slash matches directories
+HISTCMD
+HISTFILE changed by .bashrc
+HISTFILE emptied by .bashrc
+HISTFILE loaded from environment
+Hostname in prompts
+Indirect expansion of unset variable errors
+Inheritance of fds from parent
+Interactive mode - FUNCNAME and BASH_SOURCE
+Invalid coproc name
+Length of unset variable errors
+Local unset variable errors
+Many backslashes before non-special
+Missing rc file
+Multi-line for loop
+Multi-line if
+Named coproc FDs are functional
+Named coproc inside a function
+Named coproc read
+Named coproc with brace group
+Named coproc with subshell
+PATH unset would error
+PROMPT_COMMAND
+PROMPT_COMMAND array elements each see the last command's status
+PROMPT_COMMAND as an associative array is ignored
+PROMPT_COMMAND as an indexed array
+PROMPT_COMMAND preserves the last argument in $_
+Parameter expression: error on condition (interactive)
+Parameter expression: error on condition (non-interactive)
+Parameter length of unset variable with nounset
+Passing option-like arg to script
+Pathname expansion: extglob disabled
+Positional parameters beyond provided args error
+Process substitution: input + output
+Rc file loading (interactive)
+Rc file loading (non-interactive)
+Read coproc output with cat
+Read coproc output with read builtin
+Read multiple lines from coproc
+Read multiple lines with read builtin
+Regular utility error (interactive)
+Return in directly invoked script
+Return in function
+Return outside function with stderr to /dev/full
+SHELL
+Second unnamed coproc replaces first
+Sequential named coprocs with different names
+Shell language syntax error (command line)
+Shell language syntax error (interactive)
+Shell language syntax error (non-interactive)
+Source /dev/stdin with heredoc redirection
+Special built-in error (interactive)
+Special built-in redirection error (interactive)
+Static well-known variables
+Stream truncated mid-construct
+Syntax error mid-stream
+Syntax error mid-stream on a line ending in a continuation
+Test type -a with hashed path
+Test type -p -a with hashed path
+Test type reports a non-executable file found in PATH
+Test type with -P option and an external command
+Test type with -a option and a command with multiple definitions
+Test type with -f option and a command
+Test type with -p option and an external command
+Test type with a valid command
+Tilde expansion: basic
+Tilde expansion: explicit user
+Trailing literal backslash survives
+Transform coproc output to uppercase
+Unknown option
+Unnamed coproc with brace group
+Unnamed coproc with subshell
+Unset positional parameter triggers error
+Unset variable in [[ test errors
+Unset variable in arithmetic defaults to zero
+Unset variable in case pattern errors
+Unset variable in conditional test errors
+Unset variable in for loop errors
+Unset variable in function body errors
+Unset variable in pattern errors
+Unset variable in while condition errors
+Unset variable triggers error
+Utility redirection error (interactive)
+Var in prompt
+Variable assignment error (interactive)
+Variable set then unset errors on access
+Wait with no args waits for coproc
+Working dir based prompts
+a command found through an empty PATH entry is runnable
+a named script runs and stdin is not read as commands
+a script sees stdin as data, not commands
+basic history saving
+bind -q/-P/-p
+bind keyseq
+bind macro 1
+bind macro 2
+builtin with disabled builtin
+cd -
+cd -P
+cd ~
+command -V
+command -V absolutizes a command found through an empty PATH entry
+command -V reports a PATH-found command with an absolute path
+command -V reports hashed commands
+command -p searches the default path
+command -v -p
+command -v with full paths
+command -v with non-executable and non-file path names
+command -v/-V report path names as given
+command -v/-V skips a disabled builtin
+command line
+command with --help
+compgen -A command in a constrained PATH
+compgen -A command with executable symlink
+compgen -f with tilde
+coproc with name and brace group
+declare without value then access errors
+dirs to clear
+dirs with tilde replacement
+dollar-_
+echo -e
+empty HISTFILE in environment
+errexit with failing command (interactive)
+errexit with unbound variable access (interactive)
+exec -a
+exec -c
+exec without -c
+existing history file
+existing history file with timestamps
+existing history file with timestamps and HISTTIMEFORMAT
+exit from PROMPT_COMMAND ends the shell with its status
+fc -l 0 means -1
+fc -l defaults to last 16 commands
+fc -l lists recent commands
+fc -l with -n (no line numbers)
+fc -l with -n and -r combined
+fc -l with -r (reverse order)
+fc -l with both string and number
+fc -l with negative indices
+fc -l with range (positive indices)
+fc -l with range and -r
+fc -l with single argument
+fc -l with string search
+fc -s pattern replacement replaces all occurrences
+fc -s pattern replacement when pattern doesn't match
+fc -s re-executes last command
+fc -s with command argument
+fc -s with command number
+fc -s with empty replacement
+fc -s with negative offset
+fc -s with nonexistent command
+fc -s with pattern replacement
+fc -s with pattern replacement and command number
+fc -s with pattern replacement and negative index
+fc -s with pattern replacement and string prefix
+fc -s with string prefix match
+fc with invalid range
+history -a
+history -c
+history -d
+history -d: negative offset
+history -s in .bashrc suppresses loading HISTFILE
+history -s then -c in .bashrc still loads HISTFILE
+history -s then -d in .bashrc still loads HISTFILE
+history -w
+history -w with explicit file
+history N
+history with duplicates
+kill -l
+kill -n
+kill -s
+kill -sigspec
+kill -sigspec (numeric)
+loaded history entries without timestamps are stamped with load time
+login_shell is on for login shells
+no args reads commands from stdin
+popd without dir change
+printf %q with ignored modifier
+printf broken pipe returns 141 in PIPESTATUS
+prompt expansion preserves $? and PIPESTATUS
+prompt expansion preserves the last argument in $_
+pwd -LP
+readonly without value then access errors
+redirect to file that fails writes
+return does not exit the shell, from PROMPT_COMMAND or the prompt
+script -- torture
+script arguments with --
+script arguments without --
+script only one --
+set +u in subshell does not affect parent
+set -t
+set -u can be re-enabled
+set with multiple combined options
+set with options
+syntax error
+test -z with unset variable errors
+test: files refer to same device and inode
+the rc file is not loaded for a -c command
+the rc file is not loaded for a named script
+the rc file is not loaded when -s reads from a pipe
+ulimit -c
+ulimit -d
+ulimit -d unlimited
+ulimit -f
+ulimit -f unlimited
+ulimit -l
+ulimit -m
+ulimit -m unlimited
+ulimit -n

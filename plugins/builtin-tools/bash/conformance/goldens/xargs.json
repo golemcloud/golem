@@ -1,0 +1,328 @@
+{
+ "cases": {
+  "xargs: arg file": {
+   "script": "2c504d867c481493",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: Cannot open input file ‘/tmp/nope’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "x y\nstatus=1\n"
+   }
+  },
+  "xargs: child stdin is empty": {
+   "script": "6d28ef6ed7f2cece",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "xargs: command not found": {
+   "script": "2c38e677f0804c51",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: nosuchcmd: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "xargs: custom delimiter keeps empty items": {
+   "script": "261dae719c6f3673",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x a\nx b\nx \nx c\n"
+   }
+  },
+  "xargs: default command is echo": {
+   "script": "f9ccdbdd85fc898c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\n"
+   }
+  },
+  "xargs: delimiter errors": {
+   "script": "22bac3a5b43ea58b",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: Invalid input delimiter specification ab: the delimiter must be either a single character or an escape sequence starting with \\.\nxargs: Invalid escape sequence \\q in input delimiter specification.\nxargs: Invalid input delimiter specification : the delimiter must be either a single character or an escape sequence starting with \\.\n"
+   },
+   "stdout": {
+    "text": "1\n1\n1\n"
+   }
+  },
+  "xargs: delimiter escapes": {
+   "script": "0dfbed5576284893",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\na b\na\nb\n"
+   }
+  },
+  "xargs: directory as command": {
+   "script": "9de88a39e923d3dd",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: /tmp: Permission denied\n"
+   },
+   "stdout": {
+    "text": "status=126\n"
+   }
+  },
+  "xargs: double dash and passthrough": {
+   "script": "a2d1595df0852210",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x a\na\n"
+   }
+  },
+  "xargs: empty input": {
+   "script": "ffc401e447376361",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nx\nstatus=0\nstatus=0\n"
+   }
+  },
+  "xargs: endless producer default batching": {
+   "script": "219aa4fddc4e8559",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: echo: terminated by signal 13\n"
+   },
+   "stdout": {
+    "text": "x x x x x \n"
+   }
+  },
+  "xargs: endless producer with replace": {
+   "script": "a82eb04555121f1d",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: echo: terminated by signal 13\n"
+   },
+   "stdout": {
+    "text": "x\nx\n"
+   }
+  },
+  "xargs: eof string": {
+   "script": "55680b3ed9cf2f36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\na b\na b\n"
+   }
+  },
+  "xargs: exit on size": {
+   "script": "10bb2abdffdd15d1",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: argument list too long\n"
+   },
+   "stdout": {
+    "text": "status=1\na b\nc\n"
+   }
+  },
+  "xargs: failing command gives 123": {
+   "script": "96c4f59676168c74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=123\n"
+   }
+  },
+  "xargs: find pipeline": {
+   "script": "9363537157c55238",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 /tmp/x/s/c\n3 /tmp/x/a b\n5 total\n"
+   }
+  },
+  "xargs: long options": {
+   "script": "213b06398f9d64e0",
+   "status": 0,
+   "stderr": {
+    "text": "echo a\necho b\n"
+   },
+   "stdout": {
+    "text": "a\nb\na b\n"
+   }
+  },
+  "xargs: max args": {
+   "script": "03c491f9b41215eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n3 4\n5\n"
+   }
+  },
+  "xargs: max chars": {
+   "script": "b9a1d1c9180f256f",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: argument line too long\n"
+   },
+   "stdout": {
+    "text": "a b\nc d\ne\nstatus=1\n"
+   }
+  },
+  "xargs: max lines": {
+   "script": "504cdcd49378431e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c d e\nf\na\nb\n"
+   }
+  },
+  "xargs: mutually exclusive options": {
+   "script": "4c3bf148b6b49011",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: warning: options --max-lines and --max-args/-n are mutually exclusive, ignoring previous --max-lines value\nxargs: warning: options --max-args and -L are mutually exclusive, ignoring previous --max-args value\nxargs: warning: options --max-args and --replace/-I/-i are mutually exclusive, ignoring previous --max-args value\n"
+   },
+   "stdout": {
+    "text": "a\nb\na b\nc\na\n"
+   }
+  },
+  "xargs: null delimiter": {
+   "script": "2796023896a25668",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x a b\nx \nx c\n"
+   }
+  },
+  "xargs: option errors": {
+   "script": "cb0ae218772be9f4",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: invalid option -- 'Z'\nTry 'xargs --help' for more information.\nxargs: unrecognized option '--bogus'\nTry 'xargs --help' for more information.\nxargs: option requires an argument -- 'n'\nTry 'xargs --help' for more information.\nxargs: value 0 for -n option should be >= 1\nTry 'xargs --help' for more information.\nxargs: invalid number \"1x\" for -n option\nTry 'xargs --help' for more information.\nxargs: invalid number \"x\" for -P option\nTry 'xargs --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "1\n1\n1\n1\n1\n1\n"
+   }
+  },
+  "xargs: parallel is accepted": {
+   "script": "8c5dfca21029e3cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\na\n"
+   }
+  },
+  "xargs: quotes and backslashes": {
+   "script": "ca0ec757d6450ead",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc d\ne f\n"
+   }
+  },
+  "xargs: refuses prompt": {
+   "script": "4ef5921691cae25e",
+   "status": 0,
+   "stderr": {
+    "text": "echo axargs: failed to open /dev/tty for reading: No such device or address\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "xargs: replace string": {
+   "script": "449a9045fe1febe8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "item-one-one\nitem-two-two\n"
+   }
+  },
+  "xargs: replace takes whole lines": {
+   "script": "2f1d87309ac27ce0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a b  ]\n[c ]\nx y\n"
+   }
+  },
+  "xargs: status 255 aborts": {
+   "script": "fa9e3f2eecb25995",
+   "status": 0,
+   "stderr": {
+    "text": "x\nxargs: jq: exited with status 255; aborting\n"
+   },
+   "stdout": {
+    "text": "status=124\n"
+   }
+  },
+  "xargs: unmatched quote": {
+   "script": "37b63efb939019c5",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: unmatched single quote; by default quotes are special to xargs unless you use the -0 option\nxargs: unmatched double quote; by default quotes are special to xargs unless you use the -0 option\n"
+   },
+   "stdout": {
+    "text": "status=1\na\nstatus=1\n"
+   }
+  },
+  "xargs: verbose": {
+   "script": "49a7d7d41007412f",
+   "status": 0,
+   "stderr": {
+    "text": "echo a b\necho c\necho\n"
+   },
+   "stdout": {
+    "text": "a b\nc\n\n"
+   }
+  },
+  "xargs: verbose quoting": {
+   "script": "07e3f0af40ef3a4e",
+   "status": 0,
+   "stderr": {
+    "text": "true 'a b' \"it's\" 'x=y' '' 'a'$'\\t''b' plain\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}
