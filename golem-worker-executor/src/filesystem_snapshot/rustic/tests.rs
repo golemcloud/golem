@@ -24,7 +24,7 @@ use super::scripted::{Script, ScriptedBlobStorage};
 use super::{
     ChangeDetection, Chunking, Compression, OperationPhase, PruneSettings, RepackLimits,
     Repository, RepositoryKey, RepositorySettings, SaveSettings, backup_options, config_options,
-    open_existing, prune_options, repository_options, run_blocking, unopened,
+    open_existing, open_or_create, prune_options, repository_options, run_blocking,
 };
 use crate::filesystem_snapshot::contract_tests::fixture::{
     Scratch, Spec, fixture, listing, write_tree,
@@ -1140,7 +1140,7 @@ fn each_setting_goes_into_its_rustic_option() {
 }
 
 #[test]
-async fn a_repository_keeps_the_settings_of_its_first_save_and_inspect_gives_them() {
+async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_the_defaults() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let (fixed_scope, default_scope) = (new_scope(), new_scope());
     let settings = RepositorySettings {
@@ -1148,6 +1148,18 @@ async fn a_repository_keeps_the_settings_of_its_first_save_and_inspect_gives_the
         compression: Compression::Off,
         extra_verify: false,
     };
+    let backend = Arc::new(BlobBackend::new(
+        storage.clone(),
+        fixed_scope.0.clone(),
+        Handle::current(),
+        STORAGE_CALL_DEADLINE,
+    ));
+    run_blocking(move || {
+        open_or_create(backend, &key(), &settings)?;
+        Ok(())
+    })
+    .await
+    .unwrap();
     // 4 chunks of 64 KiB and one of 1 byte, each with other bytes. Rabin keeps a file below its
     // smallest chunk of 512 KiB in one chunk.
     let tree = Scratch::new();
@@ -1155,107 +1167,74 @@ async fn a_repository_keeps_the_settings_of_its_first_save_and_inspect_gives_the
         .map(|index| (index % 251) as u8)
         .collect::<Vec<_>>();
     std::fs::write(tree.path().join("data"), &content).unwrap();
-    let fixed = repository(&storage, &fixed_scope).with_settings(settings);
-    let default = repository(&storage, &default_scope);
-
-    let fixed_save = fixed.save(&name("first"), tree.path()).await.unwrap();
-    let default_save = default.save(&name("first"), tree.path()).await.unwrap();
-    let reopened = repository(&storage, &fixed_scope)
-        .with_settings(RepositorySettings::default())
-        .inspect(&name("first"))
+    let config = async |scope: &SnapshotScope| {
+        with_existing_repository(
+            storage.clone(),
+            scope,
+            STORAGE_CALL_DEADLINE,
+            |repository| {
+                let config = repository.config();
+                Ok((
+                    config.chunker(),
+                    config.chunk_size(),
+                    config.compression,
+                    config.extra_verify(),
+                ))
+            },
+        )
         .await
         .unwrap()
+    };
+
+    let fixed_save = repository(&storage, &fixed_scope)
+        .save(&name("first"), tree.path())
+        .await
         .unwrap();
-    let default_settings = default
-        .inspect(&name("first"))
+    let default_save = repository(&storage, &default_scope)
+        .save(&name("first"), tree.path())
         .await
-        .unwrap()
-        .unwrap()
-        .settings;
+        .unwrap();
+    let (fixed_chunker, fixed_chunk_size, fixed_compression, fixed_extra_verify) =
+        config(&fixed_scope).await;
+    let (default_chunker, default_chunk_size, default_compression, default_extra_verify) =
+        config(&default_scope).await;
 
     assert_eq!(
         (
-            fixed_save.data_blobs,
-            fixed_save.data_added_packed >= fixed_save.data_added,
-            default_save.data_blobs,
-            default_save.data_added_packed < default_save.data_added,
-            reopened.settings,
-            default_settings,
-        ),
-        (5, true, 1, true, settings, RepositorySettings::default())
-    );
-}
-
-#[test]
-async fn inspect_gives_an_error_for_fixed_chunks_that_no_setting_can_hold() {
-    // A repository that rustic makes with fixed chunks of 4 GiB has a chunk size that does not fit
-    // `Chunking::Fixed`. The inspection must not report it as a Rabin repository.
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let scope = new_scope();
-    let backend = Arc::new(BlobBackend::new(
-        storage.clone(),
-        scope.0.clone(),
-        Handle::current(),
-        STORAGE_CALL_DEADLINE,
-    ));
-    run_blocking(move || {
-        unopened(backend)?.init(
-            &rustic_core::Credentials::Masterkey(key().master_key()),
-            &rustic_core::KeyOptions::default(),
-            &rustic_core::ConfigOptions::default()
-                .set_chunker(rustic_core::repofile::Chunker::FixedSize)
-                .set_chunk_size(bytesize::ByteSize::b(1 << 32)),
-        )?;
-        Ok(())
-    })
-    .await
-    .unwrap();
-
-    let inspected = repository(&storage, &scope).inspect(&name("first")).await;
-
-    assert_eq!(
-        inspected.map_err(|error| error.to_string()),
-        Err(format!(
-            "the repository has fixed chunks of {} bytes, which is not 1 to {} bytes",
-            1_u64 << 32,
-            u32::MAX
-        ))
-    );
-}
-
-#[test]
-async fn inspect_gives_the_snapshots_the_name_and_the_phases_and_nothing_without_a_repository() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let scope = new_scope();
-    let repository = repository(&storage, &scope);
-    let tree = fixture_tree();
-
-    let before = repository.inspect(&name("first")).await.unwrap();
-    repository.save(&name("first"), tree.path()).await.unwrap();
-    repository.save(&name("second"), tree.path()).await.unwrap();
-    let found = repository.inspect(&name("first")).await.unwrap().unwrap();
-    let missing = repository.inspect(&name("third")).await.unwrap().unwrap();
-
-    assert_eq!(
-        (
-            before,
-            (found.snapshots, found.found),
-            (missing.snapshots, missing.found),
-            found
-                .phases
-                .iter()
-                .map(|time| time.phase)
-                .collect::<Vec<_>>(),
+            (
+                fixed_save.data_blobs,
+                fixed_save.data_added_packed >= fixed_save.data_added,
+                fixed_chunker,
+                fixed_chunk_size,
+                fixed_compression,
+                fixed_extra_verify,
+            ),
+            (
+                default_save.data_blobs,
+                default_save.data_added_packed < default_save.data_added,
+                default_chunker,
+                default_chunk_size,
+                default_compression,
+                default_extra_verify,
+            ),
         ),
         (
-            None,
-            (2, true),
-            (2, false),
-            vec![
-                OperationPhase::Open,
-                OperationPhase::Lookup,
-                OperationPhase::IndexLoad
-            ],
+            (
+                5,
+                true,
+                rustic_core::repofile::Chunker::FixedSize,
+                65_536,
+                Some(0),
+                false,
+            ),
+            (
+                1,
+                true,
+                rustic_core::repofile::Chunker::Rabin,
+                1_048_576,
+                None,
+                true,
+            ),
         )
     );
 }

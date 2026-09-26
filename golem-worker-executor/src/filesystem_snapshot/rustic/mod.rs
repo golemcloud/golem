@@ -44,7 +44,7 @@ use bytesize::ByteSize;
 use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::BlobStorage;
 use rustic_core::jiff::Span;
-use rustic_core::repofile::{Chunker, ConfigFile, MasterKey, SnapshotFile};
+use rustic_core::repofile::{Chunker, MasterKey, SnapshotFile};
 use rustic_core::{
     BackupOptions, ConfigOptions, Credentials, KeyOptions, LimitOption, LocalDestination,
     LsOptions, Open, OpenStatus, ParentOptions, PathList, PruneOptions, PruneStats,
@@ -310,18 +310,6 @@ pub(super) struct PruneReport {
     pub(super) phases: Box<[PhaseTime]>,
 }
 
-/// What an inspection of a repository found.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct InspectReport {
-    /// The number of snapshots of the repository.
-    pub(super) snapshots: u64,
-    /// Whether a snapshot has the name.
-    pub(super) found: bool,
-    /// The settings of the repository, as its config file gives them.
-    pub(super) settings: RepositorySettings,
-    pub(super) phases: Box<[PhaseTime]>,
-}
-
 /// The rustic repository of one scope in blob storage.
 ///
 /// Each operation opens the repository again, with the master key and without the rustic cache.
@@ -333,7 +321,6 @@ pub(super) struct Repository {
     scope: SnapshotScope,
     key: RepositoryKey,
     deadline: Duration,
-    settings: RepositorySettings,
 }
 
 impl Repository {
@@ -350,13 +337,7 @@ impl Repository {
             scope,
             key,
             deadline,
-            settings: RepositorySettings::default(),
         }
-    }
-
-    /// Gives the repository with the settings that a save uses when it makes the repository.
-    pub(super) fn with_settings(self, settings: RepositorySettings) -> Self {
-        Self { settings, ..self }
     }
 
     /// Saves the directory tree `tree` as a snapshot with the name, with the default settings of
@@ -371,10 +352,10 @@ impl Repository {
 
     /// Saves the directory tree `tree` as a snapshot with the name.
     ///
-    /// A save in a scope without a repository makes the repository first, with the settings of
-    /// this value. The newest snapshot of the scope is the parent of the save, so the save reads
-    /// only the files that `settings` finds changed since that snapshot. The snapshot keeps the
-    /// paths relative to `tree`.
+    /// A save in a scope without a repository makes the repository first, with
+    /// [`RepositorySettings::DEFAULT`]. The newest snapshot of the scope is the parent of the save,
+    /// so the save reads only the files that `settings` finds changed since that snapshot. The
+    /// snapshot keeps the paths relative to `tree`.
     pub(super) async fn save_with(
         &self,
         name: &SnapshotName,
@@ -383,11 +364,9 @@ impl Repository {
     ) -> anyhow::Result<SaveReport> {
         let backend = self.backend()?;
         let key = self.key.clone();
-        let repository_settings = self.settings;
         let name = name.clone();
         let tree: Box<Path> = tree.into();
-        run_blocking(move || save(backend, &key, &repository_settings, &settings, &name, &tree))
-            .await
+        run_blocking(move || save(backend, &key, &settings, &name, &tree)).await
     }
 
     /// Restores the newest snapshot with the name into the empty directory `into`.
@@ -431,18 +410,6 @@ impl Repository {
         run_blocking(move || prune(backend, &key, &settings)).await
     }
 
-    /// Opens the repository, finds the snapshots with the name, and loads the index, as a
-    /// restore does before it reads data. The result is `None` when the scope has no repository.
-    pub(super) async fn inspect(
-        &self,
-        name: &SnapshotName,
-    ) -> anyhow::Result<Option<InspectReport>> {
-        let backend = self.backend()?;
-        let key = self.key.clone();
-        let name = name.clone();
-        run_blocking(move || inspect(backend, &key, &name)).await
-    }
-
     /// Gives a backend over the namespace of the scope, which waits on the current runtime for at
     /// most the deadline.
     fn backend(&self) -> anyhow::Result<Arc<BlobBackend>> {
@@ -472,13 +439,12 @@ async fn run_blocking<R: Send + 'static>(
 fn save(
     backend: Arc<BlobBackend>,
     key: &RepositoryKey,
-    repository_settings: &RepositorySettings,
     settings: &SaveSettings,
     name: &SnapshotName,
     tree: &Path,
 ) -> anyhow::Result<SaveReport> {
     let started = Instant::now();
-    let (repository, opening) = open_or_create(backend, key, repository_settings)?;
+    let (repository, opening) = open_or_create(backend, key, &RepositorySettings::DEFAULT)?;
     let open = PhaseTime {
         phase: opening,
         wall: started.elapsed(),
@@ -583,35 +549,6 @@ fn prune(
     }))
 }
 
-fn inspect(
-    backend: Arc<BlobBackend>,
-    key: &RepositoryKey,
-    name: &SnapshotName,
-) -> anyhow::Result<Option<InspectReport>> {
-    let (repository, open) = timed(OperationPhase::Open, || open_existing(backend, key))?;
-    let Some(repository) = repository else {
-        return Ok(None);
-    };
-    let ((snapshots, found), lookup) = timed(OperationPhase::Lookup, || {
-        repository.get_all_snapshots().map(|snapshots| {
-            (
-                snapshots.len(),
-                snapshots
-                    .iter()
-                    .any(|snapshot| snapshot.label == name.as_str()),
-            )
-        })
-    })?;
-    let settings = repository_settings(repository.config())?;
-    let (_, index) = timed(OperationPhase::IndexLoad, || repository.to_indexed())?;
-    Ok(Some(InspectReport {
-        snapshots: u64::try_from(snapshots)?,
-        found,
-        settings,
-        phases: Box::new([open, lookup, index]),
-    }))
-}
-
 fn forget(
     backend: Arc<BlobBackend>,
     key: &RepositoryKey,
@@ -704,34 +641,6 @@ fn config_options(settings: &RepositorySettings) -> ConfigOptions {
     } else {
         options.set_extra_verify(false)
     }
-}
-
-/// Gives the settings of a repository from its config file, or an error when the config file has
-/// fixed chunks whose size is not a size of [`Chunking::Fixed`].
-fn repository_settings(config: &ConfigFile) -> anyhow::Result<RepositorySettings> {
-    Ok(RepositorySettings {
-        chunking: match config.chunker() {
-            Chunker::Rabin => Chunking::Rabin,
-            Chunker::FixedSize => Chunking::Fixed(
-                u32::try_from(config.chunk_size())
-                    .ok()
-                    .and_then(NonZeroU32::new)
-                    .with_context(|| {
-                        format!(
-                            "the repository has fixed chunks of {} bytes, which is not 1 to {} bytes",
-                            config.chunk_size(),
-                            u32::MAX
-                        )
-                    })?,
-            ),
-        },
-        compression: match config.compression.map(NonZeroI32::new) {
-            None => Compression::Default,
-            Some(None) => Compression::Off,
-            Some(Some(level)) => Compression::Level(level),
-        },
-        extra_verify: config.extra_verify(),
-    })
 }
 
 /// The options of a save.

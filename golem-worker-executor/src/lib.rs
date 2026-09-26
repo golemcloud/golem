@@ -35,10 +35,6 @@ pub mod workerctx;
 #[cfg(test)]
 pub mod span_test_support;
 
-/// Runs the filesystem snapshot benchmark with the arguments of the process.
-#[cfg(all(target_os = "linux", feature = "fs-snapshot-benchmark"))]
-pub use filesystem_snapshot::benchmark::cli::main as fs_snapshot_benchmark_main;
-
 #[cfg(test)]
 test_r::enable!();
 
