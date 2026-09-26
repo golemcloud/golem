@@ -445,7 +445,7 @@ impl RusticSnapshotStore {
         // A prune writes its ledger before it deletes the claims, so a delete that claims in a
         // directory that such a prune removed sees the new ledger here.
         let again = read_ledger(files).await.map_err(storage_failure)?;
-        if claims_directory(&again) != claim.directory {
+        if *claims_directory(&again) != *claim.directory {
             return Ok(None);
         }
         Ok(Some(Arc::new(self.backend(scope, token)?)))
@@ -640,7 +640,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         if freed > 0 {
             let snapshots = ids
                 .iter()
-                .map(|id| id.to_hex().to_string())
+                .map(|id| id.to_hex().to_string().into_boxed_str())
                 .collect::<Box<[_]>>();
             record_freed(&files, freed, &snapshots)
                 .await

@@ -29,7 +29,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 use tracing::warn;
 
@@ -249,36 +249,36 @@ pub(super) struct FreedRecords {
 pub(super) struct FreedRecord {
     pub(super) path: Box<Path>,
     pub(super) bytes: u64,
-    pub(super) snapshots: Option<Box<[String]>>,
+    pub(super) snapshots: Option<Box<[Box<str>]>>,
 }
 
 /// The directory of the snapshot files of a repository.
 const SNAPSHOTS_PATH: &str = "snapshots";
 
 /// Gives the content of a record: the id of each snapshot file of the delete, one on each line.
-pub(super) fn record_content(snapshots: &[String]) -> String {
+pub(super) fn record_content(snapshots: &[Box<str>]) -> String {
     snapshots.join("\n")
 }
 
 /// Reads the snapshot ids from the content of a record. Each line must be an id of 64 hex
 /// characters. A content without an id does not parse, because a reader can see a record that a
 /// write has not filled yet.
-pub(super) fn parse_record(content: &[u8]) -> Option<Box<[String]>> {
+pub(super) fn parse_record(content: &[u8]) -> Option<Box<[Box<str>]>> {
     let text = std::str::from_utf8(content).ok()?;
     text.lines()
         .filter(|line| !line.is_empty())
         .map(|line| {
             (line.len() == 64 && line.bytes().all(|byte| byte.is_ascii_hexdigit()))
-                .then(|| line.to_string())
+                .then(|| line.into())
         })
-        .collect::<Option<Box<[String]>>>()
+        .collect::<Option<Box<[Box<str>]>>>()
         .filter(|snapshots| !snapshots.is_empty())
 }
 
 /// Gives the settled records and the sum of their bytes. A record is settled when it names at
 /// least one snapshot file and none of them exists. Any other record counts as zero bytes and
 /// stays, and so does a record whose content does not parse.
-pub(super) fn settle(records: &[FreedRecord], existing: &HashSet<String>) -> FreedRecords {
+pub(super) fn settle(records: &[FreedRecord], existing: &HashSet<Box<str>>) -> FreedRecords {
     let settled = records
         .iter()
         .filter(|record| {
@@ -309,7 +309,7 @@ pub(super) fn parse_freed(name: &str) -> Option<u64> {
 pub(super) async fn record_freed(
     files: &SnapshotFiles,
     bytes: u64,
-    snapshots: &[String],
+    snapshots: &[Box<str>],
 ) -> anyhow::Result<()> {
     let path = Path::new(FREED_PATH).join(format!("{bytes}-{}", uuid::Uuid::new_v4()));
     // The name is unique, so `AlreadyExists` means that an earlier try of this call wrote it.
@@ -352,8 +352,8 @@ pub(super) async fn list_freed(files: &SnapshotFiles) -> anyhow::Result<FreedRec
         .list_below("list_snapshots", Path::new(SNAPSHOTS_PATH))
         .await?
         .iter()
-        .filter_map(|blob| Some(blob.path.file_name()?.to_str()?.to_string()))
-        .collect::<HashSet<_>>();
+        .filter_map(|blob| Some(blob.path.file_name()?.to_str()?.into()))
+        .collect::<HashSet<Box<str>>>();
     Ok(settle(&records, &existing))
 }
 
@@ -446,11 +446,11 @@ pub(super) fn next_claim(entries: &[ClaimEntry], now: Timestamp, grace: Duration
 
 /// Gives the directory of the claims of the ledger: the time of its last prune in milliseconds, or
 /// `none`.
-pub(super) fn claims_directory(ledger: &PruneLedger) -> PathBuf {
+pub(super) fn claims_directory(ledger: &PruneLedger) -> Box<Path> {
     let generation = ledger
         .last_prune
         .map_or_else(|| "none".to_string(), |last| last.to_millis().to_string());
-    Path::new(CLAIMS_PATH).join(generation)
+    Path::new(CLAIMS_PATH).join(generation).into_boxed_path()
 }
 
 /// Lists the claims and the markers in the directory, from their names. A name that does not
@@ -475,14 +475,14 @@ pub(super) async fn write_marker(
     directory: &Path,
     number: u64,
     time: Timestamp,
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<Box<Path>> {
     let path = directory.join(format!(
         "{number}@{}-{}",
         time.to_millis(),
         uuid::Uuid::new_v4()
     ));
     let _: PutIfAbsent = files.put_if_absent(op_label, &path, &[]).await?;
-    Ok(path)
+    Ok(path.into_boxed_path())
 }
 
 /// Writes the first marker of the claim with the number, then takes the claim, and gives the path
@@ -493,7 +493,7 @@ pub(super) async fn take_claim(
     directory: &Path,
     number: u64,
     now: Timestamp,
-) -> anyhow::Result<Option<PathBuf>> {
+) -> anyhow::Result<Option<Box<Path>>> {
     let marker = write_marker(files, "write_marker", directory, number, now).await?;
     let written = files
         .put_if_absent("write_claim", &directory.join(number.to_string()), &[])
@@ -1073,8 +1073,12 @@ mod tests {
 
     #[test]
     fn a_record_counts_only_when_each_of_its_snapshot_files_is_gone() {
-        let id = |digit: char| std::iter::repeat_n(digit, 64).collect::<String>();
-        let record = |name: &str, bytes: u64, snapshots: Option<Vec<String>>| FreedRecord {
+        let id = |digit: char| {
+            std::iter::repeat_n(digit, 64)
+                .collect::<String>()
+                .into_boxed_str()
+        };
+        let record = |name: &str, bytes: u64, snapshots: Option<Vec<Box<str>>>| FreedRecord {
             path: Path::new(FREED_PATH).join(name).into(),
             bytes,
             snapshots: snapshots.map(Vec::into_boxed_slice),
@@ -1108,7 +1112,11 @@ mod tests {
 
     #[test]
     fn the_content_of_a_record_holds_one_snapshot_id_on_each_line() {
-        let id = |digit: char| std::iter::repeat_n(digit, 64).collect::<String>();
+        let id = |digit: char| {
+            std::iter::repeat_n(digit, 64)
+                .collect::<String>()
+                .into_boxed_str()
+        };
         let ids = [id('a'), id('b')];
 
         assert_eq!(
@@ -1119,7 +1127,7 @@ mod tests {
                 parse_record(&[0xff, 0xfe]),
             ],
             [
-                Some(Box::new(ids.clone()) as Box<[String]>),
+                Some(Box::new(ids.clone()) as Box<[Box<str>]>),
                 None,
                 None,
                 None
@@ -1131,7 +1139,7 @@ mod tests {
     async fn a_record_of_freed_bytes_is_written_and_listed() {
         let files = new_files();
 
-        let gone = ["0".repeat(64)];
+        let gone = ["0".repeat(64).into_boxed_str()];
         record_freed(&files, 40, &gone).await.unwrap();
         record_freed(&files, 2, &gone).await.unwrap();
         let listed = list_freed(&files).await.unwrap();

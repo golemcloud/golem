@@ -128,12 +128,14 @@ impl SnapshotFiles {
         &self,
         op_label: &'static str,
         path: &Path,
-    ) -> anyhow::Result<Vec<PathBuf>> {
-        self.answer(
-            self.storage
-                .list_dir(TARGET_LABEL, op_label, self.namespace.clone(), path),
-        )
-        .await
+    ) -> anyhow::Result<Box<[Box<Path>]>> {
+        let listed = self
+            .answer(
+                self.storage
+                    .list_dir(TARGET_LABEL, op_label, self.namespace.clone(), path),
+            )
+            .await?;
+        Ok(listed.into_iter().map(PathBuf::into_boxed_path).collect())
     }
 
     /// Gives each blob below the path, at all depths, with its size.
