@@ -24,7 +24,7 @@ use super::scripted::{Script, ScriptedBlobStorage};
 use super::{
     ChangeDetection, Chunking, Compression, OperationPhase, PruneSettings, RepackLimits,
     Repository, RepositoryKey, RepositorySettings, SaveSettings, backup_options, config_options,
-    open_existing, prune_options, repository_options, run_blocking,
+    open_existing, open_or_create, prune_options, repository_options, run_blocking,
 };
 use crate::filesystem_snapshot::contract_tests::fixture::{
     Scratch, Spec, fixture, listing, write_tree,
@@ -1134,6 +1134,69 @@ fn each_setting_goes_into_its_rustic_option() {
                     rustic_core::LimitOption::Percentage(0),
                     rustic_core::LimitOption::Unlimited
                 )
+            ),
+        )
+    );
+}
+
+#[test]
+async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_the_defaults() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (created_scope, saved_scope) = (new_scope(), new_scope());
+    let settings = RepositorySettings {
+        chunking: Chunking::Fixed(NonZeroU32::new(65_536).unwrap()),
+        compression: Compression::Off,
+        extra_verify: false,
+    };
+    let backend = Arc::new(BlobBackend::new(
+        storage.clone(),
+        created_scope.0.clone(),
+        Handle::current(),
+        STORAGE_CALL_DEADLINE,
+    ));
+    run_blocking(move || {
+        open_or_create(backend.clone(), &key(), &settings)?;
+        open_or_create(backend, &key(), &RepositorySettings::DEFAULT)?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    repository(&storage, &saved_scope)
+        .save(&name("first"), fixture_tree().path())
+        .await
+        .unwrap();
+    let config = |scope: SnapshotScope| {
+        let storage = storage.clone();
+        async move {
+            with_existing_repository(storage, &scope, STORAGE_CALL_DEADLINE, |repository| {
+                let config = repository.config();
+                Ok((
+                    config.chunker(),
+                    config.chunk_size(),
+                    config.compression,
+                    config.extra_verify(),
+                ))
+            })
+            .await
+        }
+    };
+
+    let created = config(created_scope).await.unwrap();
+    let saved = config(saved_scope).await.unwrap();
+
+    assert_eq!(
+        (created, (saved.0, saved.2, saved.3)),
+        (
+            (
+                rustic_core::repofile::Chunker::FixedSize,
+                65_536,
+                Some(0),
+                false
+            ),
+            (
+                rustic_core::repofile::Chunker::Rabin,
+                None,
+                RepositorySettings::DEFAULT.extra_verify
             ),
         )
     );
