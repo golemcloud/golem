@@ -166,6 +166,9 @@ pub(crate) struct RusticSnapshotStore {
     /// Holds a save after its blocking work and before its publish, when a test sets it.
     #[cfg(test)]
     pub(super) publish_gate: Option<Arc<PublishGate>>,
+    /// Makes each backend build fail while a test sets it.
+    #[cfg(test)]
+    pub(super) refuse_backends: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// A gate that holds a save after its blocking work and before its publish.
@@ -176,6 +179,20 @@ pub(super) struct PublishGate {
     pub(super) reached: tokio::sync::Notify,
     /// Lets the save go on.
     pub(super) open: tokio::sync::Notify,
+}
+
+/// The claim of a prune that a delete holds.
+struct Claim<'a> {
+    directory: &'a Path,
+    number: u64,
+}
+
+/// How the work of a delete that holds a claim ended without an error.
+enum ClaimOutcome {
+    /// The prune ran, and it marked packs or not.
+    Pruned { marked_packs: bool },
+    /// Another prune ended after the claim, so this delete did not prune.
+    Superseded,
 }
 
 /// The error of an operation of a store that is shut down.
@@ -216,6 +233,8 @@ impl RusticSnapshotStore {
             low_priority: LowPriority::new(policy.save_threads),
             #[cfg(test)]
             publish_gate: None,
+            #[cfg(test)]
+            refuse_backends: Arc::default(),
         }
     }
 
@@ -253,6 +272,16 @@ impl RusticSnapshotStore {
         scope: &SnapshotScope,
         token: &CancellationToken,
     ) -> Result<BlobBackend, SnapshotStoreError> {
+        #[cfg(test)]
+        if self
+            .refuse_backends
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(SnapshotStoreError::Storage {
+                retryable: true,
+                source: anyhow::anyhow!("the test refuses to build a backend"),
+            });
+        }
         let runtime = Handle::try_current()
             .context("a filesystem snapshot operation needs an async runtime")
             .map_err(|source| SnapshotStoreError::Storage {
@@ -298,8 +327,11 @@ impl RusticSnapshotStore {
     /// Prunes the repository when a prune is due. The records of freed bytes stay until a prune
     /// succeeds, so a delete that runs again after a failed prune prunes again. It lists the packs only when their size can make a prune due.
     /// A due prune runs only after the delete takes a claim of its ledger, and only when the ledger
-    /// did not change after the claim. A failed prune deletes the claim, and a prune that succeeds
-    /// deletes each claim of its ledger.
+    /// did not change after the claim. After an error before the prune ran, the claim is deleted,
+    /// so a retry of the delete prunes again, and a claim write that the storage completes after
+    /// that delete can delay that prune by up to the grace period. After a prune whose ledger write
+    /// failed, the claim stays, so the next prune waits up to the grace period. A prune that
+    /// succeeds deletes each claim of its ledger.
     async fn prune_when_due(
         &self,
         scope: &SnapshotScope,
@@ -338,41 +370,23 @@ impl RusticSnapshotStore {
         {
             return Ok(());
         }
-        // A prune writes its ledger before it deletes the claims, so a delete that claims in a
-        // directory that such a prune removed sees the new ledger here.
-        match read_ledger(&files).await {
-            Ok(again) if claims_directory(&again) == claims => {}
-            Ok(_) => {
-                release_claim(&files, &claims, number).await;
-                return Ok(());
-            }
-            Err(error) => {
-                release_claim(&files, &claims, number).await;
-                return Err(storage_failure(error));
-            }
-        }
-        let backend = Arc::new(self.backend(scope, token)?);
-        let key = self.key.clone();
-        let settings = self.policy.prune;
-        let low_priority = self.low_priority;
-        let pruning = self.blocking(Operation::Prune, move || {
-            low_priority.run("fs-snap-prune", move || prune(backend, &key, &settings))
-        });
-        // The claim is written again while the prune runs, so a prune slower than the grace
-        // period keeps its claim. The writes stop when the prune ends.
-        let refreshing = keep_claim_fresh(&files, &claims, number, refresh_period(grace));
-        let pruned = match future::select(pin!(pruning), pin!(refreshing)).await {
-            Either::Left((pruned, _)) => pruned,
-            Either::Right(((), pruning)) => pruning.await,
+        let claim = Claim {
+            directory: &claims,
+            number,
         };
-        let report = match pruned {
-            Ok(report) => report,
-            Err(error) => {
-                release_claim(&files, &claims, number).await;
-                return Err(error);
+        let outcome = self
+            .prune_with_claim(scope, token, &files, &claim, grace)
+            .await;
+        // The claim is released unless the prune ran, so a retry of the delete prunes again. After
+        // a prune, the claim stays also when the ledger write fails, so no second prune runs close
+        // to the first one.
+        let marked_packs = match outcome {
+            Ok(ClaimOutcome::Pruned { marked_packs }) => marked_packs,
+            other => {
+                release_claim(&files, claim.directory, claim.number).await;
+                return other.map(|_| ());
             }
         };
-        let marked_packs = report.as_ref().is_some_and(leaves_marked_packs);
         let ended = Timestamp::now_utc();
         write_ledger(&files, ended, marked_packs)
             .await
@@ -385,6 +399,42 @@ impl RusticSnapshotStore {
         });
         remove_old_claims(&files, &new_claims).await;
         Ok(())
+    }
+
+    /// Prunes while the delete holds the claim. It gives `Superseded` when another prune ended after
+    /// the claim, and an error when no prune ran.
+    async fn prune_with_claim(
+        &self,
+        scope: &SnapshotScope,
+        token: &CancellationToken,
+        files: &SnapshotFiles,
+        claim: &Claim<'_>,
+        grace: Duration,
+    ) -> Result<ClaimOutcome, SnapshotStoreError> {
+        // A prune writes its ledger before it deletes the claims, so a delete that claims in a
+        // directory that such a prune removed sees the new ledger here.
+        let again = read_ledger(files).await.map_err(storage_failure)?;
+        if claims_directory(&again) != claim.directory {
+            return Ok(ClaimOutcome::Superseded);
+        }
+        let backend = Arc::new(self.backend(scope, token)?);
+        let key = self.key.clone();
+        let settings = self.policy.prune;
+        let low_priority = self.low_priority;
+        let pruning = self.blocking(Operation::Prune, move || {
+            low_priority.run("fs-snap-prune", move || prune(backend, &key, &settings))
+        });
+        // The claim is written again while the prune runs, so a prune slower than the grace
+        // period keeps its claim. The writes stop when the prune ends.
+        let refreshing =
+            keep_claim_fresh(files, claim.directory, claim.number, refresh_period(grace));
+        let report = match future::select(pin!(pruning), pin!(refreshing)).await {
+            Either::Left((pruned, _)) => pruned,
+            Either::Right(((), pruning)) => pruning.await,
+        }?;
+        Ok(ClaimOutcome::Pruned {
+            marked_packs: report.as_ref().is_some_and(leaves_marked_packs),
+        })
     }
 }
 

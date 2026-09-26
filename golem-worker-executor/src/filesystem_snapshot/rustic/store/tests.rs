@@ -1314,6 +1314,119 @@ async fn a_prune_deletes_the_claims_of_old_ledgers() {
 }
 
 #[test]
+#[timeout("60s")]
+async fn a_failed_ledger_write_after_a_prune_keeps_the_claim_so_no_second_prune_runs() {
+    // The first prune runs and its ledger write fails. A delete right after it finds the claim
+    // and does not prune. When the claim is older than the grace period and the margin, the next
+    // delete prunes.
+    let refused = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let refused = refused.clone();
+        move |op_label, _| {
+            if op_label == "write_ledger" && !refused.swap(true, Ordering::SeqCst) {
+                Script::Refuse
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2", "p-3"]).await;
+
+    let failed = store.delete(&scope, &name("p-1")).await;
+    let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
+    let second = store.delete(&scope, &name("p-2")).await;
+    let prunes_after_second = prunes(&storage.calls());
+    let stale = golem_common::model::Timestamp::now_utc()
+        .to_millis()
+        .saturating_sub(3_600_000 + 2 * 60_000 + 1);
+    futures::stream::iter(&claims_after_failure)
+        .for_each(|claim| {
+            let (storage, scope) = (&storage, &scope);
+            async move {
+                storage
+                    .put_raw(
+                        "test",
+                        "test",
+                        scope.0.clone(),
+                        Path::new(claim),
+                        stale.to_string().as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
+    let third = store.delete(&scope, &name("p-3")).await;
+
+    assert!(
+        failed.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{failed:?}"
+    );
+    assert!(second.is_ok(), "{second:?}");
+    assert!(third.is_ok(), "{third:?}");
+    assert_eq!(
+        (
+            claims_after_failure.len(),
+            prunes_after_second,
+            prunes(&storage.calls()),
+            ledger(&storage, &scope).await.last_prune.is_some(),
+        ),
+        (1, 1, 2, true)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_backend_that_does_not_build_after_the_claim_releases_it() {
+    // The first claim write makes the next backend build fail, and that build is the one of the
+    // prune.
+    let refuse_backends = Arc::new(AtomicBool::new(false));
+    let armed = Arc::new(AtomicBool::new(true));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let refuse_backends = refuse_backends.clone();
+        move |op_label, _| {
+            if op_label == "write_claim" && armed.swap(false, Ordering::SeqCst) {
+                refuse_backends.store(true, Ordering::SeqCst);
+            }
+            Script::Pass
+        }
+    });
+    let store = Arc::new(RusticSnapshotStore {
+        refuse_backends: refuse_backends.clone(),
+        ..RusticSnapshotStore::with_policy(
+            storage.clone(),
+            key(),
+            policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+        )
+    });
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let failed = store.delete(&scope, &name("p-1")).await;
+    let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
+    refuse_backends.store(false, Ordering::SeqCst);
+    let retried = store.delete(&scope, &name("p-2")).await;
+
+    assert!(
+        failed.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{failed:?}"
+    );
+    assert!(retried.is_ok(), "{retried:?}");
+    assert_eq!(
+        (
+            claims_after_failure,
+            ledger(&storage, &scope).await.last_prune.is_some(),
+        ),
+        (Vec::<String>::new(), true)
+    );
+}
+
+#[test]
 async fn a_forget_that_fails_after_the_record_write_leaves_the_record() {
     // The forget deletes the snapshot file, and the storage refuses that call.
     let storage =
