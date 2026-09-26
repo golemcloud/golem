@@ -4745,6 +4745,9 @@ mod sweep;
 /// its end when its prune writes one new marker.
 const SWEEP_TURN: usize = 22;
 
+/// The number of runs of the order with a drop at the first step.
+const DROP_REPEATS: usize = 300;
+
 /// The number of random orders that the property test tries.
 const SWEEP_CASES: u32 = 1000;
 
@@ -4789,6 +4792,29 @@ async fn two_deletes_make_at_most_one_prune_in_each_order_with_up_to_two_switche
         .await;
 
     println!("{cases:?} orders in {:?}", started.elapsed());
+    assert!(cases.is_ok(), "{cases:?}");
+}
+
+#[test]
+#[timeout("60s")]
+async fn two_deletes_make_at_most_one_prune_when_one_is_dropped_at_its_first_step() {
+    // A drop right after the first step cancels the forget of the delete while its storage call
+    // can already wait for a step. The order ran into that race in a random case, so the test
+    // runs it many times.
+    let (shared, prepared) = prepared_scope().await;
+    let schedule = sweep::Schedule {
+        first: 0,
+        turns: vec![6, 1, 17, 14, 16, 2, 1, 12],
+        fail: Some((0, 17)),
+        late: None,
+        drop: Some((0, 0)),
+    };
+
+    let cases = futures::stream::iter(0..DROP_REPEATS)
+        .then(|_| sweep::run_case(&shared, &prepared, &schedule))
+        .try_fold(0usize, |cases, _| async move { Ok(cases + 1) })
+        .await;
+
     assert!(cases.is_ok(), "{cases:?}");
 }
 

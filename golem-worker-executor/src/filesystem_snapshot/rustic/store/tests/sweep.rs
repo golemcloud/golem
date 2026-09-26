@@ -231,6 +231,25 @@ impl Case {
         let storage = self.deletes[who].storage.clone();
         let (before, taker) = (storage.stepped(), storage.took().len());
         storage.step();
+        // The drop cancels the operation of the delete, and a call that already waited for a step
+        // then ends without the step. So for a dropped delete, the step can stay with no call to
+        // take it, and the test takes it back.
+        let dropped = self.deletes[who].dropped;
+        let untaken = || {
+            dropped
+                && storage.stepped() == before
+                && storage.waiting_steps() == 0
+                && storage.took().len() == taker
+        };
+        if !until(|| storage.stepped() > before || untaken()).await {
+            return Err(format!(
+                "a step of the dropped delete {who} was neither taken nor left; its last calls {:?}",
+                storage.calls().iter().rev().take(6).collect::<Vec<_>>()
+            ));
+        }
+        if untaken() && storage.take_back_step() {
+            return Ok(());
+        }
         if !until(|| storage.stepped() > before).await {
             return Err(format!(
                 "a step of delete {who} did not end; its last calls {:?}",

@@ -112,6 +112,14 @@ impl ScriptedBlobStorage {
         self.steps.add_permits(1);
     }
 
+    /// Takes back one step that no call took, and tells whether one was there.
+    pub(super) fn take_back_step(&self) -> bool {
+        self.steps
+            .try_acquire()
+            .map(tokio::sync::SemaphorePermit::forget)
+            .is_ok()
+    }
+
     /// Gives the number of calls that wait for a step.
     pub(super) fn waiting_steps(&self) -> usize {
         self.waiting.load(Ordering::SeqCst)
@@ -140,11 +148,13 @@ impl ScriptedBlobStorage {
         if let Ok(permit) = self.steps.acquire().await {
             permit.forget();
         }
-        drop(waiting);
+        // The call is in the steps that were taken before it stops waiting, so a test never sees
+        // a call that neither waits nor took its step.
         self.took
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((op_label, path.into()));
+        drop(waiting);
         Stepped(&self.stepped)
     }
 
