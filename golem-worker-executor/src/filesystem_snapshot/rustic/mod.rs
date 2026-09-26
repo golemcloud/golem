@@ -366,17 +366,7 @@ impl Repository {
         let key = self.key.clone();
         let name = name.clone();
         let tree: Box<Path> = tree.into();
-        run_blocking(move || {
-            save(
-                backend,
-                &key,
-                &RepositorySettings::DEFAULT,
-                &settings,
-                &name,
-                &tree,
-            )
-        })
-        .await
+        run_blocking(move || save(backend, &key, &settings, &name, &tree)).await
     }
 
     /// Restores the newest snapshot with the name into the empty directory `into`.
@@ -449,13 +439,12 @@ async fn run_blocking<R: Send + 'static>(
 fn save(
     backend: Arc<BlobBackend>,
     key: &RepositoryKey,
-    repository_settings: &RepositorySettings,
     settings: &SaveSettings,
     name: &SnapshotName,
     tree: &Path,
 ) -> anyhow::Result<SaveReport> {
     let started = Instant::now();
-    let (repository, opening) = open_or_create(backend, key, repository_settings)?;
+    let (repository, opening) = open_or_create(backend, key, &RepositorySettings::DEFAULT)?;
     let open = PhaseTime {
         phase: opening,
         wall: started.elapsed(),

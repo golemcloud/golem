@@ -1142,7 +1142,7 @@ fn each_setting_goes_into_its_rustic_option() {
 #[test]
 async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_the_defaults() {
     let storage = Arc::new(InMemoryBlobStorage::new());
-    let (created_scope, saved_scope) = (new_scope(), new_scope());
+    let (fixed_scope, default_scope) = (new_scope(), new_scope());
     let settings = RepositorySettings {
         chunking: Chunking::Fixed(NonZeroU32::new(65_536).unwrap()),
         compression: Compression::Off,
@@ -1150,7 +1150,7 @@ async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_
     };
     let backend = Arc::new(BlobBackend::new(
         storage.clone(),
-        created_scope.0.clone(),
+        fixed_scope.0.clone(),
         Handle::current(),
         STORAGE_CALL_DEADLINE,
     ));
@@ -1186,18 +1186,18 @@ async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_
         .unwrap()
     };
 
-    let fixed_save = repository(&storage, &created_scope)
+    let fixed_save = repository(&storage, &fixed_scope)
         .save(&name("first"), tree.path())
         .await
         .unwrap();
-    let default_save = repository(&storage, &saved_scope)
+    let default_save = repository(&storage, &default_scope)
         .save(&name("first"), tree.path())
         .await
         .unwrap();
     let (fixed_chunker, fixed_chunk_size, fixed_compression, fixed_extra_verify) =
-        config(&created_scope).await;
-    let (default_chunker, _, default_compression, default_extra_verify) =
-        config(&saved_scope).await;
+        config(&fixed_scope).await;
+    let (default_chunker, default_chunk_size, default_compression, default_extra_verify) =
+        config(&default_scope).await;
 
     assert_eq!(
         (
@@ -1213,6 +1213,7 @@ async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_
                 default_save.data_blobs,
                 default_save.data_added_packed < default_save.data_added,
                 default_chunker,
+                default_chunk_size,
                 default_compression,
                 default_extra_verify,
             ),
@@ -1226,7 +1227,14 @@ async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_
                 Some(0),
                 false,
             ),
-            (1, true, rustic_core::repofile::Chunker::Rabin, None, true),
+            (
+                1,
+                true,
+                rustic_core::repofile::Chunker::Rabin,
+                1_048_576,
+                None,
+                true,
+            ),
         )
     );
 }
