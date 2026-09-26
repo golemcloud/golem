@@ -438,15 +438,44 @@ pub(super) async fn release_claim(files: &SnapshotFiles, directory: &Path, numbe
     }
 }
 
-/// Deletes the claims of a ledger after its prune. A failure gives a warning, because a claim only
-/// delays a prune until its grace period passed.
-pub(super) async fn end_claims(files: &SnapshotFiles, directory: &Path) {
-    if let Err(error) = files.delete_dir("delete_claims", directory).await {
-        warn!(
-            error = %format!("{error:#}"),
-            "Failed to delete the prune claims of a filesystem snapshot scope"
-        );
-    }
+/// Gives each claim directory of the listed claims, other than the directory to keep.
+pub(super) fn claim_directories_except(listed: &[ListedBlob], keep: &Path) -> Vec<PathBuf> {
+    listed
+        .iter()
+        .filter_map(|blob| blob.path.parent().map(Path::to_path_buf))
+        .filter(|directory| directory != keep)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Deletes each claim directory other than the directory of the new ledger. It never deletes the
+/// directory of all claims, so a live claim of the new ledger stays. A failure gives a warning,
+/// because a claim only delays a prune until its grace period passed.
+pub(super) async fn remove_old_claims(files: &SnapshotFiles, keep: &Path) {
+    let listed = match files
+        .list_below("list_claim_directories", Path::new(CLAIMS_PATH))
+        .await
+    {
+        Ok(listed) => listed,
+        Err(error) => {
+            warn!(
+                error = %format!("{error:#}"),
+                "Failed to list the prune claims of a filesystem snapshot scope"
+            );
+            return;
+        }
+    };
+    stream::iter(claim_directories_except(&listed, keep))
+        .for_each(|directory| async move {
+            if let Err(error) = files.delete_dir("delete_claims", &directory).await {
+                warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to delete the prune claims of a filesystem snapshot scope"
+                );
+            }
+        })
+        .await;
 }
 
 /// Reads the time of a claim, in milliseconds.
@@ -463,10 +492,11 @@ fn parse_claim(content: &[u8]) -> Option<Timestamp> {
 mod tests {
     use super::super::files::SnapshotFiles;
     use super::{
-        CLOCK_SKEW_MARGIN, ClaimChoice, FREED_PATH, FreedRecords, LEDGERS_PATH, ListedClaim,
-        Percent, PruneLedger, claims_directory, count_freed, list_claims, list_freed,
-        needs_repository_size, newest_ledger, next_claim, older_entries, parse_freed,
-        parse_ledger_entry, prune_due, read_ledger, record_freed, take_claim, write_ledger,
+        CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, FREED_PATH, FreedRecords, LEDGERS_PATH,
+        ListedClaim, Percent, PruneLedger, claim_directories_except, claims_directory, count_freed,
+        list_claims, list_freed, needs_repository_size, newest_ledger, next_claim, older_entries,
+        parse_freed, parse_ledger_entry, prune_due, read_ledger, record_freed, take_claim,
+        write_ledger,
     };
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
@@ -707,6 +737,29 @@ mod tests {
                     claimed_at: Some(now)
                 }]
             )
+        );
+    }
+
+    #[test]
+    fn each_claim_directory_other_than_the_new_one_is_old() {
+        let claim = |directory: &str, number: &str| ListedBlob {
+            path: Path::new(CLAIMS_PATH).join(directory).join(number).into(),
+            size: 0,
+        };
+        let directory = |name: &str| Path::new(CLAIMS_PATH).join(name);
+
+        assert_eq!(
+            claim_directories_except(
+                &[
+                    claim("none", "0"),
+                    claim("100", "0"),
+                    claim("100", "1"),
+                    claim("200", "3"),
+                    claim("300", "0"),
+                ],
+                &directory("300")
+            ),
+            vec![directory("100"), directory("200"), directory("none")]
         );
     }
 

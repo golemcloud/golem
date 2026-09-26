@@ -1281,6 +1281,40 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
 
 #[test]
 #[timeout("60s")]
+async fn a_prune_deletes_the_claims_of_old_ledgers() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    futures::stream::iter(["golem/prune-claims/100/0", "golem/prune-claims/200/4"])
+        .for_each(|path| {
+            let storage = storage.clone();
+            let scope = scope.clone();
+            async move {
+                storage
+                    .put_raw("test", "test", scope.0.clone(), Path::new(path), b"100")
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
+
+    store.delete(&scope, &name("p-1")).await.unwrap();
+
+    assert_eq!(
+        (
+            ledger(&storage, &scope).await.last_prune.is_some(),
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
     // The first read after the first claim is the start of the first prune. The gate holds it,
     // so the second delete reads the ledger that the first delete read.
@@ -2834,6 +2868,7 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
                 "list_ledgers",
                 "delete_ledger",
                 "refresh_claim",
+                "list_claim_directories",
             ]
             .contains(&op_label.as_str())
         })
