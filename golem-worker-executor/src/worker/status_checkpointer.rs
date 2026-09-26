@@ -124,7 +124,7 @@ impl StatusCheckpointer {
             || self
                 .owner_retirement
                 .get()
-                .is_some_and(|retirement| retirement.lost_shard.load(Ordering::Acquire))
+                .is_some_and(|retirement| retirement.lost_shard.get().is_some())
     }
 
     /// Prevents any future checkpoint write from resurrecting the checkpoint after it is deleted.
@@ -567,7 +567,9 @@ mod tests {
             cp.owner_retirement
                 .set(super::super::OwnerRetirement {
                     kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
-                    lost_shard: AtomicBool::new(true),
+                    lost_shard: std::sync::OnceLock::from(
+                        super::super::RetirementReason::ShardRevoked
+                    ),
                     stop: tokio::sync::OnceCell::new(),
                 })
                 .is_ok()

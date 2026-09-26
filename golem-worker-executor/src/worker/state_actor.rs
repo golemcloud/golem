@@ -55,7 +55,8 @@ use super::status::{
 };
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
-    PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric,
+    PendingMemoryGrowth, RetirementReason, UnloadReason, Worker, WorkerCommand, WorkerInstance,
+    WorkerStatusMetric,
 };
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence};
@@ -408,7 +409,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     // The shard has a new owner: give the agent up and leave no
                                     // further trace in an oplog that is no longer ours.
                                     Err(OplogError::Fenced(fence)) => {
-                                        state.retire_fenced_agent();
+                                        state.retire_fenced_agent(fence.clone());
                                         Err(fenced_error(&fence))
                                     }
                                     Err(error) => panic!("oplog write: {error}"),
@@ -442,8 +443,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 // Returned rather than reported as a moved version: the caller
                                 // retries on `false`, and a fenced oplog refuses every retry.
                                 if let Err(error) = state.oplog.add(*entry).await {
-                                    if matches!(error, OplogError::Fenced(_)) {
-                                        state.retire_fenced_agent();
+                                    if let OplogError::Fenced(fence) = &error {
+                                        state.retire_fenced_agent(fence.clone());
                                     }
                                     return Err(error);
                                 }
@@ -870,7 +871,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// two share. By the time the task runs that generation may be gone and a newer one cached
     /// under the same id, which is left alone: at a stale epoch its own open latches the fence and
     /// retires it, and at a re-granted epoch it is legitimately this executor's.
-    fn retire_fenced_agent(&self) {
+    fn retire_fenced_agent(&self, fence: OplogFence) {
         let active_agents = self.deps.active_agents();
         let owned_agent_id = self.owned_agent_id.clone();
         let status_cell = self.last_known_status.clone();
@@ -878,7 +879,12 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             if let Some(worker) = active_agents.try_get_cached(&owned_agent_id).await
                 && worker.shares_status_cell(&status_cell)
             {
-                let _ = worker.interrupt_and_retire(InterruptKind::ShardLost).await;
+                let _ = worker
+                    .interrupt_and_retire(
+                        InterruptKind::ShardLost,
+                        RetirementReason::Fenced(Some(fence)),
+                    )
+                    .await;
             }
         });
     }
@@ -907,7 +913,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 if let Some(committed) = committed {
                     committed.refused(&fence);
                 }
-                self.retire_fenced_agent();
+                self.retire_fenced_agent(fence.clone());
                 return Err(fence);
             }
             Err(error) => panic!("oplog write: {error}"),
@@ -956,7 +962,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                     match self.oplog.commit(CommitLevel::Always).await {
                         Ok(_) => {}
                         Err(OplogError::Fenced(fence)) => {
-                            self.retire_fenced_agent();
+                            self.retire_fenced_agent(fence.clone());
                             return Err(fence);
                         }
                         Err(error) => panic!("oplog write: {error}"),

@@ -5311,16 +5311,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
-        // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and
-        // a lost shard's oplog belongs to another executor now. Nothing further is written for it
-        // - not the drain, not an `Error` entry, not a status change - whatever the trap was: a
-        // revoke latches no fence, so the recorded retirement is all that says so, and the shard's
-        // new owner replays the invocation and records its outcome itself.
-        let worker = self.public_state.worker();
-        if let TrapType::Interrupt(kind) = trap_type {
-            worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind: *kind });
-        }
-        if worker.retired_for_lost_shard() {
+        // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and a
+        // lost shard's oplog belongs to another executor now. Like `Restart` and `Jump`, a
+        // `ShardLost` trap records nothing - not the drain, not an entry, not a status change - and
+        // the shard's new owner replays the invocation and records its outcome itself.
+        if let TrapType::Interrupt(kind) = trap_type
+            && self
+                .public_state
+                .worker()
+                .retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind: *kind })
+        {
             return RetryDecision::None;
         }
 
@@ -5408,13 +5408,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .await;
             match denial_persisted {
                 Ok(_) => {}
-                Err(crate::services::oplog::OplogError::Fenced(_)) => {
+                Err(crate::services::oplog::OplogError::Fenced(fence)) => {
                     // The shard moved while this failure was being recorded. Retire the agent
                     // exactly as the `ShardLost` arm above does: nothing further may be written
                     // to an oplog that belongs to another executor now.
-                    self.public_state
-                        .worker()
-                        .record_retirement(InterruptKind::ShardLost);
+                    self.public_state.worker().record_retirement(
+                        InterruptKind::ShardLost,
+                        crate::worker::RetirementReason::Fenced(Some(fence)),
+                    );
                     return RetryDecision::None;
                 }
                 Err(error) => panic!("oplog write: {error}"),
@@ -5802,12 +5803,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         target_revision: ComponentRevision,
         details: Option<String>,
     ) -> Result<(), WorkerExecutorError> {
-        // A lost shard's update is settled by the new owner. A revoke latches no fence, so the
-        // storage would still accept this entry, and it would drop the update there.
         let worker = self.public_state.worker();
-        if worker.retired_for_lost_shard() {
-            return Err(WorkerExecutorError::ShardingNotReady);
-        }
         let entry = OplogEntry::failed_update(target_revision, details.clone());
         worker.add_and_commit_oplog(entry).await?;
 
@@ -5829,10 +5825,6 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         info!("Worker update to {} finished successfully", target_revision);
         let worker = self.public_state.worker();
-        // As for a failed update: the outcome is the shard's new owner's to record.
-        if worker.retired_for_lost_shard() {
-            return Err(WorkerExecutorError::ShardingNotReady);
-        }
         worker
             .persist_successful_update(
                 &self.linear_memory,
@@ -6392,11 +6384,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             // Not for a lost shard, however the loss
                                             // reached the trap: the shard's new owner resumes that
                                             // invocation.
-                                            let shard_lost = worker.retired_for_lost_shard()
-                                                || matches!(
-                                                    trap_type,
-                                                    TrapType::Interrupt(InterruptKind::ShardLost)
-                                                );
+                                            let shard_lost = matches!(
+                                                trap_type,
+                                                TrapType::Interrupt(InterruptKind::ShardLost)
+                                            );
                                             if uses_streams
                                                 && !shard_lost
                                                 && (matches!(trap_type, TrapType::Interrupt(_))

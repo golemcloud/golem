@@ -722,13 +722,78 @@ enum OwnerCleanupState {
     Retired,
 }
 
-/// Why this worker retires as its owner, recorded once (the first kind wins), and the shared stop
-/// that carries it out. A fence found under the worker lifecycle lock records the kind there; the
-/// stop starts once `interrupt_and_retire` runs. A lost shard is recorded on top of any kind: an
-/// API interrupt or an environment unload may already be retiring the agent when its shard moves.
+/// Why this executor stops owning an agent.
+#[derive(Clone, Debug)]
+pub(crate) enum RetirementReason {
+    /// Asked for: an interrupt through the Golem API, or an environment unload.
+    Requested,
+    /// The oplog refused a write, because another executor claimed it at a newer epoch. `None`
+    /// when the refusal arrived without its epochs, as a `ShardLost` trap.
+    Fenced(Option<OplogFence>),
+    /// The shard manager revoked the shard.
+    ShardRevoked,
+    /// A delivered assignment no longer holds the shard, or holds it at a newer epoch.
+    ShardNotAssigned,
+}
+
+impl RetirementReason {
+    /// The lost-shard reason `error` carries, if it means the agent's shard was lost.
+    ///
+    /// Such a failure is not this executor's to record or to retry. An append would be refused by
+    /// the same fence that caused it, and on a shard lost without one it would write an error into
+    /// an oplog the new owner is already recovering. A retry in place would reopen the oplog at the
+    /// epoch this executor no longer holds. Every path that fails on a lost shard - startup and
+    /// replay recovery, streaming-session completion, the dropped-call drain, an interrupt -
+    /// classifies with this one function, so none of them can take the in-place retry another one
+    /// refuses.
+    pub(crate) fn of_error(error: &WorkerExecutorError) -> Option<Self> {
+        match error {
+            WorkerExecutorError::OplogFenced {
+                agent_id,
+                expected_epoch,
+                actual_epoch,
+            } => Some(Self::Fenced(Some(OplogFence {
+                agent_id: agent_id.clone(),
+                expected_epoch: ShardEpoch(*expected_epoch),
+                actual_epoch: actual_epoch.map(ShardEpoch),
+            }))),
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            } => Some(Self::Fenced(None)),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for RetirementReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Requested => write!(f, "requested"),
+            Self::Fenced(Some(fence)) => write!(
+                f,
+                "fenced: asserted epoch {}, stored {:?}",
+                fence.expected_epoch.0,
+                fence.actual_epoch.map(|epoch| epoch.0)
+            ),
+            Self::Fenced(None) => write!(f, "fenced"),
+            Self::ShardRevoked => write!(f, "shard revoked"),
+            Self::ShardNotAssigned => write!(f, "shard not assigned"),
+        }
+    }
+}
+
+/// Why this worker retires as its owner, and the shared stop that carries it out. A fence found
+/// under the worker lifecycle lock records the reason there; the stop starts once
+/// `interrupt_and_retire` runs.
+///
+/// The interrupt is recorded once (the first wins), but the shard can be lost after that: an API
+/// interrupt or an environment unload may already be retiring the agent when its shard moves, and
+/// its waiters must still be sent to the new owner. So the lost shard is a cell of its own, set
+/// once and later than the rest when it has to be: unset while the shard is this executor's,
+/// `Some(reason)` once it is lost.
 pub(super) struct OwnerRetirement {
     kind: InterruptKind,
-    lost_shard: AtomicBool,
+    lost_shard: std::sync::OnceLock<RetirementReason>,
     stop: tokio::sync::OnceCell<
         futures::future::Shared<
             futures::future::BoxFuture<'static, Result<(), WorkerExecutorError>>,
@@ -1122,24 +1187,6 @@ fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
     }
 }
 
-/// Whether `error` means the agent's shard was lost.
-///
-/// Such a failure is not this executor's to record or to retry. An append would be refused by the
-/// same fence that caused it, and on a shard lost without one it would write an error into an
-/// oplog the new owner is already recovering. A retry in place would reopen the oplog at the epoch
-/// this executor no longer holds. Every path that fails on a lost shard - startup and replay
-/// recovery, streaming-session completion, the dropped-call drain, an interrupt - classifies with
-/// this one predicate, so none of them can take the in-place retry another one refuses.
-pub(crate) fn is_shard_lost(error: &WorkerExecutorError) -> bool {
-    matches!(
-        error,
-        WorkerExecutorError::OplogFenced { .. }
-            | WorkerExecutorError::Interrupted {
-                kind: InterruptKind::ShardLost
-            }
-    )
-}
-
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn ensure_not_failed<T: HasAll<Ctx> + Send + Sync>(
         deps: &T,
@@ -1236,26 +1283,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Records retirement without taking the lifecycle lock. Owner writes stop immediately;
     /// `interrupt_and_retire` carries out the shared stop after that lock is released.
-    pub(crate) fn record_retirement(&self, kind: InterruptKind) {
-        let mut first = false;
-        let retirement = self.owner_retirement.get_or_init(|| {
-            first = true;
-            OwnerRetirement {
-                kind,
-                lost_shard: AtomicBool::new(false),
-                stop: tokio::sync::OnceCell::new(),
-            }
+    pub(crate) fn record_retirement(&self, kind: InterruptKind, reason: RetirementReason) {
+        let retirement = self.owner_retirement.get_or_init(|| OwnerRetirement {
+            kind,
+            lost_shard: std::sync::OnceLock::new(),
+            stop: tokio::sync::OnceCell::new(),
         });
-        if matches!(kind, InterruptKind::ShardLost) {
-            first = !retirement.lost_shard.swap(true, Ordering::AcqRel);
-        }
         self.owner_retirement_requested.cancel();
         self.durable_stream_producer.fence();
-        if first && self.retired_for_lost_shard() {
+        if !matches!(reason, RetirementReason::Requested)
+            && retirement.lost_shard.set(reason.clone()).is_ok()
+        {
             // Debug rather than warn: the oplog that latched a fence has already warned with
             // both epochs, and a revoke or reassignment is logged by the sweep.
             debug!(
                 agent_id = %self.owned_agent_id,
+                %reason,
                 "Retiring the agent: this executor no longer owns its shard"
             );
         }
@@ -1263,27 +1306,36 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// Whether this worker is retired because its shard moved to another executor.
     pub(crate) fn retired_for_lost_shard(&self) -> bool {
+        self.lost_shard_reason().is_some()
+    }
+
+    /// Why the shard moved, once it has.
+    pub(crate) fn lost_shard_reason(&self) -> Option<RetirementReason> {
         self.owner_retirement
             .get()
-            .is_some_and(|retirement| retirement.lost_shard.load(Ordering::Acquire))
+            .and_then(|retirement| retirement.lost_shard.get().cloned())
     }
 
     /// Starts the lost-shard retirement in a task of its own, for a caller the retirement's stop
     /// would wait for. Not async, so the retirement's future is not part of the caller's.
-    pub(crate) fn spawn_lost_shard_retirement(self: Arc<Self>) {
+    pub(crate) fn spawn_lost_shard_retirement(self: Arc<Self>, reason: RetirementReason) {
         tokio::spawn(async move {
-            let _ = self.interrupt_and_retire(InterruptKind::ShardLost).await;
+            let _ = self
+                .interrupt_and_retire(InterruptKind::ShardLost, reason)
+                .await;
         });
     }
 
-    /// Records a lost-shard retirement when `error` is one, per [`is_shard_lost`]. Returns whether
-    /// the worker is retired for a lost shard, by this failure or an earlier one: either way the
-    /// caller must neither record the failure nor retry in place.
+    /// Records a lost-shard retirement when `error` is one, per [`RetirementReason::of_error`], and
+    /// returns whether it was: the caller must then neither record the failure nor retry in place.
+    /// Any other failure is the caller's to handle; a write it makes is refused by the fence once
+    /// the shard's new owner has claimed the oplog.
     pub(crate) fn retire_if_shard_lost(&self, error: &WorkerExecutorError) -> bool {
-        if is_shard_lost(error) {
-            self.record_retirement(InterruptKind::ShardLost);
-        }
-        self.retired_for_lost_shard()
+        let Some(reason) = RetirementReason::of_error(error) else {
+            return false;
+        };
+        self.record_retirement(InterruptKind::ShardLost, reason);
+        true
     }
 
     /// Stops this worker through this handle, whichever generation it is. Nothing public reaches
@@ -1372,8 +1424,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn interrupt_and_retire(
         self: &Arc<Self>,
         interrupt: InterruptKind,
+        reason: RetirementReason,
     ) -> Result<(), WorkerExecutorError> {
-        self.record_retirement(interrupt);
+        self.record_retirement(interrupt, reason);
         if matches!(interrupt, InterruptKind::ShardLost) {
             // Signalled first, so a running guest leaves wasmtime even when a deletion owns the
             // stop or this generation is no longer the cached one. The ack is not awaited: a
@@ -1485,8 +1538,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     if let Some(entry) = entry {
                         // Refused, the shard moved during this retirement: nothing is cached for
                         // the invocation the new owner resumes, and its waiters are sent there.
-                        if self.add_and_commit_oplog(entry).await.is_err() {
-                            self.record_retirement(InterruptKind::ShardLost);
+                        if let Err(error) = self.add_and_commit_oplog(entry).await {
+                            let fence = match error {
+                                OplogError::Fenced(fence) => Some(fence),
+                                OplogError::Payload(_) => None,
+                            };
+                            self.record_retirement(
+                                InterruptKind::ShardLost,
+                                RetirementReason::Fenced(fence),
+                            );
                             self.fail_pending_invocations(WorkerExecutorError::runtime(
                                 "Worker ownership has retired",
                             ))
@@ -2119,7 +2179,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.oplog().shard_epoch(),
         ) {
             info!("The agent's shard left this executor while the agent was being created");
-            let _ = self.interrupt_and_retire(InterruptKind::ShardLost).await;
+            let _ = self
+                .interrupt_and_retire(InterruptKind::ShardLost, RetirementReason::ShardNotAssigned)
+                .await;
         }
     }
 
@@ -2996,12 +3058,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         retry_cleanup: bool,
     ) -> Result<(), WorkerExecutorError> {
-        // Retired for a lost shard, by an earlier attempt's refused write or by a sweep: the agent's
-        // durable state is the new owner's, so no stage runs here again and no remote effect is
-        // repeated.
-        if self.retired_for_lost_shard() {
-            return Err(WorkerExecutorError::ShardingNotReady);
-        }
         let interrupt_kind = InterruptKind::Interrupt(Timestamp::now_utc());
         if !self
             .deletion_stage_completed(WorkerDeletionStage::ExecutionFenced)
@@ -8075,8 +8131,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 if slot.is_retired() {
                                     break;
                                 }
-                                if is_shard_lost(&error) {
-                                    worker.spawn_lost_shard_retirement();
+                                if let Some(reason) = RetirementReason::of_error(&error) {
+                                    worker.spawn_lost_shard_retirement(reason);
                                     break;
                                 }
                                 warn!(
@@ -8100,8 +8156,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         // Remote attachment control may acquire another cold worker that refers back
                         // to us. Only run this after local construction has published readiness.
                         let needs_retry = worker.run_durable_stream_maintenance(&producer).await;
-                        if worker.retired_for_lost_shard() {
-                            worker.spawn_lost_shard_retirement();
+                        if let Some(reason) = worker.lost_shard_reason() {
+                            worker.spawn_lost_shard_retirement(reason);
                             break;
                         }
                         drop(worker);
@@ -8230,7 +8286,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Records the lost shard whose oplog refused a write, and returns the refusal for the
     /// caller to propagate.
     pub(crate) fn retired_by(&self, fence: OplogFence) -> OplogError {
-        self.record_retirement(InterruptKind::ShardLost);
+        self.record_retirement(
+            InterruptKind::ShardLost,
+            RetirementReason::Fenced(Some(fence.clone())),
+        );
         OplogError::Fenced(fence)
     }
 
@@ -8878,14 +8937,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         loop {
             match self.lookup_invocation_result(key).await {
                 LookupResult::Interrupted => break Ok(LookupResult::Interrupted),
-                // Retired for a lost shard, so no result for the key will be published on this
-                // executor. The retry answer is published to waiters but not cached, and a
-                // receiver that lagged past it, or subscribed after it, finds it here instead.
-                LookupResult::New | LookupResult::Pending if self.retired_for_lost_shard() => {
-                    break Ok(LookupResult::Complete(Err(
-                        WorkerExecutorError::ShardingNotReady,
-                    )));
-                }
                 LookupResult::New | LookupResult::Pending => {
                     let waiting = subscription.wait_for(|event| match event {
                         Event::InvocationCompleted {
@@ -8917,13 +8968,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         () = tokio::time::sleep_until(next_ownership_check) => {
                             next_ownership_check = tokio::time::Instant::now()
                                 + INVOCATION_OWNERSHIP_RECHECK_INTERVAL;
-
-                            // A key the retirement did not know about yet (enqueued, not yet folded
-                            // into the status it failed from) gets no retry answer published. The
-                            // lookup at the top of the loop answers it.
-                            if self.retired_for_lost_shard() {
-                                continue;
-                            }
 
                             // An agent whose shard has moved is resumed by whoever owns
                             // it now, and its `InvocationCompleted` is published on that
@@ -9168,7 +9212,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // retirement fails the waiters while this generation still holds the cache entry, then
         // drops it. It is shared, so the passes its own stop and other stops make here join it,
         // and it is spawned because its stop comes back through here.
-        if self.retired_for_lost_shard()
+        if let Some(reason) = self.lost_shard_reason()
             && let Some(worker) = self
                 .deps
                 .active_agents()
@@ -9176,7 +9220,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await
             && std::ptr::eq(worker.as_ref(), self)
         {
-            worker.spawn_lost_shard_retirement();
+            worker.spawn_lost_shard_retirement(reason);
         }
 
         if !called_from_invocation_loop && let Some(startup_attempt) = startup_attempt {
@@ -9307,11 +9351,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Make sure the oplog is committed. Best-effort: a stop must finish.
                 match self.oplog.commit(CommitLevel::Always).await {
                     Ok(_) => {}
-                    Err(OplogError::Fenced(_)) => {
+                    Err(OplogError::Fenced(fence)) => {
                         // The shard has a new owner. Recording the retirement is synchronous and
                         // takes no lock, so it is safe under the worker lifecycle lock this arm
                         // holds.
-                        self.record_retirement(InterruptKind::ShardLost);
+                        self.record_retirement(
+                            InterruptKind::ShardLost,
+                            RetirementReason::Fenced(Some(fence)),
+                        );
                     }
                     Err(error) => {
                         warn!(%error, "Committing the oplog while stopping failed");
@@ -12160,19 +12207,25 @@ mod tests {
         };
 
         // A text failure is never a fence: only the typed refusal is.
-        assert!(!is_shard_lost(&WorkerExecutorError::runtime(
-            OplogError::Fenced(fence).to_string()
-        )));
-        assert!(is_shard_lost(&WorkerExecutorError::oplog_fenced(
-            agent_id,
-            2,
-            Some(3)
-        )));
+        assert!(
+            RetirementReason::of_error(&WorkerExecutorError::runtime(
+                OplogError::Fenced(fence.clone()).to_string()
+            ))
+            .is_none()
+        );
+        // The typed refusal keeps its epochs.
+        assert!(matches!(
+            RetirementReason::of_error(&WorkerExecutorError::oplog_fenced(agent_id, 2, Some(3))),
+            Some(RetirementReason::Fenced(Some(carried))) if carried == fence
+        ));
         // Without a latched fence: a shard revoked or reassigned interrupts the agent with
         // `ShardLost` and writes nothing, so no fence ever latches.
-        assert!(is_shard_lost(&WorkerExecutorError::Interrupted {
-            kind: InterruptKind::ShardLost
-        }));
+        assert!(matches!(
+            RetirementReason::of_error(&WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost
+            }),
+            Some(RetirementReason::Fenced(None))
+        ));
 
         // Every other failure is still the agent's own, to be recorded or retried.
         for kind in [
@@ -12182,11 +12235,11 @@ mod tests {
             InterruptKind::Jump,
         ] {
             assert!(
-                !is_shard_lost(&WorkerExecutorError::Interrupted { kind }),
+                RetirementReason::of_error(&WorkerExecutorError::Interrupted { kind }).is_none(),
                 "{kind:?} is not a lost shard"
             );
         }
-        assert!(!is_shard_lost(&WorkerExecutorError::runtime("boom")));
+        assert!(RetirementReason::of_error(&WorkerExecutorError::runtime("boom")).is_none());
     }
 
     #[test]

@@ -38,7 +38,7 @@ use crate::services::{
     HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::{
-    ExportStreamControlResult as DomainExportResult, Worker, WorkerUpdateMode,
+    ExportStreamControlResult as DomainExportResult, RetirementReason, Worker, WorkerUpdateMode,
     retired_by_assignment,
 };
 pub use crate::worker::{
@@ -1272,7 +1272,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // shards' new owners.
         let shard_service = self.shard_service();
         self.active_agents()
-            .give_up_matching(|agent_id| shard_service.check_worker(agent_id).is_err())
+            .give_up_matching(
+                |agent_id| shard_service.check_worker(agent_id).is_err(),
+                RetirementReason::ShardRevoked,
+            )
             .await;
 
         Ok(())
@@ -1397,13 +1400,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .collect();
         let assignment = this.shard_service().try_get_current_assignment();
         this.active_agents()
-            .give_up_matching(|agent_id| {
-                retired_by_assignment(
-                    assignment.as_ref(),
-                    agent_id,
-                    held_epochs.get(agent_id).copied().flatten(),
-                )
-            })
+            .give_up_matching(
+                |agent_id| {
+                    retired_by_assignment(
+                        assignment.as_ref(),
+                        agent_id,
+                        held_epochs.get(agent_id).copied().flatten(),
+                    )
+                },
+                RetirementReason::ShardNotAssigned,
+            )
             .await;
 
         if !this.shard_service().is_ready() {

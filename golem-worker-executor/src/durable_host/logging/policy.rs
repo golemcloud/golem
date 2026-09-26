@@ -134,10 +134,11 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
                         // worker's own: a fence retires the agent, anything else is fail-stop.
                         match oplog.add(entry).await {
                             Ok(_) => {}
-                            Err(crate::services::oplog::OplogError::Fenced(_)) => {
-                                public_state
-                                    .worker()
-                                    .record_retirement(golem_service_base::error::worker_executor::InterruptKind::ShardLost);
+                            Err(crate::services::oplog::OplogError::Fenced(fence)) => {
+                                public_state.worker().record_retirement(
+                                    golem_service_base::error::worker_executor::InterruptKind::ShardLost,
+                                    crate::worker::RetirementReason::Fenced(Some(fence)),
+                                );
                             }
                             Err(error) => panic!("oplog write: {error}"),
                         }

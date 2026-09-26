@@ -65,7 +65,7 @@ use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
-use crate::worker::{Worker, WorkerCreationMode};
+use crate::worker::{RetirementReason, Worker, WorkerCreationMode};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
@@ -1304,7 +1304,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// it: one that read the assignment before the shard left opens its oplog at the epoch it
     /// was granted, and checks the assignment again once it is published - see
     /// `Worker::retire_if_shard_left_during_construction`.
-    pub(crate) async fn give_up_matching(&self, select: impl Fn(&AgentId) -> bool) {
+    pub(crate) async fn give_up_matching(
+        &self,
+        select: impl Fn(&AgentId) -> bool,
+        reason: RetirementReason,
+    ) {
         let selected: Vec<Arc<Worker<Ctx>>> = self
             .snapshot()
             .await
@@ -1322,8 +1326,13 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
 
         // Concurrent, and a failed retirement never stops the sweep: each agent's own answer is
         // the routing miss that sends its callers to the new owner.
-        futures::future::join_all(selected.into_iter().map(|worker| async move {
-            let _ = worker.interrupt_and_retire(InterruptKind::ShardLost).await;
+        futures::future::join_all(selected.into_iter().map(|worker| {
+            let reason = reason.clone();
+            async move {
+                let _ = worker
+                    .interrupt_and_retire(InterruptKind::ShardLost, reason)
+                    .await;
+            }
         }))
         .await;
     }
@@ -1335,7 +1344,10 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         for (_agent_id, worker) in self.snapshot().await {
             if worker.get_initial_worker_metadata().environment_id == environment_id
                 && let Err(error) = worker
-                    .interrupt_and_retire(InterruptKind::Interrupt(Timestamp::now_utc()))
+                    .interrupt_and_retire(
+                        InterruptKind::Interrupt(Timestamp::now_utc()),
+                        RetirementReason::Requested,
+                    )
                     .await
             {
                 tracing::error!(

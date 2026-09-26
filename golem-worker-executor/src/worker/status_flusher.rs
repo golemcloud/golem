@@ -164,7 +164,7 @@ impl AgentStatusFlusher {
             || self
                 .owner_retirement
                 .get()
-                .is_some_and(|retirement| retirement.lost_shard.load(Ordering::Acquire))
+                .is_some_and(|retirement| retirement.lost_shard.get().is_some())
     }
 
     /// Called from the hot path whenever the in-memory status changed. Updates the recovery index
@@ -851,7 +851,9 @@ mod tests {
                 .owner_retirement
                 .set(super::super::OwnerRetirement {
                     kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
-                    lost_shard: AtomicBool::new(true),
+                    lost_shard: std::sync::OnceLock::from(
+                        super::super::RetirementReason::ShardRevoked
+                    ),
                     stop: tokio::sync::OnceCell::new(),
                 })
                 .is_ok()
@@ -882,7 +884,9 @@ mod tests {
                 .owner_retirement
                 .set(super::super::OwnerRetirement {
                     kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
-                    lost_shard: AtomicBool::new(true),
+                    lost_shard: std::sync::OnceLock::from(
+                        super::super::RetirementReason::ShardRevoked
+                    ),
                     stop: tokio::sync::OnceCell::new(),
                 })
                 .is_ok()

@@ -33,7 +33,7 @@ use crate::worker::invocation::{
 use crate::worker::status_checkpointer;
 use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, PendingLiveInvocationDisposition,
-    PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningAgent,
+    PendingWorkerInterrupt, QueuedWorkerInvocation, RetirementReason, RetryDecision, RunningAgent,
     RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest, Worker, WorkerCommand,
     WorkerInterruptState, WorkerRunningAgent, WorkerTrace,
 };
@@ -844,14 +844,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .await
                                             .current_idempotency_key
                                             .clone();
-                                        // A lost shard, before or by this interrupt: the oplog is
-                                        // the new owner's to write, so no lifecycle entry and no
-                                        // failure is recorded for an invocation it runs. A pending
-                                        // suspend or interrupt is not displaced by `ShardLost`, so
-                                        // the kind alone does not say so.
-                                        if matches!(kind, InterruptKind::ShardLost)
-                                            || self.parent.retired_for_lost_shard()
-                                        {
+                                        // A lost shard: the oplog is the new owner's to write, so
+                                        // no lifecycle entry and no failure is recorded for an
+                                        // invocation it runs. Any other pending interrupt was
+                                        // requested and is recorded, or refused by the fence
+                                        // once the new owner has claimed the oplog.
+                                        if matches!(kind, InterruptKind::ShardLost) {
                                             self.stop_startup_retired().await;
                                             break 'outer;
                                         }
@@ -978,7 +976,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// recorded here: the stop then tears the entity bodies down as `ShardLost`, fails the waiters
     /// and removes only this generation. A kind already recorded is kept.
     async fn stop_startup_retired(&self) {
-        self.parent.record_retirement(InterruptKind::ShardLost);
+        self.parent
+            .record_retirement(InterruptKind::ShardLost, RetirementReason::Fenced(None));
         self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
             .await;
     }
@@ -996,11 +995,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             ?decision,
             "Invocation queue loop interrupted while unloaded"
         );
-        // A lost shard, before or by this interrupt: the oplog is the new owner's to write, so no
-        // lifecycle entry and no failure is recorded for an invocation it runs, and nothing waits
-        // on here for a permit to restart it. A pending suspend or interrupt is not displaced by
-        // `ShardLost`, so the kind alone does not say so.
-        if matches!(kind, InterruptKind::ShardLost) || self.parent.retired_for_lost_shard() {
+        // A lost shard: the oplog is the new owner's to write, so no lifecycle entry and no
+        // failure is recorded for an invocation it runs, and nothing waits on here for a permit
+        // to restart it. Any other pending interrupt was requested and is recorded, or refused by
+        // the fence once the new owner has claimed the oplog.
+        if matches!(kind, InterruptKind::ShardLost) {
             self.stop_startup_retired().await;
             return true;
         }
@@ -2859,8 +2858,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
                     .await;
-                if let Some(outcome) = self.retired_outcome() {
-                    return outcome;
+                // A lost shard writes nothing more: a terminal streaming-session failure would end
+                // an invocation the shard's new owner resumes.
+                if matches!(kind, InterruptKind::ShardLost) {
+                    return CommandOutcome::BreakInnerLoop(RetryDecision::None);
                 }
                 if self.uses_streams
                     && let Err(error) = self
@@ -2904,9 +2905,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .data_mut()
                     .on_invocation_failure(&full_function_name, &trap_type)
                     .await;
-                if let Some(outcome) = self.retired_outcome() {
-                    return outcome;
-                }
                 if self.uses_streams
                     && let Err(error) = self
                         .parent
@@ -2924,16 +2922,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 failed_agent_invocation_outcome(self.parent.agent_mode(), RetryDecision::None)
             }
         }
-    }
-
-    /// The outcome of an invocation that failed on an agent retired for a lost shard, `None`
-    /// otherwise. Checked after `on_invocation_failure`, which records a lost shard. Nothing more
-    /// is written: a terminal streaming-session failure, like any other terminal record, would end
-    /// an invocation the shard's new owner resumes.
-    fn retired_outcome(&self) -> Option<CommandOutcome> {
-        self.parent
-            .retired_for_lost_shard()
-            .then_some(CommandOutcome::BreakInnerLoop(RetryDecision::None))
     }
 
     /// The logic handling an agent invocation that did not succeed.
@@ -2981,6 +2969,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )),
             },
         };
+        let shard_lost = matches!(
+            trap_type,
+            Some(TrapType::Interrupt(InterruptKind::ShardLost))
+        );
         let decision = match trap_type {
             Some(trap_type) => {
                 self.store
@@ -2990,8 +2982,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             }
             None => RetryDecision::None,
         };
-        if let Some(outcome) = self.retired_outcome() {
-            return outcome;
+        // A lost shard writes nothing more: a terminal streaming-session failure would end an
+        // invocation the shard's new owner resumes.
+        if shard_lost {
+            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
         }
 
         if self.uses_streams
@@ -3181,12 +3175,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await
             }
             Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                // Marked before `fail_update` checks the mark: a `ShardLost` interrupt is a lost
-                // shard whether or not anything marked the agent on its way here.
-                self.parent
+                // A `FailedUpdate` drops the pending update from the status: for a lost shard
+                // nothing is written, and the update stays pending for the new owner.
+                if self
+                    .parent
                     .retire_if_shard_lost(&WorkerExecutorError::Interrupted {
                         kind: interrupt_kind,
-                    });
+                    })
+                {
+                    return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                }
                 self.fail_update(
                     target_revision,
                     format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
