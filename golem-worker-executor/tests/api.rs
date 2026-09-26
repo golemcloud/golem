@@ -8183,10 +8183,21 @@ async fn a_deletion_that_outlived_the_shard_leaves_the_agent_to_its_new_owner(
         entries,
         "a deletion that lost the shard removes nothing from the new owner's oplog"
     );
+
+    // The failed deletion stays cached with the stages it completed, so a retry here meets the
+    // fence again instead of repeating them. It leaves once the shard leaves this executor.
     assert!(
-        executor.active_agent(&owned).await.is_none(),
-        "this executor still holds an agent it has given up"
+        executor.worker_is_cached(&owned).await,
+        "the failed deletion left the cache before its shard left this executor"
     );
+    revoke_shard_zero(&executor).await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned).await {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("the failed deletion stayed cached after its shard was revoked"))?;
     Ok(())
 }
 

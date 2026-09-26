@@ -3594,9 +3594,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
         // A recovery that failed because the shard moved is recorded by nobody: the agent retires
         // here and is recovered by the shard's new owner. The caller stops the worker right after
-        // this, and that stop is where the agent is dropped. An owner already retiring for a
-        // reason that never reached this error - a revoked or reassigned shard - records nothing
-        // either: the oplog would still accept the entry, at an epoch it no longer owns in spirit.
+        // this, and that stop is where the agent is dropped.
         if self.retire_if_shard_lost(error) {
             return;
         }

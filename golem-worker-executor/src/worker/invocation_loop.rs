@@ -33,7 +33,7 @@ use crate::worker::invocation::{
 use crate::worker::status_checkpointer;
 use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, PendingLiveInvocationDisposition,
-    PendingWorkerInterrupt, QueuedWorkerInvocation, RetirementReason, RetryDecision, RunningAgent,
+    PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningAgent,
     RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest, Worker, WorkerCommand,
     WorkerInterruptState, WorkerRunningAgent, WorkerTrace,
 };
@@ -970,14 +970,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     }
 
     /// Stops a generation whose shard was lost, found by an interrupt or by its oplog refusing a
-    /// lifecycle entry: the waiters are told to look for the shard's new owner.
-    ///
-    /// A refused entry is the first this executor learns of the fence, so the retirement is
-    /// recorded here: the stop then tears the entity bodies down as `ShardLost`, fails the waiters
-    /// and removes only this generation. A kind already recorded is kept.
+    /// lifecycle entry: the waiters are told to look for the shard's new owner. Both have already
+    /// recorded the retirement - `interrupt_and_retire` before it sends `ShardLost`, the write
+    /// helper with the fence that refused it.
     async fn stop_startup_retired(&self) {
-        self.parent
-            .record_retirement(InterruptKind::ShardLost, RetirementReason::Fenced(None));
         self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
             .await;
     }

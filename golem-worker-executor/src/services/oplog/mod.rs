@@ -941,7 +941,9 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// The refusal this oplog has latched, if the storage has turned one of its writes away:
     /// every later write fails on it, so the handle is finished. Answered without a round trip,
-    /// so the open-oplog cache can decline to hand a finished handle to a new opener.
+    /// so the open-oplog cache can decline to hand a finished handle to a new opener, and a write
+    /// known to be refused is not started: a remote side effect, or the plugin forwarder's flush
+    /// and checkpoint.
     fn fence(&self) -> Option<OplogFence> {
         self.inner().and_then(|inner| inner.fence())
     }

@@ -21,7 +21,7 @@ use crate::metrics::workers::{
     record_agent_identity_resolution, record_derived_cache_publication_failed,
     record_stale_running_worker, record_status_cache_publication, record_worker_call,
 };
-use crate::services::oplog::{OplogError, OplogLifecycleGuard, OplogService};
+use crate::services::oplog::{OplogLifecycleGuard, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
@@ -1694,8 +1694,7 @@ impl WorkerService for DefaultWorkerService {
         if delete_current_oplog && let Some(epoch) = expected_epoch {
             self.oplog_service
                 .assert_owning_epoch(owned_agent_id, agent_mode, epoch)
-                .await
-                .map_err(oplog_removal_error)?;
+                .await?;
         }
 
         self.remove_cached_status(owned_agent_id, fingerprint)
@@ -1723,8 +1722,7 @@ impl WorkerService for DefaultWorkerService {
         if delete_current_oplog {
             self.oplog_service
                 .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
-                .await
-                .map_err(oplog_removal_error)?;
+                .await?;
         }
 
         let shard_assignment = self
@@ -4716,18 +4714,5 @@ mod tests {
             result.is_err(),
             "expected the index read failure to surface"
         );
-    }
-}
-
-/// A refused oplog delete or ownership check is the routing miss that sends the delete to the
-/// shard's new owner; anything else is a failure of the delete.
-fn oplog_removal_error(error: OplogError) -> WorkerExecutorError {
-    match error {
-        OplogError::Fenced(fence) => WorkerExecutorError::oplog_fenced(
-            fence.agent_id,
-            fence.expected_epoch.0,
-            fence.actual_epoch.map(|epoch| epoch.0),
-        ),
-        other => WorkerExecutorError::runtime(other.to_string()),
     }
 }
