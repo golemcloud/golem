@@ -13,7 +13,6 @@ autotests = false
 
 [features]
 test-utils = []
-fs-snapshot-benchmark = ["dep:clap"]
 
 [lib]
 path = "src/lib.rs"
@@ -23,12 +22,6 @@ harness = false
 name = "worker-executor"
 path = "src/server.rs"
 harness = false
-test = false
-
-[[bin]]
-name = "fs-snapshot-benchmark"
-path = "src/fs_snapshot_benchmark.rs"
-required-features = ["fs-snapshot-benchmark"]
 test = false
 
 [[test]]
@@ -61,7 +54,6 @@ cap-fs-ext = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
-clap = { workspace = true, optional = true }
 dashmap = { workspace = true }
 desert_rust = { workspace = true }
 drop-stream = { workspace = true }
@@ -160,7 +152,6 @@ golem-worker-executor-test-utils = { workspace = true }
 assert2 = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
-clap = { workspace = true }
 criterion = { workspace = true }
 axum = { workspace = true }
 figment = { workspace = true, features = ["test"] }
