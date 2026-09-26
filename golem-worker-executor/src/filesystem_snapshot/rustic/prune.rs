@@ -435,14 +435,16 @@ pub(super) fn lease_span(grace: Duration, deadline: Duration) -> Duration {
 }
 
 /// Gives how long a marker holds the claims of its ledger: the lease bound, then one margin for
-/// clock skew, then one storage call deadline. A marker write that the storage received can still
-/// land up to one deadline after the call gave up, and another delete sees the marker time with up
-/// to one margin of skew. So a prune whose lease ran out stops before another delete can take its
-/// claim.
+/// clock skew, then two storage call deadlines. Another delete sees the marker time with up to one
+/// margin of skew. A marker write that the storage received can still land up to one deadline after
+/// the call gave up. A prune that its lease stopped writes its final marker after the lease ran
+/// out, and that write can land up to one more deadline later. So a prune whose lease ran out stops
+/// before another delete can take its claim, and the next prune waits a full hold from its final
+/// marker.
 pub(super) fn claim_hold(grace: Duration, deadline: Duration) -> Duration {
     lease_bound(grace, deadline)
         .saturating_add(CLOCK_SKEW_MARGIN)
-        .saturating_add(deadline)
+        .saturating_add(deadline.saturating_mul(2))
 }
 
 /// Chooses the claim of a delete from the entries of the claim directory of its ledger. Any marker
@@ -761,6 +763,9 @@ mod tests {
     const GRACE: Duration = Duration::from_secs(15 * 60);
     /// The grace period and the margin for clock skew, in milliseconds.
     const HELD_MILLIS: u64 = 15 * 60 * 1000 + 2 * 60 * 1000;
+    /// The hold of a claim with the grace period and the deadline, in milliseconds: the grace
+    /// period less one deadline, then the margin, then two deadlines.
+    const HOLD_MILLIS: u64 = HELD_MILLIS + 2 * 1000;
     const DEADLINE: Duration = Duration::from_secs(2);
     const MILLI: Duration = Duration::from_millis(1);
 
@@ -918,8 +923,8 @@ mod tests {
                     due(now + margin + 1)
                 ],
                 [
-                    claim(now - grace),
-                    claim(now - grace - margin),
+                    claim(now - HOLD_MILLIS + 1),
+                    claim(now - HOLD_MILLIS),
                     claim(now + margin),
                     claim(now + margin + 1)
                 ]
@@ -948,10 +953,10 @@ mod tests {
             [
                 choose(&[]),
                 choose(&[claim(0), claim(1), marker(0, now - 1)]),
-                choose(&[claim(0), claim(1), marker(1, now - HELD_MILLIS)]),
+                choose(&[claim(0), claim(1), marker(1, now - HOLD_MILLIS)]),
                 choose(&[claim(4)]),
                 choose(&[marker(2, now - 1)]),
-                choose(&[claim(0), claim(3), marker(0, now - HELD_MILLIS)]),
+                choose(&[claim(0), claim(3), marker(0, now - HOLD_MILLIS)]),
             ],
             [
                 ClaimChoice::Claim(0),
@@ -984,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn the_hold_is_the_lease_then_one_margin_then_one_deadline() {
+    fn the_hold_is_the_lease_then_one_margin_then_two_deadlines() {
         let margin = CLOCK_SKEW_MARGIN;
         let minute = Duration::from_secs(60);
 
@@ -996,10 +1001,10 @@ mod tests {
                 claim_hold(Duration::ZERO, Duration::from_millis(1)),
             ],
             [
-                GRACE + margin,
-                GRACE + margin,
-                minute + margin + minute,
-                Duration::from_millis(1) + margin + Duration::from_millis(1),
+                GRACE + margin + minute,
+                GRACE + margin + DEADLINE,
+                minute + margin + 2 * minute,
+                MILLI + margin + 2 * MILLI,
             ]
         );
     }
