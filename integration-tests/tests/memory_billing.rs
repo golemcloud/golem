@@ -53,7 +53,10 @@ mod tests {
         .expect("Failed constructing memory-billing test dependencies");
 
         let cluster = deps.worker_executor_cluster();
-        cluster.kill_all().await;
+        cluster
+            .kill_all_and_wait(tokio::time::Instant::now() + Duration::from_secs(60))
+            .await
+            .expect("failed to stop worker executor");
         cluster
             .restart_all_with_extra_env_vars(vec![
                 (

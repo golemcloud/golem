@@ -741,6 +741,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test integration ':tag:group2&db_sqlite' -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test streaming-session-recovery -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group5]
@@ -1749,7 +1750,7 @@ if not ${source_ref_ok}
 end
 source_ref = trim ${source_ref_result.stdout}
 
-exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only suite --save-to-json ${results} --runner-id ${runner_id} --runner-label ${runner_label} --source-repository golemcloud/golem --source-commit-sha ${source_commit} --source-ref ${source_ref} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- --primary-only --retain-details --retain-selected-zero-counts suite --save-to-json ${results} --runner-id ${runner_id} --runner-label ${runner_label} --source-repository golemcloud/golem --source-commit-sha ${source_commit} --source-ref ${source_ref} integration-tests/benchmark_suites/ci.yaml spawned --registry-service-http-port ${registry_http_port}
 '''
 
 [tasks.run-and-publish-benchmark-suite-orb]
