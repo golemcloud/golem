@@ -1,0 +1,55 @@
+[package]
+name = "whttp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# The shared HTTP transport for `wcurl`/`waget` (the "fourth crate" their duplicated seams
+# anticipated). A cfg-gated WASI-HTTP (wasi-fetch) / reqwest client plus TARGET-AGNOSTIC redirect
+# following and timeouts — so both command clients behave identically on native and the
+# Golem agent. Both transports can follow redirects on their own; doing it here instead (with
+# each transport's own follower disabled) removes that divergence.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# `http::Method` in the public API.
+http = "1"
+
+# `--compressed` (curl) / transparent gzip·deflate decoding. `miniz_oxide` is a pure-Rust DEFLATE
+# implementation — no system zlib/libz-sys, so it builds clean for wasm32-wasip2 the same way the
+# rest of this crate's dependency choices do (see the `iri-string` note below).
+flate2 = { version = "1", default-features = false, features = ["miniz_oxide"] }
+
+# Redirect `Location` resolution (RFC 3986 §5 reference resolution). We deliberately do NOT use the
+# `url` crate: its `idna`→`icu` stack compiles multiple MB of Unicode tables into the wasm agent for
+# host IDNA we never need. `iri-string` is pure-Rust, has zero runtime deps, pulls no icu/idna, and
+# builds clean on wasm32-wasip2 — the right "don't reinvent RFC 3986" crate for this target.
+iri-string = "0.7"
+
+# wasm: `wasi-fetch`, a reqwest-shaped client over the wasip3 WASI-HTTP bindings. This REPLACED
+# wstd, which is not merely stale but broken here: wstd's client resolves its reactor from a
+# thread-local that only `wstd::block_on` installs, and golem-rust now drives agent methods with
+# wit-bindgen's async runtime instead — so every wstd request panicked "Reactor::current must be
+# called within a wstd runtime" and trapped the agent. wasi-fetch keeps no runtime state of its
+# own (its futures are driven by whatever executor polls them), which is what makes it work under
+# both the agent's executor and the standalone bins'. Pinned exactly, as upstream golem pins it in
+# its own agent components and in the app template the CLI generates.
+#
+# `-m`/`--max-time` is carried in WASI-HTTP's own connect/first-byte and between-bytes timeouts
+# plus a clock check after each wait (see `Deadline` in src/lib.rs), not a timer raced against the
+# request.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasi-fetch = { workspace = true }
+
+# native: reqwest with pure-Rust rustls TLS (no system libcurl/OpenSSL). Auto-redirect is disabled
+# in code so this crate's shared loop is the single source of redirect behavior on both targets.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

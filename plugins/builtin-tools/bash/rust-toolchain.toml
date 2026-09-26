@@ -1,0 +1,7 @@
+# The toolchain that builds bash.wasm (build-bash-wasm.sh). The artifact's bytes depend on the exact
+# rustc, so it is pinned; a newer one means rebuilding and committing bash.wasm.
+[toolchain]
+channel = "1.98.0"
+targets = ["wasm32-wasip2"]
+components = ["rustfmt", "clippy"]
+profile = "minimal"

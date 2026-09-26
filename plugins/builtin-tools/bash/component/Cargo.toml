@@ -1,0 +1,31 @@
+[package]
+name = "golem-bash-tool"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "golem_bash"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+log = "0.4"
+bash-shell = { path = "../shell" }
+futures.workspace = true
+golem-rust = { workspace = true, features = ["export_golem_agentic"] }
+golem-schema.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen.workspace = true
+# Routes `log` to `wasi:logging`, which the executor records as agent log events. golem-rust
+# installs this only in an agent's constructor; a tool component has none, so we install it.
+wasi-logger = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt"] }
+
+[lints]
+workspace = true

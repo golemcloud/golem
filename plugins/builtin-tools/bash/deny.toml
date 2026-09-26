@@ -1,0 +1,12 @@
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/Aditya1404Sal/brush",
+    "https://github.com/Aditya1404Sal/coreutils",
+    "https://github.com/Aditya1404Sal/jaq",
+    "https://github.com/Aditya1404Sal/sed",
+    "https://github.com/golemcloud/wit-bindgen",
+    "https://github.com/uutils/diffutils",
+]
