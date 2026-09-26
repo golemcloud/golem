@@ -63,7 +63,7 @@ use std::path::Path;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
@@ -527,7 +527,6 @@ impl RusticSnapshotStore {
         else {
             return Ok(());
         };
-        let lease = Arc::new(Lease::until(Instant::now()));
         let span = lease_span(grace, deadline);
         let (started, time) = marker_time();
         let marker = marker_path(&claims, number, time);
@@ -540,18 +539,18 @@ impl RusticSnapshotStore {
             marker.clone(),
             self.tracker.token(),
         );
-        let won = take_claim(&files, &claims, number, &marker, started, &lease, span)
+        let lease = take_claim(&files, &claims, number, &marker, started, span)
             .await
             .map_err(storage_failure)?;
-        if !won {
+        let Some(lease) = lease else {
             guard.disarm();
             return Ok(());
-        }
+        };
         guard.claimed.store(true, Ordering::SeqCst);
         let claim = Claim {
             directory: &claims,
             number,
-            lease,
+            lease: Arc::new(lease),
             span,
             guard,
         };

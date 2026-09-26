@@ -60,11 +60,17 @@ impl Lease {
         }
     }
 
-    /// Moves the end of the lease to the instant when that is later. A marker write that ends late
-    /// gives the instant from the start of the write, so it never moves the end beyond that.
-    pub(super) fn extend_to(&self, expiry: Instant) {
+    /// Moves the end of the lease to `span` after `started`, the start of a marker write that
+    /// succeeded, when that is later. A write that started at or after the end of the lease does
+    /// not move it, so a lease that ran out stays out: another delete can have taken the claim over
+    /// before the marker of that write was visible. A write that started before the end and ends
+    /// late can still move it, because no other delete can take the claim over before that marker
+    /// is visible.
+    pub(super) fn extend_from(&self, started: Instant, span: Duration) {
         let mut current = self.expiry.lock().unwrap_or_else(PoisonError::into_inner);
-        *current = (*current).max(expiry);
+        if started < *current {
+            *current = (*current).max(started + span);
+        }
     }
 
     /// Gives the end of the lease.

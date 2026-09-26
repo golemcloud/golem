@@ -1466,6 +1466,37 @@ async fn a_prune_goes_on_after_one_failed_refresh_when_the_later_refreshes_succe
 
 #[test]
 #[timeout("60s")]
+async fn the_lease_of_a_prune_starts_at_its_first_marker_so_a_prune_without_a_refresh_prunes() {
+    // A grace period of one hour gives a refresh period of fifteen minutes, so the prune ends
+    // before its first refresh, and only the first marker gives the lease.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+    let calls = storage.calls();
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (
+            prunes(&calls),
+            calls
+                .iter()
+                .filter(|(op_label, _)| *op_label == "refresh_claim")
+                .count(),
+            ledger(&storage, &scope).await.last_prune.is_some(),
+        ),
+        (1, 0, true)
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_prune_deletes_the_claims_of_old_ledgers() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(

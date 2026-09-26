@@ -548,31 +548,31 @@ async fn write_leased_marker(
 ) -> anyhow::Result<Box<Path>> {
     let (started, time) = marker_time();
     let marker = write_marker(files, op_label, directory, number, time).await?;
-    lease.extend_to(started + span);
+    lease.extend_from(started, span);
     Ok(marker)
 }
 
 /// Writes the first marker of the claim with the number at the path `marker`, then takes the
-/// claim, and tells whether this delete holds the claim. The caller makes the path before the
-/// write, so a guard can delete the marker when the delete stops during the write. A delete that
-/// loses the claim deletes its marker. The marker write moves the end of the lease from `started`,
-/// the instant that [`marker_time`] gave with the time in the name of the marker.
+/// claim, and gives the lease of the prune when this delete holds the claim. The caller makes the
+/// path before the write, so a guard can delete the marker when the delete stops during the write.
+/// A delete that loses the claim deletes its marker. The lease starts with the marker write: it
+/// ends `span` after `started`, the instant that [`marker_time`] gave with the time in the name of
+/// the marker.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
     marker: &Path,
     started: Instant,
-    lease: &Lease,
     span: Duration,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Option<Lease>> {
     write_marker_at(files, "write_marker", marker).await?;
-    lease.extend_to(started + span);
+    let lease = Lease::until(started + span);
     let written = files
         .put_if_absent("write_claim", &directory.join(number.to_string()), &[])
         .await?;
     if written == PutIfAbsent::Written {
-        return Ok(true);
+        return Ok(Some(lease));
     }
     if let Err(error) = files.delete("delete_marker", marker).await {
         warn!(
@@ -580,7 +580,7 @@ pub(super) async fn take_claim(
             "Failed to delete the marker of a prune claim that a filesystem snapshot delete lost"
         );
     }
-    Ok(false)
+    Ok(None)
 }
 
 /// Gives the time between two markers of a live claim: a fourth of the grace period, or a fourth
@@ -734,6 +734,8 @@ pub(super) async fn remove_old_claims(files: &SnapshotFiles, ended: Timestamp) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::backend::BlobBackend;
+    use super::super::fault::is_lease_expired;
     use super::super::files::SnapshotFiles;
     use super::super::scripted::{Script, ScriptedBlobStorage};
     use super::{
@@ -752,8 +754,10 @@ mod tests {
     use golem_service_base::storage::blob::ListedBlob;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use pretty_assertions::assert_eq;
+    use rustic_core::{FileType, ReadBackend};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use std::time::Instant;
     use test_r::{test, timeout};
@@ -1082,37 +1086,18 @@ mod tests {
         assert!(ended);
     }
 
-    #[test]
-    #[timeout("60s")]
-    async fn a_refresh_that_ends_late_moves_the_lease_only_to_its_start_plus_the_span() {
-        // Each refresh write takes the delay. A lease from the end of the write would be later
-        // than a lease from its start by the delay.
-        let delay = Duration::from_millis(300);
-        let span = Duration::from_secs(1);
-        let storage =
-            ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), move |op_label, _| {
-                if op_label == "refresh_claim" {
-                    Script::Delay(delay)
-                } else {
-                    Script::Pass
-                }
-            });
-        let files = files_over(storage);
-        let lease = Lease::until(Instant::now());
-        let written = std::sync::Mutex::default();
+    /// Refreshes the claim at each period until the first refresh write succeeds, and gives the
+    /// instant after that write. It gives `None` when the refresh ends before a write succeeded.
+    async fn refresh_until_written(
+        files: &SnapshotFiles,
+        period: Duration,
+        lease: &Lease,
+        span: Duration,
+    ) -> Option<Instant> {
+        let written = std::sync::Mutex::<Vec<Box<Path>>>::default();
         let directory = claims_directory(&ledger(None, false));
-        let started = Instant::now();
-
-        let ended = tokio::select! {
-            () = keep_claim_fresh(
-                &files,
-                &directory,
-                0,
-                Duration::from_millis(10),
-                &written,
-                &lease,
-                span,
-            ) => None,
+        tokio::select! {
+            () = keep_claim_fresh(files, &directory, 0, period, &written, lease, span) => None,
             ended = async {
                 futures::stream::repeat(())
                     .then(|()| tokio::time::sleep(Duration::from_millis(5)))
@@ -1125,10 +1110,40 @@ mod tests {
                     .await;
                 Instant::now()
             } => Some(ended),
-        };
+        }
+    }
 
-        let ended = ended.unwrap();
+    #[test]
+    #[timeout("60s")]
+    async fn a_refresh_that_starts_before_the_end_of_the_lease_and_ends_after_it_moves_the_lease_to_its_start_plus_the_span()
+     {
+        // The first refresh starts about 10 ms after the lease starts, before its end at 250 ms.
+        // Each refresh write takes the delay, so the write ends after the end of the lease. A lease
+        // from the end of the write would be later than a lease from its start by the delay.
+        let delay = Duration::from_millis(500);
+        let span = Duration::from_secs(1);
+        let storage =
+            ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), move |op_label, _| {
+                if op_label == "refresh_claim" {
+                    Script::Delay(delay)
+                } else {
+                    Script::Pass
+                }
+            });
+        let files = files_over(storage);
+        let started = Instant::now();
+        let first_expiry = started + Duration::from_millis(250);
+        let lease = Lease::until(first_expiry);
+
+        let ended = refresh_until_written(&files, Duration::from_millis(10), &lease, span)
+            .await
+            .unwrap();
+
         let expiry = lease.expiry();
+        assert!(
+            ended > first_expiry,
+            "the write ended before the end of the lease"
+        );
         assert!(expiry >= started + span, "the lease did not move");
         assert!(
             expiry + delay / 2 < ended + span,
@@ -1137,40 +1152,79 @@ mod tests {
     }
 
     #[test]
+    #[timeout("60s")]
+    async fn a_refresh_that_starts_after_the_lease_ran_out_does_not_move_it_and_the_next_call_is_refused()
+     {
+        // The lease ends when the test starts. The first refresh write fails, and a later one
+        // succeeds, but each refresh starts after the end of the lease. Nothing calls the backend
+        // while the lease is out, and the first call after the refresh finds the lease still out.
+        let refused = Arc::new(AtomicBool::new(false));
+        let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+            let refused = refused.clone();
+            move |op_label, _| {
+                if op_label == "refresh_claim" && !refused.swap(true, Ordering::SeqCst) {
+                    Script::Refuse
+                } else {
+                    Script::Pass
+                }
+            }
+        });
+        let files = files_over(storage.clone());
+        let expiry = Instant::now();
+        let lease = Arc::new(Lease::until(expiry));
+
+        let refreshed = refresh_until_written(
+            &files,
+            Duration::from_millis(10),
+            &lease,
+            Duration::from_secs(3600),
+        )
+        .await
+        .is_some();
+        let backend = BlobBackend::new(
+            storage,
+            files.namespace.clone(),
+            tokio::runtime::Handle::current(),
+            DEADLINE,
+        )
+        .leased_by(lease.clone());
+        let listed = tokio::task::spawn_blocking(move || backend.list(FileType::Snapshot))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                refreshed,
+                refused.load(Ordering::SeqCst),
+                lease.expiry() == expiry,
+                listed
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| is_lease_expired(error)),
+            ),
+            (true, true, true, true),
+            "{listed:?}"
+        );
+    }
+
+    #[test]
     async fn a_claim_is_taken_after_its_marker_and_a_loser_deletes_its_marker() {
         let files = new_files();
         let directory = claims_directory(&ledger(Some(42), false));
-        let started = Instant::now();
-
-        let lease = Lease::until(started);
         let marker = || {
             let (at, time) = marker_time();
             (marker_path(&directory, 0, time), at)
         };
         let (first_marker, first_at) = marker();
         let (second_marker, second_at) = marker();
-        let first = take_claim(
-            &files,
-            &directory,
-            0,
-            &first_marker,
-            first_at,
-            &lease,
-            GRACE,
-        )
-        .await
-        .unwrap();
-        let again = take_claim(
-            &files,
-            &directory,
-            0,
-            &second_marker,
-            second_at,
-            &lease,
-            GRACE,
-        )
-        .await
-        .unwrap();
+        let first = take_claim(&files, &directory, 0, &first_marker, first_at, GRACE)
+            .await
+            .unwrap()
+            .map(|lease| lease.expiry());
+        let again = take_claim(&files, &directory, 0, &second_marker, second_at, GRACE)
+            .await
+            .unwrap()
+            .map(|lease| lease.expiry());
         let listed = list_claims(&files, &directory).await.unwrap();
 
         assert_eq!(
@@ -1183,16 +1237,14 @@ mod tests {
                 listed
                     .iter()
                     .any(|entry| matches!(entry, ClaimEntry::Marker(0, _))),
-                lease.expiry() >= started + GRACE,
             ),
             (
                 "golem/prune-claims/42".to_string(),
-                true,
-                false,
+                Some(first_at + GRACE),
+                None,
                 2,
                 true,
                 true,
-                true
             )
         );
     }
