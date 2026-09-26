@@ -41,6 +41,7 @@ use crate::filesystem_snapshot::{
     ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
     SnapshotStoreError, newest_first, snapshot_time,
 };
+use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -704,11 +705,35 @@ impl Lookup {
     }
 }
 
+/// Runs the check of a local path on a blocking thread. A thread that fails gives the error of the
+/// path.
+async fn check_path(
+    operation: NativeOperation,
+    path: &Path,
+    error: fn(std::io::Error) -> SnapshotStoreError,
+    check: fn(&Path) -> Result<(), SnapshotStoreError>,
+) -> Result<(), SnapshotStoreError> {
+    let path: Box<Path> = path.into();
+    execute_native(NativeStorageProfile::Unknown, operation, move || {
+        check(&path)
+    })
+    .await
+    .map_err(|failed| error(std::io::Error::other(failed)))?
+}
+
 /// Checks that the tree of a save is a directory at an absolute path.
 async fn check_tree(tree: &Path) -> Result<(), SnapshotStoreError> {
-    let metadata = tokio::fs::metadata(tree)
-        .await
-        .map_err(SnapshotStoreError::Source)?;
+    check_path(
+        NativeOperation::Metadata,
+        tree,
+        SnapshotStoreError::Source,
+        tree_is_valid,
+    )
+    .await
+}
+
+fn tree_is_valid(tree: &Path) -> Result<(), SnapshotStoreError> {
+    let metadata = std::fs::metadata(tree).map_err(SnapshotStoreError::Source)?;
     if !tree.is_absolute() || !metadata.is_dir() {
         return Err(SnapshotStoreError::Source(std::io::Error::new(
             std::io::ErrorKind::NotADirectory,
@@ -723,15 +748,23 @@ async fn check_tree(tree: &Path) -> Result<(), SnapshotStoreError> {
 
 /// Checks that the directory of a restore is an empty directory with a UTF-8 path.
 async fn check_destination(into: &Path) -> Result<(), SnapshotStoreError> {
+    check_path(
+        NativeOperation::DirectoryEnumeration,
+        into,
+        SnapshotStoreError::Destination,
+        destination_is_valid,
+    )
+    .await
+}
+
+fn destination_is_valid(into: &Path) -> Result<(), SnapshotStoreError> {
     let refused = |kind, reason: &str| {
         SnapshotStoreError::Destination(std::io::Error::new(
             kind,
             format!("the directory {} {reason}", into.display()),
         ))
     };
-    let metadata = tokio::fs::metadata(into)
-        .await
-        .map_err(SnapshotStoreError::Destination)?;
+    let metadata = std::fs::metadata(into).map_err(SnapshotStoreError::Destination)?;
     if !metadata.is_dir() {
         return Err(refused(
             std::io::ErrorKind::NotADirectory,
@@ -744,11 +777,10 @@ async fn check_destination(into: &Path) -> Result<(), SnapshotStoreError> {
             "does not have a UTF-8 path",
         ));
     }
-    let first = tokio::fs::read_dir(into)
-        .await
+    let first = std::fs::read_dir(into)
         .map_err(SnapshotStoreError::Destination)?
-        .next_entry()
-        .await
+        .next()
+        .transpose()
         .map_err(SnapshotStoreError::Destination)?;
     match first {
         Some(_) => Err(refused(
