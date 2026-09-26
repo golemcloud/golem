@@ -2416,6 +2416,136 @@ async fn shut_down_waits_for_the_release_of_a_delete_dropped_after_its_claim() {
     );
 }
 
+/// A storage whose gate holds the listing of the packs, which is the first call of a prune, and
+/// whose final marker takes 200 ms.
+fn holding_the_prune() -> Arc<ScriptedBlobStorage> {
+    ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+        if op_label == "list" && path == Path::new("data") {
+            Script::WaitForGate
+        } else if op_label == "final_marker" {
+            Script::Delay(Duration::from_millis(200))
+        } else {
+            Script::Pass
+        }
+    })
+}
+
+/// Gives the number of final marker writes in the calls.
+fn final_markers(calls: &[(&'static str, String)]) -> usize {
+    calls
+        .iter()
+        .filter(|(op_label, _)| *op_label == "final_marker")
+        .count()
+}
+
+/// Gives the number of markers of the claims of the scope.
+async fn markers(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> usize {
+    claim_entries(storage, scope)
+        .await
+        .iter()
+        .filter(|entry| matches!(entry, ClaimEntry::Marker(..)))
+        .count()
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_shut_down_during_a_started_prune_still_writes_its_final_marker_and_waits_for_it() {
+    // The gate holds the first call of the prune, and the shut down cancels it. A grace period of
+    // one hour gives no refresh, so the claim has its first marker and its final marker.
+    let storage = holding_the_prune();
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let started = eventually(|| prunes(&storage.calls()) == 1).await;
+
+    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
+    let markers_at_shut_down = markers(&storage, &scope).await;
+    storage.open_gate();
+    let deleted = tokio::time::timeout(LIMIT, deleting).await;
+
+    assert!(matches!(deleted, Ok(Ok(Err(_)))), "{deleted:?}");
+    assert_eq!(
+        (
+            started,
+            stopped,
+            markers_at_shut_down,
+            final_markers(&storage.calls())
+        ),
+        (true, true, 2, 1)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_dropped_during_a_started_prune_writes_its_final_marker() {
+    // The gate holds the first call of the prune, and the test drops the delete there.
+    let storage = holding_the_prune();
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let started = eventually(|| prunes(&storage.calls()) == 1).await;
+
+    deleting.abort();
+    let dropped = deleting.await;
+    let ended = eventually(|| store.work_in_flight() == 0).await;
+    let markers_after = markers(&storage, &scope).await;
+    storage.open_gate();
+
+    assert!(
+        dropped.as_ref().is_err_and(|error| error.is_cancelled()),
+        "{dropped:?}"
+    );
+    assert_eq!(
+        (
+            started,
+            ended,
+            markers_after,
+            final_markers(&storage.calls())
+        ),
+        (true, true, 2, 1)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_writes_one_final_marker() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+    let ended = eventually(|| store.work_in_flight() == 0).await;
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (
+            ended,
+            prunes(&storage.calls()),
+            final_markers(&storage.calls())
+        ),
+        (true, 1, 1)
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_shut_down_after_the_claim_still_releases_it() {

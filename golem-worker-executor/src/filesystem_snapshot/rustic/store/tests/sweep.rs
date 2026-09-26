@@ -111,6 +111,8 @@ struct Step {
     failed: bool,
     /// The call reached the storage: a step that passed, or the landing of a late call.
     effect: bool,
+    /// The entry is the landing of a late call, not a call.
+    landed: bool,
 }
 
 /// One delete of the case: its store, its scripted storage and its task.
@@ -205,6 +207,7 @@ impl Case {
         self.log.push(Step {
             failed: false,
             effect: true,
+            landed: true,
             ..step
         });
         Ok(())
@@ -257,6 +260,7 @@ impl Case {
             path,
             failed: refused || late.is_some(),
             effect: !refused && late.is_none(),
+            landed: false,
         };
         self.log.push(step.clone());
         if let Some((_, _, delay)) = late {
@@ -284,6 +288,7 @@ impl Case {
                 path: String::new(),
                 failed: true,
                 effect: false,
+                landed: false,
             });
         }
         if settle(&self.deletes[who]).await {
@@ -526,6 +531,45 @@ fn started_claims_gone(log: &[Step], claims: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Gives each delete whose prune started and that made no call for its final marker. The prune
+/// started when the delete called for the listing of the packs. A delete that called to delete its
+/// claim released it, because each attempt of its prune found a snapshot file gone, so it writes
+/// no final marker.
+fn final_markers_missing(log: &[Step]) -> Vec<usize> {
+    [0, 1]
+        .into_iter()
+        .filter(|who| {
+            let own = log
+                .iter()
+                .filter(|step| step.delete == *who && !step.landed);
+            let (mut started, mut released, mut marked) = (false, false, false);
+            own.for_each(|step| {
+                started |= is_prune_start(step.op_label, &step.path);
+                released |= step.op_label == "delete_claim";
+                marked |= step.op_label == "final_marker";
+            });
+            started && !released && !marked
+        })
+        .collect()
+}
+
+/// Gives each delete that called for a final marker after a final marker call of it that gave no
+/// error.
+fn final_markers_repeated(log: &[Step]) -> Vec<usize> {
+    [0, 1]
+        .into_iter()
+        .filter(|who| {
+            log.iter()
+                .filter(|step| {
+                    step.delete == *who && !step.landed && step.op_label == "final_marker"
+                })
+                .skip_while(|step| step.failed)
+                .nth(1)
+                .is_some()
+        })
+        .collect()
+}
+
 /// Checks the rules on the end state of a case.
 async fn check(
     shared: &Arc<InMemoryBlobStorage>,
@@ -572,6 +616,18 @@ async fn check(
     if !dropped.is_empty() {
         return fail(&format!(
             "a delete whose prune started and wrote no ledger lost its claim: {dropped:?}"
+        ));
+    }
+    let unmarked = final_markers_missing(log);
+    if !unmarked.is_empty() {
+        return fail(&format!(
+            "a delete whose prune started and kept its claim made no final marker call: {unmarked:?}"
+        ));
+    }
+    let repeated = final_markers_repeated(log);
+    if !repeated.is_empty() {
+        return fail(&format!(
+            "a delete made a final marker call after one that succeeded: {repeated:?}"
         ));
     }
     let records = blobs(&**shared, &scope.0, "golem/prune-freed/").await;

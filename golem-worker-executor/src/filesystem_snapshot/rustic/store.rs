@@ -64,7 +64,7 @@ use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
-use tokio::runtime::Handle;
+use tokio::runtime::{Handle, TryCurrentError};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
@@ -200,27 +200,32 @@ struct Claim<'a> {
     lease: Arc<Lease>,
     /// The time that a marker write that succeeds adds to the lease.
     span: Duration,
-    /// Releases the claim when the delete stops before its prune starts.
+    /// Releases the claim when the delete stops before its prune starts, and writes the final
+    /// marker of a prune that started.
     guard: ClaimGuard,
 }
 
 /// The claim is written, and its prune did not start.
 const CLAIM_PENDING: u8 = 0;
-/// The rustic prune of the claim started, so the claim stays.
+/// The rustic prune of the claim started, so the claim stays, and it needs its final marker.
 const CLAIM_STARTED: u8 = 1;
 /// The claim was released, so its prune must not start.
 const CLAIM_RELEASED: u8 = 2;
+/// The final marker of the prune that started is written.
+const CLAIM_FINISHED: u8 = 3;
 
-/// Holds a prune claim from the write of its first marker until the rustic prune starts. When the
-/// delete drops before that, the guard releases the claim in a task, and it moves its token of the
-/// tracker into that task, so `shut_down` waits for the release. The prune and the guard change the
-/// state from pending with one atomic step each, so only one of them wins: a released claim never
-/// starts a prune, and a drop after the prune started does not release the claim. After the start,
-/// only the delete releases the claim, when each attempt of the prune found a snapshot file gone,
-/// because such a prune changed nothing and counts as a prune that did not run.
+/// Holds a prune claim from the write of its first marker until the final marker of its prune.
+/// When the delete drops before the prune starts, the guard releases the claim in a task. When the
+/// delete drops after the prune started and before the final marker is written, the guard writes
+/// the final marker in a task. The guard moves its token of the tracker into that task, so
+/// `shut_down` waits for it. The prune and the guard change the state from pending with one atomic
+/// step each, so only one of them wins: a released claim never starts a prune, and a drop after the
+/// prune started does not release the claim. After the start, only the delete releases the claim,
+/// when each attempt of the prune found a snapshot file gone, because such a prune changed nothing
+/// and counts as a prune that did not run.
 struct ClaimGuard {
-    /// The blobs of the scope, with a token that nothing cancels, so a release also runs after a
-    /// cancel or a drop.
+    /// The blobs of the scope, with a token that nothing cancels, so a release and a final marker
+    /// also run after a cancel or a drop.
     files: SnapshotFiles,
     directory: Box<Path>,
     number: u64,
@@ -257,13 +262,26 @@ impl ClaimGuard {
         }
     }
 
-    /// Makes the release task, and moves the token of the tracker into it.
-    fn spawn_release(&self) -> Option<tokio::task::JoinHandle<()>> {
+    /// Spawns the work on the runtime, and moves the token of the tracker into it.
+    fn spawn_tracked(
+        &self,
+        work: impl Future<Output = ()> + Send + 'static,
+    ) -> Result<tokio::task::JoinHandle<()>, TryCurrentError> {
         let tracked = self
             .tracked
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
+        Handle::try_current().map(|runtime| {
+            runtime.spawn(async move {
+                let _tracked = tracked;
+                work.await;
+            })
+        })
+    }
+
+    /// Makes the release task, and moves the token of the tracker into it.
+    fn spawn_release(&self) -> Option<tokio::task::JoinHandle<()>> {
         let files = self.files.clone();
         let directory = self.directory.clone();
         let number = self.number;
@@ -273,18 +291,41 @@ impl ClaimGuard {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        match Handle::try_current() {
-            Ok(runtime) => Some(runtime.spawn(async move {
-                let _tracked = tracked;
-                release_claim(&files, &directory, number, claimed, &markers).await;
-            })),
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    "The prune claim of a filesystem snapshot scope stays, because no runtime runs its release"
-                );
-                None
-            }
+        self.spawn_tracked(async move {
+            release_claim(&files, &directory, number, claimed, &markers).await;
+        })
+        .inspect_err(|error| {
+            warn!(
+                error = %error,
+                "The prune claim of a filesystem snapshot scope stays, because no runtime runs its release"
+            );
+        })
+        .ok()
+    }
+
+    /// Makes the task that writes the final marker, and moves the token of the tracker into it.
+    fn spawn_final_marker(&self) {
+        let files = self.files.clone();
+        let directory = self.directory.clone();
+        let number = self.number;
+        if let Err(error) = self.spawn_tracked(async move {
+            write_final_marker(&files, &directory, number).await;
+        }) {
+            warn!(
+                error = %error,
+                "The prune claim of a filesystem snapshot scope gets no final marker, because no runtime runs its write"
+            );
+        }
+    }
+
+    /// Writes the final marker of a prune that started, and then marks the guard finished. A guard
+    /// whose prune did not start writes nothing. When the write fails, the drop of the guard tries
+    /// it again.
+    async fn finish(&self) {
+        if self.state.load(Ordering::SeqCst) == CLAIM_STARTED
+            && write_final_marker(&self.files, &self.directory, self.number).await
+        {
+            self.state.store(CLAIM_FINISHED, Ordering::SeqCst);
         }
     }
 
@@ -316,19 +357,37 @@ impl ClaimGuard {
 
 impl Drop for ClaimGuard {
     fn drop(&mut self) {
-        if self
-            .state
-            .compare_exchange(
-                CLAIM_PENDING,
-                CLAIM_RELEASED,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok()
-        {
+        let moved = |from, to| {
+            self.state
+                .compare_exchange(from, to, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        };
+        if moved(CLAIM_PENDING, CLAIM_RELEASED) {
             drop(self.spawn_release());
+        } else if moved(CLAIM_STARTED, CLAIM_FINISHED) {
+            self.spawn_final_marker();
         }
     }
+}
+
+/// Writes the final marker of the claim with the number, and tells whether the write succeeded. A
+/// failed write gives a warning.
+async fn write_final_marker(files: &SnapshotFiles, directory: &Path, number: u64) -> bool {
+    write_marker(
+        files,
+        "final_marker",
+        directory,
+        number,
+        Timestamp::now_utc(),
+    )
+    .await
+    .inspect_err(|error| {
+        warn!(
+            error = %format!("{error:#}"),
+            "Failed to write the final marker of the prune claim of a filesystem snapshot scope"
+        );
+    })
+    .is_ok()
 }
 
 /// Moves the claim of the state from pending to started, and tells whether the prune may start.
@@ -585,22 +644,10 @@ impl RusticSnapshotStore {
             }
             other => other.map(|marked| marked.unwrap_or_default()),
         };
-        // The final marker holds the claim for the grace period from the end of this prune, also
-        // when the prune or its ledger write fails.
-        if let Err(error) = write_marker(
-            &files,
-            "final_marker",
-            claim.directory,
-            claim.number,
-            Timestamp::now_utc(),
-        )
-        .await
-        {
-            warn!(
-                error = %format!("{error:#}"),
-                "Failed to write the final marker of the prune claim of a filesystem snapshot scope"
-            );
-        }
+        // The final marker holds the claim for the hold from the end of this prune, also when the
+        // prune or its ledger write fails. It goes through the files of the guard, which no cancel
+        // ends, so a prune that a shut down stopped also gets it.
+        claim.guard.finish().await;
         let marked_packs = pruned?;
         let ended = Timestamp::now_utc();
         write_ledger(&files, ended, marked_packs)
