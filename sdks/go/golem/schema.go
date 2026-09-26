@@ -204,7 +204,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 
 	at := common.AgentType{
 		TypeName:       e.name,
-		Kind:           common.AgentTypeKindRegular,
+		Kind:           e.kind(),
 		Description:    e.desc,
 		SourceLanguage: "go",
 		Schema:         g.build(),
@@ -221,4 +221,12 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		Config:       configDecls,
 	}
 	return at, g.invalids
+}
+
+// kind is the agent type kind an entry publishes.
+func (e *agentEntry) kind() common.AgentTypeKind {
+	if e.router != nil {
+		return common.AgentTypeKindHttpRouter
+	}
+	return common.AgentTypeKindRegular
 }

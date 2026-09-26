@@ -124,7 +124,7 @@ func (d *definitions) discover() ([]common.AgentType, []definitionError) {
 		// definition error rather than a runtime panic.
 		if e.newState == nil {
 			errs = append(errs, definitionError{agent: name, detail: "agent defined but never implemented (call golem.Implement)"})
-		} else if len(e.order) == 0 {
+		} else if len(e.order) == 0 && e.router == nil { // a router may serve static files only
 			errs = append(errs, definitionError{agent: name, detail: "agent implemented but has no methods (call golem.Handle)"})
 		}
 		at, invalids, err := d.safeBuildAgentType(e)

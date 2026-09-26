@@ -7,7 +7,7 @@ description: "Exposing a Go agent's methods over HTTP. Use when the user wants t
 
 ## Overview
 
-HTTP mounting is **metadata only**: you declare, on the agent's definition, a URL prefix for the agent and a route for each method. The platform routes matching requests to the right instance and method — there is no incoming-request handler to write in the guest.
+HTTP mounting is **metadata only**: you declare, on the agent's definition, a URL prefix for the agent and a route for each method. The platform routes matching requests to the right instance and method — there is no incoming-request handler to write. To handle raw requests yourself (a `net/http` handler, streaming bodies, a website), use an HTTP router instead (see `golem-http-router-go`).
 
 Two pieces, both on the **definition**:
 

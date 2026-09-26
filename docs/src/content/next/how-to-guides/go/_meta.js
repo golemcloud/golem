@@ -19,6 +19,7 @@ export default {
   "golem-fire-and-forget-go": "Fire-and-Forget Invocations in Go (`Trigger`)",
   "golem-interactive-repl-go": "Golem Interactive REPL (Go)",
   "golem-http-params-go": "HTTP Request and Response Parameter Mapping (Go)",
+  "golem-http-router-go": "HTTP Routers in Go",
   "golem-invoke-agent-go": "Invoking a Go Golem Agent with `golem agent invoke`",
   "golem-logging-go": "Logging from a Go Agent",
   "golem-mark-read-only-go": "Marking Agent Methods as Read-Only (Go)",

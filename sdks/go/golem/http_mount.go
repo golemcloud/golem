@@ -326,6 +326,10 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	for _, pe := range perrs {
 		rec("", "HTTP mount path %q: %s", e.mount.Path, pe)
 	}
+	if e.router != nil {
+		mount, endpoints := buildRouterHTTP(e, mp, rec)
+		return mount, endpoints, errs
+	}
 
 	idNames := fieldNameSet(e.idFields)
 	mountVars := map[string]bool{}
@@ -589,6 +593,8 @@ func verbName(m common.HttpMethod) string {
 		return "TRACE"
 	case common.HttpMethodPatch:
 		return "PATCH"
+	case common.HttpMethodAny:
+		return "*"
 	default:
 		return m.Custom()
 	}

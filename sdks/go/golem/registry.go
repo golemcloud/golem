@@ -59,6 +59,9 @@ type agentEntry struct {
 	newState func(idVal reflect.Value, agentID string) any
 	methods  map[string]*methodEntry
 	order    []string
+	// router is set when the entry is an HTTP router rather than an ordinary
+	// agent; see [DefineHTTPRouter].
+	router *routerEntry
 }
 
 // instance is the single agent instance this worker runs. A component may define

@@ -50,6 +50,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-go` | Waiting for external input using Golem promises |
 | `golem-call-from-external-go` | Invoking agents from outside the platform (CLI, HTTP, worker REST API) |
 | `golem-add-http-endpoint-go` | Exposing an agent's methods over HTTP |
+| `golem-http-router-go` | Handling raw HTTP requests with a `net/http` handler, static files and OpenAPI |
 | `golem-http-params-go` | Mapping HTTP path/query/header/body to method inputs |
 | `golem-add-http-auth-go` | Requiring authentication on HTTP endpoints |
 | `golem-add-cors-go` | Configuring CORS on HTTP endpoints |
