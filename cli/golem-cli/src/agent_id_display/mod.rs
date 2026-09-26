@@ -38,6 +38,7 @@ use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 
 pub use highlight::format_agent_id_for_terminal;
+pub(crate) use highlight::{AgentIdHighlightKind, highlight_agent_id};
 pub use parse_common::ParseError;
 
 /// Represents the source language of an agent component, used to select

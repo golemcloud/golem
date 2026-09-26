@@ -193,6 +193,7 @@ pub struct AgentListRequest {
     pub filters: Vec<String>,
     pub mode: AgentListMode,
     pub scan_cursor: Option<ScanCursor>,
+    pub component_scan_cursors: Option<BTreeMap<String, ScanCursor>>,
     pub max_count: Option<u64>,
     pub precise: bool,
     pub stable_sort: bool,

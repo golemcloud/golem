@@ -30,7 +30,7 @@ const MIN_WIDTH: usize = 20;
 
 /// Lexical class of a token, used for both layout and coloring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(crate) enum AgentIdHighlightKind {
     Open,
     Close,
     Comma,
@@ -43,7 +43,7 @@ enum Kind {
 
 /// A token as a byte range into the original rendered string.
 struct Span {
-    kind: Kind,
+    kind: AgentIdHighlightKind,
     start: usize,
     end: usize,
 }
@@ -77,20 +77,59 @@ pub fn format_agent_id_for_terminal(
     layout(rendered, &spans, &close_of, colorize, width)
 }
 
-fn kind_of(token: &Token) -> Kind {
+fn kind_of(token: &Token) -> AgentIdHighlightKind {
     match token {
-        Token::LBrace | Token::LBrack | Token::LParen => Kind::Open,
-        Token::RBrace | Token::RBrack | Token::RParen => Kind::Close,
-        Token::Comma => Kind::Comma,
+        Token::LBrace | Token::LBrack | Token::LParen => AgentIdHighlightKind::Open,
+        Token::RBrace | Token::RBrack | Token::RParen => AgentIdHighlightKind::Close,
+        Token::Comma => AgentIdHighlightKind::Comma,
         Token::Colon | Token::DoubleColon | Token::Dot | Token::Eq | Token::Star | Token::At => {
-            Kind::Punct
+            AgentIdHighlightKind::Punct
         }
-        Token::StringLit(_) | Token::CharLit(_) => Kind::Str,
-        Token::IntLit(_) | Token::UintLit(_) | Token::FloatLit(_) => Kind::Num,
-        Token::BoolLit(_) | Token::Null | Token::Undefined => Kind::Lit,
-        Token::Ident(_) => Kind::Ident,
-        Token::Eof => Kind::Punct,
+        Token::StringLit(_) | Token::CharLit(_) => AgentIdHighlightKind::Str,
+        Token::IntLit(_) | Token::UintLit(_) | Token::FloatLit(_) => AgentIdHighlightKind::Num,
+        Token::BoolLit(_) | Token::Null | Token::Undefined => AgentIdHighlightKind::Lit,
+        Token::Ident(_) => AgentIdHighlightKind::Ident,
+        Token::Eof => AgentIdHighlightKind::Punct,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AgentIdHighlightSpan<'a> {
+    pub text: &'a str,
+    pub kind: Option<AgentIdHighlightKind>,
+}
+
+/// Splits an already-rendered agent id into semantic spans while preserving
+/// whitespace and any punctuation recovered by the lexer.
+pub(crate) fn highlight_agent_id(rendered: &str) -> Vec<AgentIdHighlightSpan<'_>> {
+    let Some(spans) = tokenize(rendered) else {
+        return vec![AgentIdHighlightSpan {
+            text: rendered,
+            kind: None,
+        }];
+    };
+    let mut result = Vec::with_capacity(spans.len().saturating_mul(2).saturating_add(1));
+    let mut cursor = 0;
+    for span in spans {
+        if cursor < span.start {
+            result.push(AgentIdHighlightSpan {
+                text: &rendered[cursor..span.start],
+                kind: None,
+            });
+        }
+        result.push(AgentIdHighlightSpan {
+            text: &rendered[span.start..span.end],
+            kind: Some(span.kind),
+        });
+        cursor = span.end;
+    }
+    if cursor < rendered.len() {
+        result.push(AgentIdHighlightSpan {
+            text: &rendered[cursor..],
+            kind: None,
+        });
+    }
+    result
 }
 
 /// Tokenizes the rendered id, recovering any character the lexer does not model
@@ -127,7 +166,7 @@ fn tokenize(input: &str) -> Option<Vec<Span>> {
                         spans.last_mut().expect("checked above").end = at + 1;
                     } else {
                         spans.push(Span {
-                            kind: Kind::Punct,
+                            kind: AgentIdHighlightKind::Punct,
                             start: at,
                             end: at + ch.len_utf8(),
                         });
@@ -148,8 +187,8 @@ fn match_brackets(spans: &[Span]) -> Vec<Option<usize>> {
 
     for (index, span) in spans.iter().enumerate() {
         match span.kind {
-            Kind::Open => open_stack.push(index),
-            Kind::Close => {
+            AgentIdHighlightKind::Open => open_stack.push(index),
+            AgentIdHighlightKind::Close => {
                 if let Some(open) = open_stack.pop() {
                     close_of[open] = Some(index);
                 }
@@ -177,7 +216,7 @@ fn layout(
 
     for (index, span) in spans.iter().enumerate() {
         let closing_expanded =
-            span.kind == Kind::Close && expanded.last().copied().unwrap_or(false);
+            span.kind == AgentIdHighlightKind::Close && expanded.last().copied().unwrap_or(false);
 
         // Keep the renderer's own spacing whenever we stay on the same line.
         if !at_line_start
@@ -193,7 +232,7 @@ fn layout(
         let text = &input[span.start..span.end];
 
         match span.kind {
-            Kind::Open => {
+            AgentIdHighlightKind::Open => {
                 let fits = close_of[index]
                     .map(|close| col + input[span.start..spans[close].end].width() <= width)
                     .unwrap_or(true);
@@ -205,14 +244,14 @@ fn layout(
                     at_line_start = true;
                 }
             }
-            Kind::Close => {
+            AgentIdHighlightKind::Close => {
                 let was_expanded = expanded.pop().unwrap_or(false);
                 if was_expanded {
                     newline_indent(&mut out, &mut col, indent_level(&expanded));
                 }
                 push_token(&mut out, &mut col, text, span.kind, colorize);
             }
-            Kind::Comma => {
+            AgentIdHighlightKind::Comma => {
                 push_token(&mut out, &mut col, text, span.kind, colorize);
                 if expanded.last().copied().unwrap_or(false) {
                     newline_indent(&mut out, &mut col, indent_level(&expanded));
@@ -238,14 +277,23 @@ fn newline_indent(out: &mut String, col: &mut usize, level: usize) {
     *col = level * INDENT.width();
 }
 
-fn push_token(out: &mut String, col: &mut usize, text: &str, kind: Kind, colorize: bool) {
+fn push_token(
+    out: &mut String,
+    col: &mut usize,
+    text: &str,
+    kind: AgentIdHighlightKind,
+    colorize: bool,
+) {
     if colorize {
         let colored = match kind {
-            Kind::Str => text.green().to_string(),
-            Kind::Num => text.cyan().to_string(),
-            Kind::Lit => text.yellow().to_string(),
-            Kind::Open | Kind::Close | Kind::Comma | Kind::Punct => text.dimmed().to_string(),
-            Kind::Ident => text.to_string(),
+            AgentIdHighlightKind::Str => text.green().to_string(),
+            AgentIdHighlightKind::Num => text.cyan().to_string(),
+            AgentIdHighlightKind::Lit => text.yellow().to_string(),
+            AgentIdHighlightKind::Open
+            | AgentIdHighlightKind::Close
+            | AgentIdHighlightKind::Comma
+            | AgentIdHighlightKind::Punct => text.dimmed().to_string(),
+            AgentIdHighlightKind::Ident => text.to_string(),
         };
         out.push_str(&colored);
     } else {
@@ -256,13 +304,49 @@ fn push_token(out: &mut String, col: &mut usize, text: &str, kind: Kind, coloriz
 
 #[cfg(test)]
 mod tests {
-    use super::format_agent_id_for_terminal;
+    use super::{AgentIdHighlightKind, format_agent_id_for_terminal, highlight_agent_id};
     use test_r::test;
 
     #[test]
     fn short_id_stays_on_one_line() {
         let id = r#"Counter("main")"#;
         assert_eq!(format_agent_id_for_terminal(id, false, Some(80)), id);
+    }
+
+    #[test]
+    fn semantic_highlighting_preserves_text_and_classifies_values() {
+        let id = r#"Cart("ann", 42, true)"#;
+        let spans = highlight_agent_id(id);
+
+        assert_eq!(spans.iter().map(|span| span.text).collect::<String>(), id);
+        assert!(
+            spans.iter().any(|span| {
+                span.text == "Cart" && span.kind == Some(AgentIdHighlightKind::Ident)
+            })
+        );
+        assert!(spans.iter().any(|span| {
+            span.text == r#""ann""# && span.kind == Some(AgentIdHighlightKind::Str)
+        }));
+        assert!(
+            spans
+                .iter()
+                .any(|span| { span.text == "42" && span.kind == Some(AgentIdHighlightKind::Num) })
+        );
+        assert!(
+            spans.iter().any(|span| {
+                span.text == "true" && span.kind == Some(AgentIdHighlightKind::Lit)
+            })
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|span| { span.text == "(" && span.kind == Some(AgentIdHighlightKind::Open) })
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.text == " " && span.kind.is_none())
+        );
     }
 
     #[test]

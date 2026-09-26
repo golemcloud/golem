@@ -22,11 +22,13 @@ use crate::tui::visual::TuiVisualStyle;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget, Wrap,
 };
+use serde_json::Value;
+use std::collections::BTreeMap;
 use unicode_width::UnicodeWidthStr;
 
 pub(super) fn fit(text: &str, width: usize) -> String {
@@ -168,13 +170,20 @@ impl Notice<'_> {
             NoticeKind::Empty => ("Empty", "○", visual.text_muted),
         };
         Line::from(vec![
-            Span::styled(glyph, Style::default().fg(color)),
+            Span::styled("[", Style::default().fg(visual.border_subtle)),
             Span::styled(
-                format!(" {label}"),
+                glyph,
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("  {}", self.message),
+                format!(" {label}"),
+                Style::default()
+                    .fg(visual.text_muted)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("]", Style::default().fg(visual.border_subtle)),
+            Span::styled(
+                format!(" {}", self.message),
                 Style::default().fg(visual.text_secondary),
             ),
         ])
@@ -202,6 +211,38 @@ pub(super) enum TableDecoration {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CellTone {
+    Info,
+    Success,
+    Warning,
+    Error,
+    Muted,
+}
+
+impl CellTone {
+    pub(super) fn color(self, visual: &TuiVisualStyle) -> Color {
+        match self {
+            Self::Info => visual.info,
+            Self::Success => visual.success,
+            Self::Warning => visual.marker,
+            Self::Error => visual.error,
+            Self::Muted => visual.text_muted,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PaneTableCellSpan {
+    pub text: String,
+    pub tone: Option<CellTone>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PaneTableCell {
+    pub spans: Vec<PaneTableCellSpan>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct PaneTableColumn<'a> {
     pub id: &'a str,
     pub title: &'a str,
@@ -216,6 +257,56 @@ pub(super) struct PaneTableState {
     pub selected: usize,
     pub horizontal_offset: u16,
     visible_columns: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct CursorCollectionState<C> {
+    batch_size: u64,
+    loaded_depth: u64,
+    cursors: BTreeMap<String, C>,
+}
+
+impl<C> CursorCollectionState<C> {
+    pub fn new(batch_size: u64) -> Self {
+        Self {
+            batch_size,
+            loaded_depth: 1,
+            cursors: BTreeMap::new(),
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.loaded_depth = 1;
+        self.cursors.clear();
+    }
+
+    pub fn has_more(&self) -> bool {
+        !self.cursors.is_empty()
+    }
+
+    pub fn request_limit(&self, append: bool) -> u64 {
+        if append {
+            self.batch_size
+        } else {
+            self.batch_size.saturating_mul(self.loaded_depth)
+        }
+    }
+
+    pub fn cursors(&self) -> &BTreeMap<String, C> {
+        &self.cursors
+    }
+
+    pub fn finish_request(&mut self, append: bool, cursors: BTreeMap<String, C>) {
+        if append {
+            self.loaded_depth = self.loaded_depth.saturating_add(1);
+        }
+        self.cursors = cursors;
+    }
+
+    #[cfg(test)]
+    pub fn loaded_depth(&self) -> u64 {
+        self.loaded_depth
+    }
 }
 
 impl PaneTableState {
@@ -256,18 +347,85 @@ impl PaneTableState {
 
     #[allow(dead_code)]
     pub fn pan_right(&mut self, columns: &[PaneTableColumn<'_>], viewport_width: u16) {
+        self.pan_right_to_width(table_virtual_width(columns, self), viewport_width);
+    }
+
+    pub fn pan_right_to_width(&mut self, virtual_width: u16, viewport_width: u16) {
         self.horizontal_offset = self
             .horizontal_offset
             .saturating_add(1)
-            .min(table_virtual_width(columns, self).saturating_sub(viewport_width));
+            .min(virtual_width.saturating_sub(viewport_width));
     }
 
     #[allow(dead_code)]
     pub fn clamp_offset(&mut self, columns: &[PaneTableColumn<'_>], viewport_width: u16) {
+        self.clamp_offset_to_width(table_virtual_width(columns, self), viewport_width);
+    }
+
+    pub fn clamp_offset_to_width(&mut self, virtual_width: u16, viewport_width: u16) {
         self.horizontal_offset = self
             .horizontal_offset
-            .min(table_virtual_width(columns, self).saturating_sub(viewport_width));
+            .min(virtual_width.saturating_sub(viewport_width));
     }
+}
+
+pub(super) fn responsive_table_columns<'a>(
+    columns: &[PaneTableColumn<'a>],
+    rows: &[&[&str]],
+    state: &PaneTableState,
+    viewport_width: u16,
+) -> Vec<PaneTableColumn<'a>> {
+    let mut resolved = columns.to_vec();
+    let visible = columns
+        .iter()
+        .enumerate()
+        .filter(|(_, column)| state.column_visible(column.id))
+        .map(|(index, column)| {
+            let title_width = UnicodeWidthStr::width(column.title) as u16;
+            let minimum = title_width.max(column.width.min(12));
+            let content_width = rows
+                .iter()
+                .map(|row| {
+                    row.get(index)
+                        .map(|value| UnicodeWidthStr::width(*value) as u16)
+                        .unwrap_or_default()
+                })
+                .max()
+                .unwrap_or_default();
+            (index, minimum, minimum.max(content_width))
+        })
+        .collect::<Vec<_>>();
+    if visible.is_empty() {
+        return resolved;
+    }
+
+    for (index, minimum, _) in &visible {
+        resolved[*index].width = *minimum;
+    }
+    let separator_width = visible.len().saturating_sub(1) as u16;
+    let minimum_width = visible
+        .iter()
+        .fold(separator_width, |width, (_, minimum, _)| {
+            width.saturating_add(*minimum)
+        });
+    let mut remaining = viewport_width.saturating_sub(minimum_width);
+    while remaining > 0 {
+        let mut grew = false;
+        for (index, _, preferred) in &visible {
+            if resolved[*index].width < *preferred {
+                resolved[*index].width = resolved[*index].width.saturating_add(1);
+                remaining -= 1;
+                grew = true;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    resolved
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -301,35 +459,45 @@ impl ColumnChooserState {
     pub fn lines(
         &self,
         columns: &[PaneTableColumn<'_>],
+        widths: &[usize; 2],
+        start: usize,
+        count: usize,
         visual: &TuiVisualStyle,
     ) -> Vec<Line<'static>> {
         std::iter::once(
             DecisionTableRow {
                 cells: &["Column", "Visibility"],
-                widths: &[24, 12],
+                widths,
                 header: true,
                 selectable: true,
                 selected: false,
             }
             .line(visual),
         )
-        .chain(columns.iter().enumerate().map(|(index, column)| {
-            let visibility = if column.required {
-                "required"
-            } else if self.draft.column_visible(column.id) {
-                "☑ shown"
-            } else {
-                "☐ hidden"
-            };
-            DecisionTableRow {
-                cells: &[column.title, visibility],
-                widths: &[24, 12],
-                header: false,
-                selectable: true,
-                selected: index == self.selected,
-            }
-            .line(visual)
-        }))
+        .chain(
+            columns
+                .iter()
+                .enumerate()
+                .skip(start)
+                .take(count)
+                .map(|(index, column)| {
+                    let visibility = if column.required {
+                        "required"
+                    } else if self.draft.column_visible(column.id) {
+                        "☑ shown"
+                    } else {
+                        "☐ hidden"
+                    };
+                    DecisionTableRow {
+                        cells: &[column.title, visibility],
+                        widths,
+                        header: false,
+                        selectable: true,
+                        selected: index == self.selected,
+                    }
+                    .line(visual)
+                }),
+        )
         .collect()
     }
 }
@@ -339,6 +507,17 @@ pub(super) struct PaneTable<'a> {
     pub rows: &'a [&'a [&'a str]],
     pub state: &'a PaneTableState,
     pub decoration: TableDecoration,
+    pub cell_tones: Option<&'a [&'a [Option<CellTone>]]>,
+    pub rich_cells: Option<&'a [&'a [Option<PaneTableCell>]]>,
+    pub row_markers: Option<&'a [&'a str]>,
+    pub first_row_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PaneTableWindow {
+    pub start_row: usize,
+    pub selected_row: usize,
+    pub selected_line_offset: usize,
 }
 
 impl PaneTable<'_> {
@@ -371,52 +550,133 @@ impl PaneTable<'_> {
                     .iter()
                     .map(|column| column.title)
                     .collect::<Vec<_>>(),
+                None,
+                None,
                 true,
                 false,
                 false,
                 visual,
             ),
         ];
-        let mut markers = vec![(false, false)];
+        let mut markers = vec![(false, false, "")];
         for (index, row) in self.rows.iter().enumerate() {
             let selected = index == self.state.selected;
             let wrapped = self.row_lines(index, row);
-            for values in wrapped {
-                lines.push(self.data_line(&values, false, selected, index % 2 == 1, visual));
-                markers.push((selected, index % 2 == 1));
+            let alternate = self.first_row_index.saturating_add(index) % 2 == 1;
+            let row_marker = self
+                .row_markers
+                .and_then(|markers| markers.get(index))
+                .copied()
+                .unwrap_or("");
+            for (line_index, values) in wrapped.into_iter().enumerate() {
+                let rich_cells = (line_index == 0)
+                    .then(|| self.rich_cells.and_then(|rows| rows.get(index).copied()))
+                    .flatten();
+                lines.push(self.data_line(
+                    &values,
+                    self.cell_tones.and_then(|tones| tones.get(index).copied()),
+                    rich_cells,
+                    false,
+                    selected,
+                    alternate,
+                    visual,
+                ));
+                markers.push((
+                    selected,
+                    alternate,
+                    if line_index == 0 { row_marker } else { "" },
+                ));
             }
         }
+        let line_count = lines.len();
         Paragraph::new(lines).render(virtual_area, &mut virtual_buffer);
         let offset = self
             .state
             .horizontal_offset
             .min(virtual_width.saturating_sub(data_area.width));
         for row in 0..area.height {
-            let (selected, alternate) = markers.get(row as usize).copied().unwrap_or_default();
-            let background = table_row_background(selected, alternate, self.decoration, visual);
+            let has_line = (row as usize) < line_count;
+            let (selected, alternate, row_marker) =
+                markers.get(row as usize).copied().unwrap_or_default();
+            let background = if has_line {
+                table_row_background(selected, alternate, self.decoration, visual)
+            } else {
+                visual.surface
+            };
             for x in 0..marker_width {
                 let cell = &mut frame.buffer_mut()[(area.x + x, area.y + row)];
-                cell.set_symbol(if selected && x == 0 { "▌" } else { " " })
-                    .set_style(
-                        Style::default()
-                            .fg(if selected {
-                                visual.table_selection_text
-                            } else {
-                                visual.text_muted
-                            })
-                            .bg(background),
-                    );
+                let symbol = if selected && x == 0 {
+                    "▌"
+                } else if x == 1 && !row_marker.is_empty() {
+                    row_marker
+                } else {
+                    " "
+                };
+                let foreground = if (selected && x == 0) || (x == 1 && !row_marker.is_empty()) {
+                    visual.accent
+                } else {
+                    visual.text_muted
+                };
+                cell.set_symbol(symbol)
+                    .set_style(Style::default().fg(foreground).bg(background));
             }
             for x in 0..data_area.width {
                 let source_x = offset.saturating_add(x);
                 let target = &mut frame.buffer_mut()[(data_area.x + x, data_area.y + row)];
-                if source_x < virtual_width {
+                if has_line && source_x < virtual_width {
                     *target = virtual_buffer[(source_x, row)].clone();
                 } else {
                     target.set_symbol(" ").set_bg(background);
                 }
             }
         }
+    }
+
+    pub fn window(&self, viewport_height: u16) -> PaneTableWindow {
+        self.window_from(viewport_height, 0)
+    }
+
+    pub fn window_from(&self, viewport_height: u16, first_visible_row: usize) -> PaneTableWindow {
+        if self.rows.is_empty() {
+            return PaneTableWindow {
+                start_row: 0,
+                selected_row: 0,
+                selected_line_offset: 0,
+            };
+        }
+        let selected = self.state.selected.min(self.rows.len().saturating_sub(1));
+        let selected_line_offset = 1
+            + (0..selected)
+                .map(|index| self.row_height(index, self.rows[index]))
+                .sum::<usize>();
+        let available = viewport_height.saturating_sub(1).max(1) as usize;
+        let mut start = first_visible_row
+            .min(self.rows.len().saturating_sub(1))
+            .min(selected);
+        let mut used = (start..=selected)
+            .map(|index| self.row_height(index, self.rows[index]))
+            .sum::<usize>();
+        while start < selected && used > available {
+            used = used.saturating_sub(self.row_height(start, self.rows[start]));
+            start += 1;
+        }
+        PaneTableWindow {
+            start_row: start,
+            selected_row: selected.saturating_sub(start),
+            selected_line_offset,
+        }
+    }
+
+    pub fn row_at_visual_line(&self, start_row: usize, visual_line: usize) -> Option<usize> {
+        let mut line = 0usize;
+        for index in start_row..self.rows.len() {
+            let height = self.row_height(index, self.rows[index]);
+            if visual_line < line.saturating_add(height) {
+                return Some(index);
+            }
+            line = line.saturating_add(height);
+        }
+        None
     }
 
     fn visible_columns(&self) -> impl Iterator<Item = (usize, &PaneTableColumn<'_>)> {
@@ -470,6 +730,8 @@ impl PaneTable<'_> {
     fn data_line(
         &self,
         values: &[impl AsRef<str>],
+        tones: Option<&[Option<CellTone>]>,
+        rich_cells: Option<&[Option<PaneTableCell>]>,
         header: bool,
         selected: bool,
         alternate: bool,
@@ -489,7 +751,13 @@ impl PaneTable<'_> {
                 ));
             }
             let value = values.get(column_index).map(AsRef::as_ref).unwrap_or("");
-            let color = if selected {
+            let color = if let Some(tone) = tones
+                .and_then(|tones| tones.get(column_index))
+                .copied()
+                .flatten()
+            {
+                tone.color(visual)
+            } else if selected {
                 visual.table_selection_text
             } else if header {
                 visual.text_muted
@@ -498,20 +766,94 @@ impl PaneTable<'_> {
             } else {
                 visual.text_secondary
             };
-            spans.push(Span::styled(
-                fit(value, column.width as usize),
-                Style::default()
-                    .fg(color)
-                    .bg(background)
-                    .add_modifier(if header {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
-            ));
+            if let Some(cell) = rich_cells
+                .and_then(|cells| cells.get(column_index))
+                .and_then(Option::as_ref)
+            {
+                spans.extend(fit_rich_cell(
+                    cell,
+                    column.width as usize,
+                    color,
+                    background,
+                    visual,
+                ));
+            } else {
+                spans.push(Span::styled(
+                    fit(value, column.width as usize),
+                    Style::default()
+                        .fg(color)
+                        .bg(background)
+                        .add_modifier(if header {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ));
+            }
         }
         Line::from(spans)
     }
+}
+
+fn fit_rich_cell(
+    cell: &PaneTableCell,
+    width: usize,
+    default_color: Color,
+    background: Color,
+    visual: &TuiVisualStyle,
+) -> Vec<Span<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let full_width = cell
+        .spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.text.as_str()))
+        .sum::<usize>();
+    let truncated = full_width > width;
+    let target_width = width.saturating_sub(usize::from(truncated));
+    let mut used = 0usize;
+    let mut result = Vec::new();
+    for fragment in &cell.spans {
+        let mut text = String::new();
+        let mut fragment_truncated = false;
+        for character in fragment.text.chars() {
+            let character_width = UnicodeWidthStr::width(character.to_string().as_str());
+            if used.saturating_add(character_width) > target_width {
+                fragment_truncated = true;
+                break;
+            }
+            text.push(character);
+            used = used.saturating_add(character_width);
+        }
+        if !text.is_empty() {
+            result.push(Span::styled(
+                text,
+                Style::default()
+                    .fg(fragment
+                        .tone
+                        .map_or(default_color, |tone| tone.color(visual)))
+                    .bg(background),
+            ));
+        }
+        if fragment_truncated {
+            break;
+        }
+    }
+    if truncated {
+        result.push(Span::styled(
+            "…",
+            Style::default().fg(visual.text_muted).bg(background),
+        ));
+        used = used.saturating_add(1);
+    }
+    if used < width {
+        result.push(Span::styled(
+            " ".repeat(width - used),
+            Style::default().fg(default_color).bg(background),
+        ));
+    }
+    result
 }
 
 fn table_virtual_width(columns: &[PaneTableColumn<'_>], state: &PaneTableState) -> u16 {
@@ -523,6 +865,13 @@ fn table_virtual_width(columns: &[PaneTableColumn<'_>], state: &PaneTableState) 
         .map(|column| column.width)
         .fold(0_u16, u16::saturating_add)
         .saturating_add(count.saturating_sub(1))
+}
+
+pub(super) fn pane_table_virtual_width(
+    columns: &[PaneTableColumn<'_>],
+    state: &PaneTableState,
+) -> u16 {
+    table_virtual_width(columns, state)
 }
 
 fn table_row_background(
@@ -590,7 +939,7 @@ impl ContentTableRow<'_> {
             Style::default().fg(visual.text)
         };
         let mut spans = vec![Span::styled(
-            if self.selected { "◆ " } else { "  " },
+            if self.selected { "▌ " } else { "  " },
             row_style,
         )];
         for (index, (cell, width)) in self.cells.iter().zip(self.widths).enumerate() {
@@ -656,6 +1005,36 @@ impl ContextHeader<'_> {
                     .add_modifier(Modifier::BOLD),
             ),
         ];
+        let full_width = 8 + self
+            .pairs
+            .iter()
+            .enumerate()
+            .map(|(index, pair)| {
+                usize::from(index > 0)
+                    + 3
+                    + UnicodeWidthStr::width(pair.label)
+                    + UnicodeWidthStr::width(pair.value)
+            })
+            .sum::<usize>();
+        if full_width > area.width as usize {
+            let compact = match self.pairs {
+                [app, environment, server, ..] => {
+                    format!("{}/{}/{}", app.value, environment.value, server.value)
+                }
+                [app, environment] => format!("{}/{}", app.value, environment.value),
+                [pair] => pair.value.to_string(),
+                [] => String::new(),
+            };
+            if !compact.is_empty() {
+                spans.push(Span::styled("· ", surface.fg(visual.border_subtle)));
+                spans.push(Span::styled(
+                    fit(&compact, area.width.saturating_sub(10) as usize),
+                    surface.fg(visual.text).add_modifier(Modifier::BOLD),
+                ));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)).style(surface), area);
+            return;
+        }
         for (index, pair) in self.pairs.iter().enumerate() {
             spans.push(Span::styled(
                 if index == 0 { "· " } else { " · " },
@@ -1017,6 +1396,21 @@ impl WorkspaceSelector<'_> {
             .fg(visual.text_muted)
             .bg(visual.footer_background);
         let rule = surface.fg(visual.footer_rule);
+        let full_width = 2
+            + self
+                .items
+                .iter()
+                .map(|item| {
+                    let content_width = if item.key.is_empty() {
+                        item.label.chars().count()
+                    } else {
+                        item.key.chars().count() + 1 + item.label.chars().count()
+                    };
+                    4 + content_width
+                })
+                .sum::<usize>()
+            + self.items.len().saturating_sub(1) * 2;
+        let compact = full_width >= area.width as usize;
         let mut spans = vec![Span::styled("├─", rule)];
         let mut used = 2usize;
         for (index, item) in self.items.iter().enumerate() {
@@ -1025,21 +1419,45 @@ impl WorkspaceSelector<'_> {
                 used += 2;
             }
             let (open, close, color, modifier) = if item.active {
-                ("[ ", " ]", visual.text_secondary, Modifier::BOLD)
+                (
+                    if compact { "[" } else { "[ " },
+                    if compact { "]" } else { " ]" },
+                    visual.text_secondary,
+                    Modifier::BOLD,
+                )
             } else {
-                ("( ", " )", visual.text_muted, Modifier::empty())
+                (
+                    if compact { "(" } else { "( " },
+                    if compact { ")" } else { " )" },
+                    visual.text_muted,
+                    Modifier::empty(),
+                )
             };
             spans.push(Span::styled(open, surface.fg(color).add_modifier(modifier)));
-            spans.push(key_span(item.key.to_string(), visual));
+            if item.key.is_empty() {
+                spans.push(Span::styled(
+                    item.label.to_string(),
+                    surface.fg(color).add_modifier(modifier),
+                ));
+            } else {
+                spans.push(key_span(item.key.to_string(), visual));
+                if !compact {
+                    spans.push(Span::styled(
+                        format!(" {}", item.label),
+                        surface.fg(color).add_modifier(modifier),
+                    ));
+                }
+            }
             spans.push(Span::styled(
-                format!(" {}{close}", item.label),
+                close,
                 surface.fg(color).add_modifier(modifier),
             ));
-            used += open.chars().count()
-                + item.key.chars().count()
-                + 1
-                + item.label.chars().count()
-                + close.chars().count();
+            let item_width = if item.key.is_empty() {
+                item.label.chars().count()
+            } else {
+                item.key.chars().count() + usize::from(!compact) * (1 + item.label.chars().count())
+            };
+            used += open.chars().count() + item_width + close.chars().count();
         }
         spans.push(Span::styled(
             "─".repeat((area.width as usize).saturating_sub(used)),
@@ -1065,7 +1483,7 @@ pub(super) struct ShortcutRow<'a> {
     pub items: &'a [KeyHint<'a>],
     pub active: bool,
     pub left_glyph: &'a str,
-    pub fallback: KeyHint<'a>,
+    pub fallback: Option<KeyHint<'a>>,
 }
 
 impl ShortcutRow<'_> {
@@ -1123,7 +1541,10 @@ impl ShortcutRow<'_> {
             |item: &KeyHint<'_>| item.key.chars().count() + item.label.chars().count() + 1;
         let full_width = self.items.iter().map(item_width).sum::<usize>()
             + self.items.len().saturating_sub(1) * 3;
-        let fallback_width = item_width(&self.fallback);
+        let fallback_width = self
+            .fallback
+            .map(|fallback| item_width(&fallback))
+            .unwrap_or(1);
         let mut used = 0;
         let mut visible = Vec::new();
         for item in self.items {
@@ -1140,8 +1561,11 @@ impl ShortcutRow<'_> {
             used += separator + width;
             visible.push(*item);
         }
-        if full_width > available && !visible.iter().any(|item| item.key == self.fallback.key) {
-            visible.push(self.fallback);
+        if let Some(fallback) = self.fallback
+            && full_width > available
+            && !visible.iter().any(|item| item.key == fallback.key)
+        {
+            visible.push(fallback);
         }
         for (index, item) in visible.iter().enumerate() {
             if index > 0 {
@@ -1157,6 +1581,12 @@ impl ShortcutRow<'_> {
                     visual.text_muted
                 }),
             ));
+        }
+        if full_width > available && self.fallback.is_none() {
+            if !visible.is_empty() {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled("…", Style::default().fg(visual.text_muted)));
         }
         frame.render_widget(
             Paragraph::new(Line::from(spans))
@@ -1200,6 +1630,115 @@ pub(super) fn shortcut_line(
     Line::from(spans).alignment(alignment)
 }
 
+pub(super) struct HelpRow<'a> {
+    pub key: &'a str,
+    pub label: &'a str,
+}
+
+impl HelpRow<'_> {
+    pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
+        if width < 8 {
+            return Line::from(fit(self.label, width)).alignment(Alignment::Left);
+        }
+        let prefix_width = 2;
+        let gap_width = 2;
+        let key_width = 20.min(width.saturating_sub(prefix_width + gap_width) / 2);
+        let label_width = width.saturating_sub(prefix_width + key_width + gap_width);
+        Line::from(vec![
+            Span::raw(" ".repeat(prefix_width)),
+            Span::styled(
+                fit(self.key, key_width),
+                Style::default()
+                    .fg(visual.shortcut_key)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" ".repeat(gap_width)),
+            Span::styled(
+                fit(self.label, label_width),
+                Style::default().fg(visual.text_secondary),
+            ),
+        ])
+        .alignment(Alignment::Left)
+    }
+}
+
+pub(super) struct CommandRow<'a> {
+    pub label: &'a str,
+    pub shortcut: Option<&'a str>,
+    pub description: &'a str,
+    pub selected: bool,
+    pub unavailable: bool,
+}
+
+impl CommandRow<'_> {
+    pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
+        let marker_width = width.min(2);
+        let available = width.saturating_sub(marker_width);
+        let selected_style = Style::default()
+            .fg(visual.selection_text)
+            .bg(visual.selection_background)
+            .add_modifier(Modifier::BOLD);
+        let muted_style = Style::default().fg(visual.text_muted);
+        let label_style = if self.selected {
+            selected_style
+        } else if self.unavailable {
+            muted_style
+        } else {
+            Style::default()
+                .fg(visual.text)
+                .add_modifier(Modifier::BOLD)
+        };
+        let shortcut_style = if self.selected {
+            selected_style
+        } else if self.unavailable {
+            muted_style
+        } else {
+            Style::default()
+                .fg(visual.shortcut_key)
+                .add_modifier(Modifier::BOLD)
+        };
+        let description_style = if self.selected {
+            selected_style
+        } else {
+            muted_style
+        };
+        let marker_style = if self.selected {
+            selected_style
+        } else {
+            Style::default()
+        };
+        let mut spans = vec![Span::styled(
+            fit(if self.selected { "▌" } else { "" }, marker_width),
+            marker_style,
+        )];
+        if available < 34 {
+            let compact = self
+                .shortcut
+                .map(|shortcut| format!("{}  {shortcut}", self.label))
+                .unwrap_or_else(|| self.label.to_string());
+            spans.push(Span::styled(fit(&compact, available), label_style));
+        } else {
+            let shortcut_width = usize::from(self.shortcut.is_some()) * 16;
+            let label_width = (available / 3)
+                .clamp(16, 28)
+                .min(available.saturating_sub(shortcut_width));
+            let description_width = available.saturating_sub(label_width + shortcut_width);
+            spans.push(Span::styled(fit(self.label, label_width), label_style));
+            if shortcut_width > 0 {
+                spans.push(Span::styled(
+                    fit(self.shortcut.unwrap_or_default(), shortcut_width),
+                    shortcut_style,
+                ));
+            }
+            spans.push(Span::styled(
+                fit(self.description, description_width),
+                description_style,
+            ));
+        }
+        Line::from(spans).alignment(Alignment::Left)
+    }
+}
+
 pub(super) struct SearchInput<'a> {
     pub query: &'a str,
 }
@@ -1228,6 +1767,234 @@ impl SearchInput<'_> {
     }
 }
 
+pub(super) struct CollectionQueryBar<'a> {
+    pub dataset: &'a str,
+    pub scope: &'a str,
+    pub query: &'a str,
+    pub matched: usize,
+    pub loaded: usize,
+    pub more_available: bool,
+    pub editing: bool,
+}
+
+impl CollectionQueryBar<'_> {
+    pub fn height(&self) -> u16 {
+        1 + u16::from(self.editing || !self.query.is_empty())
+    }
+
+    pub fn lines(self, visual: &TuiVisualStyle) -> Vec<Line<'static>> {
+        let more = if self.more_available {
+            " · more available"
+        } else {
+            ""
+        };
+        let mut lines = vec![Line::from(vec![
+            Span::styled("Dataset  ", Style::default().fg(visual.text_muted)),
+            Span::styled(self.dataset.to_string(), Style::default().fg(visual.text)),
+            Span::styled(
+                format!("   {} loaded{more}", self.loaded),
+                Style::default().fg(visual.text_muted),
+            ),
+        ])];
+        if self.editing || !self.query.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Find     ", Style::default().fg(visual.text_muted)),
+                Span::styled(
+                    format!("{}: ", self.scope),
+                    Style::default().fg(visual.accent),
+                ),
+                Span::styled(
+                    if self.query.is_empty() {
+                        "type to search".to_string()
+                    } else {
+                        self.query.to_string()
+                    },
+                    Style::default().fg(if self.query.is_empty() {
+                        visual.text_faint
+                    } else {
+                        visual.input_text
+                    }),
+                ),
+                Span::styled(
+                    format!("   {}/{} loaded matches", self.matched, self.loaded),
+                    Style::default().fg(visual.text_muted),
+                ),
+            ]));
+        }
+        lines
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PaneStatusTone {
+    Active,
+    Loading,
+    Idle,
+}
+
+pub(super) struct PaneHeaderStatus<'a> {
+    pub label: &'a str,
+    pub tone: PaneStatusTone,
+}
+
+impl PaneHeaderStatus<'_> {
+    pub fn render(self, frame: &mut Frame<'_>, area: Rect, visual: &TuiVisualStyle) {
+        if area.width < 8 || area.height == 0 {
+            return;
+        }
+        let (glyph, color) = match self.tone {
+            PaneStatusTone::Active => ("●", visual.success),
+            PaneStatusTone::Loading => ("…", visual.accent),
+            PaneStatusTone::Idle => ("○", visual.text_muted),
+        };
+        let text = format!("{glyph} {}", self.label);
+        let width = (text.chars().count() as u16).min(area.width.saturating_sub(2));
+        let target = Rect {
+            x: area.right().saturating_sub(width).saturating_sub(1),
+            width,
+            height: 1,
+            ..area
+        };
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(color).bg(visual.surface)),
+            target,
+        );
+    }
+}
+
+pub(super) struct JsonDocument<'a> {
+    pub value: &'a Value,
+}
+
+impl JsonDocument<'_> {
+    pub fn lines(self, width: u16, visual: &TuiVisualStyle) -> Vec<Line<'static>> {
+        let source =
+            serde_json::to_string_pretty(self.value).unwrap_or_else(|_| self.value.to_string());
+        source
+            .lines()
+            .flat_map(|line| wrap_styled_spans(json_spans(line, visual), width as usize))
+            .collect()
+    }
+}
+
+pub(super) struct ScrollableDocument<'a> {
+    pub lines: &'a [Line<'static>],
+    pub offset: usize,
+}
+
+impl ScrollableDocument<'_> {
+    pub fn max_offset(&self, viewport_height: u16) -> usize {
+        self.lines.len().saturating_sub(viewport_height as usize)
+    }
+
+    pub fn render(self, frame: &mut Frame<'_>, region: PaneRegion, visual: &TuiVisualStyle) {
+        let offset = self.offset.min(self.max_offset(region.content_area.height));
+        frame.render_widget(
+            Paragraph::new(self.lines.to_vec())
+                .style(Style::default().fg(visual.text).bg(visual.surface))
+                .scroll((offset.min(u16::MAX as usize) as u16, 0)),
+            region.content_area,
+        );
+        if let Some(slot) = region.scrollbar {
+            let mut state = ScrollbarState::new(self.lines.len())
+                .position(offset)
+                .viewport_content_length(region.content_area.height as usize);
+            render_scrollbar(frame, slot, &mut state, visual);
+        }
+    }
+}
+
+fn json_spans(line: &str, visual: &TuiVisualStyle) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < line.len() {
+        let rest = &line[index..];
+        let character = rest.chars().next().expect("non-empty json suffix");
+        if character == '"' {
+            let mut escaped = false;
+            let mut end = index + character.len_utf8();
+            for next in line[end..].chars() {
+                end += next.len_utf8();
+                if next == '"' && !escaped {
+                    break;
+                }
+                escaped = next == '\\' && !escaped;
+                if next != '\\' {
+                    escaped = false;
+                }
+            }
+            let is_key = line[end..].trim_start().starts_with(':');
+            spans.push(Span::styled(
+                line[index..end].to_string(),
+                Style::default().fg(if is_key { visual.info } else { visual.success }),
+            ));
+            index = end;
+        } else if character.is_ascii_digit() || character == '-' {
+            let end = index
+                + rest
+                    .find(|next: char| {
+                        !(next.is_ascii_digit() || matches!(next, '-' | '+' | '.' | 'e' | 'E'))
+                    })
+                    .unwrap_or(rest.len());
+            spans.push(Span::styled(
+                line[index..end].to_string(),
+                Style::default().fg(visual.accent_hover),
+            ));
+            index = end;
+        } else if character.is_ascii_alphabetic() {
+            let end = index
+                + rest
+                    .find(|next: char| !next.is_ascii_alphabetic())
+                    .unwrap_or(rest.len());
+            let word = &line[index..end];
+            spans.push(Span::styled(
+                word.to_string(),
+                Style::default().fg(if word == "null" {
+                    visual.text_muted
+                } else {
+                    visual.marker
+                }),
+            ));
+            index = end;
+        } else {
+            let color = if matches!(character, '{' | '}' | '[' | ']' | ':' | ',') {
+                visual.border
+            } else {
+                visual.text
+            };
+            spans.push(Span::styled(
+                character.to_string(),
+                Style::default().fg(color),
+            ));
+            index += character.len_utf8();
+        }
+    }
+    spans
+}
+
+fn wrap_styled_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![Line::default()];
+    }
+    let mut lines = Vec::new();
+    let mut current = Vec::new();
+    let mut used = 0_usize;
+    for span in spans {
+        for character in span.content.chars() {
+            let text = character.to_string();
+            let character_width = UnicodeWidthStr::width(text.as_str());
+            if used > 0 && used.saturating_add(character_width) > width {
+                lines.push(Line::from(std::mem::take(&mut current)));
+                used = 0;
+            }
+            current.push(Span::styled(text, span.style));
+            used = used.saturating_add(character_width);
+        }
+    }
+    lines.push(Line::from(current));
+    lines
+}
+
 pub(super) struct SelectableRow<'a> {
     pub label: &'a str,
     pub selected: bool,
@@ -1236,8 +2003,9 @@ pub(super) struct SelectableRow<'a> {
 
 impl SelectableRow<'_> {
     pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
-        let marker = if self.selected { "◆ " } else { "  " };
-        let used = marker.chars().count() + self.label.chars().count();
+        let marker = if self.selected { "▌ " } else { "  " };
+        let marker_width = UnicodeWidthStr::width(marker);
+        let label = fit(self.label, width.saturating_sub(marker_width));
         let style = if self.selected {
             Style::default()
                 .fg(visual.selection_text)
@@ -1248,15 +2016,7 @@ impl SelectableRow<'_> {
         } else {
             Style::default().fg(visual.text)
         };
-        Line::from(Span::styled(
-            format!(
-                "{marker}{}{}",
-                self.label,
-                " ".repeat(width.saturating_sub(used))
-            ),
-            style,
-        ))
-        .alignment(Alignment::Center)
+        Line::from(Span::styled(format!("{marker}{label}"), style)).alignment(Alignment::Center)
     }
 }
 
@@ -1276,7 +2036,7 @@ impl DecisionTableRow<'_> {
         let mut spans = Vec::new();
         if self.selectable {
             spans.push(Span::styled(
-                if self.selected { "◆ " } else { "  " },
+                if self.selected { "▌ " } else { "  " },
                 if self.selected {
                     selected_style
                 } else {
@@ -1285,11 +2045,17 @@ impl DecisionTableRow<'_> {
             ));
         }
         for (index, (cell, width)) in self.cells.iter().zip(self.widths).enumerate() {
-            let text = if cell.chars().count() < *width {
-                format!("{cell}{}", " ".repeat(*width - cell.chars().count()))
-            } else {
-                cell.chars().take(*width).collect()
-            };
+            if index > 0 {
+                spans.push(Span::styled(
+                    "│",
+                    if self.selected {
+                        selected_style.fg(visual.border)
+                    } else {
+                        Style::default().fg(visual.border_subtle)
+                    },
+                ));
+            }
+            let text = fit(cell, *width);
             let color = if self.header {
                 visual.text_muted
             } else if index == 0 {
@@ -1315,13 +2081,16 @@ pub(super) struct OverlayFrame<'a> {
 }
 
 impl OverlayFrame<'_> {
-    pub fn render(
-        self,
-        frame: &mut Frame<'_>,
-        area: Rect,
-        lines: Vec<Line<'static>>,
-        visual: &TuiVisualStyle,
-    ) {
+    pub fn content_area(area: Rect) -> Rect {
+        Rect {
+            x: area.x.saturating_add(2),
+            y: area.y.saturating_add(2),
+            width: area.width.saturating_sub(4),
+            height: area.height.saturating_sub(4),
+        }
+    }
+
+    pub fn render_shell(self, frame: &mut Frame<'_>, area: Rect, visual: &TuiVisualStyle) -> Rect {
         frame.render_widget(Clear, area);
         let surface = Style::default()
             .fg(visual.text)
@@ -1338,17 +2107,26 @@ impl OverlayFrame<'_> {
             block = block.title(overlay_title(title, visual));
         }
         frame.render_widget(block, area);
+        Self::content_area(area)
+    }
+
+    pub fn render(
+        self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        lines: Vec<Line<'static>>,
+        visual: &TuiVisualStyle,
+    ) {
+        let surface = Style::default()
+            .fg(visual.text)
+            .bg(visual.overlay_background);
+        let content_area = self.render_shell(frame, area, visual);
         frame.render_widget(
             Paragraph::new(lines)
                 .style(surface)
                 .alignment(Alignment::Center)
                 .wrap(Wrap { trim: false }),
-            Rect {
-                x: area.x.saturating_add(2),
-                y: area.y.saturating_add(2),
-                width: area.width.saturating_sub(4),
-                height: area.height.saturating_sub(4),
-            },
+            content_area,
         );
     }
 }
@@ -1693,6 +2471,57 @@ mod tests {
     }
 
     #[test]
+    fn header_and_workspace_selector_reduce_before_clipping() {
+        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let buffer = render(50, 2, |frame| {
+            ContextHeader {
+                pairs: &[
+                    ContextPair {
+                        label: "app",
+                        value: "preview-app",
+                    },
+                    ContextPair {
+                        label: "env",
+                        value: "local",
+                    },
+                    ContextPair {
+                        label: "server",
+                        value: "local",
+                    },
+                ],
+            }
+            .render(frame, Rect::new(0, 0, 50, 1), &visual);
+            WorkspaceSelector {
+                items: &[
+                    WorkspaceItem {
+                        key: "1",
+                        label: "Overview",
+                        active: true,
+                    },
+                    WorkspaceItem {
+                        key: "2",
+                        label: "Workbench",
+                        active: false,
+                    },
+                    WorkspaceItem {
+                        key: "3",
+                        label: "Resources",
+                        active: false,
+                    },
+                ],
+                junctions: &[],
+            }
+            .render(frame, Rect::new(0, 1, 50, 1), &visual);
+        });
+        let text = text(&buffer);
+        assert!(text.contains("┌ GOLEM · preview-app/local/local"));
+        assert!(!text.contains("app preview-app"));
+        assert!(text.contains("├─[1]──(2)──(3)"));
+        assert!(!text.contains("Overview"));
+        assert_eq!(buffer[(49, 1)].symbol(), "┘");
+    }
+
+    #[test]
     fn workspace_selector_never_overwrites_a_label_with_a_junction() {
         let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
         let buffer = render(32, 1, |frame| {
@@ -1726,7 +2555,7 @@ mod tests {
         });
         assert_eq!(buffer[(0, 0)].symbol(), "›");
         assert_eq!(buffer[(0, 0)].bg, visual.input_background);
-        assert_eq!(buffer[(0, 1)].symbol(), "◆");
+        assert_eq!(buffer[(0, 1)].symbol(), "▌");
         assert!((0..20).all(|x| buffer[(x, 1)].bg == visual.selection_background));
     }
 
@@ -1743,7 +2572,7 @@ mod tests {
         let buffer = render(18, 1, |frame| {
             frame.render_widget(Paragraph::new(line), frame.area());
         });
-        assert!(text(&buffer).starts_with("◆ checkou… running"));
+        assert!(text(&buffer).starts_with("▌ checkou… running"));
         assert!((0..18).all(|x| buffer[(x, 0)].bg == visual.selection_background));
     }
 
@@ -1810,6 +2639,26 @@ mod tests {
     }
 
     #[test]
+    fn cursor_collection_state_tracks_continuations_and_loaded_depth() {
+        let mut state = CursorCollectionState::new(200);
+        assert_eq!(state.request_limit(false), 200);
+        assert!(!state.has_more());
+
+        state.finish_request(false, BTreeMap::from([("cart".to_string(), 17)]));
+        assert!(state.has_more());
+        assert_eq!(state.request_limit(true), 200);
+        assert_eq!(state.cursors().get("cart"), Some(&17));
+
+        state.finish_request(true, BTreeMap::from([("cart".to_string(), 42)]));
+        assert_eq!(state.loaded_depth(), 2);
+        assert_eq!(state.request_limit(false), 400);
+
+        state.reset();
+        assert_eq!(state.loaded_depth(), 1);
+        assert!(!state.has_more());
+    }
+
+    #[test]
     fn pane_table_horizontal_offset_clamps_and_keeps_marker_frozen() {
         let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
         let columns = pane_table_columns();
@@ -1826,6 +2675,10 @@ mod tests {
                 rows,
                 state: &state,
                 decoration: TableDecoration::Minimal,
+                cell_tones: None,
+                rich_cells: None,
+                row_markers: None,
+                first_row_index: 0,
             }
             .render(frame, frame.area(), &visual);
         });
@@ -1843,11 +2696,16 @@ mod tests {
             &["first", "one", "abcdefghijklmnop"],
             &["second", "two", "qrstuvwxyzabcdef"],
         ];
+        let row_markers = ["✓", "✓"];
         let table = PaneTable {
             columns: &columns,
             rows,
             state: &state,
             decoration: TableDecoration::Zebra,
+            cell_tones: None,
+            rich_cells: None,
+            row_markers: Some(&row_markers),
+            first_row_index: 0,
         };
         assert_eq!(table.height(), 4);
         assert_eq!(
@@ -1856,6 +2714,10 @@ mod tests {
                 rows,
                 state: &state,
                 decoration: TableDecoration::Minimal,
+                cell_tones: None,
+                rich_cells: None,
+                row_markers: None,
+                first_row_index: 0,
             }
             .height(),
             3
@@ -1866,6 +2728,10 @@ mod tests {
                 rows,
                 state: &state,
                 decoration: TableDecoration::Rules,
+                cell_tones: None,
+                rich_cells: None,
+                row_markers: None,
+                first_row_index: 0,
             }
             .height(),
             3
@@ -1873,9 +2739,119 @@ mod tests {
         let buffer = render(24, 4, |frame| table.render(frame, frame.area(), &visual));
         assert_eq!(buffer[(0, 1)].symbol(), "▌");
         assert_eq!(buffer[(0, 2)].symbol(), "▌");
+        assert_eq!(buffer[(1, 1)].symbol(), "✓");
+        assert_eq!(buffer[(1, 2)].symbol(), " ");
+        assert_eq!(buffer[(1, 3)].symbol(), "✓");
+        assert_eq!(buffer[(0, 1)].fg, visual.accent);
+        assert_eq!(buffer[(0, 2)].fg, visual.accent);
+        assert_eq!(buffer[(1, 3)].fg, visual.accent);
         assert!((0..24).all(|x| buffer[(x, 1)].bg == visual.table_selected_odd_background));
         assert!((0..24).all(|x| buffer[(x, 2)].bg == visual.table_selected_odd_background));
         assert!(text(&buffer).contains("qrstuvw…"));
+    }
+
+    #[test]
+    fn pane_table_window_and_hit_testing_follow_wrapped_visual_rows() {
+        let columns = pane_table_columns();
+        let state = PaneTableState::new(&columns, 1);
+        let rows: &[&[&str]] = &[
+            &["first", "one", "short"],
+            &["second", "two", "abcdefghijklmnop"],
+            &["third", "three", "short"],
+        ];
+        let table = PaneTable {
+            columns: &columns,
+            rows,
+            state: &state,
+            decoration: TableDecoration::Zebra,
+            cell_tones: None,
+            rich_cells: None,
+            row_markers: None,
+            first_row_index: 0,
+        };
+
+        let window = table.window(3);
+        assert_eq!(window.start_row, 1);
+        assert_eq!(window.selected_row, 0);
+        assert_eq!(table.row_at_visual_line(window.start_row, 0), Some(1));
+        assert_eq!(table.row_at_visual_line(window.start_row, 1), Some(1));
+        assert_eq!(table.row_at_visual_line(window.start_row, 2), Some(2));
+    }
+
+    #[test]
+    fn pane_table_window_preserves_a_visible_viewport_anchor() {
+        let columns = pane_table_columns();
+        let rows: &[&[&str]] = &[
+            &["zero", "", ""],
+            &["one", "", ""],
+            &["two", "", ""],
+            &["three", "", ""],
+            &["four", "", ""],
+            &["five", "", ""],
+            &["six", "", ""],
+        ];
+        let state = PaneTableState::new(&columns, 4);
+        let table = PaneTable {
+            columns: &columns,
+            rows,
+            state: &state,
+            decoration: TableDecoration::Minimal,
+            cell_tones: None,
+            rich_cells: None,
+            row_markers: None,
+            first_row_index: 0,
+        };
+
+        let window = table.window_from(5, 3);
+        assert_eq!(window.start_row, 3);
+        assert_eq!(window.selected_row, 1);
+    }
+
+    #[test]
+    fn responsive_table_columns_use_available_width_for_long_content() {
+        let columns = pane_table_columns();
+        let mut state = PaneTableState::new(&columns, 0);
+        state.set_column_visible(&columns, "owner", true);
+        let rows: &[&[&str]] = &[&[
+            "checkout-agent-identifier",
+            "platform-observability",
+            "long details remain visible when the pane has room",
+        ]];
+
+        let narrow = responsive_table_columns(&columns, rows, &state, 24);
+        let wide = responsive_table_columns(&columns, rows, &state, 48);
+
+        assert_eq!(pane_table_virtual_width(&narrow, &state), 24);
+        assert_eq!(pane_table_virtual_width(&wide, &state), 48);
+        assert!(wide[0].width > narrow[0].width);
+        assert!(wide[1].width > narrow[1].width);
+        assert!(wide[2].width > narrow[2].width);
+    }
+
+    #[test]
+    fn help_and_command_rows_are_left_aligned_single_line_tables() {
+        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let help = HelpRow {
+            key: "ctrl+x v",
+            label: "Switch Overview / Metrics",
+        }
+        .line(48, &visual);
+        let command = CommandRow {
+            label: "A command with a long name",
+            shortcut: Some("ctrl+x v"),
+            description: "A description that must never wrap into another row",
+            selected: true,
+            unavailable: false,
+        }
+        .line(48, &visual);
+        let buffer = render(48, 2, |frame| {
+            frame.render_widget(Paragraph::new(help), Rect::new(0, 0, 48, 1));
+            frame.render_widget(Paragraph::new(command), Rect::new(0, 1, 48, 1));
+        });
+
+        assert_eq!(buffer[(2, 0)].symbol(), "c");
+        assert_eq!(buffer[(0, 1)].symbol(), "▌");
+        assert!((0..48).all(|x| buffer[(x, 1)].bg == visual.selection_background));
     }
 
     #[test]
@@ -1891,6 +2867,10 @@ mod tests {
                     rows,
                     state: &state,
                     decoration,
+                    cell_tones: None,
+                    rich_cells: None,
+                    row_markers: None,
+                    first_row_index: 0,
                 }
                 .render(frame, frame.area(), &visual);
             })
@@ -1913,6 +2893,103 @@ mod tests {
             selected_even[(2, 2)].bg,
             visual.table_selected_even_background
         );
+    }
+
+    #[test]
+    fn pane_table_rich_cells_keep_semantic_colors_selection_and_width() {
+        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let columns = [PaneTableColumn {
+            id: "agent-id",
+            title: "AgentID",
+            width: 10,
+            required: true,
+            default_visible: true,
+            policy: CellPolicy::Ellipsis,
+        }];
+        let rows: &[&[&str]] = &[&[r#"Cart("ann", 42)"#]];
+        let rich_row = [Some(PaneTableCell {
+            spans: vec![
+                PaneTableCellSpan {
+                    text: "Cart(".to_string(),
+                    tone: None,
+                },
+                PaneTableCellSpan {
+                    text: r#""ann""#.to_string(),
+                    tone: Some(CellTone::Success),
+                },
+                PaneTableCellSpan {
+                    text: ", 42)".to_string(),
+                    tone: Some(CellTone::Info),
+                },
+            ],
+        })];
+        let rich_rows: &[&[Option<PaneTableCell>]] = &[&rich_row];
+        let state = PaneTableState::new(&columns, 0);
+        let buffer = render(12, 2, |frame| {
+            PaneTable {
+                columns: &columns,
+                rows,
+                state: &state,
+                decoration: TableDecoration::Zebra,
+                cell_tones: None,
+                rich_cells: Some(rich_rows),
+                row_markers: None,
+                first_row_index: 0,
+            }
+            .render(frame, frame.area(), &visual);
+        });
+
+        assert!(text(&buffer).lines().nth(1).unwrap().contains('…'));
+        assert!((2..12).any(|x| buffer[(x, 1)].fg == visual.success));
+        assert_eq!(buffer[(0, 1)].bg, visual.table_selected_odd_background);
+        assert!((0..12).all(|x| buffer[(x, 1)].bg == visual.table_selected_odd_background));
+    }
+
+    #[test]
+    fn pane_table_uses_surface_below_short_content_across_the_full_width() {
+        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let columns = pane_table_columns();
+        let rows: &[&[&str]] = &[&["one", "", "short"]];
+        let state = PaneTableState::new(&columns, usize::MAX);
+        let buffer = render(40, 6, |frame| {
+            PaneTable {
+                columns: &columns,
+                rows,
+                state: &state,
+                decoration: TableDecoration::Zebra,
+                cell_tones: None,
+                rich_cells: None,
+                row_markers: None,
+                first_row_index: 0,
+            }
+            .render(frame, frame.area(), &visual);
+        });
+
+        for y in 2..6 {
+            assert!((0..40).all(|x| buffer[(x, y)].bg == visual.surface));
+        }
+    }
+
+    #[test]
+    fn decision_table_cells_have_an_explicit_width_safe_separator() {
+        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let line = DecisionTableRow {
+            cells: &["tui-observability-demo:agent", "Any"],
+            widths: &[12, 3],
+            header: false,
+            selectable: true,
+            selected: true,
+        }
+        .line(&visual);
+        let buffer = render(18, 1, |frame| {
+            frame.render_widget(Paragraph::new(line), frame.area());
+        });
+        let rendered = text(&buffer);
+
+        assert!(rendered.contains('│'), "{rendered}");
+        assert!(!rendered.contains("agentAny"), "{rendered}");
+        assert_eq!(UnicodeWidthStr::width(rendered.as_str()), 18);
+        assert!((0..18).all(|x| buffer[(x, 0)].bg == visual.selection_background));
     }
 
     #[test]
@@ -1972,22 +3049,24 @@ mod tests {
             "○ idle",
             "× failed",
             "! attention",
-            "Loading",
-            "● Active",
-            "✓ Success",
-            "! Warning",
-            "Unavailable",
-            "Error",
-            "Empty",
-            "Notice",
+            "[… Loading] message",
+            "[● Active] message",
+            "[✓ Success] message",
+            "[! Warning] message",
+            "[— Unavailable] message",
+            "[× Error] message",
+            "[○ Empty] message",
+            "[i Notice] message",
         ] {
             assert!(text.contains(expected), "missing {expected:?}");
         }
         let active_row = text
             .lines()
-            .position(|line| line.contains("● Active"))
+            .position(|line| line.contains("[● Active]"))
             .expect("active notice row") as u16;
-        assert_eq!(buffer[(0, active_row)].fg, visual.success);
+        assert_eq!(buffer[(0, active_row)].fg, visual.border_subtle);
+        assert_eq!(buffer[(1, active_row)].fg, visual.success);
+        assert_eq!(buffer[(2, active_row)].fg, visual.text_muted);
     }
 
     #[test]
@@ -2053,10 +3132,10 @@ mod tests {
                 ],
                 active: false,
                 left_glyph: "│",
-                fallback: KeyHint {
+                fallback: Some(KeyHint {
                     key: "ctrl+p",
                     label: "Commands",
-                },
+                }),
             }
             .render(frame, frame.area(), &visual);
         });
@@ -2094,5 +3173,33 @@ mod tests {
         let narrow = ShortcutRow::pack(&items, 42, 2);
         assert_eq!(narrow.len(), 2);
         assert!(narrow.iter().all(|row| !row.is_empty()));
+    }
+
+    #[test]
+    fn shortcut_row_without_a_fallback_never_invents_a_key() {
+        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let items = [
+            KeyHint {
+                key: "ctrl+x r",
+                label: "Long action",
+            },
+            KeyHint {
+                key: "ctrl+x shift+r",
+                label: "Another long action",
+            },
+        ];
+        let buffer = render(20, 1, |frame| {
+            ShortcutRow {
+                items: &items,
+                active: false,
+                left_glyph: "└",
+                fallback: None,
+            }
+            .render(frame, frame.area(), &visual);
+        });
+        let rendered = text(&buffer);
+
+        assert!(rendered.contains('…'), "{rendered}");
+        assert!(!rendered.contains("ctrl+p"), "{rendered}");
     }
 }

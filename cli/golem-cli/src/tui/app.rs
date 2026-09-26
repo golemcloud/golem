@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::{
+    AgentIdHighlightKind, format_agent_id_for_terminal, highlight_agent_id,
+};
 use crate::app::context::ApplicationContext;
 use crate::auth::AuthPresenter;
 use crate::command::GolemCliGlobalFlags;
@@ -24,33 +27,37 @@ use crate::model::agent::{
 };
 use crate::model::app::ApplicationSourceMode;
 use crate::model::app_raw::{BuiltinServer, Server};
-use crate::model::environment::EnvironmentReference;
+use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
+use crate::model::masking::Masked;
 use crate::tui::TuiEvent;
 use crate::tui::context_executor::{TuiContextExecutor, TuiContextId, TuiContextTaskResult};
 use crate::tui::input::encode_key_for_pty;
 use crate::tui::layout::{
     self, DragTarget, LayoutInput, LayoutSnapshot, RegionKind, TuiLayoutState,
+    adaptive_data_popup_rect,
 };
 use crate::tui::nested_cli::{
     CommandExit, NestedCliRuntime, NestedCliSpec, NestedCliTarget, spawn_nested_cli,
 };
 use crate::tui::terminal::TerminalGuard;
 use crate::tui::terminal_screen::TerminalScreen;
-use crate::tui::visual::active_style;
 #[cfg(feature = "tui-preview")]
+use crate::tui::visual::TuiVisualVariant;
 use crate::tui::visual::{
     ChromeTextStyle, FooterLayoutStyle, HeaderMetadataStyle, HeaderSeparatorStyle, PaneEdgeStyle,
-    PaneTitleStyle, TuiVisualVariant,
+    PaneTitleStyle, active_style,
 };
 use crate::tui::visual::{TuiVisualStyle, with_style};
-#[cfg(feature = "tui-preview")]
 use crate::tui::widgets::{
-    CellPolicy, ColumnChooserState, ContentTableRow, ContextHeader, ContextPair, DecisionTableRow,
-    FieldRow, KeyHint, Notice, NoticeKind, OutputLine, OverlayFrame, PaneEnding, PaneFocus,
-    PaneHeader, PaneLayout, PaneRegion, PaneResizeDividers, PaneRole, PaneScrollbarSlot, PaneSpec,
-    PaneTable, PaneTableColumn, PaneTableState, SearchInput, SectionHeading, SelectableRow,
-    ShortcutRow, StatusKind, StatusMarker, TableDecoration, WorkspaceItem, WorkspaceSelector, fit,
-    key_span, render_scrollbar, shortcut_line,
+    CellPolicy, CellTone, CollectionQueryBar, ColumnChooserState, CommandRow, ContentTableRow,
+    ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow, HelpRow,
+    JsonDocument, KeyHint, Notice, NoticeKind, OutputLine, OverlayFrame, PaneEnding, PaneFocus,
+    PaneHeader, PaneHeaderStatus, PaneLayout, PaneRegion, PaneResizeDividers, PaneRole,
+    PaneScrollbarSlot, PaneSpec, PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan,
+    PaneTableColumn, PaneTableState, ScrollableDocument, SearchInput, SectionHeading,
+    SelectableRow, ShortcutRow, StatusKind, StatusMarker, TableDecoration, WorkspaceItem,
+    WorkspaceSelector, fit, key_span, pane_table_virtual_width, render_scrollbar,
+    responsive_table_columns, shortcut_line,
 };
 use ansi_to_tui::IntoText;
 use crossterm::event::{
@@ -60,17 +67,18 @@ use crossterm::event::{
 use futures_util::StreamExt;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use golem_client::model::{EnvironmentWithDetails, OAuth2WebflowData};
+use golem_client::model::{EnvironmentWithDetails, OAuth2WebflowData, ScanCursor};
+use golem_common::model::AgentStatus;
+use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::oplog::OplogErrorKind;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
-};
+use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use serde_json::Value;
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Write, stdout};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -84,6 +92,7 @@ use tokio::time::{Duration, sleep};
 
 const TUI_EVENT_CHANNEL_CAPACITY: usize = 1024;
 const CONTEXT_PICKER_RIGHT_PADDING: usize = 4;
+const AGENT_PAGE_SIZE: u64 = 200;
 
 type TuiEventSender = Sender<TuiEvent>;
 
@@ -94,6 +103,7 @@ pub async fn run(ctx: Arc<Context>, global_flags: GolemCliGlobalFlags) -> anyhow
     let mut terminal = TerminalGuard::enter()?;
     let (event_tx, mut event_rx) = mpsc::channel::<TuiEvent>(TUI_EVENT_CHANNEL_CAPACITY);
     spawn_terminal_event_reader(event_tx.clone());
+    app.refresh_agents(Some(&event_tx));
 
     terminal.draw(|frame| render(frame, &app))?;
 
@@ -292,8 +302,13 @@ fn tui_auth_presenter(event_tx: &TuiEventSender) -> Arc<dyn AuthPresenter> {
 struct TuiApp {
     should_quit: bool,
     active_workspace: TuiWorkspace,
+    ops_view: OpsView,
+    fake_otlp: FakeOtlpExplorerState,
     dev_focus: DevPanel,
     mode: TuiMode,
+    help_scroll: usize,
+    help_content_height: Cell<usize>,
+    help_viewport_height: Cell<usize>,
     palette: CommandPalette,
     command_options: CommandOptions,
     command_run: Option<CommandRun>,
@@ -323,9 +338,14 @@ impl TuiApp {
         });
         Self {
             should_quit: false,
-            active_workspace: TuiWorkspace::Home,
+            active_workspace: TuiWorkspace::Ops,
+            ops_view: OpsView::Overview,
+            fake_otlp: FakeOtlpExplorerState::default(),
             dev_focus: DevPanel::Repl,
             mode: TuiMode::Normal,
+            help_scroll: 0,
+            help_content_height: Cell::new(0),
+            help_viewport_height: Cell::new(0),
             palette: CommandPalette::default(),
             command_options: CommandOptions::default(),
             command_run: None,
@@ -403,9 +423,11 @@ impl TuiApp {
                 self.finish_agent_inspect_job(AgentInspectPane::Stream, exit)
             }
             TuiEvent::AgentRefreshTick => self.refresh_agents(Some(event_tx)),
-            TuiEvent::AgentRefreshFinished { generation, result } => {
-                self.finish_agent_refresh(generation, result)
-            }
+            TuiEvent::AgentRefreshFinished {
+                generation,
+                append,
+                result,
+            } => self.finish_agent_refresh(generation, append, result),
             TuiEvent::ContextSwitchFinished { generation, result } => {
                 self.finish_context_switch(generation, result, event_tx)
             }
@@ -440,6 +462,8 @@ impl TuiApp {
             TuiMode::ContextSwitchConfirm => self.handle_context_switch_confirm_key(key, event_tx),
             TuiMode::Help => self.handle_help_key(key),
             TuiMode::AgentFilter => self.handle_agent_filter_key(key, event_tx),
+            TuiMode::AgentDatasetFilter => self.handle_agent_dataset_filter_key(key, event_tx),
+            TuiMode::AgentColumns => self.handle_agent_columns_key(key),
             TuiMode::CommandInteraction => self.handle_command_interaction_key(key),
             TuiMode::Repl => self.handle_repl_key(key),
             TuiMode::LeaderRepl => self.handle_leader_key(key, event_tx, TuiMode::Repl),
@@ -447,86 +471,149 @@ impl TuiApp {
     }
 
     fn handle_global_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
-        if self.agents_focused() && self.agents.view_mode == AgentsViewMode::Inspect {
-            if key.code == KeyCode::Char('?') {
-                self.mode = TuiMode::Help;
-                return;
-            }
-            self.handle_agent_inspect_key(key);
+        if self.handle_modified_shortcut(key, event_tx) {
             return;
         }
-
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+            KeyCode::Esc if self.agent_details_focused() => {
+                self.agents.focus = AgentOverviewFocus::List
+            }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.dev_panel_focused(DevPanel::Server) && self.server.run.is_running() {
-                    self.stop_server();
-                } else {
-                    self.should_quit = true;
-                }
+                self.should_quit = true;
             }
-            KeyCode::Char('b') => self.start_command(CommandKind::Build, event_tx),
-            KeyCode::Char('d') => self.start_command(CommandKind::Deploy, event_tx),
-            KeyCode::Char('c') => self.start_command(CommandKind::Clean, event_tx),
+            KeyCode::Enter if self.agent_list_focused() => self.toggle_agent_details(),
+            KeyCode::Up
+                if self.ops_view == OpsView::Metrics
+                    && self.fake_otlp.focus == FakeOtlpFocus::Details =>
+            {
+                self.fake_otlp.scroll_details(1, true)
+            }
+            KeyCode::Down
+                if self.ops_view == OpsView::Metrics
+                    && self.fake_otlp.focus == FakeOtlpFocus::Details =>
+            {
+                self.fake_otlp.scroll_details(1, false)
+            }
+            KeyCode::PageUp
+                if self.ops_view == OpsView::Metrics
+                    && self.fake_otlp.focus == FakeOtlpFocus::Details =>
+            {
+                self.fake_otlp.scroll_details(10, true)
+            }
+            KeyCode::PageDown
+                if self.ops_view == OpsView::Metrics
+                    && self.fake_otlp.focus == FakeOtlpFocus::Details =>
+            {
+                self.fake_otlp.scroll_details(10, false)
+            }
+            KeyCode::Up if self.ops_view == OpsView::Metrics => self.fake_otlp.previous(),
+            KeyCode::Down if self.ops_view == OpsView::Metrics => self.fake_otlp.next(),
+            KeyCode::Home if self.ops_view == OpsView::Metrics => self.fake_otlp.first(),
+            KeyCode::End if self.ops_view == OpsView::Metrics => self.fake_otlp.last(),
+            KeyCode::Up if self.agent_list_focused() => self.select_previous_agent(),
+            KeyCode::Down if self.agent_list_focused() => {
+                self.select_next_agent();
+                self.maybe_load_more_agents(event_tx);
+            }
+            KeyCode::PageUp if self.agent_list_focused() => self.select_previous_agent_page(),
+            KeyCode::PageDown if self.agent_list_focused() => {
+                self.select_next_agent_page();
+                self.maybe_load_more_agents(event_tx);
+            }
+            KeyCode::Home if self.agent_list_focused() => self.select_first_agent(),
+            KeyCode::End if self.agent_list_focused() => {
+                self.select_last_agent();
+                self.maybe_load_more_agents(event_tx);
+            }
+            KeyCode::Up if self.agent_details_focused() => self.scroll_agent_details_up(1),
+            KeyCode::Down if self.agent_details_focused() => self.scroll_agent_details_down(1),
+            KeyCode::PageUp if self.agent_details_focused() => self.scroll_agent_details_up(10),
+            KeyCode::PageDown if self.agent_details_focused() => self.scroll_agent_details_down(10),
+            KeyCode::Home if self.agent_details_focused() => self.agents.details_scroll = 0,
+            KeyCode::End if self.agent_details_focused() => self.scroll_agent_details_bottom(),
+            KeyCode::Left if self.agent_list_focused() => self.agents.table.pan_left(),
+            KeyCode::Right if self.agent_list_focused() => self.agents.table.pan_right_to_width(
+                self.agents.table_virtual_width.get(),
+                self.agents.table_viewport_width.get(),
+            ),
+            KeyCode::Tab | KeyCode::BackTab => self.cycle_ops_pane_focus(),
+            KeyCode::Backspace if self.agent_list_focused() && !self.agents.query.is_empty() => {
+                self.mode = TuiMode::AgentFilter;
+                self.agents.query.pop();
+                self.agents.reset_selection();
+            }
+            KeyCode::Char(character)
+                if self.agent_list_focused()
+                    && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+                    && (!character.is_whitespace() || !self.agents.query.is_empty()) =>
+            {
+                self.mode = TuiMode::AgentFilter;
+                self.agents.query.push(character);
+                self.agents.reset_selection();
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_modified_shortcut(
+        &mut self,
+        key: KeyEvent,
+        event_tx: Option<&TuiEventSender>,
+    ) -> bool {
+        match key.code {
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.should_quit = true;
+            }
             KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.mode = TuiMode::LeaderNormal
+                self.mode = TuiMode::LeaderNormal;
             }
-            KeyCode::Char('r') => self.start_or_focus_repl(event_tx),
-            KeyCode::Char('u') if self.agents_focused() => self.refresh_agents(event_tx),
-            KeyCode::Enter if self.agents_focused() => self.open_agent_inspect(event_tx),
-            KeyCode::Char('/') if self.agents_focused() => self.mode = TuiMode::AgentFilter,
-            KeyCode::Char('s') => self.open_and_toggle_server(event_tx),
-            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.layout.server_drawer_open = !self.layout.server_drawer_open;
-            }
-            KeyCode::Enter if self.dev_panel_focused(DevPanel::Server) => {
-                self.toggle_server(event_tx)
-            }
-            KeyCode::Enter if self.dev_panel_focused(DevPanel::Repl) => {
-                self.start_or_focus_repl(event_tx)
-            }
-            KeyCode::PageUp if self.dev_panel_focused(DevPanel::Server) => {
-                self.scroll_server_up_by(10)
-            }
-            KeyCode::PageDown if self.dev_panel_focused(DevPanel::Server) => {
-                self.scroll_server_down_by(10)
-            }
-            KeyCode::Home if self.dev_panel_focused(DevPanel::Server) => {
-                self.server.run.output.scroll_top()
-            }
-            KeyCode::End if self.dev_panel_focused(DevPanel::Server) => {
-                self.server.run.output.scroll_bottom()
-            }
-            KeyCode::PageUp => self.scroll_output_up(),
-            KeyCode::PageDown => self.scroll_output_down(),
-            KeyCode::Home => self.scroll_output_top(),
-            KeyCode::End => self.scroll_output_bottom(),
-            KeyCode::Up if self.dev_panel_focused(DevPanel::Output) => self.scroll_output_up_by(1),
-            KeyCode::Down if self.dev_panel_focused(DevPanel::Output) => {
-                self.scroll_output_down_by(1)
-            }
-            KeyCode::Up if self.dev_panel_focused(DevPanel::Server) => self.scroll_server_up_by(1),
-            KeyCode::Down if self.dev_panel_focused(DevPanel::Server) => {
-                self.scroll_server_down_by(1)
-            }
-            KeyCode::Up if self.agents_focused() => self.select_previous_agent(),
-            KeyCode::Down if self.agents_focused() => self.select_next_agent(),
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_palette();
             }
-            KeyCode::Char(':') => self.open_palette(),
-            KeyCode::Char('?') => self.mode = TuiMode::Help,
-            KeyCode::Tab if self.active_workspace == TuiWorkspace::Dev => self.next_dev_panel(),
-            KeyCode::BackTab if self.active_workspace == TuiWorkspace::Dev => {
-                self.previous_dev_panel()
+            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_help();
             }
-            KeyCode::Char(']') => self.next_workspace(),
-            KeyCode::Char('[') => self.previous_workspace(),
-            KeyCode::Char('1') => self.active_workspace = TuiWorkspace::Home,
-            KeyCode::Char('2') => self.open_dev_workspace(DevPanel::Repl),
-            KeyCode::Char('3') => self.open_ops_workspace(event_tx),
-            _ => {}
+            KeyCode::Left if self.agents_focused() && key.modifiers.contains(KeyModifiers::ALT) => {
+                self.resize_agent_details(-5);
+            }
+            KeyCode::Right
+                if self.agents_focused() && key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                self.resize_agent_details(5);
+            }
+            KeyCode::Char('r')
+                if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.refresh_agents(event_tx);
+            }
+            KeyCode::Char(' ')
+                if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.toggle_selected_agent();
+            }
+            KeyCode::Char('f')
+                if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.open_agent_dataset_filter();
+            }
+            KeyCode::Char('a')
+                if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.include_filtered_agents();
+            }
+            KeyCode::Char('n')
+                if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.exclude_filtered_agents();
+            }
+            KeyCode::Char('l')
+                if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.load_more_agents(event_tx);
+            }
+            _ => return false,
         }
+        true
     }
 
     fn handle_palette_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
@@ -565,8 +652,9 @@ impl TuiApp {
         if self.context_switcher.environment_list_running {
             match key.code {
                 KeyCode::Esc => self.cancel_context_environment_list(),
-                KeyCode::Char('q') => self.should_quit = true,
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('q') | KeyCode::Char('c')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
                     self.should_quit = true;
                 }
                 _ => {}
@@ -594,10 +682,10 @@ impl TuiApp {
         event_tx: Option<&TuiEventSender>,
     ) {
         match key.code {
-            KeyCode::Enter | KeyCode::Char('y') => {
+            KeyCode::Enter => {
                 self.confirm_context_switch(event_tx);
             }
-            KeyCode::Esc | KeyCode::Char('n') => {
+            KeyCode::Esc => {
                 self.context_switcher.pending_action = None;
                 self.context_switcher.waiting_for_dev_stop = false;
                 self.mode = TuiMode::ContextPicker;
@@ -608,15 +696,42 @@ impl TuiApp {
 
     fn handle_help_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc | KeyCode::Char('?') => self.mode = TuiMode::Normal,
+            KeyCode::Esc => self.mode = TuiMode::Normal,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.mode = TuiMode::Normal;
+            }
+            KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+            KeyCode::Down => self.scroll_help_down(1),
+            KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+            KeyCode::PageDown => self.scroll_help_down(10),
+            KeyCode::Home => self.help_scroll = 0,
+            KeyCode::End => {
+                self.help_scroll = self
+                    .help_content_height
+                    .get()
+                    .saturating_sub(self.help_viewport_height.get())
             }
             _ => {}
         }
     }
 
+    fn open_help(&mut self) {
+        self.help_scroll = 0;
+        self.mode = TuiMode::Help;
+    }
+
+    fn scroll_help_down(&mut self, amount: usize) {
+        let max = self
+            .help_content_height
+            .get()
+            .saturating_sub(self.help_viewport_height.get());
+        self.help_scroll = self.help_scroll.saturating_add(amount).min(max);
+    }
+
     fn handle_agent_filter_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
+        if self.handle_modified_shortcut(key, event_tx) {
+            return;
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Enter => self.mode = TuiMode::Normal,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -624,22 +739,57 @@ impl TuiApp {
             }
             KeyCode::Backspace => {
                 self.agents.query.pop();
-                self.agents.selected = 0;
+                self.agents.reset_selection();
             }
             KeyCode::Up => self.select_previous_agent(),
             KeyCode::Down => self.select_next_agent(),
+            KeyCode::Tab | KeyCode::BackTab => self.cycle_ops_pane_focus(),
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.agents.query.clear();
-                self.agents.selected = 0;
+                self.agents.reset_selection();
             }
             KeyCode::Char(character)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
                 self.agents.query.push(character);
-                self.agents.selected = 0;
+                self.agents.reset_selection();
             }
-            KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cycle_agent_mode(event_tx);
+            _ => {}
+        }
+    }
+
+    fn handle_agent_dataset_filter_key(
+        &mut self,
+        key: KeyEvent,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        let Some(filter) = self.agents.dataset_filter.as_mut() else {
+            self.mode = TuiMode::Normal;
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.agents.dataset_filter = None;
+                self.mode = TuiMode::Normal;
+            }
+            KeyCode::Up => filter.selected = filter.selected.saturating_sub(1),
+            KeyCode::Down => {
+                filter.selected = filter
+                    .selected
+                    .saturating_add(1)
+                    .min(filter.choices.len().saturating_sub(1));
+            }
+            KeyCode::Enter => {
+                let selected = filter.choices.get(filter.selected).cloned();
+                self.agents.dataset_filter = None;
+                self.mode = TuiMode::Normal;
+                if let Some(selected) = selected
+                    && selected != self.agents.dataset_scope
+                {
+                    self.agents.dataset_scope = selected;
+                    self.reset_agent_dataset();
+                    self.refresh_agents(event_tx);
+                }
             }
             _ => {}
         }
@@ -653,73 +803,87 @@ impl TuiApp {
     ) {
         match key.code {
             KeyCode::Esc => self.mode = return_mode,
-            KeyCode::Char('?') => self.mode = TuiMode::Help,
+            KeyCode::Char('h') => self.open_help(),
             KeyCode::Char('p') => self.open_palette(),
             KeyCode::Char('e') => {
                 self.open_context_picker();
-            }
-            KeyCode::Char('y') => {
-                self.command_options.yes = !self.command_options.yes;
-                self.mode = return_mode;
-            }
-            KeyCode::Char('r') => {
-                self.command_options.reset = !self.command_options.reset;
-                self.mode = return_mode;
-            }
-            KeyCode::Char('s') => {
-                if self.server.available {
-                    self.server.clean = !self.server.clean;
-                }
-                self.mode = return_mode;
-            }
-            KeyCode::Char('l') => {
-                self.layout.dev_preset = self.layout.dev_preset.next();
-                self.mode = return_mode;
-            }
-            KeyCode::Char('v') => {
-                self.layout.server_drawer_open = !self.layout.server_drawer_open;
-                self.mode = return_mode;
             }
             KeyCode::Char('a') if self.agents_focused() => {
                 self.toggle_agent_auto_refresh(event_tx);
                 self.mode = return_mode;
             }
             KeyCode::Char('d') if self.agents_focused() => {
-                self.agents.detail_visible = !self.agents.detail_visible;
+                self.toggle_agent_details();
                 self.mode = return_mode;
             }
             KeyCode::Char('m') if self.agents_focused() => {
                 self.cycle_agent_mode(event_tx);
                 self.mode = return_mode;
             }
-            KeyCode::Char('q') if return_mode == TuiMode::Repl => self.mode = TuiMode::Normal,
-            KeyCode::Char('k') if return_mode == TuiMode::Repl => {
-                self.stop_repl();
-                self.mode = TuiMode::Normal;
-            }
-            KeyCode::Char('R') if return_mode == TuiMode::Repl => {
-                self.restart_repl(event_tx);
-                self.mode = TuiMode::Repl;
-            }
-            KeyCode::Char('R') if self.dev_panel_focused(DevPanel::Server) => {
-                self.restart_server(ServerStartMode::Current, event_tx);
+            KeyCode::Char('v') => {
+                self.ops_view = self.ops_view.next();
                 self.mode = return_mode;
             }
-            KeyCode::Char('C') if self.dev_panel_focused(DevPanel::Server) => {
-                self.restart_server(ServerStartMode::Clean, event_tx);
-                self.mode = return_mode;
+            KeyCode::Char('f') if self.ops_view == OpsView::Overview => {
+                self.agents.query_scope = self.agents.query_scope.next();
+                self.agents.reset_selection();
+                self.mode = TuiMode::AgentFilter;
+            }
+            KeyCode::Char('c') if self.agents_focused() => {
+                self.agents.column_chooser = Some(ColumnChooserState::new(&self.agents.table));
+                self.mode = TuiMode::AgentColumns;
             }
             _ => self.mode = return_mode,
         }
     }
 
+    fn handle_agent_columns_key(&mut self, key: KeyEvent) {
+        let Some(chooser) = self.agents.column_chooser.as_mut() else {
+            self.mode = TuiMode::Normal;
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.agents.column_chooser = None;
+                self.mode = TuiMode::Normal;
+            }
+            KeyCode::Up => chooser.selected = chooser.selected.saturating_sub(1),
+            KeyCode::Down => {
+                chooser.selected = chooser
+                    .selected
+                    .saturating_add(1)
+                    .min(AGENT_COLUMNS.len() - 1)
+            }
+            KeyCode::Char(' ')
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                chooser.toggle(&AGENT_COLUMNS, chooser.selected)
+            }
+            KeyCode::Enter => {
+                if let Some(chooser) = self.agents.column_chooser.take() {
+                    chooser.apply(&mut self.agents.table);
+                }
+                self.mode = TuiMode::Normal;
+            }
+            _ => {}
+        }
+    }
+
     fn handle_mouse(&mut self, mouse: MouseEvent, event_tx: Option<&TuiEventSender>) {
+        if self.mode == TuiMode::Help {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.help_scroll = self.help_scroll.saturating_sub(3),
+                MouseEventKind::ScrollDown => self.scroll_help_down(3),
+                _ => {}
+            }
+            return;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, true)
+                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, true, event_tx)
             }
             MouseEventKind::ScrollDown => {
-                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, false)
+                self.scroll_region_under_pointer(mouse.column, mouse.row, 3, false, event_tx)
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 self.layout.dragging = self.drag_target_at(mouse.column, mouse.row);
@@ -736,7 +900,14 @@ impl TuiApp {
         }
     }
 
-    fn scroll_region_under_pointer(&mut self, x: u16, y: u16, amount: usize, up: bool) {
+    fn scroll_region_under_pointer(
+        &mut self,
+        x: u16,
+        y: u16,
+        amount: usize,
+        up: bool,
+        event_tx: Option<&TuiEventSender>,
+    ) {
         let region = self
             .layout_snapshot
             .borrow()
@@ -769,6 +940,21 @@ impl TuiApp {
                     self.scroll_agent_inspect_down_by(amount);
                 }
             }
+            Some(RegionKind::OpsDetails) => {
+                self.agents.focus = AgentOverviewFocus::Details;
+                if up {
+                    self.scroll_agent_details_up(amount);
+                } else {
+                    self.scroll_agent_details_down(amount);
+                }
+            }
+            Some(RegionKind::OpsList) => {
+                self.agents.focus = AgentOverviewFocus::List;
+                self.scroll_agent_list(amount, up);
+                if !up {
+                    self.maybe_load_more_agents(event_tx);
+                }
+            }
             _ => {}
         }
     }
@@ -785,6 +971,12 @@ impl TuiApp {
                 self.scroll_server_up_by(amount);
             } else {
                 self.scroll_server_down_by(amount);
+            }
+        } else if self.agent_details_focused() {
+            if up {
+                self.scroll_agent_details_up(amount);
+            } else {
+                self.scroll_agent_details_down(amount);
             }
         } else if self.ops_agents_focused() && self.agents.view_mode == AgentsViewMode::Inspect {
             if up {
@@ -811,7 +1003,11 @@ impl TuiApp {
             Some(RegionKind::ServerDrawer) => {
                 self.layout.server_drawer_open = true;
             }
-            Some(RegionKind::OpsList) => self.select_agent_at_row(y),
+            Some(RegionKind::OpsList) => {
+                self.agents.focus = AgentOverviewFocus::List;
+                self.select_agent_at_row(y, event_tx);
+            }
+            Some(RegionKind::OpsDetails) => self.agents.focus = AgentOverviewFocus::Details,
             Some(RegionKind::OpsInspectPane(pane)) => self.agents.inspect.focus = pane,
             Some(RegionKind::ContextPickerRow(index)) => {
                 self.context_switcher.selected = index;
@@ -835,6 +1031,7 @@ impl TuiApp {
                 Some(RegionKind::DevPrimarySplit) => Some(DragTarget::DevPrimary),
                 Some(RegionKind::DevSecondarySplit) => Some(DragTarget::DevSecondary),
                 Some(RegionKind::ServerDrawerSplit) => Some(DragTarget::ServerDrawer),
+                Some(RegionKind::OpsDetailsSplit) => Some(DragTarget::OpsDetails),
                 _ => None,
             })
     }
@@ -877,10 +1074,21 @@ impl TuiApp {
                 let ratio = layout::drawer_ratio_from_pointer(snapshot.body, x);
                 self.layout.server_drawer_ratio = layout::clamp_drawer_ratio(snapshot.body, ratio);
             }
+            DragTarget::OpsDetails => {
+                let area = if self.ops_agents_focused() {
+                    snapshot.workspace_body
+                } else {
+                    snapshot
+                        .region(RegionKind::DevPanelBody(DevPanel::Agents))
+                        .unwrap_or(snapshot.workspace_body)
+                };
+                let ratio = layout::ops_details_ratio_from_pointer(area, x);
+                self.layout.ops_details_ratio = layout::clamp_ops_details_ratio(area, ratio);
+            }
         }
     }
 
-    fn select_agent_at_row(&mut self, y: u16) {
+    fn select_agent_at_row(&mut self, y: u16, event_tx: Option<&TuiEventSender>) {
         let Some(list_area) = self
             .layout_snapshot
             .borrow()
@@ -889,17 +1097,60 @@ impl TuiApp {
         else {
             return;
         };
-        if y < list_area.y {
-            return;
-        }
-        let visible_index = y.saturating_sub(list_area.y) as usize;
         let filtered = self.filtered_agents();
         if filtered.is_empty() {
             return;
         }
-        let selected = self.agents.selected.min(filtered.len().saturating_sub(1));
-        let start = selected.saturating_sub((list_area.height as usize).saturating_sub(1));
-        self.agents.selected = (start + visible_index).min(filtered.len().saturating_sub(1));
+        let query_rows = CollectionQueryBar {
+            dataset: &self.agents.dataset_label(),
+            scope: self.agents.query_scope.label(),
+            query: &self.agents.query,
+            matched: filtered.len(),
+            loaded: self.agents.agents.len(),
+            more_available: self.agents.has_more(),
+            editing: self.mode == TuiMode::AgentFilter,
+        }
+        .height();
+        let notice_rows = u16::from(self.agents.last_error.is_some() && !filtered.is_empty());
+        let data_y = list_area
+            .y
+            .saturating_add(query_rows)
+            .saturating_add(notice_rows)
+            .saturating_add(1);
+        if y < data_y {
+            return;
+        }
+        let owned_rows = filtered
+            .iter()
+            .map(|agent| agent_table_row(agent))
+            .collect::<Vec<_>>();
+        let row_cells = owned_rows
+            .iter()
+            .map(|row| row.iter().map(String::as_str).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let rows = row_cells.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut table_state = self.agents.table.clone();
+        table_state.selected = self.agents.selected.min(filtered.len().saturating_sub(1));
+        let table = PaneTable {
+            columns: &AGENT_COLUMNS,
+            rows: &rows,
+            state: &table_state,
+            decoration: TableDecoration::Zebra,
+            cell_tones: None,
+            rich_cells: None,
+            row_markers: None,
+            first_row_index: 0,
+        };
+        let table_height = list_area.height.saturating_sub(query_rows + notice_rows);
+        let window = table.window_from(table_height, self.agents.table_first_visible_row.get());
+        let visual_line = y.saturating_sub(data_y) as usize;
+        let Some(selected) = table.row_at_visual_line(window.start_row, visual_line) else {
+            return;
+        };
+        self.agents.selected = selected;
+        self.agents.table.selected = self.agents.selected;
+        self.agents.details_scroll = 0;
+        self.maybe_load_more_agents(event_tx);
     }
 
     fn execute_action(&mut self, action: TuiActionKind, event_tx: Option<&TuiEventSender>) {
@@ -961,6 +1212,22 @@ impl TuiApp {
                 self.close_palette();
                 self.refresh_agents(event_tx);
             }
+            TuiActionKind::OpenAgentDatasetFilter => {
+                self.close_palette();
+                self.open_agent_dataset_filter();
+            }
+            TuiActionKind::IncludeAgentMatches => {
+                self.include_filtered_agents();
+                self.close_palette();
+            }
+            TuiActionKind::ExcludeAgentMatches => {
+                self.exclude_filtered_agents();
+                self.close_palette();
+            }
+            TuiActionKind::LoadMoreAgents => {
+                self.close_palette();
+                self.load_more_agents(event_tx);
+            }
             TuiActionKind::OpenContextPicker => {
                 self.palette.reset();
                 self.open_context_picker();
@@ -970,11 +1237,20 @@ impl TuiApp {
                 self.close_palette();
             }
             TuiActionKind::ToggleAgentDetails => {
-                self.agents.detail_visible = !self.agents.detail_visible;
+                self.toggle_agent_details();
                 self.close_palette();
             }
             TuiActionKind::CycleAgentMode => {
                 self.cycle_agent_mode(event_tx);
+                self.close_palette();
+            }
+            TuiActionKind::CycleOpsView => {
+                self.ops_view = self.ops_view.next();
+                self.close_palette();
+            }
+            TuiActionKind::CycleAgentFindScope => {
+                self.agents.query_scope = self.agents.query_scope.next();
+                self.agents.reset_selection();
                 self.close_palette();
             }
             TuiActionKind::StartOrFocusRepl => {
@@ -1002,7 +1278,7 @@ impl TuiApp {
             }
             TuiActionKind::ShowHelp => {
                 self.palette.reset();
-                self.mode = TuiMode::Help;
+                self.open_help();
             }
             TuiActionKind::Quit => {
                 self.close_palette();
@@ -1039,11 +1315,23 @@ impl TuiApp {
             {
                 TuiActionAvailability::Unavailable("command already running")
             }
-            TuiActionId::RefreshAgents if self.agents.refresh_running => {
+            TuiActionId::RefreshAgents | TuiActionId::LoadMoreAgents
+                if self.agents.refresh_running =>
+            {
                 TuiActionAvailability::Unavailable("refresh already running")
             }
-            TuiActionId::RefreshAgents if self.context_executor.is_none() => {
+            TuiActionId::RefreshAgents | TuiActionId::LoadMoreAgents
+                if self.context_executor.is_none() =>
+            {
                 TuiActionAvailability::Unavailable("context executor unavailable")
+            }
+            TuiActionId::LoadMoreAgents if !self.agents.has_more() => {
+                TuiActionAvailability::Unavailable("all available agents are loaded")
+            }
+            TuiActionId::IncludeAgentMatches | TuiActionId::ExcludeAgentMatches
+                if self.filtered_agents().is_empty() =>
+            {
+                TuiActionAvailability::Unavailable("no loaded agents match")
             }
             TuiActionId::OpenContextPicker if self.context_switch_busy() => {
                 TuiActionAvailability::Unavailable("context switch already running")
@@ -1122,11 +1410,67 @@ impl TuiApp {
     }
 
     fn ops_agents_focused(&self) -> bool {
-        self.active_workspace == TuiWorkspace::Ops
+        self.active_workspace == TuiWorkspace::Ops && self.ops_view == OpsView::Overview
     }
 
     fn agents_focused(&self) -> bool {
         self.ops_agents_focused() || self.dev_panel_focused(DevPanel::Agents)
+    }
+
+    fn agent_details_open(&self) -> bool {
+        self.agents_focused()
+            && self.agents.detail_visible
+            && self
+                .agent_details_layout_area()
+                .is_none_or(|area| layout::ops_details_visible(area, true))
+    }
+
+    fn agent_details_layout_area(&self) -> Option<Rect> {
+        let snapshot = self.layout_snapshot.borrow();
+        let snapshot = snapshot.as_ref()?;
+        if self.ops_agents_focused() {
+            Some(snapshot.workspace_body)
+        } else if self.dev_panel_focused(DevPanel::Agents) {
+            snapshot.region(RegionKind::DevPanelBody(DevPanel::Agents))
+        } else {
+            None
+        }
+    }
+
+    fn agent_list_focused(&self) -> bool {
+        self.agents_focused()
+            && (!self.agent_details_open() || self.agents.focus == AgentOverviewFocus::List)
+    }
+
+    fn agent_details_focused(&self) -> bool {
+        self.agent_details_open() && self.agents.focus == AgentOverviewFocus::Details
+    }
+
+    fn cycle_ops_pane_focus(&mut self) {
+        match self.ops_view {
+            OpsView::Overview if self.agent_details_open() => {
+                self.agents.focus = match self.agents.focus {
+                    AgentOverviewFocus::List => AgentOverviewFocus::Details,
+                    AgentOverviewFocus::Details => AgentOverviewFocus::List,
+                };
+                if self.agents.focus == AgentOverviewFocus::Details {
+                    self.mode = TuiMode::Normal;
+                }
+            }
+            OpsView::Metrics => {
+                let details_visible = self
+                    .layout_snapshot
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|snapshot| fake_otlp_details_visible(snapshot.workspace_body));
+                if details_visible {
+                    self.fake_otlp.toggle_focus();
+                } else {
+                    self.fake_otlp.focus = FakeOtlpFocus::Series;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn context_switch_dev_blockers(&self) -> Vec<&'static str> {
@@ -1522,9 +1866,19 @@ impl TuiApp {
     fn reset_agents_for_context_switch(&mut self) {
         self.close_agent_inspect_jobs();
         self.agents.view_mode = AgentsViewMode::List;
-        self.agents.selected = 0;
+        self.agents.reset_selection();
+        self.agents.included.clear();
+        self.agents.dataset_scope = AgentDatasetScope::All;
+        self.agents.dataset_filter = None;
+        self.agents.query.clear();
+        self.agents.query_scope = AgentQueryScope::AgentId;
+        self.agents.focus = AgentOverviewFocus::List;
+        self.agents.details_scroll = 0;
         self.agents.last_error = None;
+        self.agents.metadata_error = None;
         self.agents.agents.clear();
+        self.agents.agent_types.clear();
+        self.agents.paging.reset();
         self.agents.refresh_running = false;
         self.agents.refresh_context_id = None;
         self.agents.refresh_generation += 1;
@@ -1542,11 +1896,150 @@ impl TuiApp {
         let count = self.filtered_agents().len();
         if count > 0 {
             self.agents.selected = (self.agents.selected + 1).min(count - 1);
+            self.agents.table.selected = self.agents.selected;
+            self.agents.details_scroll = 0;
+            self.agents.reveal_selection(count);
         }
     }
 
     fn select_previous_agent(&mut self) {
         self.agents.selected = self.agents.selected.saturating_sub(1);
+        self.agents.table.selected = self.agents.selected;
+        self.agents.details_scroll = 0;
+        self.agents.reveal_selection(self.filtered_agents().len());
+    }
+
+    fn select_next_agent_page(&mut self) {
+        let count = self.filtered_agents().len();
+        if count > 0 {
+            self.agents.selected = self.agents.selected.saturating_add(10).min(count - 1);
+            self.agents.table.selected = self.agents.selected;
+            self.agents.details_scroll = 0;
+            self.agents.reveal_selection(count);
+        }
+    }
+
+    fn select_previous_agent_page(&mut self) {
+        self.agents.selected = self.agents.selected.saturating_sub(10);
+        self.agents.table.selected = self.agents.selected;
+        self.agents.details_scroll = 0;
+        self.agents.reveal_selection(self.filtered_agents().len());
+    }
+
+    fn scroll_agent_list(&mut self, amount: usize, up: bool) {
+        let count = self.filtered_agents().len();
+        if count == 0 {
+            return;
+        }
+        self.agents.selected = if up {
+            self.agents.selected.saturating_sub(amount)
+        } else {
+            self.agents
+                .selected
+                .saturating_add(amount)
+                .min(count.saturating_sub(1))
+        };
+        self.agents.table.selected = self.agents.selected;
+        self.agents.details_scroll = 0;
+        self.agents.reveal_selection(count);
+    }
+
+    fn select_first_agent(&mut self) {
+        self.agents.reset_selection();
+    }
+
+    fn select_last_agent(&mut self) {
+        self.agents.selected = self.filtered_agents().len().saturating_sub(1);
+        self.agents.table.selected = self.agents.selected;
+        self.agents.details_scroll = 0;
+        self.agents.reveal_selection(self.filtered_agents().len());
+    }
+
+    fn include_filtered_agents(&mut self) {
+        let identities = self
+            .filtered_agents()
+            .into_iter()
+            .map(AgentListItem::identity)
+            .collect::<Vec<_>>();
+        self.agents.included.extend(identities);
+    }
+
+    fn exclude_filtered_agents(&mut self) {
+        let identities = self
+            .filtered_agents()
+            .into_iter()
+            .map(AgentListItem::identity)
+            .collect::<Vec<_>>();
+        for identity in identities {
+            self.agents.included.remove(&identity);
+        }
+    }
+
+    fn open_agent_dataset_filter(&mut self) {
+        self.agents.open_dataset_filter();
+        self.mode = TuiMode::AgentDatasetFilter;
+    }
+
+    fn reset_agent_dataset(&mut self) {
+        self.agents.invalidate_refresh();
+        self.agents.reset_selection();
+        self.agents.paging.reset();
+        self.agents.agents.clear();
+        self.agents.last_error = None;
+    }
+
+    fn resize_agent_details(&mut self, delta: i16) {
+        let Some(area) = self.agent_details_layout_area() else {
+            return;
+        };
+        let requested = (self.layout.ops_details_ratio as i16 + delta).clamp(0, 100) as u16;
+        self.layout.ops_details_ratio = layout::clamp_ops_details_ratio(area, requested);
+    }
+
+    fn toggle_agent_details(&mut self) {
+        self.agents.detail_visible = !self.agents.detail_visible;
+        if !self.agents.detail_visible {
+            self.agents.focus = AgentOverviewFocus::List;
+        }
+    }
+
+    fn scroll_agent_details_up(&mut self, amount: usize) {
+        self.agents.details_scroll = self.agents.details_scroll.saturating_sub(amount);
+    }
+
+    fn scroll_agent_details_down(&mut self, amount: usize) {
+        self.agents.details_scroll = self.agents.details_scroll.saturating_add(amount);
+        self.agents.clamp_details_scroll();
+    }
+
+    fn scroll_agent_details_bottom(&mut self) {
+        self.agents.details_scroll = self
+            .agents
+            .details_content_height
+            .get()
+            .saturating_sub(self.agents.details_viewport_height.get());
+    }
+
+    fn maybe_load_more_agents(&mut self, event_tx: Option<&TuiEventSender>) {
+        let count = self.filtered_agents().len();
+        if count > 0 && self.agents.selected.saturating_add(5) >= count {
+            self.load_more_agents(event_tx);
+        }
+    }
+
+    fn toggle_selected_agent(&mut self) {
+        let identity = {
+            let filtered = self.filtered_agents();
+            filtered
+                .get(self.agents.selected)
+                .map(|agent| agent.identity())
+        };
+        let Some(identity) = identity else {
+            return;
+        };
+        if !self.agents.included.remove(&identity) {
+            self.agents.included.insert(identity);
+        }
     }
 
     fn filtered_agents(&self) -> Vec<&AgentListItem> {
@@ -1554,6 +2047,16 @@ impl TuiApp {
     }
 
     fn refresh_agents(&mut self, event_tx: Option<&TuiEventSender>) {
+        self.start_agent_refresh(event_tx, false);
+    }
+
+    fn load_more_agents(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.agents.has_more() {
+            self.start_agent_refresh(event_tx, true);
+        }
+    }
+
+    fn start_agent_refresh(&mut self, event_tx: Option<&TuiEventSender>, append: bool) {
         if self.context_switch_pending() {
             return;
         }
@@ -1572,36 +2075,86 @@ impl TuiApp {
         self.agents.refresh_generation += 1;
         let generation = self.agents.refresh_generation;
         self.agents.refresh_running = true;
+        self.agents.refresh_append = append;
         self.agents.last_error = None;
         self.agents.refresh_context_id = Some(context_executor.current_context_id());
         self.agents.refresh_context_label = Some(self.context.short_label());
         let mode = self.agents.mode;
         let environment_reference = self.selected_environment_reference.clone();
+        let dataset_scope = self.agents.dataset_scope.clone();
+        let component_scan_cursors = append.then(|| self.agents.paging.cursors().clone());
+        let max_count = self.agents.paging.request_limit(append);
         let auth_presenter = Some(tui_auth_presenter(&event_tx));
         context_executor.spawn(
             event_tx,
             auth_presenter,
             move |launch_context| async move {
+                let (component_name, agent_type_name) = match &dataset_scope {
+                    AgentDatasetScope::All => (None, None),
+                    AgentDatasetScope::Component(component) => (
+                        Some(golem_common::model::component::ComponentName(
+                            component.clone(),
+                        )),
+                        None,
+                    ),
+                    AgentDatasetScope::AgentType { agent_type, .. } => (
+                        None,
+                        Some(golem_common::model::agent::AgentTypeName(
+                            agent_type.clone(),
+                        )),
+                    ),
+                };
                 let request = AgentListRequest {
                     mode: mode.agent_list_mode(),
                     stable_sort: true,
-                    environment_reference,
+                    environment_reference: environment_reference.clone(),
+                    component_name,
+                    agent_type_name,
+                    component_scan_cursors,
+                    max_count: Some(max_count),
                     ..AgentListRequest::default()
                 };
-                launch_context
-                    .context()
+                let context = launch_context.context();
+                let agents = context
                     .agent_handler()
                     .list_agent_metadata(request)
+                    .await?
+                    .masked(context.masking_config())?;
+                let agent_types = if append {
+                    None
+                } else {
+                    let result = async {
+                        let environment = context
+                            .environment_handler()
+                            .resolve_opt_environment_reference(
+                                EnvironmentResolveMode::Any,
+                                environment_reference.as_ref(),
+                            )
+                            .await?;
+                        context.app_handler().list_agent_types(&environment).await
+                    }
                     .await
+                    .map_err(|error| format!("{error:#}"));
+                    Some(result)
+                };
+                Ok(AgentRefreshPayload {
+                    agents,
+                    agent_types,
+                })
             },
-            move |result| TuiEvent::AgentRefreshFinished { generation, result },
+            move |result| TuiEvent::AgentRefreshFinished {
+                generation,
+                append,
+                result,
+            },
         );
     }
 
     fn finish_agent_refresh(
         &mut self,
         generation: u64,
-        result: TuiContextTaskResult<AgentsMetadataResponseView>,
+        append: bool,
+        result: TuiContextTaskResult<AgentRefreshPayload>,
     ) {
         if generation != self.agents.refresh_generation {
             return;
@@ -1614,10 +2167,74 @@ impl TuiApp {
 
         self.agents.refresh_running = false;
         match result {
-            Ok(response) => {
-                self.agents.agents = agent_items_from_metadata_response(response);
+            Ok(payload) => {
+                let selected_identity = self
+                    .filtered_agents()
+                    .get(self.agents.selected)
+                    .map(|agent| agent.identity());
+                let cursors = payload
+                    .agents
+                    .cursors
+                    .iter()
+                    .filter_map(|(component, cursor)| {
+                        cursor
+                            .parse::<ScanCursor>()
+                            .ok()
+                            .map(|cursor| (component.clone(), cursor))
+                    })
+                    .collect();
+                let mut items = agent_items_from_metadata_response(payload.agents);
+                if append {
+                    let mut seen = self
+                        .agents
+                        .agents
+                        .iter()
+                        .map(AgentListItem::identity)
+                        .collect::<HashSet<_>>();
+                    self.agents.agents.extend(
+                        items
+                            .drain(..)
+                            .filter(|agent| seen.insert(agent.identity())),
+                    );
+                    self.agents.agents.sort_by(|left, right| {
+                        left.component
+                            .cmp(&right.component)
+                            .then_with(|| left.agent_id.cmp(&right.agent_id))
+                    });
+                } else {
+                    self.agents.agents = items;
+                }
+                self.agents.paging.finish_request(append, cursors);
+                if let Some(agent_types) = payload.agent_types {
+                    match agent_types {
+                        Ok(agent_types) => {
+                            self.agents.agent_types = agent_types
+                                .into_iter()
+                                .filter_map(|agent_type| {
+                                    let key = (
+                                        agent_type.implemented_by.component_name.clone(),
+                                        agent_type.agent_type.type_name.0.clone(),
+                                    );
+                                    serde_json::to_value(agent_type)
+                                        .ok()
+                                        .map(|value| (key, value))
+                                })
+                                .collect();
+                            self.agents.metadata_error = None;
+                        }
+                        Err(error) => self.agents.metadata_error = Some(plain_tui_text(&error)),
+                    }
+                }
                 self.agents.last_error = None;
+                if let Some(selected_identity) = selected_identity {
+                    self.agents.selected = self
+                        .filtered_agents()
+                        .iter()
+                        .position(|agent| agent.identity() == selected_identity)
+                        .unwrap_or(self.agents.selected);
+                }
                 self.agents.clamp_selection();
+                self.agents.clamp_details_scroll();
             }
             Err(error) => {
                 self.agents.last_error = Some(agent_refresh_error(error, logs));
@@ -1643,7 +2260,7 @@ impl TuiApp {
 
     fn cycle_agent_mode(&mut self, event_tx: Option<&TuiEventSender>) {
         self.agents.mode = self.agents.mode.next();
-        self.agents.selected = 0;
+        self.reset_agent_dataset();
         self.refresh_agents(event_tx);
     }
 
@@ -1666,7 +2283,7 @@ impl TuiApp {
         let Some(agent_name) = self
             .filtered_agents()
             .get(self.agents.selected)
-            .map(|agent| agent.name.clone())
+            .map(|agent| agent.agent_id.clone())
         else {
             return;
         };
@@ -1808,7 +2425,7 @@ impl TuiApp {
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_palette();
             }
-            KeyCode::Char('?') => self.mode = TuiMode::Help,
+            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_help(),
             _ => {
                 if let Some(bytes) = encode_key_for_pty(key)
                     && let Some(run) = self.command_run.as_mut()
@@ -2472,6 +3089,8 @@ pub(super) enum TuiMode {
     ContextSwitchConfirm,
     Help,
     AgentFilter,
+    AgentDatasetFilter,
+    AgentColumns,
     CommandInteraction,
     Repl,
     LeaderRepl,
@@ -2582,8 +3201,22 @@ struct AgentsState {
     view_mode: AgentsViewMode,
     mode: AgentModeFilter,
     query: String,
+    query_scope: AgentQueryScope,
+    dataset_scope: AgentDatasetScope,
+    dataset_filter: Option<AgentDatasetFilterState>,
     selected: usize,
+    table: PaneTableState,
+    included: HashSet<AgentIdentity>,
+    column_chooser: Option<ColumnChooserState>,
     detail_visible: bool,
+    focus: AgentOverviewFocus,
+    details_scroll: usize,
+    details_content_height: Cell<usize>,
+    details_viewport_height: Cell<usize>,
+    table_viewport_width: Cell<u16>,
+    table_viewport_height: Cell<u16>,
+    table_first_visible_row: Cell<usize>,
+    table_virtual_width: Cell<u16>,
     auto_refresh: bool,
     refresh_running: bool,
     refresh_generation: u64,
@@ -2591,7 +3224,11 @@ struct AgentsState {
     refresh_context_label: Option<String>,
     auto_refresh_stop: Option<Arc<AtomicBool>>,
     last_error: Option<String>,
+    metadata_error: Option<String>,
+    paging: CursorCollectionState<ScanCursor>,
+    refresh_append: bool,
     agents: Vec<AgentListItem>,
+    agent_types: BTreeMap<(String, String), Value>,
     inspect: AgentInspectState,
 }
 
@@ -2601,8 +3238,22 @@ impl Default for AgentsState {
             view_mode: AgentsViewMode::List,
             mode: AgentModeFilter::Durable,
             query: String::new(),
+            query_scope: AgentQueryScope::AgentId,
+            dataset_scope: AgentDatasetScope::All,
+            dataset_filter: None,
             selected: 0,
+            table: PaneTableState::new(&AGENT_COLUMNS, 0),
+            included: HashSet::new(),
+            column_chooser: None,
             detail_visible: true,
+            focus: AgentOverviewFocus::List,
+            details_scroll: 0,
+            details_content_height: Cell::new(0),
+            details_viewport_height: Cell::new(0),
+            table_viewport_width: Cell::new(0),
+            table_viewport_height: Cell::new(0),
+            table_first_visible_row: Cell::new(0),
+            table_virtual_width: Cell::new(0),
             auto_refresh: false,
             refresh_running: false,
             refresh_generation: 0,
@@ -2610,7 +3261,11 @@ impl Default for AgentsState {
             refresh_context_label: None,
             auto_refresh_stop: None,
             last_error: None,
+            metadata_error: None,
+            paging: CursorCollectionState::new(AGENT_PAGE_SIZE),
+            refresh_append: false,
             agents: Vec::new(),
+            agent_types: BTreeMap::new(),
             inspect: AgentInspectState::default(),
         }
     }
@@ -2623,18 +3278,16 @@ impl AgentsState {
             return self.agents.iter().collect();
         }
 
-        let matcher = SkimMatcherV2::default();
-        let mut matches = self
-            .agents
+        let query = query.to_lowercase();
+        self.agents
             .iter()
-            .filter_map(|agent| {
-                matcher
-                    .fuzzy_match(&agent.search_text(), query)
-                    .map(|score| (score, agent))
+            .filter(|agent| {
+                self.query_scope
+                    .value(agent)
+                    .to_lowercase()
+                    .contains(&query)
             })
-            .collect::<Vec<_>>();
-        matches.sort_by(|(left, _), (right, _)| right.cmp(left));
-        matches.into_iter().map(|(_, agent)| agent).collect()
+            .collect()
     }
 
     fn clamp_selection(&mut self) {
@@ -2644,12 +3297,464 @@ impl AgentsState {
         } else {
             self.selected = self.selected.min(count - 1);
         }
+        self.table.selected = self.selected;
+        self.reveal_selection(count);
+    }
+
+    fn reset_selection(&mut self) {
+        self.selected = 0;
+        self.table.selected = 0;
+        self.table_first_visible_row.set(0);
+        self.details_scroll = 0;
+    }
+
+    fn reveal_selection(&self, count: usize) {
+        if count == 0 {
+            self.table_first_visible_row.set(0);
+            return;
+        }
+        let capacity = self.table_viewport_height.get().saturating_sub(1).max(1) as usize;
+        let mut first = self
+            .table_first_visible_row
+            .get()
+            .min(count.saturating_sub(1));
+        if self.selected < first {
+            first = self.selected;
+        } else if self.selected >= first.saturating_add(capacity) {
+            first = self.selected.saturating_add(1).saturating_sub(capacity);
+        }
+        first = first.min(count.saturating_sub(capacity));
+        self.table_first_visible_row.set(first);
     }
 
     fn selected_agent<'a>(&self, filtered: &'a [&'a AgentListItem]) -> Option<&'a AgentListItem> {
         filtered.get(self.selected).copied()
     }
+
+    fn has_more(&self) -> bool {
+        self.paging.has_more()
+    }
+
+    fn dataset_label(&self) -> String {
+        self.dataset_scope.label()
+    }
+
+    fn open_dataset_filter(&mut self) {
+        self.dataset_filter = Some(AgentDatasetFilterState::new(
+            &self.dataset_scope,
+            &self.agent_types,
+            &self.agents,
+        ));
+    }
+
+    fn clamp_details_scroll(&mut self) {
+        let max = self
+            .details_content_height
+            .get()
+            .saturating_sub(self.details_viewport_height.get());
+        self.details_scroll = self.details_scroll.min(max);
+    }
+
+    fn invalidate_refresh(&mut self) {
+        self.refresh_running = false;
+        self.refresh_context_id = None;
+        self.refresh_generation = self.refresh_generation.saturating_add(1);
+    }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentOverviewFocus {
+    List,
+    Details,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentQueryScope {
+    AgentId,
+    Component,
+    AgentType,
+}
+
+impl AgentQueryScope {
+    fn next(self) -> Self {
+        match self {
+            Self::AgentId => Self::Component,
+            Self::Component => Self::AgentType,
+            Self::AgentType => Self::AgentId,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::AgentId => Self::AgentType,
+            Self::Component => Self::AgentId,
+            Self::AgentType => Self::Component,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::AgentId => "AgentID",
+            Self::Component => "Component",
+            Self::AgentType => "Agent type",
+        }
+    }
+
+    fn value<'a>(self, agent: &'a AgentListItem) -> &'a str {
+        match self {
+            Self::AgentId => &agent.agent_id,
+            Self::Component => agent.component.as_deref().unwrap_or(""),
+            Self::AgentType => agent.agent_type.as_deref().unwrap_or(""),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum AgentDatasetScope {
+    All,
+    Component(String),
+    AgentType {
+        component: String,
+        agent_type: String,
+    },
+}
+
+impl AgentDatasetScope {
+    fn label(&self) -> String {
+        match self {
+            Self::All => "component:any · type:any".to_string(),
+            Self::Component(component) => format!("component:{component} · type:any"),
+            Self::AgentType {
+                component,
+                agent_type,
+            } => {
+                format!("component:{component} · type:{agent_type}")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct AgentDatasetFilterState {
+    choices: Vec<AgentDatasetScope>,
+    selected: usize,
+}
+
+impl AgentDatasetFilterState {
+    fn new(
+        current: &AgentDatasetScope,
+        agent_types: &BTreeMap<(String, String), Value>,
+        agents: &[AgentListItem],
+    ) -> Self {
+        let mut choices = vec![AgentDatasetScope::All];
+        let mut types = agent_types
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        types.extend(agents.iter().filter_map(|agent| {
+            agent
+                .component
+                .as_ref()
+                .zip(agent.agent_type.as_ref())
+                .map(|(component, agent_type)| (component.clone(), agent_type.clone()))
+        }));
+        let components = types
+            .iter()
+            .map(|(component, _)| component.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        choices.extend(components.into_iter().map(AgentDatasetScope::Component));
+        choices.extend(types.into_iter().map(|(component, agent_type)| {
+            AgentDatasetScope::AgentType {
+                component,
+                agent_type,
+            }
+        }));
+        if !choices.contains(current) {
+            choices.push(current.clone());
+        }
+        let selected = choices
+            .iter()
+            .position(|choice| choice == current)
+            .unwrap_or(0);
+        Self { choices, selected }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpsView {
+    Overview,
+    Metrics,
+}
+
+impl OpsView {
+    fn next(self) -> Self {
+        match self {
+            Self::Overview => Self::Metrics,
+            Self::Metrics => Self::Overview,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Metrics => "Metrics",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+enum FakeOtlpFocus {
+    #[default]
+    Series,
+    Details,
+}
+
+#[derive(Debug, Default)]
+struct FakeOtlpExplorerState {
+    selected: usize,
+    focus: FakeOtlpFocus,
+    details_scroll: usize,
+    details_content_height: Cell<usize>,
+    details_viewport_height: Cell<usize>,
+}
+
+impl FakeOtlpExplorerState {
+    fn previous(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+        self.details_scroll = 0;
+    }
+
+    fn next(&mut self) {
+        self.selected = self
+            .selected
+            .saturating_add(1)
+            .min(FAKE_OTLP_SERIES.len().saturating_sub(1));
+        self.details_scroll = 0;
+    }
+
+    fn first(&mut self) {
+        self.selected = 0;
+        self.details_scroll = 0;
+    }
+
+    fn last(&mut self) {
+        self.selected = FAKE_OTLP_SERIES.len().saturating_sub(1);
+        self.details_scroll = 0;
+    }
+
+    fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            FakeOtlpFocus::Series => FakeOtlpFocus::Details,
+            FakeOtlpFocus::Details => FakeOtlpFocus::Series,
+        };
+    }
+
+    fn scroll_details(&mut self, amount: usize, up: bool) {
+        self.details_scroll = if up {
+            self.details_scroll.saturating_sub(amount)
+        } else {
+            self.details_scroll.saturating_add(amount)
+        };
+        self.details_scroll = self.details_scroll.min(
+            self.details_content_height
+                .get()
+                .saturating_sub(self.details_viewport_height.get()),
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FakeOtlpSeries {
+    name: &'static str,
+    instrument: &'static str,
+    unit: &'static str,
+    latest: &'static str,
+    aggregation: &'static str,
+    scope: &'static str,
+    resource: &'static str,
+    attributes: &'static str,
+    samples: &'static [u64],
+}
+
+const FAKE_OTLP_COLUMNS: [PaneTableColumn<'static>; 3] = [
+    PaneTableColumn {
+        id: "metric",
+        title: "Metric",
+        width: 28,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "instrument",
+        title: "Instrument",
+        width: 11,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "latest",
+        title: "Latest",
+        width: 13,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+];
+
+const FAKE_OTLP_SERIES: [FakeOtlpSeries; 7] = [
+    FakeOtlpSeries {
+        name: "golem.agent.invocations",
+        instrument: "Counter",
+        unit: "{invocation}",
+        latest: "12,418",
+        aggregation: "sum · 15m",
+        scope: "golem.agent.runtime@demo",
+        resource: "service.name=checkout-agent",
+        attributes: "component=checkout, agent.type=CartAgent",
+        samples: &[
+            12, 14, 15, 19, 22, 20, 24, 31, 29, 34, 39, 37, 45, 48, 51, 58,
+        ],
+    },
+    FakeOtlpSeries {
+        name: "golem.agent.invocation.duration",
+        instrument: "Histogram",
+        unit: "ms",
+        latest: "42 ms p95",
+        aggregation: "p95 · 15m",
+        scope: "golem.agent.runtime@demo",
+        resource: "service.name=checkout-agent",
+        attributes: "component=checkout, agent.type=CartAgent",
+        samples: &[
+            28, 31, 30, 36, 33, 39, 41, 37, 44, 49, 46, 43, 40, 45, 42, 42,
+        ],
+    },
+    FakeOtlpSeries {
+        name: "golem.agent.failures",
+        instrument: "Counter",
+        unit: "{failure}",
+        latest: "7",
+        aggregation: "sum · 15m",
+        scope: "golem.agent.runtime@demo",
+        resource: "service.name=checkout-agent",
+        attributes: "component=checkout, error.kind=timeout",
+        samples: &[0, 0, 1, 0, 0, 1, 0, 2, 0, 0, 0, 1, 0, 1, 0, 1],
+    },
+    FakeOtlpSeries {
+        name: "golem.agent.memory.usage",
+        instrument: "Gauge",
+        unit: "MiBy",
+        latest: "18.6 MiB",
+        aggregation: "last · 1m",
+        scope: "golem.agent.runtime@demo",
+        resource: "service.name=checkout-agent",
+        attributes: "component=checkout, agent.id=cart-17",
+        samples: &[
+            14, 15, 15, 16, 17, 16, 17, 18, 19, 18, 18, 19, 20, 19, 18, 19,
+        ],
+    },
+    FakeOtlpSeries {
+        name: "demo.cart.items",
+        instrument: "UpDownCounter",
+        unit: "{item}",
+        latest: "3",
+        aggregation: "last · 1m",
+        scope: "demo.checkout@0.1.0",
+        resource: "service.name=checkout-agent",
+        attributes: "component=checkout, cart.region=eu-central",
+        samples: &[1, 1, 2, 2, 4, 3, 3, 5, 4, 2, 3, 6, 5, 4, 4, 3],
+    },
+    FakeOtlpSeries {
+        name: "demo.orders.completed",
+        instrument: "Counter",
+        unit: "{order}",
+        latest: "942",
+        aggregation: "sum · 15m",
+        scope: "demo.orders@0.1.0",
+        resource: "service.name=order-agent",
+        attributes: "component=orders, agent.type=OrderAgent",
+        samples: &[
+            31, 33, 36, 35, 39, 41, 45, 44, 48, 52, 51, 55, 58, 61, 63, 66,
+        ],
+    },
+    FakeOtlpSeries {
+        name: "demo.payment.queue.depth",
+        instrument: "Gauge",
+        unit: "{request}",
+        latest: "11",
+        aggregation: "last · 1m",
+        scope: "demo.payments@0.1.0",
+        resource: "service.name=payment-agent",
+        attributes: "component=payments, queue=settlement",
+        samples: &[4, 6, 5, 8, 12, 10, 7, 9, 14, 18, 15, 13, 12, 10, 9, 11],
+    },
+];
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct AgentIdentity {
+    component: String,
+    agent_id: String,
+}
+
+const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
+    PaneTableColumn {
+        id: "agent_id",
+        title: "AgentID",
+        width: 32,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "status",
+        title: "Status",
+        width: 14,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "type",
+        title: "Type",
+        width: 22,
+        required: false,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "component",
+        title: "Component",
+        width: 28,
+        required: false,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "revision",
+        title: "Revision",
+        width: 10,
+        required: false,
+        default_visible: false,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "pending",
+        title: "Pending",
+        width: 10,
+        required: false,
+        default_visible: false,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "created_at",
+        title: "Created at",
+        width: 24,
+        required: false,
+        default_visible: false,
+        policy: CellPolicy::Ellipsis,
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AgentsViewMode {
@@ -2794,26 +3899,100 @@ impl AgentModeFilter {
 
 #[derive(Clone, Debug)]
 struct AgentListItem {
-    name: String,
+    agent_id: String,
     component: Option<String>,
     agent_type: Option<String>,
-    status: Option<String>,
+    revision: String,
+    pending: String,
+    created_at: String,
+    status: AgentStatus,
+    last_error_kind: Option<OplogErrorKind>,
     raw: Value,
 }
 
 impl AgentListItem {
-    fn search_text(&self) -> String {
-        [
-            Some(self.name.as_str()),
-            self.component.as_deref(),
-            self.agent_type.as_deref(),
-            self.status.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" ")
+    fn identity(&self) -> AgentIdentity {
+        AgentIdentity {
+            component: self.component.clone().unwrap_or_default(),
+            agent_id: self.agent_id.clone(),
+        }
     }
+
+    fn status_label(&self) -> String {
+        if self.last_error_kind == Some(OplogErrorKind::Recovery) {
+            "Unavailable".to_string()
+        } else {
+            self.status.to_string()
+        }
+    }
+
+    fn status_tone(&self) -> CellTone {
+        if self.last_error_kind == Some(OplogErrorKind::Recovery) {
+            return CellTone::Muted;
+        }
+        match self.status {
+            AgentStatus::Running => CellTone::Success,
+            AgentStatus::Idle => CellTone::Info,
+            AgentStatus::Suspended | AgentStatus::Retrying => CellTone::Warning,
+            AgentStatus::Interrupted | AgentStatus::Failed => CellTone::Error,
+            AgentStatus::Exited => CellTone::Muted,
+        }
+    }
+}
+
+fn agent_table_row(agent: &AgentListItem) -> Vec<String> {
+    vec![
+        agent.agent_id.clone(),
+        agent.status_label(),
+        agent.agent_type.clone().unwrap_or_else(|| "-".to_string()),
+        agent.component.clone().unwrap_or_else(|| "-".to_string()),
+        agent.revision.clone(),
+        agent.pending.clone(),
+        agent.created_at.clone(),
+    ]
+}
+
+fn agent_id_highlight_tone(kind: AgentIdHighlightKind) -> Option<CellTone> {
+    match kind {
+        AgentIdHighlightKind::Str => Some(CellTone::Success),
+        AgentIdHighlightKind::Num => Some(CellTone::Info),
+        AgentIdHighlightKind::Lit => Some(CellTone::Warning),
+        AgentIdHighlightKind::Open
+        | AgentIdHighlightKind::Close
+        | AgentIdHighlightKind::Comma
+        | AgentIdHighlightKind::Punct => Some(CellTone::Muted),
+        AgentIdHighlightKind::Ident => None,
+    }
+}
+
+fn agent_id_table_cell(agent_id: &str) -> PaneTableCell {
+    PaneTableCell {
+        spans: highlight_agent_id(agent_id)
+            .into_iter()
+            .map(|span| PaneTableCellSpan {
+                text: span.text.to_string(),
+                tone: span.kind.and_then(agent_id_highlight_tone),
+            })
+            .collect(),
+    }
+}
+
+fn agent_id_line_spans(agent_id: &str) -> Vec<Span<'static>> {
+    highlight_agent_id(agent_id)
+        .into_iter()
+        .map(|span| {
+            let color = span
+                .kind
+                .and_then(agent_id_highlight_tone)
+                .map_or(theme().text, |tone| tone.color(&theme()));
+            Span::styled(span.text.to_string(), Style::default().fg(color))
+        })
+        .collect()
+}
+
+pub(super) struct AgentRefreshPayload {
+    agents: AgentsMetadataResponseView,
+    agent_types: Option<Result<Vec<DeployedRegisteredAgentType>, String>>,
 }
 
 impl LocalServerService {
@@ -3121,17 +4300,25 @@ fn agent_items_from_metadata_response(response: AgentsMetadataResponseView) -> V
 }
 
 fn agent_item_from_metadata(agent: AgentMetadataView) -> AgentListItem {
-    let name = agent.agent_id.0.clone();
+    let agent_id = agent.agent_id.0.clone();
     let component = Some(agent.component_name.0.clone());
-    let agent_type = agent_type_from_agent_name(&name);
-    let status = Some(format!("{:?}", agent.status));
+    let agent_type = agent_type_from_agent_name(&agent_id);
+    let status = agent.status.clone();
+    let last_error_kind = agent.last_error_kind.clone();
+    let revision = agent.component_revision.to_string();
+    let pending = agent.pending_invocation_count.to_string();
+    let created_at = agent.created_at.to_string();
     let raw = serde_json::to_value(agent).unwrap_or(Value::Null);
 
     AgentListItem {
-        name,
+        agent_id,
         component,
         agent_type,
+        revision,
+        pending,
+        created_at,
         status,
+        last_error_kind,
         raw,
     }
 }
@@ -3144,11 +4331,21 @@ fn agent_type_from_agent_name(name: &str) -> Option<String> {
 }
 
 fn agent_refresh_error(error: String, logs: Vec<String>) -> String {
+    let error = plain_tui_text(&error);
     if logs.is_empty() {
         error
     } else {
-        format!("{error}\n{}", logs.join("\n"))
+        let logs = logs
+            .iter()
+            .map(|line| plain_tui_text(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{error}\n{logs}")
     }
+}
+
+fn plain_tui_text(text: &str) -> String {
+    strip_ansi_escapes::strip_str(text)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3159,7 +4356,7 @@ pub(super) enum TuiWorkspace {
 }
 
 impl TuiWorkspace {
-    pub(super) const ALL: [Self; 3] = [Self::Home, Self::Dev, Self::Ops];
+    pub(super) const ALL: [Self; 1] = [Self::Ops];
 
     pub(super) fn title(self) -> &'static str {
         match self {
@@ -3389,7 +4586,7 @@ impl TuiContextTarget {
             detail: String::new(),
             kind: TuiContextTargetKind::Error,
             global_flags: GolemCliGlobalFlags::default(),
-            error: Some(error),
+            error: Some(plain_tui_text(&error)),
             is_current: false,
         }
     }
@@ -3942,6 +5139,10 @@ fn render_styled(frame: &mut Frame<'_>, app: &TuiApp, visual: &TuiVisualStyle) {
 #[cfg(feature = "tui-preview")]
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum DesignLabScene {
+    OpsAgents,
+    OpsMetricsDemo,
+    ActivityTimeline,
+    ActivityJournal,
     ShellDefault,
     ShellScrollable,
     ContentDensity,
@@ -3966,6 +5167,10 @@ enum DesignLabScene {
 impl DesignLabScene {
     fn parse(name: &str) -> anyhow::Result<Self> {
         match name {
+            "ops-agents" => Ok(Self::OpsAgents),
+            "ops-metrics-demo" => Ok(Self::OpsMetricsDemo),
+            "activity-timeline" => Ok(Self::ActivityTimeline),
+            "activity-journal" => Ok(Self::ActivityJournal),
             "shell-default" => Ok(Self::ShellDefault),
             "shell-compact" => Ok(Self::ShellDefault),
             "shell-scrollbar" => Ok(Self::ShellScrollable),
@@ -3991,44 +5196,41 @@ impl DesignLabScene {
 }
 
 fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
-    let snapshot = layout::compute(LayoutInput {
+    let context_picker_rows = context_picker_layout_rows(&app.context_switcher);
+    let snapshot = layout::compute_ops_shell(LayoutInput {
         area: frame.area(),
-        active_workspace: app.active_workspace,
+        active_workspace: TuiWorkspace::Ops,
         focused_dev_panel: app.dev_focus,
         mode: app.mode,
-        context_picker_rows: app.context_switcher.row_count(),
-        context_picker_step: app.context_switcher.mode.clone(),
-        agents_view_mode: app.agents.view_mode,
-        agent_details_visible: app.agents.detail_visible,
+        context_picker_rows,
+        context_picker_selected: app.context_switcher.selected,
+        context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
+        agents_view_mode: AgentsViewMode::List,
+        agent_details_visible: app.ops_view == OpsView::Overview && app.agents.detail_visible,
         layout: app.layout.clone(),
     });
     app.layout_snapshot.replace(Some(snapshot.clone()));
 
-    render_header(frame, snapshot.header, app);
-
-    render_tabs(frame, snapshot.tabs, app);
-    render_separator(frame, snapshot.separator);
-
-    match app.active_workspace {
-        TuiWorkspace::Home => render_home_workspace(frame, snapshot.workspace_body, app),
-        TuiWorkspace::Dev => render_dev_workspace(frame, snapshot.workspace_body, app),
-        TuiWorkspace::Ops => render_agents_view(frame, snapshot.workspace_body, app),
+    ContextHeader {
+        pairs: &[
+            ContextPair {
+                label: "app",
+                value: &app.context.application,
+            },
+            ContextPair {
+                label: "env",
+                value: &app.context.environment,
+            },
+            ContextPair {
+                label: "server",
+                value: &app.context.server,
+            },
+        ],
     }
-    if let Some(drawer_area) = snapshot.server_drawer {
-        render_split_handle(
-            frame,
-            snapshot
-                .region(RegionKind::ServerDrawerSplit)
-                .unwrap_or(drawer_area),
-        );
-        render_server_view(frame, drawer_area, app);
-    }
+    .render(frame, snapshot.header, &theme());
 
-    let footer = Paragraph::new(footer_line(app))
-        .style(footer_style())
-        .alignment(Alignment::Center);
-    frame.render_widget(footer, snapshot.footer);
-    render_left_rail(frame, snapshot.footer, footer_rail_style());
+    render_ops_workspace(frame, snapshot.workspace_body, app);
+    render_ops_footer(frame, snapshot.footer, app);
 
     match app.mode {
         TuiMode::Normal => {}
@@ -4036,12 +5238,1022 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
         TuiMode::ContextPicker => render_context_picker(frame, app),
         TuiMode::ContextSwitchConfirm => render_context_switch_confirm(frame, app),
         TuiMode::AgentFilter => {}
+        TuiMode::AgentDatasetFilter => render_agent_dataset_filter(frame, app),
+        TuiMode::AgentColumns => render_agent_columns(frame, app),
         TuiMode::CommandInteraction => {}
         TuiMode::Repl => {}
         TuiMode::LeaderRepl => render_leader_hint(frame, app, TuiMode::Repl),
         TuiMode::Palette => render_palette(frame, app),
         TuiMode::Help => render_help(frame, app),
     }
+}
+
+fn render_ops_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
+    match app.ops_view {
+        OpsView::Overview => render_ops_agents_overview(frame, area, app),
+        OpsView::Metrics => render_ops_fake_otlp_explorer(frame, area, app),
+    }
+}
+
+fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let show_details = layout::ops_details_visible(area, app.agents.detail_visible);
+    let details_ratio = layout::clamp_ops_details_ratio(area, app.layout.ops_details_ratio);
+    let weights = if show_details {
+        vec![details_ratio as u32, (100 - details_ratio) as u32]
+    } else {
+        vec![1]
+    };
+    let [headers, body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(area);
+    let header_layout = PaneLayout::horizontal(headers, &weights);
+    let specs = if show_details {
+        vec![
+            PaneSpec {
+                title: "Agents · Overview",
+                focus: if app.agents.focus == AgentOverviewFocus::List {
+                    PaneFocus::Active
+                } else {
+                    PaneFocus::Idle
+                },
+            },
+            PaneSpec {
+                title: "Details",
+                focus: if app.agents.focus == AgentOverviewFocus::Details {
+                    PaneFocus::Active
+                } else {
+                    PaneFocus::Idle
+                },
+            },
+        ]
+    } else {
+        vec![PaneSpec {
+            title: "Agents · Overview",
+            focus: PaneFocus::Active,
+        }]
+    };
+    header_layout.render_headers(frame, &specs, &theme());
+    let (refresh_label, refresh_tone) = if app.agents.refresh_running {
+        (
+            if app.agents.refresh_append {
+                "loading more"
+            } else {
+                "refreshing"
+            },
+            PaneStatusTone::Loading,
+        )
+    } else if app.agents.auto_refresh {
+        ("auto 5s", PaneStatusTone::Active)
+    } else {
+        ("auto off", PaneStatusTone::Idle)
+    };
+    if let Some(header) = header_layout.panes.first() {
+        PaneHeaderStatus {
+            label: refresh_label,
+            tone: refresh_tone,
+        }
+        .render(frame, *header, &theme());
+    }
+
+    let filtered = app.filtered_agents();
+    let owned_rows = filtered
+        .iter()
+        .map(|agent| agent_table_row(agent))
+        .collect::<Vec<_>>();
+    let row_cells = owned_rows
+        .iter()
+        .map(|row| row.iter().map(String::as_str).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let rows = row_cells.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let owned_tones = filtered
+        .iter()
+        .map(|agent| {
+            vec![
+                None,
+                Some(agent.status_tone()),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]
+        })
+        .collect::<Vec<_>>();
+    let tones = owned_tones.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let owned_rich_cells = filtered
+        .iter()
+        .map(|agent| {
+            vec![
+                Some(agent_id_table_cell(&agent.agent_id)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]
+        })
+        .collect::<Vec<_>>();
+    let rich_cells = owned_rich_cells
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let row_markers = filtered
+        .iter()
+        .map(|agent| {
+            if app.agents.included.contains(&agent.identity()) {
+                "✓"
+            } else {
+                ""
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut table_state = app.agents.table.clone();
+    table_state.selected = app.agents.selected.min(filtered.len().saturating_sub(1));
+    let table_content_height = PaneTable {
+        columns: &AGENT_COLUMNS,
+        rows: &rows,
+        state: &table_state,
+        decoration: TableDecoration::Zebra,
+        cell_tones: Some(&tones),
+        rich_cells: Some(&rich_cells),
+        row_markers: Some(&row_markers),
+        first_row_index: 0,
+    }
+    .height();
+    let query_bar = CollectionQueryBar {
+        dataset: &app.agents.dataset_label(),
+        scope: app.agents.query_scope.label(),
+        query: &app.agents.query,
+        matched: filtered.len(),
+        loaded: app.agents.agents.len(),
+        more_available: app.agents.has_more(),
+        editing: app.mode == TuiMode::AgentFilter,
+    };
+    let query_height = query_bar.height() as usize;
+    let stale_result_notice = usize::from(app.agents.last_error.is_some() && !filtered.is_empty());
+    let table_height = table_content_height
+        .saturating_add(stale_result_notice)
+        .saturating_add(query_height);
+    let body_layout = PaneLayout::horizontal(body, &weights);
+    let details_width = body_layout
+        .panes
+        .get(1)
+        .map(|area| area.width)
+        .unwrap_or_default();
+    let selected_agent = app.agents.selected_agent(&filtered);
+    let mut details_lines = build_ops_agent_details_lines(
+        selected_agent,
+        app.agents.included.len(),
+        &app.agents.agent_types,
+        app.agents.metadata_error.as_deref(),
+        details_width,
+    );
+    let content_heights = if show_details {
+        vec![table_height, details_lines.len()]
+    } else {
+        vec![table_height]
+    };
+    let mut regions = body_layout.regions(&content_heights);
+    if show_details
+        && let Some(details_region) = regions.get(1)
+        && details_region.scrollbar.is_some()
+    {
+        details_lines = build_ops_agent_details_lines(
+            selected_agent,
+            app.agents.included.len(),
+            &app.agents.agent_types,
+            app.agents.metadata_error.as_deref(),
+            details_region.content_area.width,
+        );
+        regions = body_layout.regions(&[table_height, details_lines.len()]);
+    }
+    let Some(table_region) = regions.first() else {
+        return;
+    };
+
+    let mut table_area = table_region.content_area;
+    let query_area = Rect {
+        height: table_area.height.min(query_height as u16),
+        ..table_area
+    };
+    frame.render_widget(
+        Paragraph::new(query_bar.lines(&theme())).style(surface_style()),
+        query_area,
+    );
+    table_area.y = table_area.y.saturating_add(query_area.height);
+    table_area.height = table_area.height.saturating_sub(query_area.height);
+    if let Some(error) = &app.agents.last_error {
+        let message = if filtered.is_empty() {
+            format!("Agent refresh failed: {error}")
+        } else {
+            format!("Refresh failed; showing the last successful result: {error}")
+        };
+        let notice_area = Rect {
+            height: table_area.height.min(1),
+            ..table_area
+        };
+        frame.render_widget(
+            Paragraph::new(
+                Notice {
+                    kind: NoticeKind::Error,
+                    message: &message,
+                }
+                .line(&theme()),
+            )
+            .style(surface_style()),
+            notice_area,
+        );
+        if !filtered.is_empty() {
+            table_area.y = table_area.y.saturating_add(notice_area.height);
+            table_area.height = table_area.height.saturating_sub(notice_area.height);
+        }
+    }
+
+    let data_viewport_width = table_area.width.saturating_sub(2);
+    app.agents.table_viewport_width.set(data_viewport_width);
+    app.agents.table_viewport_height.set(table_area.height);
+    let resolved_columns =
+        responsive_table_columns(&AGENT_COLUMNS, &rows, &table_state, data_viewport_width);
+    let virtual_width = pane_table_virtual_width(&resolved_columns, &table_state);
+    app.agents.table_virtual_width.set(virtual_width);
+    table_state.clamp_offset_to_width(virtual_width, data_viewport_width);
+    let table_window = PaneTable {
+        columns: &resolved_columns,
+        rows: &rows,
+        state: &table_state,
+        decoration: TableDecoration::Zebra,
+        cell_tones: Some(&tones),
+        rich_cells: Some(&rich_cells),
+        row_markers: Some(&row_markers),
+        first_row_index: 0,
+    }
+    .window_from(table_area.height, app.agents.table_first_visible_row.get());
+    app.agents
+        .table_first_visible_row
+        .set(table_window.start_row);
+
+    if app.agents.last_error.is_some() && filtered.is_empty() {
+    } else if app.agents.refresh_running && filtered.is_empty() {
+        frame.render_widget(
+            Paragraph::new(
+                Notice {
+                    kind: NoticeKind::Loading,
+                    message: "Refreshing agents",
+                }
+                .line(&theme()),
+            )
+            .style(surface_style()),
+            table_area,
+        );
+    } else if filtered.is_empty() {
+        frame.render_widget(
+            Paragraph::new(
+                Notice {
+                    kind: NoticeKind::Empty,
+                    message: "No agents match the current filter",
+                }
+                .line(&theme()),
+            )
+            .style(surface_style()),
+            table_area,
+        );
+    } else {
+        let start = table_window.start_row;
+        let visible_rows = &rows[start..];
+        let visible_tones = &tones[start..];
+        let visible_rich_cells = &rich_cells[start..];
+        let visible_markers = &row_markers[start..];
+        table_state.selected = table_window.selected_row;
+        PaneTable {
+            columns: &resolved_columns,
+            rows: visible_rows,
+            state: &table_state,
+            decoration: TableDecoration::Zebra,
+            cell_tones: Some(visible_tones),
+            rich_cells: Some(visible_rich_cells),
+            row_markers: Some(visible_markers),
+            first_row_index: start,
+        }
+        .render(frame, table_area, &theme());
+    }
+
+    body_layout.render_body_boundaries(frame, &regions, &theme());
+    if let Some(slot) = table_region.scrollbar {
+        let mut state = ScrollbarState::new(table_height)
+            .position(
+                query_height
+                    .saturating_add(stale_result_notice)
+                    .saturating_add(table_window.selected_line_offset),
+            )
+            .viewport_content_length(table_region.content_area.height as usize);
+        render_scrollbar(frame, slot, &mut state, &theme());
+    }
+    if show_details && let Some(details_region) = regions.get(1) {
+        app.agents.details_content_height.set(details_lines.len());
+        app.agents
+            .details_viewport_height
+            .set(details_region.content_area.height as usize);
+        ScrollableDocument {
+            lines: &details_lines,
+            offset: app.agents.details_scroll,
+        }
+        .render(frame, *details_region, &theme());
+    }
+}
+
+fn build_ops_agent_details_lines(
+    agent: Option<&AgentListItem>,
+    included_count: usize,
+    agent_types: &BTreeMap<(String, String), Value>,
+    metadata_error: Option<&str>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        SectionHeading {
+            title: "Selected agent",
+            detail: None,
+        }
+        .line(&theme()),
+        Line::default(),
+    ];
+    if let Some(agent) = agent {
+        let value_width = width.saturating_sub(12) as usize;
+        let formatted_agent_id =
+            format_agent_id_for_terminal(&agent.agent_id, false, Some(value_width.max(20)));
+        let mut id_lines = formatted_agent_id.lines();
+        if let Some(first) = id_lines.next() {
+            let mut spans = vec![
+                Span::styled(fit("AgentID", 10), Style::default().fg(theme().text_muted)),
+                Span::raw("  "),
+            ];
+            spans.extend(agent_id_line_spans(first));
+            lines.push(Line::from(spans));
+        }
+        for line in id_lines {
+            let mut spans = vec![Span::raw(" ".repeat(12))];
+            spans.extend(agent_id_line_spans(line));
+            lines.push(Line::from(spans));
+        }
+        let status = agent.status_label();
+        lines.push(Line::from(vec![
+            Span::styled(fit("Status", 10), Style::default().fg(theme().text_muted)),
+            Span::raw("  "),
+            Span::styled(
+                status,
+                Style::default().fg(agent.status_tone().color(&theme())),
+            ),
+        ]));
+        for (label, value) in [
+            ("Type", agent.agent_type.as_deref().unwrap_or("-")),
+            ("Component", agent.component.as_deref().unwrap_or("-")),
+        ] {
+            lines.push(
+                FieldRow {
+                    label,
+                    value,
+                    label_width: 10,
+                }
+                .line(&theme()),
+            );
+        }
+        lines.push(Line::default());
+        lines.push(
+            Notice {
+                kind: NoticeKind::Info,
+                message: &format!("{included_count} agents included for cross-agent views"),
+            }
+            .line(&theme()),
+        );
+        lines.push(Line::default());
+        lines.push(
+            SectionHeading {
+                title: "Agent metadata",
+                detail: None,
+            }
+            .line(&theme()),
+        );
+        lines.extend(JsonDocument { value: &agent.raw }.lines(width, &theme()));
+        lines.push(Line::default());
+        lines.push(
+            SectionHeading {
+                title: "Agent type metadata",
+                detail: None,
+            }
+            .line(&theme()),
+        );
+        match agent
+            .component
+            .as_ref()
+            .zip(agent.agent_type.as_ref())
+            .and_then(|(component, agent_type)| {
+                agent_types.get(&(component.clone(), agent_type.clone()))
+            }) {
+            Some(metadata) => lines.extend(JsonDocument { value: metadata }.lines(width, &theme())),
+            None if metadata_error.is_some() => lines.push(
+                Notice {
+                    kind: NoticeKind::Warning,
+                    message: metadata_error.unwrap_or("Agent type metadata is unavailable"),
+                }
+                .line(&theme()),
+            ),
+            None => lines.push(
+                Notice {
+                    kind: NoticeKind::Unavailable,
+                    message: "No deployed metadata found for this agent type",
+                }
+                .line(&theme()),
+            ),
+        }
+    } else {
+        lines.push(
+            Notice {
+                kind: NoticeKind::Empty,
+                message: "Select an agent to inspect it",
+            }
+            .line(&theme()),
+        );
+    }
+    lines
+}
+
+fn render_ops_fake_otlp_explorer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let [header, body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(area);
+    let show_details = fake_otlp_details_visible(area);
+    let weights = fake_otlp_weights(show_details);
+    let header_layout = PaneLayout::horizontal(header, &weights);
+    let specs = if show_details {
+        vec![
+            PaneSpec {
+                title: "Agents · Metrics · FAKE OTLP",
+                focus: if app.fake_otlp.focus == FakeOtlpFocus::Series {
+                    PaneFocus::Active
+                } else {
+                    PaneFocus::Idle
+                },
+            },
+            PaneSpec {
+                title: "Series detail · FAKE",
+                focus: if app.fake_otlp.focus == FakeOtlpFocus::Details {
+                    PaneFocus::Active
+                } else {
+                    PaneFocus::Idle
+                },
+            },
+        ]
+    } else {
+        vec![PaneSpec {
+            title: "Agents · Metrics · FAKE OTLP",
+            focus: PaneFocus::Active,
+        }]
+    };
+    header_layout.render_headers(frame, &specs, &theme());
+    render_fake_otlp_explorer_body(
+        frame,
+        body,
+        app.fake_otlp.selected,
+        app.agents.included.len(),
+        Some(&app.fake_otlp),
+    );
+}
+
+fn fake_otlp_details_visible(area: Rect) -> bool {
+    area.width >= 72
+}
+
+fn fake_otlp_weights(show_details: bool) -> Vec<u32> {
+    if show_details { vec![56, 44] } else { vec![1] }
+}
+
+fn render_fake_otlp_explorer_body(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    selected: usize,
+    included_agents: usize,
+    state: Option<&FakeOtlpExplorerState>,
+) {
+    let selected = selected.min(FAKE_OTLP_SERIES.len().saturating_sub(1));
+    let series = &FAKE_OTLP_SERIES[selected];
+    let show_details = fake_otlp_details_visible(area);
+    let weights = fake_otlp_weights(show_details);
+    let layout = PaneLayout::horizontal(area, &weights);
+    let rows = FAKE_OTLP_SERIES
+        .iter()
+        .map(|series| [series.name, series.instrument, series.latest])
+        .collect::<Vec<_>>();
+    let row_cells = rows.iter().map(|row| row.as_slice()).collect::<Vec<_>>();
+    let table_state = PaneTableState::new(&FAKE_OTLP_COLUMNS, selected);
+    let table = PaneTable {
+        columns: &FAKE_OTLP_COLUMNS,
+        rows: &row_cells,
+        state: &table_state,
+        decoration: TableDecoration::Zebra,
+        cell_tones: None,
+        rich_cells: None,
+        row_markers: None,
+        first_row_index: 0,
+    };
+    let details_width = layout
+        .panes
+        .get(1)
+        .map(|pane| pane.width)
+        .unwrap_or(area.width);
+    let details_lines = fake_otlp_details_lines(series, included_agents, details_width);
+    let content_heights = if show_details {
+        vec![table.height().saturating_add(1), details_lines.len()]
+    } else {
+        vec![table.height().saturating_add(1)]
+    };
+    let regions = layout.regions(&content_heights);
+    let Some(table_region) = regions.first() else {
+        return;
+    };
+
+    let notice_area = Rect {
+        height: table_region.content_area.height.min(1),
+        ..table_region.content_area
+    };
+    frame.render_widget(
+        Paragraph::new(
+            Notice {
+                kind: NoticeKind::Warning,
+                message: "FAKE DATA — deterministic OTLP explorer demo",
+            }
+            .line(&theme()),
+        )
+        .style(surface_style()),
+        notice_area,
+    );
+    let table_area = Rect {
+        y: table_region
+            .content_area
+            .y
+            .saturating_add(notice_area.height),
+        height: table_region
+            .content_area
+            .height
+            .saturating_sub(notice_area.height),
+        ..table_region.content_area
+    };
+    let resolved_columns = responsive_table_columns(
+        &FAKE_OTLP_COLUMNS,
+        &row_cells,
+        &table_state,
+        table_area.width.saturating_sub(2),
+    );
+    let window = table.window(table_area.height);
+    let start = window.start_row.min(row_cells.len());
+    let visible_rows = &row_cells[start..];
+    let mut visible_state = table_state.clone();
+    visible_state.selected = window.selected_row;
+    PaneTable {
+        columns: &resolved_columns,
+        rows: visible_rows,
+        state: &visible_state,
+        decoration: TableDecoration::Zebra,
+        cell_tones: None,
+        rich_cells: None,
+        row_markers: None,
+        first_row_index: start,
+    }
+    .render(frame, table_area, &theme());
+
+    layout.render_body_boundaries(frame, &regions, &theme());
+    if let Some(slot) = table_region.scrollbar {
+        let mut state = ScrollbarState::new(table.height().saturating_add(1))
+            .position(window.selected_line_offset.saturating_add(1))
+            .viewport_content_length(table_region.content_area.height as usize);
+        render_scrollbar(frame, slot, &mut state, &theme());
+    }
+    if show_details && let Some(details_region) = regions.get(1) {
+        if let Some(state) = state {
+            state.details_content_height.set(details_lines.len());
+            state
+                .details_viewport_height
+                .set(details_region.content_area.height as usize);
+        }
+        ScrollableDocument {
+            lines: &details_lines,
+            offset: state.map_or(0, |state| state.details_scroll),
+        }
+        .render(frame, *details_region, &theme());
+    }
+}
+
+fn fake_otlp_details_lines(
+    series: &FakeOtlpSeries,
+    included_agents: usize,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Notice {
+            kind: NoticeKind::Warning,
+            message: "FAKE DATA — generated for UI review; not received from this context",
+        }
+        .line(&theme()),
+        Line::default(),
+        SectionHeading {
+            title: "Selected OTLP series",
+            detail: Some("demo only"),
+        }
+        .line(&theme()),
+    ];
+    for (label, value) in [
+        ("Metric", series.name),
+        ("Instrument", series.instrument),
+        ("Unit", series.unit),
+        ("Latest", series.latest),
+        ("Query", series.aggregation),
+        ("Scope", series.scope),
+        ("Resource", series.resource),
+    ] {
+        lines.push(
+            FieldRow {
+                label,
+                value,
+                label_width: 11,
+            }
+            .line(&theme()),
+        );
+    }
+    lines.push(
+        FieldRow {
+            label: "Selection",
+            value: &format!("{included_agents} explicitly included agents"),
+            label_width: 11,
+        }
+        .line(&theme()),
+    );
+    lines.extend([
+        Line::default(),
+        SectionHeading {
+            title: "15 minute trend",
+            detail: Some("deterministic samples"),
+        }
+        .line(&theme()),
+        Line::from(Span::styled(
+            fake_otlp_sparkline(series.samples, width.saturating_sub(2) as usize),
+            Style::default().fg(theme().accent),
+        )),
+        Line::from(Span::styled(
+            "-15m                                               now",
+            Style::default().fg(theme().text_muted),
+        )),
+        Line::default(),
+        SectionHeading {
+            title: "Attributes",
+            detail: None,
+        }
+        .line(&theme()),
+        Line::from(Span::styled(
+            series.attributes.to_string(),
+            Style::default().fg(theme().text_secondary),
+        )),
+        Line::default(),
+        Notice {
+            kind: NoticeKind::Info,
+            message: "No OTLP receiver or query store is read by this demo",
+        }
+        .line(&theme()),
+    ]);
+    lines
+}
+
+fn fake_otlp_sparkline(samples: &[u64], width: usize) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    if samples.is_empty() || width == 0 {
+        return String::new();
+    }
+    let width = width.min(64);
+    let min = samples.iter().copied().min().unwrap_or_default();
+    let max = samples.iter().copied().max().unwrap_or(min);
+    (0..width)
+        .map(|index| {
+            let sample_index = if width == 1 {
+                samples.len() - 1
+            } else {
+                index.saturating_mul(samples.len() - 1) / (width - 1)
+            };
+            let value = samples[sample_index];
+            let level = if max == min {
+                3
+            } else {
+                value.saturating_sub(min).saturating_mul(7) / max.saturating_sub(min)
+            };
+            BARS[level as usize]
+        })
+        .collect()
+}
+
+fn render_ops_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    if area.height == 0 {
+        return;
+    }
+    let rows = (area.y..area.bottom())
+        .map(|y| Rect::new(area.x, y, area.width, 1))
+        .collect::<Vec<_>>();
+    WorkspaceSelector {
+        items: &[WorkspaceItem {
+            key: "",
+            label: "Ops",
+            active: true,
+        }],
+        junctions: &[],
+    }
+    .render(frame, rows[0], &theme());
+
+    let global = [
+        KeyHint {
+            key: "ctrl+p",
+            label: "Commands",
+        },
+        KeyHint {
+            key: "ctrl+h",
+            label: "Help",
+        },
+        KeyHint {
+            key: "ctrl+q",
+            label: "Quit",
+        },
+    ];
+    if let Some(row) = rows.get(1) {
+        ShortcutRow {
+            items: &global,
+            active: false,
+            left_glyph: if rows.len() == 2 { "└" } else { "│" },
+            fallback: Some(global[0]),
+        }
+        .render(frame, *row, &theme());
+    }
+    if let Some(row) = rows.get(2) {
+        let overview = if app.agent_details_focused() {
+            vec![
+                KeyHint {
+                    key: "ctrl+x v",
+                    label: "Metrics",
+                },
+                KeyHint {
+                    key: "tab / shift+tab",
+                    label: "Focus pane",
+                },
+                KeyHint {
+                    key: "alt+left/right",
+                    label: "Resize",
+                },
+                KeyHint {
+                    key: "↑/↓",
+                    label: "Scroll details",
+                },
+                KeyHint {
+                    key: "esc",
+                    label: "Focus list",
+                },
+            ]
+        } else {
+            let mut hints = vec![
+                KeyHint {
+                    key: "ctrl+x v",
+                    label: "Metrics",
+                },
+                KeyHint {
+                    key: "type",
+                    label: "Find loaded",
+                },
+                KeyHint {
+                    key: "enter",
+                    label: "Details",
+                },
+            ];
+            if app.agent_details_open() {
+                hints.extend([
+                    KeyHint {
+                        key: "tab / shift+tab",
+                        label: "Focus pane",
+                    },
+                    KeyHint {
+                        key: "alt+left/right",
+                        label: "Resize",
+                    },
+                ]);
+            }
+            hints.extend([
+                KeyHint {
+                    key: "ctrl+f",
+                    label: "Dataset",
+                },
+                KeyHint {
+                    key: "ctrl+space",
+                    label: "Include",
+                },
+                KeyHint {
+                    key: "ctrl+a",
+                    label: "All matches",
+                },
+                KeyHint {
+                    key: "ctrl+n",
+                    label: "No matches",
+                },
+                KeyHint {
+                    key: "ctrl+l",
+                    label: "Load more",
+                },
+                KeyHint {
+                    key: "ctrl+r",
+                    label: "Refresh",
+                },
+            ]);
+            hints
+        };
+        let metrics = [
+            KeyHint {
+                key: "ctrl+x v",
+                label: "Overview",
+            },
+            KeyHint {
+                key: "tab / shift+tab",
+                label: "Focus pane",
+            },
+            KeyHint {
+                key: "↑/↓",
+                label: if app.fake_otlp.focus == FakeOtlpFocus::Details {
+                    "Scroll details"
+                } else {
+                    "Select fake series"
+                },
+            },
+        ];
+        let items = match app.ops_view {
+            OpsView::Overview => overview.as_slice(),
+            OpsView::Metrics => metrics.as_slice(),
+        };
+        ShortcutRow {
+            items,
+            active: false,
+            left_glyph: "└",
+            fallback: None,
+        }
+        .render(frame, *row, &theme());
+    }
+}
+
+fn render_agent_columns(frame: &mut Frame<'_>, app: &TuiApp) {
+    let Some(chooser) = app.agents.column_chooser.as_ref() else {
+        return;
+    };
+    let area = adaptive_data_popup_rect(frame.area(), 40, 10);
+    let content = OverlayFrame::content_area(area);
+    let choice_capacity = content.height.saturating_sub(3).max(1) as usize;
+    let overflow = AGENT_COLUMNS.len() > choice_capacity;
+    let table_width = content.width.saturating_sub(u16::from(overflow)) as usize;
+    let widths = decision_table_widths(table_width, 65);
+    let start = chooser
+        .selected
+        .saturating_sub(choice_capacity.saturating_sub(1));
+    let mut lines = chooser.lines(&AGENT_COLUMNS, &widths, start, choice_capacity, &theme());
+    lines.push(Line::default());
+    let footer = shortcut_line(
+        &[
+            KeyHint {
+                key: "↑/↓",
+                label: "Navigate",
+            },
+            KeyHint {
+                key: "space",
+                label: "Toggle",
+            },
+            KeyHint {
+                key: "enter",
+                label: "Apply",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Cancel",
+            },
+        ],
+        &theme(),
+        Alignment::Center,
+    );
+    let lines = overlay_lines_with_footer(lines, footer, content.height);
+    OverlayFrame {
+        title: Some("Columns"),
+    }
+    .render(frame, area, lines, &theme());
+    if overflow {
+        render_overlay_scrollbar(
+            frame,
+            Rect {
+                y: content.y.saturating_add(1),
+                height: content.height.saturating_sub(3),
+                ..content
+            },
+            AGENT_COLUMNS.len(),
+            chooser.selected,
+        );
+    }
+}
+
+fn render_agent_dataset_filter(frame: &mut Frame<'_>, app: &TuiApp) {
+    let Some(filter) = app.agents.dataset_filter.as_ref() else {
+        return;
+    };
+    let area = adaptive_data_popup_rect(frame.area(), 48, 10);
+    let content = OverlayFrame::content_area(area);
+    let visible_count = content.height.saturating_sub(5).max(1) as usize;
+    let overflow = filter.choices.len() > visible_count;
+    let table_width = content.width.saturating_sub(u16::from(overflow)) as usize;
+    let widths = decision_table_widths(table_width, 50);
+    let start = filter
+        .selected
+        .saturating_sub(visible_count.saturating_sub(1));
+    let mut lines = vec![
+        Notice {
+            kind: NoticeKind::Info,
+            message: "Server-side filter; applied before loading agents",
+        }
+        .line(&theme()),
+        Line::default(),
+        DecisionTableRow {
+            cells: &["Component", "Agent type"],
+            widths: &widths,
+            header: true,
+            selectable: true,
+            selected: false,
+        }
+        .line(&theme()),
+    ];
+    lines.extend(
+        filter
+            .choices
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible_count)
+            .map(|(index, choice)| {
+                let (component, agent_type) = match choice {
+                    AgentDatasetScope::All => ("Any", "Any"),
+                    AgentDatasetScope::Component(component) => (component.as_str(), "Any"),
+                    AgentDatasetScope::AgentType {
+                        component,
+                        agent_type,
+                    } => (component.as_str(), agent_type.as_str()),
+                };
+                DecisionTableRow {
+                    cells: &[component, agent_type],
+                    widths: &widths,
+                    header: false,
+                    selectable: true,
+                    selected: index == filter.selected,
+                }
+                .line(&theme())
+            }),
+    );
+    lines.push(Line::default());
+    let footer = shortcut_line(
+        &[
+            KeyHint {
+                key: "↑/↓",
+                label: "Navigate",
+            },
+            KeyHint {
+                key: "enter",
+                label: "Apply",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Cancel",
+            },
+        ],
+        &theme(),
+        Alignment::Center,
+    );
+    let lines = overlay_lines_with_footer(lines, footer, content.height);
+    OverlayFrame {
+        title: Some("Agent dataset"),
+    }
+    .render(frame, area, lines, &theme());
+    if overflow {
+        render_overlay_scrollbar(
+            frame,
+            Rect {
+                y: content.y.saturating_add(3),
+                height: content.height.saturating_sub(5),
+                ..content
+            },
+            filter.choices.len(),
+            filter.selected,
+        );
+    }
+}
+
+fn decision_table_widths(total_width: usize, first_percent: usize) -> [usize; 2] {
+    let available = total_width.saturating_sub(3);
+    let first = available.saturating_mul(first_percent) / 100;
+    [first, available.saturating_sub(first)]
 }
 
 #[cfg(feature = "tui-preview")]
@@ -4128,8 +6340,13 @@ fn render_design_lab_overlay_for_scene(frame: &mut Frame<'_>, scene: DesignLabSc
 
 #[cfg(feature = "tui-preview")]
 fn render_design_lab_with_unified_footer(frame: &mut Frame<'_>, scene: DesignLabScene) {
+    let compact = design_lab_compact_shell(frame.area());
     let contextual = design_lab_contextual_hints(scene);
-    let contextual_rows = ShortcutRow::pack(&contextual, frame.area().width, 2).len() as u16;
+    let contextual_rows = if compact {
+        0
+    } else {
+        ShortcutRow::pack(&contextual, frame.area().width, 2).len() as u16
+    };
     let footer_height = 2 + contextual_rows + u16::from(scene == DesignLabScene::ShortcutLeader);
     let [header, separator, body, footer] = Layout::default()
         .direction(Direction::Vertical)
@@ -4143,7 +6360,12 @@ fn render_design_lab_with_unified_footer(frame: &mut Frame<'_>, scene: DesignLab
     render_design_lab_header(frame, header);
     render_design_lab_separator(frame, separator, scene);
     render_design_lab_body(frame, body, scene);
-    render_design_lab_unified_footer(frame, footer, scene);
+    render_design_lab_unified_footer(frame, footer, scene, compact);
+}
+
+#[cfg(feature = "tui-preview")]
+fn design_lab_compact_shell(area: Rect) -> bool {
+    area.width < 72 || area.height < 20
 }
 
 #[cfg(feature = "tui-preview")]
@@ -4338,6 +6560,46 @@ fn render_design_lab_separator(frame: &mut Frame<'_>, area: Rect, scene: DesignL
 #[cfg(feature = "tui-preview")]
 fn design_lab_top_panes(scene: DesignLabScene) -> (Vec<PaneSpec<'static>>, Vec<u32>) {
     match scene {
+        DesignLabScene::OpsAgents => (
+            vec![
+                PaneSpec {
+                    title: "Agents · Overview",
+                    focus: PaneFocus::Active,
+                },
+                PaneSpec {
+                    title: "Details",
+                    focus: PaneFocus::Idle,
+                },
+            ],
+            vec![60, 40],
+        ),
+        DesignLabScene::OpsMetricsDemo => (
+            vec![
+                PaneSpec {
+                    title: "Agents · Metrics · FAKE OTLP",
+                    focus: PaneFocus::Active,
+                },
+                PaneSpec {
+                    title: "Series detail · FAKE",
+                    focus: PaneFocus::Idle,
+                },
+            ],
+            vec![56, 44],
+        ),
+        DesignLabScene::ActivityTimeline => (
+            vec![PaneSpec {
+                title: "Agents · Activity · Timeline",
+                focus: PaneFocus::Active,
+            }],
+            vec![1],
+        ),
+        DesignLabScene::ActivityJournal => (
+            vec![PaneSpec {
+                title: "Agents · Activity · Journal",
+                focus: PaneFocus::Active,
+            }],
+            vec![1],
+        ),
         DesignLabScene::SplitFocus | DesignLabScene::SplitScrollable => (
             vec![
                 PaneSpec {
@@ -4487,6 +6749,10 @@ fn render_design_lab_rail(frame: &mut Frame<'_>, area: Rect, style: Style, focus
 #[cfg(feature = "tui-preview")]
 fn render_design_lab_body(frame: &mut Frame<'_>, area: Rect, scene: DesignLabScene) {
     match scene {
+        DesignLabScene::OpsAgents => render_design_lab_table_details(frame, area),
+        DesignLabScene::OpsMetricsDemo => render_design_lab_metrics_demo(frame, area),
+        DesignLabScene::ActivityTimeline => render_design_lab_activity(frame, area, false),
+        DesignLabScene::ActivityJournal => render_design_lab_activity(frame, area, true),
         DesignLabScene::ShellDefault
         | DesignLabScene::ShellScrollable
         | DesignLabScene::ShortcutLeader
@@ -4727,6 +6993,10 @@ fn render_design_lab_table_decoration(frame: &mut Frame<'_>, area: Rect) {
             rows: &PANE_TABLE_ROWS[..PANE_TABLE_ROWS.len().min(3)],
             state: &state,
             decoration,
+            cell_tones: None,
+            rich_cells: None,
+            row_markers: None,
+            first_row_index: 0,
         }
         .render(frame, table, &theme());
     }
@@ -4747,6 +7017,10 @@ fn render_design_lab_table(frame: &mut Frame<'_>, area: Rect, panned: bool) {
         rows: PANE_TABLE_ROWS,
         state: &state,
         decoration: TableDecoration::Zebra,
+        cell_tones: None,
+        rich_cells: None,
+        row_markers: None,
+        first_row_index: 0,
     };
     let table_height = table.height();
     let regions = layout.regions(&[table_height]);
@@ -4774,6 +7048,10 @@ fn render_design_lab_table_details(frame: &mut Frame<'_>, area: Rect) {
         rows: PANE_TABLE_ROWS,
         state: &state,
         decoration: TableDecoration::Zebra,
+        cell_tones: None,
+        rich_cells: None,
+        row_markers: None,
+        first_row_index: 0,
     }
     .render(frame, table_region.content_area, &theme());
     frame.render_widget(
@@ -4805,7 +7083,7 @@ fn render_design_lab_table_details(frame: &mut Frame<'_>, area: Rect) {
             Line::default(),
             Notice {
                 kind: NoticeKind::Info,
-                message: "Selection remains in the table; Tab focuses details.",
+                message: "Selection remains in the table; Ctrl+Right focuses details.",
             }
             .line(&theme()),
         ])
@@ -4828,11 +7106,91 @@ fn render_design_lab_table_details(frame: &mut Frame<'_>, area: Rect) {
 }
 
 #[cfg(feature = "tui-preview")]
+fn render_design_lab_metrics_demo(frame: &mut Frame<'_>, area: Rect) {
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
+    render_fake_otlp_explorer_body(frame, area, 1, 4, None);
+}
+
+#[cfg(feature = "tui-preview")]
+fn render_design_lab_activity(frame: &mut Frame<'_>, area: Rect, journal: bool) {
+    frame.render_widget(Paragraph::new("").style(surface_style()), area);
+    let layout = PaneLayout::horizontal(area, &[1]);
+    let regions = layout.regions(&[20]);
+    let Some(region) = regions.first() else {
+        return;
+    };
+    let lines = if journal {
+        vec![
+            SectionHeading {
+                title: "Journal",
+                detail: Some("3 explicitly included agents"),
+            }
+            .line(&theme()),
+            Line::default(),
+            FieldRow {
+                label: "checkout/a-17",
+                value: "#481  exported-function-invoked  invocation=01J…",
+                label_width: 18,
+            }
+            .line(&theme()),
+            FieldRow {
+                label: "orders/a-04",
+                value: "#932  imported-function-invoked  rpc=01J…",
+                label_width: 18,
+            }
+            .line(&theme()),
+            Notice {
+                kind: NoticeKind::Info,
+                message: "Per-agent oplog index is authoritative; timestamps do not establish global causality.",
+            }
+            .line(&theme()),
+        ]
+    } else {
+        vec![
+            SectionHeading {
+                title: "Timeline",
+                detail: Some("3 explicitly included agents"),
+            }
+            .line(&theme()),
+            Line::default(),
+            Notice {
+                kind: NoticeKind::Active,
+                message: "checkout/a-17 started invocation 01J…",
+            }
+            .line(&theme()),
+            Notice {
+                kind: NoticeKind::Info,
+                message: "orders/a-04 called checkout/a-17 through durable RPC.",
+            }
+            .line(&theme()),
+            Notice {
+                kind: NoticeKind::Success,
+                message: "checkout/a-17 completed in 184 ms.",
+            }
+            .line(&theme()),
+        ]
+    };
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(surface_style())
+            .wrap(Wrap { trim: false }),
+        region.content_area,
+    );
+    layout.render_body_boundaries(frame, &regions, &theme());
+}
+
+#[cfg(feature = "tui-preview")]
 fn render_design_lab_column_chooser(frame: &mut Frame<'_>) {
     let table_state = PaneTableState::new(PANE_TABLE_COLUMNS, 0);
     let mut chooser = ColumnChooserState::new(&table_state);
     chooser.selected = 2;
-    let mut lines = chooser.lines(PANE_TABLE_COLUMNS, &theme());
+    let mut lines = chooser.lines(
+        PANE_TABLE_COLUMNS,
+        &[24, 12],
+        0,
+        PANE_TABLE_COLUMNS.len(),
+        &theme(),
+    );
     lines.push(Line::default());
     lines.push(shortcut_line(
         &[
@@ -5488,7 +7846,12 @@ fn render_design_lab_footer(frame: &mut Frame<'_>, area: Rect, scene: DesignLabS
 }
 
 #[cfg(feature = "tui-preview")]
-fn render_design_lab_unified_footer(frame: &mut Frame<'_>, area: Rect, scene: DesignLabScene) {
+fn render_design_lab_unified_footer(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    scene: DesignLabScene,
+    compact: bool,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -5509,19 +7872,30 @@ fn render_design_lab_unified_footer(frame: &mut Frame<'_>, area: Rect, scene: De
             label: "Commands",
         },
         KeyHint {
-            key: "?",
+            key: "ctrl+h",
             label: "Help",
         },
         KeyHint {
-            key: "q",
+            key: "ctrl+q",
             label: "Quit",
         },
     ];
     if !rows.is_empty() {
         let row = rows.remove(0);
-        render_design_lab_scoped_footer_row(frame, row, &global, false, "│");
+        let closes = compact && theme().footer_closes && leader.is_none();
+        render_design_lab_scoped_footer_row(
+            frame,
+            row,
+            &global,
+            false,
+            if closes { "└" } else { "│" },
+        );
     }
-    let contextual = design_lab_contextual_hints(scene);
+    let contextual = if compact {
+        Vec::new()
+    } else {
+        design_lab_contextual_hints(scene)
+    };
     let contextual_rows = ShortcutRow::pack(&contextual, area.width, 2);
     let row_count = contextual_rows.len().min(rows.len());
     for (index, (row, items)) in rows.into_iter().zip(contextual_rows).enumerate() {
@@ -5540,27 +7914,27 @@ fn render_design_lab_unified_footer(frame: &mut Frame<'_>, area: Rect, scene: De
             row,
             &[
                 KeyHint {
-                    key: "w",
+                    key: "ctrl+x w",
                     label: "Workspace",
                 },
                 KeyHint {
-                    key: "f",
+                    key: "tab",
                     label: "Focus",
                 },
                 KeyHint {
-                    key: "r",
+                    key: "ctrl+x r",
                     label: "Run",
                 },
                 KeyHint {
-                    key: "l",
+                    key: "ctrl+x l",
                     label: "Layout",
                 },
                 KeyHint {
-                    key: "e",
+                    key: "ctrl+x e",
                     label: "Context",
                 },
                 KeyHint {
-                    key: "?",
+                    key: "ctrl+x h",
                     label: "Help",
                 },
             ],
@@ -5572,6 +7946,36 @@ fn render_design_lab_unified_footer(frame: &mut Frame<'_>, area: Rect, scene: De
 
 #[cfg(feature = "tui-preview")]
 fn design_lab_contextual_hints(scene: DesignLabScene) -> Vec<KeyHint<'static>> {
+    if matches!(
+        scene,
+        DesignLabScene::OpsAgents
+            | DesignLabScene::OpsMetricsDemo
+            | DesignLabScene::ActivityTimeline
+            | DesignLabScene::ActivityJournal
+    ) {
+        return vec![
+            KeyHint {
+                key: "ctrl+x v",
+                label: "View",
+            },
+            KeyHint {
+                key: "tab",
+                label: "Focus",
+            },
+            KeyHint {
+                key: "type",
+                label: "Filter",
+            },
+            KeyHint {
+                key: "ctrl+space",
+                label: "Include",
+            },
+            KeyHint {
+                key: "ctrl+r",
+                label: "Refresh",
+            },
+        ];
+    }
     if matches!(
         scene,
         DesignLabScene::TableDecoration
@@ -5600,7 +8004,7 @@ fn design_lab_contextual_hints(scene: DesignLabScene) -> Vec<KeyHint<'static>> {
     }
     let mut hints = vec![
         KeyHint {
-            key: "r",
+            key: "ctrl+r",
             label: "Run",
         },
         KeyHint {
@@ -5627,7 +8031,7 @@ fn design_lab_contextual_hints(scene: DesignLabScene) -> Vec<KeyHint<'static>> {
             label: "Open",
         },
         KeyHint {
-            key: "u",
+            key: "ctrl+r",
             label: "Refresh",
         },
     ]);
@@ -5644,21 +8048,39 @@ fn render_design_lab_footer_navigation(
     if joined {
         let (_, weights) = design_lab_top_panes(scene);
         let junctions = PaneLayout::horizontal(area, &weights).junctions();
+        if matches!(
+            scene,
+            DesignLabScene::OpsAgents
+                | DesignLabScene::OpsMetricsDemo
+                | DesignLabScene::ActivityTimeline
+                | DesignLabScene::ActivityJournal
+        ) {
+            WorkspaceSelector {
+                items: &[WorkspaceItem {
+                    key: "",
+                    label: "Ops",
+                    active: true,
+                }],
+                junctions: &junctions,
+            }
+            .render(frame, area, &theme());
+            return;
+        }
         WorkspaceSelector {
             items: &[
                 WorkspaceItem {
-                    key: "1",
-                    label: "Overview",
+                    key: "",
+                    label: "Home",
                     active: true,
                 },
                 WorkspaceItem {
-                    key: "2",
-                    label: "Workbench",
+                    key: "",
+                    label: "Dev",
                     active: false,
                 },
                 WorkspaceItem {
-                    key: "3",
-                    label: "Resources",
+                    key: "",
+                    label: "Ops",
                     active: false,
                 },
             ],
@@ -5734,10 +8156,7 @@ fn render_design_lab_scoped_footer_row(
         items,
         active,
         left_glyph,
-        fallback: KeyHint {
-            key: "ctrl+p",
-            label: "Commands",
-        },
+        fallback: items.iter().find(|item| item.key == "ctrl+p").copied(),
     }
     .render(frame, area, &theme());
 }
@@ -5921,8 +8340,9 @@ fn render_dev_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         active_workspace: app.active_workspace,
         focused_dev_panel: app.dev_focus,
         mode: app.mode,
-        context_picker_rows: app.context_switcher.row_count(),
-        context_picker_step: app.context_switcher.mode.clone(),
+        context_picker_rows: context_picker_layout_rows(&app.context_switcher),
+        context_picker_selected: app.context_switcher.selected,
+        context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
         agents_view_mode: app.agents.view_mode,
         agent_details_visible: app.agents.detail_visible,
         layout: app.layout.clone(),
@@ -6092,20 +8512,21 @@ fn render_agents_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         return;
     }
 
-    let areas = if app.agents.detail_visible {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(content_area)
-            .to_vec()
+    let show_details = layout::ops_details_visible(content_area, app.agents.detail_visible);
+    let areas = if show_details {
+        let ratio = layout::clamp_ops_details_ratio(content_area, app.layout.ops_details_ratio);
+        PaneLayout::horizontal(content_area, &[ratio as u32, (100 - ratio) as u32])
     } else {
-        vec![content_area]
+        PaneLayout::horizontal(content_area, &[1])
     };
 
     let filtered = app.filtered_agents();
-    render_agent_list(frame, areas[0], &app.agents, &filtered);
-    if app.agents.detail_visible {
-        render_agent_details(frame, areas[1], app.agents.selected_agent(&filtered));
+    render_agent_list(frame, areas.panes[0], &app.agents, &filtered);
+    if show_details {
+        render_agent_details(frame, areas.panes[1], app.agents.selected_agent(&filtered));
+        if let Some(divider) = areas.dividers.first() {
+            render_split_handle(frame, *divider);
+        }
     }
 }
 
@@ -6264,9 +8685,13 @@ fn render_agent_list(
                 content_prefix(),
                 Span::styled(marker, style),
                 Span::raw(" "),
-                fixed_span(&agent.name, 28, style),
+                fixed_span(&agent.agent_id, 28, style),
                 Span::raw(" "),
-                fixed_span(agent.status.as_deref().unwrap_or("-"), 12, style),
+                fixed_span(
+                    agent.status_label(),
+                    12,
+                    style.fg(agent.status_tone().color(&theme())),
+                ),
                 Span::raw(" "),
                 fixed_span(agent.agent_type.as_deref().unwrap_or("-"), 20, style),
             ]));
@@ -6286,11 +8711,8 @@ fn render_agent_details(frame: &mut Frame<'_>, area: Rect, agent: Option<&AgentL
                     Span::styled("  ", surface_style()),
                     Span::styled("Details", Style::default().add_modifier(Modifier::BOLD)),
                 ]),
-                prefixed_line(format!("Name      : {}", agent.name)),
-                prefixed_line(format!(
-                    "Status    : {}",
-                    agent.status.as_deref().unwrap_or("-")
-                )),
+                prefixed_line(format!("AgentID   : {}", agent.agent_id)),
+                prefixed_line(format!("Status    : {}", agent.status_label())),
                 prefixed_line(format!(
                     "Type      : {}",
                     agent.agent_type.as_deref().unwrap_or("-")
@@ -6556,172 +8978,243 @@ fn content_prefix() -> Span<'static> {
 }
 
 fn render_help(frame: &mut Frame<'_>, app: &TuiApp) {
-    let area = centered_rect(70, 85, frame.area());
-    let lines = help_lines(app);
-
-    frame.render_widget(Clear, area);
+    let area = adaptive_data_popup_rect(frame.area(), 48, 12);
+    let content = OverlayFrame {
+        title: Some("Help"),
+    }
+    .render_shell(frame, area, &theme());
+    if content.height == 0 {
+        return;
+    }
+    let footer_height = content.height.min(1);
+    let body = Rect {
+        height: content.height.saturating_sub(footer_height),
+        ..content
+    };
+    let footer = Rect {
+        y: body.bottom(),
+        height: footer_height,
+        ..content
+    };
+    let mut lines = help_lines(app, body.width as usize);
+    let overflow = lines.len() > body.height as usize;
+    if overflow {
+        lines = help_lines(app, body.width.saturating_sub(1) as usize);
+    }
+    app.help_content_height.set(lines.len());
+    app.help_viewport_height.set(body.height as usize);
+    let offset = app
+        .help_scroll
+        .min(lines.len().saturating_sub(body.height as usize));
     frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme().border))
-                .title(" Help "),
-        ),
-        area,
+        Paragraph::new(lines)
+            .style(
+                Style::default()
+                    .fg(theme().text)
+                    .bg(theme().overlay_background),
+            )
+            .scroll((offset.min(u16::MAX as usize) as u16, 0)),
+        Rect {
+            width: body.width.saturating_sub(u16::from(overflow)),
+            ..body
+        },
     );
+    if footer.height > 0 {
+        frame.render_widget(
+            Paragraph::new(shortcut_line(
+                &[
+                    KeyHint {
+                        key: "↑/↓ / pgup/pgdn",
+                        label: "Scroll",
+                    },
+                    KeyHint {
+                        key: "esc",
+                        label: "Close",
+                    },
+                ],
+                &theme(),
+                Alignment::Center,
+            ))
+            .style(Style::default().bg(theme().overlay_background)),
+            footer,
+        );
+    }
+    render_overlay_scrollbar(frame, body, app.help_content_height.get(), offset);
 }
 
-fn help_lines(app: &TuiApp) -> Vec<Line<'static>> {
+fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![
-        Line::from(vec![Span::styled(
-            "Keyboard Shortcuts",
+        Line::from(Span::styled(
+            fit("Keyboard Shortcuts", width),
             Style::default().add_modifier(Modifier::BOLD),
-        )]),
+        ))
+        .alignment(Alignment::Left),
         Line::default(),
     ];
 
     push_action_section_for_app(
         &mut lines,
         app,
+        width,
         "Global",
         &[
             TuiActionId::OpenPalette,
             TuiActionId::OpenContextPicker,
             TuiActionId::ShowHelp,
-            TuiActionId::Build,
-            TuiActionId::Deploy,
-            TuiActionId::Clean,
-            TuiActionId::StartOrFocusRepl,
             TuiActionId::Quit,
         ],
     );
-    push_raw_help(&mut lines, "ctrl+p / :", "Open Palette");
-    push_raw_help(&mut lines, "esc / ctrl+c", "Quit");
-    push_raw_help(&mut lines, "] / [", "Next / previous workspace");
-    push_raw_help(&mut lines, "1 / 2 / 3", "Jump to Home / Dev / Ops");
-    push_raw_help(&mut lines, "tab", "Next Dev panel");
+    push_raw_help(&mut lines, width, "ctrl+c", "Quit");
+    push_raw_help(&mut lines, width, "ctrl+x v", "Switch Overview / Metrics");
 
-    push_section_break(&mut lines, "Palette");
-    push_raw_help(&mut lines, "type", "Filter commands");
-    push_raw_help(&mut lines, "up / down", "Move selection");
-    push_raw_help(&mut lines, "enter", "Execute selected action");
-    push_raw_help(&mut lines, "esc / ctrl+c", "Close palette");
+    push_section_break(&mut lines, width, "Palette");
+    push_raw_help(&mut lines, width, "type", "Filter commands");
+    push_raw_help(&mut lines, width, "up / down", "Move selection");
+    push_raw_help(&mut lines, width, "enter", "Execute selected action");
+    push_raw_help(&mut lines, width, "esc / ctrl+c", "Close palette");
 
-    push_action_section_for_app(
-        &mut lines,
-        app,
-        "Leader",
-        &[
-            TuiActionId::ToggleYes,
-            TuiActionId::ToggleReset,
-            TuiActionId::ToggleServerClean,
-            TuiActionId::CycleDevLayoutPreset,
-            TuiActionId::ToggleServerDrawer,
-            TuiActionId::OpenContextPicker,
-            TuiActionId::RestartServer,
-            TuiActionId::CleanRestartServer,
-        ],
-    );
-
-    if app.agents_focused() {
-        if app.agents.view_mode == AgentsViewMode::Inspect {
-            push_section_break(&mut lines, "Agent Inspect");
-            push_raw_help(&mut lines, "left / right", "Switch pane focus");
-            push_raw_help(&mut lines, "up / down", "Scroll focused pane");
-            push_raw_help(&mut lines, "pageup / pagedown", "Scroll focused pane");
-            push_raw_help(&mut lines, "home / end", "Top / latest focused pane");
-            push_raw_help(&mut lines, "esc", "Return to agent list");
-        } else {
-            push_action_section_for_app(
-                &mut lines,
-                app,
-                "Agents",
-                &[
-                    TuiActionId::RefreshAgents,
-                    TuiActionId::ToggleAgentAutoRefresh,
-                    TuiActionId::ToggleAgentDetails,
-                    TuiActionId::CycleAgentMode,
-                ],
-            );
-            push_raw_help(&mut lines, "/", "Filter agents");
-            push_raw_help(&mut lines, "up / down", "Move selection");
-            push_raw_help(&mut lines, "enter", "Inspect selected agent");
-        }
-    }
-
-    if app.command_is_running() {
-        push_section_break(&mut lines, "Command");
-        push_raw_help(&mut lines, "type", "Send input to command");
+    if app.ops_view == OpsView::Metrics {
+        push_section_break(&mut lines, width, "Fake OTLP Metrics Demo");
         push_raw_help(
             &mut lines,
-            "esc / ctrl+c",
-            "Cancel command, press again to force kill",
+            width,
+            "tab / shift+tab",
+            "Focus series or details",
         );
-        push_raw_help(&mut lines, "pageup / pagedown", "Scroll output");
-        push_raw_help(&mut lines, "home / end", "Top / latest output");
-        push_raw_help(&mut lines, "mouse wheel", "Scroll output");
-    } else if app.dev_panel_focused(DevPanel::Output) {
-        push_section_break(&mut lines, "Output");
-        push_raw_help(&mut lines, "up / down", "Scroll output");
-        push_raw_help(&mut lines, "pageup / pagedown", "Scroll output");
-        push_raw_help(&mut lines, "home / end", "Top / latest output");
-        push_raw_help(&mut lines, "mouse wheel", "Scroll output");
-    }
-
-    if app.dev_panel_focused(DevPanel::Repl) || app.repl.is_running() {
+        push_raw_help(
+            &mut lines,
+            width,
+            "up / down",
+            "Select or scroll focused pane",
+        );
+        push_raw_help(
+            &mut lines,
+            width,
+            "home / end",
+            "Move to first / last fake series",
+        );
+        lines.push(
+            Line::from(Span::styled(
+                fit(
+                    "  !  FAKE DATA — no OTLP receiver or query store is read",
+                    width,
+                ),
+                Style::default().fg(theme().marker),
+            ))
+            .alignment(Alignment::Left),
+        );
+    } else {
         push_action_section_for_app(
             &mut lines,
             app,
-            "REPL",
+            width,
+            "Agents Overview",
             &[
-                TuiActionId::StartOrFocusRepl,
-                TuiActionId::LeaveRepl,
-                TuiActionId::StopRepl,
-                TuiActionId::RestartRepl,
+                TuiActionId::RefreshAgents,
+                TuiActionId::OpenAgentDatasetFilter,
+                TuiActionId::IncludeAgentMatches,
+                TuiActionId::ExcludeAgentMatches,
+                TuiActionId::LoadMoreAgents,
+                TuiActionId::ToggleAgentAutoRefresh,
+                TuiActionId::ToggleAgentDetails,
+                TuiActionId::CycleAgentMode,
             ],
         );
-        push_raw_help(&mut lines, "enter", "Start or focus REPL");
-        push_raw_help(&mut lines, "ctrl+x p / ?", "Palette / help");
+        push_raw_help(&mut lines, width, "type", "Find within loaded agents");
+        push_raw_help(&mut lines, width, "ctrl+x f", "Change local find field");
+        push_raw_help(
+            &mut lines,
+            width,
+            "tab / shift+tab",
+            "Focus list or details",
+        );
+        push_raw_help(
+            &mut lines,
+            width,
+            "up / down",
+            "Move or scroll focused pane",
+        );
+        push_raw_help(&mut lines, width, "pageup / pagedown", "Move by page");
+        push_raw_help(&mut lines, width, "home / end", "Move to first / last row");
+        push_raw_help(&mut lines, width, "left / right", "Pan visible columns");
+        push_raw_help(
+            &mut lines,
+            width,
+            "ctrl+space",
+            "Include or exclude focused agent",
+        );
+        push_raw_help(&mut lines, width, "enter", "Show or hide details");
+        push_raw_help(&mut lines, width, "ctrl+x c", "Choose visible columns");
+        push_raw_help(&mut lines, width, "alt+left/right", "Resize details split");
     }
 
     lines.push(Line::default());
-    lines.push(Line::from("Press esc to close this help."));
+    lines.push(Line::from(fit("Press esc to close this help.", width)).alignment(Alignment::Left));
     lines
 }
 
 fn push_action_section_for_app(
     lines: &mut Vec<Line<'static>>,
     app: &TuiApp,
+    width: usize,
     title: &'static str,
     ids: &[TuiActionId],
 ) {
-    push_section_break(lines, title);
+    push_section_break(lines, width, title);
     for id in ids {
-        push_action_help_for_app(lines, app, action(*id));
+        push_action_help_for_app(lines, app, action(*id), width);
     }
 }
 
-fn push_section_break(lines: &mut Vec<Line<'static>>, title: &'static str) {
+fn push_section_break(lines: &mut Vec<Line<'static>>, width: usize, title: &'static str) {
     if lines.last().is_some_and(|line| !line.spans.is_empty()) {
         lines.push(Line::default());
     }
-    lines.push(Line::from(title));
+    lines.push(
+        Line::from(Span::styled(
+            fit(title, width),
+            Style::default()
+                .fg(theme().text)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .alignment(Alignment::Left),
+    );
 }
 
-fn push_action_help_for_app(lines: &mut Vec<Line<'static>>, app: &TuiApp, action: &TuiAction) {
+fn push_action_help_for_app(
+    lines: &mut Vec<Line<'static>>,
+    app: &TuiApp,
+    action: &TuiAction,
+    width: usize,
+) {
     let shortcut = action.shortcut.unwrap_or("-");
     let suffix = match app.action_availability(action) {
         TuiActionAvailability::Available => String::new(),
         TuiActionAvailability::Unavailable(reason) => format!(" ({reason})"),
     };
-    lines.push(Line::from(format!(
-        "  {shortcut:<18} {}{suffix}",
-        action.label
-    )));
+    let label = format!("{}{suffix}", action.label);
+    lines.push(
+        HelpRow {
+            key: shortcut,
+            label: &label,
+        }
+        .line(width, &theme()),
+    );
 }
 
-fn push_raw_help(lines: &mut Vec<Line<'static>>, shortcut: &'static str, label: &'static str) {
-    lines.push(Line::from(format!("  {shortcut:<18} {label}")));
+fn push_raw_help(
+    lines: &mut Vec<Line<'static>>,
+    width: usize,
+    shortcut: &'static str,
+    label: &'static str,
+) {
+    lines.push(
+        HelpRow {
+            key: shortcut,
+            label,
+        }
+        .line(width, &theme()),
+    );
 }
 
 fn render_tabs(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -6773,55 +9266,31 @@ fn tab_status(view: TuiWorkspace, app: &TuiApp) -> Option<Span<'static>> {
     Some(Span::styled(label, style))
 }
 
-fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp, return_mode: TuiMode) {
+fn render_leader_hint(frame: &mut Frame<'_>, _app: &TuiApp, _return_mode: TuiMode) {
     let area = Rect {
         x: frame.area().x,
         y: frame.area().y + frame.area().height.saturating_sub(2),
         width: frame.area().width,
         height: 1,
     };
-    let line = if return_mode == TuiMode::Repl {
-        leader_line(&[
-            (TuiActionId::LeaveRepl, "leave"),
-            (TuiActionId::StopRepl, "stop"),
-            (TuiActionId::RestartRepl, "restart"),
-            (TuiActionId::OpenPalette, "palette"),
-            (TuiActionId::ShowHelp, "help"),
-        ])
-    } else {
-        let mut spans = vec![Span::styled("┃ ", command_rail_style())];
-        push_leader_item(
-            &mut spans,
-            TuiActionId::ToggleYes,
-            format!("yes:{}", flag_state(app.command_options.yes)),
-        );
-        push_leader_item(
-            &mut spans,
-            TuiActionId::ToggleReset,
-            format!("reset:{}", flag_state(app.command_options.reset)),
-        );
-        push_leader_item(
-            &mut spans,
-            TuiActionId::ToggleServerClean,
-            format!("clean:{}", flag_state(app.server.clean)),
-        );
-        push_leader_item(
-            &mut spans,
-            TuiActionId::CycleDevLayoutPreset,
-            format!("layout:{}", app.layout.dev_preset.label()),
-        );
-        push_leader_item(
-            &mut spans,
-            TuiActionId::ToggleServerDrawer,
-            format!("drawer:{}", flag_state(app.layout.server_drawer_open)),
-        );
-        push_leader_item(&mut spans, TuiActionId::OpenContextPicker, "context");
-        push_leader_item(&mut spans, TuiActionId::OpenPalette, "palette");
-        push_leader_item(&mut spans, TuiActionId::ShowHelp, "help");
-        Line::from(spans)
-    };
+    let line = Line::from(vec![
+        Span::styled("│ ", command_rail_style()),
+        shortcut_span("e"),
+        Span::raw(" Context   "),
+        shortcut_span("a"),
+        Span::raw(" Auto refresh   "),
+        shortcut_span("m"),
+        Span::raw(" Agent mode   "),
+        shortcut_span("d"),
+        Span::raw(" Details   "),
+        shortcut_span("c"),
+        Span::raw(" Columns   "),
+        shortcut_span("p"),
+        Span::raw(" Commands   "),
+        shortcut_span("h"),
+        Span::raw(" Help"),
+    ]);
     frame.render_widget(Paragraph::new(line).style(command_status_bg_style()), area);
-    render_left_rail(frame, area, command_rail_style());
 }
 
 fn leader_line(items: &[(TuiActionId, &'static str)]) -> Line<'static> {
@@ -7401,22 +9870,17 @@ fn output_bytes_to_lines(bytes: Vec<u8>) -> Vec<Line<'static>> {
 }
 
 fn render_context_picker(frame: &mut Frame<'_>, app: &TuiApp) {
-    let visible_count = app.context_switcher.row_count().min(10);
     let selected = app
         .context_switcher
         .selected
         .min(app.context_switcher.row_count().saturating_sub(1));
-    let rows = context_picker_rows(&app.context_switcher, visible_count);
-    let area = centered_rect_fixed(
-        context_picker_width(&rows, frame.area().width),
-        context_picker_height(rows.len(), frame.area().height),
-        frame.area(),
-    );
-    let (title, subtitle, footer) = match app.context_switcher.mode {
+    let rows = context_picker_rows(&app.context_switcher);
+    let area = adaptive_data_popup_rect(frame.area(), 48, 10);
+    let content = OverlayFrame::content_area(area);
+    let (title, subtitle) = match app.context_switcher.mode {
         ContextPickerStep::Targets => (
             "Switch Context",
             format!("Current: {}", app.context.short_label()),
-            "enter select  up/down move  esc close",
         ),
         ContextPickerStep::AppEnvironments => (
             "Select App Environment",
@@ -7431,55 +9895,123 @@ fn render_context_picker(frame: &mut Frame<'_>, app: &TuiApp) {
                 })
                 .map(|target| format!("Server: {} - {}", target.label, target.detail))
                 .unwrap_or_else(|| "Server app environments".to_string()),
-            "enter switch  up/down move  esc servers",
         ),
     };
     let mut lines = vec![
-        palette_line(vec![Span::styled(
-            title,
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        palette_line(vec![Span::raw(subtitle)]),
-        palette_line(vec![]),
+        Notice {
+            kind: NoticeKind::Info,
+            message: &subtitle,
+        }
+        .line(&theme()),
+        Line::default(),
     ];
 
     if app.context_switcher.switch_running {
-        lines.push(palette_line(vec![Span::styled(
-            "switching...",
-            Style::default().fg(theme().accent),
-        )]));
-        lines.push(palette_line(vec![]));
+        lines.push(
+            Notice {
+                kind: NoticeKind::Loading,
+                message: "Switching context",
+            }
+            .line(&theme()),
+        );
+        lines.push(Line::default());
     }
     if let Some(error) = &app.context_switcher.last_error {
-        lines.push(palette_line(vec![Span::styled(
-            error.clone(),
-            Style::default().fg(theme().error),
-        )]));
-        lines.push(palette_line(vec![]));
+        lines.push(
+            Notice {
+                kind: NoticeKind::Error,
+                message: error,
+            }
+            .line(&theme()),
+        );
+        lines.push(Line::default());
     }
 
+    let prefix_height = context_picker_prefix_height(&app.context_switcher);
+    debug_assert_eq!(prefix_height, lines.len());
+    let row_capacity = (content.height as usize)
+        .saturating_sub(prefix_height)
+        .saturating_sub(2)
+        .max(1);
+    let selected_line = rows
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                ContextPickerRenderRow::Item {
+                    selectable_index,
+                    ..
+                } if *selectable_index == selected
+            )
+        })
+        .unwrap_or_default();
+    let mut start = selected_line.saturating_sub(row_capacity.saturating_sub(1));
+    if start > 0
+        && matches!(
+            rows.get(start.saturating_sub(1)),
+            Some(ContextPickerRenderRow::Section(_))
+        )
+        && selected_line.saturating_sub(start).saturating_add(2) <= row_capacity
+    {
+        start = start.saturating_sub(1);
+    }
+    let overflow = rows.len() > row_capacity;
     let label_width = context_picker_label_width(&rows);
-    let content_width = area.width.saturating_sub(2) as usize;
+    let content_width = content.width.saturating_sub(u16::from(overflow)) as usize;
     lines.extend(
         rows.iter()
+            .skip(start)
+            .take(row_capacity)
             .map(|row| context_picker_render_line(row, selected, label_width, content_width)),
     );
 
-    lines.push(palette_line(vec![]));
-    lines.push(palette_line(vec![Span::styled(
-        footer,
-        Style::default().fg(theme().text_muted),
-    )]));
-
-    frame.render_widget(Clear, area);
-    let content_area = Rect {
-        x: area.x.saturating_add(2),
-        y: area.y,
-        width: area.width.saturating_sub(2),
-        height: area.height,
+    lines.push(Line::default());
+    let footer_items = match app.context_switcher.mode {
+        ContextPickerStep::Targets => [
+            KeyHint {
+                key: "enter",
+                label: "Select",
+            },
+            KeyHint {
+                key: "↑/↓",
+                label: "Navigate",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Close",
+            },
+        ],
+        ContextPickerStep::AppEnvironments => [
+            KeyHint {
+                key: "enter",
+                label: "Switch",
+            },
+            KeyHint {
+                key: "↑/↓",
+                label: "Navigate",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Servers",
+            },
+        ],
     };
-    frame.render_widget(Paragraph::new(lines), content_area);
-    render_left_rail(frame, area, Style::default().fg(theme().accent));
+    let footer = shortcut_line(&footer_items, &theme(), Alignment::Center);
+    let lines = overlay_lines_with_footer(lines, footer, content.height);
+
+    OverlayFrame { title: Some(title) }.render(frame, area, lines, &theme());
+    if overflow {
+        render_overlay_scrollbar(
+            frame,
+            Rect {
+                y: content.y.saturating_add(prefix_height as u16),
+                height: row_capacity.min(u16::MAX as usize) as u16,
+                ..content
+            },
+            rows.len(),
+            selected_line,
+        );
+    }
     if app.context_switcher.environment_list_running {
         render_context_environment_loading(frame, app);
     }
@@ -7490,74 +10022,78 @@ fn render_context_switch_confirm(frame: &mut Frame<'_>, app: &TuiApp) {
     let message = app
         .context_switch_dev_blocker_message()
         .unwrap_or_else(|| "Switching context will stop running dev jobs.".to_string());
-    let status = if app.context_switcher.waiting_for_dev_stop {
-        "Waiting for dev jobs to stop..."
+    let (status_kind, status) = if app.context_switcher.waiting_for_dev_stop {
+        (NoticeKind::Loading, "Waiting for dev jobs to stop...")
     } else {
-        "Press enter to stop them gracefully, or esc to keep the current context."
+        (
+            NoticeKind::Info,
+            "Press enter to stop them gracefully, or esc to keep the current context.",
+        )
     };
     let lines = vec![
-        palette_line(vec![Span::styled(
-            "Confirm Context Switch",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        palette_line(vec![]),
-        palette_line(vec![Span::styled(
-            message,
-            Style::default().fg(theme().marker),
-        )]),
-        palette_line(vec![]),
-        palette_line(vec![Span::raw(status)]),
-        palette_line(vec![]),
-        palette_line(vec![Span::styled(
-            "enter/y confirm  esc/n cancel",
-            Style::default().fg(theme().text_muted),
-        )]),
+        Notice {
+            kind: NoticeKind::Warning,
+            message: &message,
+        }
+        .line(&theme()),
+        Line::default(),
+        Notice {
+            kind: status_kind,
+            message: status,
+        }
+        .line(&theme()),
+        Line::default(),
+        shortcut_line(
+            &[
+                KeyHint {
+                    key: "enter",
+                    label: "Confirm",
+                },
+                KeyHint {
+                    key: "esc",
+                    label: "Cancel",
+                },
+            ],
+            &theme(),
+            Alignment::Center,
+        ),
     ];
-    frame.render_widget(Clear, area);
-    let content_area = Rect {
-        x: area.x.saturating_add(2),
-        y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(2),
-    };
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        content_area,
-    );
-    render_left_rail(frame, area, Style::default().fg(theme().marker));
+    OverlayFrame {
+        title: Some("Switch context?"),
+    }
+    .render(frame, area, lines, &theme());
 }
 
 fn render_context_environment_loading(frame: &mut Frame<'_>, app: &TuiApp) {
-    let area = centered_rect_fixed(52, 7, frame.area());
+    let area = centered_rect_fixed(52, 9, frame.area());
     let spinner = spinner_symbol(app.context_switcher.environment_list_spinner_frame);
+    let message = format!("{spinner} Loading app environments");
     let lines = vec![
-        palette_line(vec![Span::styled(
-            "Loading",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        palette_line(vec![]),
-        palette_line(vec![Span::styled(
-            format!("{spinner} Loading app environments"),
-            Style::default().fg(theme().accent),
-        )]),
-        palette_line(vec![]),
-        palette_line(vec![Span::styled(
-            "esc cancel  q quit",
-            Style::default().fg(theme().text_muted),
-        )]),
+        Notice {
+            kind: NoticeKind::Loading,
+            message: &message,
+        }
+        .line(&theme()),
+        Line::default(),
+        shortcut_line(
+            &[
+                KeyHint {
+                    key: "esc",
+                    label: "Cancel",
+                },
+                KeyHint {
+                    key: "ctrl+q",
+                    label: "Quit",
+                },
+            ],
+            &theme(),
+            Alignment::Center,
+        ),
     ];
-    frame.render_widget(Clear, area);
-    let content_area = Rect {
-        x: area.x.saturating_add(2),
-        y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(2),
-    };
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        content_area,
-    );
-    render_left_rail(frame, area, Style::default().fg(theme().accent));
+    OverlayFrame {
+        title: Some("Loading"),
+    }
+    .render(frame, area, lines, &theme());
 }
 
 #[derive(Debug, Clone)]
@@ -7572,40 +10108,12 @@ enum ContextPickerRenderRow {
     },
 }
 
-impl ContextPickerRenderRow {
-    fn text_width(&self) -> usize {
-        match self {
-            Self::Section(label) => label.chars().count() + 2,
-            Self::Item {
-                label,
-                marker,
-                detail,
-                ..
-            } => {
-                let marker_width = marker
-                    .as_ref()
-                    .map(|marker| marker.chars().count() + 1)
-                    .unwrap_or_default();
-                4 + label.chars().count()
-                    + 1
-                    + detail.chars().count()
-                    + marker_width
-                    + CONTEXT_PICKER_RIGHT_PADDING
-            }
-        }
-    }
-}
-
-fn context_picker_rows(
-    context_switcher: &ContextSwitcherState,
-    visible_count: usize,
-) -> Vec<ContextPickerRenderRow> {
+fn context_picker_rows(context_switcher: &ContextSwitcherState) -> Vec<ContextPickerRenderRow> {
     match context_switcher.mode {
         ContextPickerStep::Targets => {
             context_switcher
                 .targets
                 .iter()
-                .take(visible_count)
                 .enumerate()
                 .fold(
                     (Vec::new(), None),
@@ -7634,7 +10142,6 @@ fn context_picker_rows(
             context_switcher
                 .app_environments
                 .iter()
-                .take(visible_count)
                 .enumerate()
                 .fold(
                     (Vec::new(), None::<bool>),
@@ -7668,6 +10175,23 @@ fn context_picker_rows(
     }
 }
 
+fn context_picker_layout_rows(context_switcher: &ContextSwitcherState) -> Vec<Option<usize>> {
+    context_picker_rows(context_switcher)
+        .into_iter()
+        .map(|row| match row {
+            ContextPickerRenderRow::Section(_) => None,
+            ContextPickerRenderRow::Item {
+                selectable_index, ..
+            } => Some(selectable_index),
+        })
+        .collect()
+}
+
+fn context_picker_prefix_height(context_switcher: &ContextSwitcherState) -> usize {
+    2 + usize::from(context_switcher.switch_running) * 2
+        + usize::from(context_switcher.last_error.is_some()) * 2
+}
+
 fn context_picker_render_line(
     row: &ContextPickerRenderRow,
     selected: usize,
@@ -7675,12 +10199,11 @@ fn context_picker_render_line(
     content_width: usize,
 ) -> Line<'static> {
     match row {
-        ContextPickerRenderRow::Section(label) => palette_line(vec![Span::styled(
-            format!("  {label}"),
-            Style::default()
-                .fg(theme().text_secondary)
-                .add_modifier(Modifier::BOLD),
-        )]),
+        ContextPickerRenderRow::Section(label) => SectionHeading {
+            title: label,
+            detail: None,
+        }
+        .line(&theme()),
         ContextPickerRenderRow::Item {
             selectable_index,
             label,
@@ -7689,20 +10212,11 @@ fn context_picker_render_line(
             unavailable,
         } => {
             let is_selected = *selectable_index == selected;
-            let style = match (is_selected, unavailable) {
-                (true, true) => Style::default()
-                    .fg(theme().text_muted)
-                    .add_modifier(Modifier::REVERSED),
-                (true, false) => Style::default().add_modifier(Modifier::REVERSED),
-                (false, true) => Style::default().fg(theme().text_muted),
-                (false, false) => Style::default(),
-            };
-            let prefix = if is_selected { ">   " } else { "    " };
             let marker_width = marker
                 .as_ref()
                 .map(|marker| marker.chars().count() + 1)
                 .unwrap_or_default();
-            let fixed_width = prefix.chars().count() + label_width + 1;
+            let fixed_width = 2 + label_width + 2;
             let detail_width = content_width
                 .saturating_sub(fixed_width + marker_width + CONTEXT_PICKER_RIGHT_PADDING);
             let detail_text = if marker.is_some() {
@@ -7710,20 +10224,22 @@ fn context_picker_render_line(
             } else {
                 ellipsis_text(detail, detail_width)
             };
-            let mut spans = vec![
-                Span::styled(prefix.to_string(), style),
-                Span::styled(pad_or_ellipsis(label, label_width), style),
-                Span::styled(" ".to_string(), style),
-                Span::styled(detail_text, style),
-            ];
-            if let Some(marker) = marker {
-                spans.push(Span::styled(" ".to_string(), style));
-                spans.push(Span::styled(
-                    marker.clone(),
-                    style.fg(theme().text_secondary),
-                ));
+            let badge = marker
+                .as_ref()
+                .map(|marker| format!(" {marker}"))
+                .unwrap_or_default();
+            let text = format!(
+                "{}  {}{}",
+                pad_or_ellipsis(label, label_width),
+                detail_text,
+                badge
+            );
+            SelectableRow {
+                label: &text,
+                selected: is_selected,
+                unavailable: *unavailable,
             }
-            Line::from(spans)
+            .line(content_width, &theme())
         }
     }
 }
@@ -7737,29 +10253,6 @@ fn context_picker_label_width(rows: &[ContextPickerRenderRow]) -> usize {
         .max()
         .unwrap_or(18)
         .clamp(18, 36)
-}
-
-fn context_picker_width(rows: &[ContextPickerRenderRow], terminal_width: u16) -> u16 {
-    let preferred_width = rows
-        .iter()
-        .map(ContextPickerRenderRow::text_width)
-        .max()
-        .unwrap_or("Switch Context".len())
-        .max("Select App Environment".len())
-        + 4;
-    let max_width = if terminal_width <= 60 {
-        terminal_width.saturating_sub(2).max(20) as usize
-    } else {
-        (terminal_width.saturating_sub(4) as usize).min(120).max(56)
-    };
-    let min_width = 56.min(max_width);
-    preferred_width.clamp(min_width, max_width) as u16
-}
-
-fn context_picker_height(row_count: usize, terminal_height: u16) -> u16 {
-    let content_height = 6 + row_count.max(1);
-    let max_height = terminal_height.saturating_sub(4).max(8) as usize;
-    (content_height + 2).clamp(8, max_height) as u16
 }
 
 fn ellipsis_text(text: &str, width: usize) -> String {
@@ -7788,132 +10281,139 @@ fn pad_or_ellipsis(text: &str, width: usize) -> String {
 
 fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
     let actions = filtered_actions(&app.palette.query);
-    let visible_actions = actions.iter().take(8).copied().collect::<Vec<_>>();
-    let width_actions = palette_actions();
-    let label_width = palette_label_width(&width_actions);
-    let reason_width = palette_reason_width(app, &width_actions);
-    let area = centered_rect_fixed(
-        palette_width(
-            &app.palette.query,
-            &width_actions,
-            label_width,
-            reason_width,
-            frame.area().width,
-        ),
-        palette_height(width_actions.len().min(8), frame.area().height),
-        frame.area(),
-    );
+    let area = adaptive_data_popup_rect(frame.area(), 36, 10);
+    let content = OverlayFrame::content_area(area);
+    let action_capacity = content.height.saturating_sub(4).max(1) as usize;
+    let overflow = actions.len() > action_capacity;
+    let content_width = content.width.saturating_sub(u16::from(overflow)) as usize;
     let selected = app.palette.selected.min(actions.len().saturating_sub(1));
+    let visible_count = action_capacity.min(actions.len());
+    let start = selected.saturating_sub(visible_count.saturating_sub(1));
+    let visible_actions = actions
+        .iter()
+        .skip(start)
+        .take(visible_count)
+        .copied()
+        .collect::<Vec<_>>();
     let mut lines = vec![
-        palette_line(vec![Span::styled(
-            "Command Palette",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        palette_line(vec![Span::raw(format!("> {}", app.palette.query))]),
-        palette_line(vec![]),
+        SearchInput {
+            query: &app.palette.query,
+        }
+        .line(content_width, &theme()),
+        Line::default(),
     ];
 
     if actions.is_empty() {
-        lines.push(palette_line(vec![Span::raw("No matching commands")]));
+        lines.push(
+            Notice {
+                kind: NoticeKind::Empty,
+                message: "No matching commands",
+            }
+            .line(&theme()),
+        );
     } else {
         for (index, action) in visible_actions.iter().enumerate() {
-            let prefix = if index == selected { "> " } else { "  " };
-            let plain_label = palette_action_label(action, prefix);
             let availability = app.action_availability(action);
-            let style = match (index == selected, availability.is_unavailable()) {
-                (true, true) => Style::default()
-                    .fg(theme().text_muted)
-                    .add_modifier(Modifier::REVERSED),
-                (true, false) => Style::default().add_modifier(Modifier::REVERSED),
-                (false, true) => Style::default().fg(theme().text_muted),
-                (false, false) => Style::default(),
+            let reason = match availability {
+                TuiActionAvailability::Available => String::new(),
+                TuiActionAvailability::Unavailable(reason) => {
+                    format!(" — unavailable: {reason}")
+                }
             };
-            let mut label_spans = vec![Span::styled(format!("{prefix}{}", action.label), style)];
-            if let Some(shortcut) = action.shortcut {
-                label_spans.push(Span::raw(" ("));
-                label_spans.push(shortcut_span(shortcut));
-                label_spans.push(Span::raw(")"));
-            }
-            let padding = label_width.saturating_sub(plain_label.chars().count());
-            let mut line_spans = label_spans;
-            line_spans.push(Span::raw(" ".repeat(padding)));
-            line_spans.push(Span::raw("  "));
-            line_spans.push(Span::styled(action.description, style));
-            if let TuiActionAvailability::Unavailable(reason) = availability {
-                line_spans.push(Span::styled(format!(" - {reason}"), style));
-            }
-            lines.push(Line::from(line_spans));
+            let description = format!("{}{reason}", action.description);
+            lines.push(
+                CommandRow {
+                    label: action.label,
+                    shortcut: action.shortcut,
+                    description: &description,
+                    selected: start + index == selected,
+                    unavailable: availability.is_unavailable(),
+                }
+                .line(content_width, &theme()),
+            );
         }
     }
-
-    frame.render_widget(Clear, area);
-    let content_area = Rect {
-        x: area.x.saturating_add(2),
-        y: area.y,
-        width: area.width.saturating_sub(2),
-        height: area.height,
-    };
-    frame.render_widget(Paragraph::new(lines), content_area);
-    render_left_rail(frame, area, Style::default().fg(theme().accent));
+    lines.push(Line::default());
+    let footer = shortcut_line(
+        &[
+            KeyHint {
+                key: "↑/↓",
+                label: "Navigate",
+            },
+            KeyHint {
+                key: "enter",
+                label: "Run",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Close",
+            },
+        ],
+        &theme(),
+        Alignment::Center,
+    );
+    let lines = overlay_lines_with_footer(lines, footer, content.height);
+    OverlayFrame {
+        title: Some("Commands"),
+    }
+    .render(frame, area, lines, &theme());
+    if overflow {
+        render_overlay_scrollbar(
+            frame,
+            Rect {
+                y: content.y.saturating_add(2),
+                height: content.height.saturating_sub(4),
+                ..content
+            },
+            actions.len(),
+            selected,
+        );
+    }
 }
 
 fn palette_line(mut spans: Vec<Span<'static>>) -> Line<'static> {
     Line::from(std::mem::take(&mut spans))
 }
 
-fn palette_label_width(actions: &[TuiAction]) -> usize {
-    actions
-        .iter()
-        .map(|action| palette_action_label(action, "  ").chars().count())
-        .max()
-        .unwrap_or("No matching commands".len())
-        .max(18)
+fn overlay_lines_with_footer(
+    mut body: Vec<Line<'static>>,
+    footer: Line<'static>,
+    height: u16,
+) -> Vec<Line<'static>> {
+    if height == 0 {
+        return Vec::new();
+    }
+    let body_height = height.saturating_sub(1) as usize;
+    body.truncate(body_height);
+    body.resize(body_height, Line::default());
+    body.push(footer);
+    body
 }
 
-fn palette_reason_width(app: &TuiApp, actions: &[TuiAction]) -> usize {
-    actions
-        .iter()
-        .filter_map(|action| match app.action_availability(action) {
-            TuiActionAvailability::Available => None,
-            TuiActionAvailability::Unavailable(reason) => Some(3 + reason.chars().count()),
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-fn palette_action_label(action: &TuiAction, prefix: &str) -> String {
-    let shortcut = action
-        .shortcut
-        .map(|shortcut| format!(" ({shortcut})"))
-        .unwrap_or_default();
-    format!("{prefix}{}{}", action.label, shortcut)
-}
-
-fn palette_width(
-    query: &str,
-    actions: &[TuiAction],
-    label_width: usize,
-    reason_width: usize,
-    terminal_width: u16,
-) -> u16 {
-    let action_width = actions
-        .iter()
-        .map(|action| label_width + 2 + action.description.chars().count() + reason_width)
-        .max()
-        .unwrap_or("No matching commands".len());
-    let content_width = action_width
-        .max("Command Palette".len())
-        .max(query.chars().count() + 2)
-        + 2;
-    let max_width = terminal_width.saturating_sub(4).max(20) as usize;
-    let min_width = 36.min(max_width);
-    (content_width + 2).clamp(min_width, max_width) as u16
-}
-
-fn palette_height(action_count: usize, terminal_height: u16) -> u16 {
-    let content_height = 3 + action_count.max(1);
-    let max_height = terminal_height.saturating_sub(4).max(6) as usize;
-    (content_height + 2).clamp(6, max_height) as u16
+fn render_overlay_scrollbar(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    content_length: usize,
+    position: usize,
+) {
+    if area.width == 0 || area.height == 0 || content_length <= area.height as usize {
+        return;
+    }
+    let mut state = ScrollbarState::new(content_length)
+        .position(position)
+        .viewport_content_length(area.height as usize);
+    render_scrollbar(
+        frame,
+        PaneScrollbarSlot {
+            area: Rect {
+                x: area.right().saturating_sub(1),
+                width: 1,
+                ..area
+            },
+        },
+        &mut state,
+        &theme(),
+    );
 }
 
 fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
@@ -7925,28 +10425,6 @@ fn centered_rect_fixed(width: u16, height: u16, area: Rect) -> Rect {
         width,
         height,
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let [_, horizontal, _] = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .areas(area);
-
-    let [_, vertical, _] = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .areas(horizontal);
-
-    vertical
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -7963,9 +10441,15 @@ enum TuiActionId {
     CycleDevLayoutPreset,
     ToggleServerDrawer,
     RefreshAgents,
+    OpenAgentDatasetFilter,
+    IncludeAgentMatches,
+    ExcludeAgentMatches,
+    LoadMoreAgents,
     ToggleAgentAutoRefresh,
     CycleAgentMode,
     ToggleAgentDetails,
+    CycleOpsView,
+    CycleAgentFindScope,
     SelectHome,
     SelectDev,
     SelectOps,
@@ -8085,9 +10569,15 @@ enum TuiActionKind {
     CycleDevLayoutPreset,
     ToggleServerDrawer,
     RefreshAgents,
+    OpenAgentDatasetFilter,
+    IncludeAgentMatches,
+    ExcludeAgentMatches,
+    LoadMoreAgents,
     ToggleAgentAutoRefresh,
     CycleAgentMode,
     ToggleAgentDetails,
+    CycleOpsView,
+    CycleAgentFindScope,
     StartOrFocusRepl,
     FocusRepl,
     LeaveRepl,
@@ -8099,12 +10589,12 @@ enum TuiActionKind {
     Quit,
 }
 
-const ACTIONS: [TuiAction; 27] = [
+const ACTIONS: [TuiAction; 33] = [
     TuiAction {
         id: TuiActionId::Build,
         label: "Build",
         description: "Run golem build",
-        shortcut: Some("b"),
+        shortcut: Some("ctrl+x b"),
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -8115,7 +10605,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::Deploy,
         label: "Deploy",
         description: "Run golem deploy",
-        shortcut: Some("d"),
+        shortcut: Some("ctrl+x d"),
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -8126,7 +10616,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::Clean,
         label: "Clean",
         description: "Run golem clean",
-        shortcut: Some("c"),
+        shortcut: Some("ctrl+x c"),
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -8159,7 +10649,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::ToggleServer,
         label: "Start/Stop Server",
         description: "Focus Dev Server and toggle it",
-        shortcut: Some("s"),
+        shortcut: Some("ctrl+x s"),
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -8214,7 +10704,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::ToggleServerDrawer,
         label: "Toggle Server Drawer",
         description: "Open or close the global local-server drawer",
-        shortcut: Some("ctrl+x v"),
+        shortcut: None,
         category: TuiActionCategory::Dev,
         scope: TuiActionScope::Leader,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -8225,12 +10715,56 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::RefreshAgents,
         label: "Refresh Agents",
         description: "Refresh the Ops agent list",
-        shortcut: Some("u"),
+        shortcut: Some("ctrl+r"),
         category: TuiActionCategory::Ops,
         scope: TuiActionScope::Agents,
         execution_kind: TuiActionExecutionKind::Direct,
         palette_visible: true,
         kind: TuiActionKind::RefreshAgents,
+    },
+    TuiAction {
+        id: TuiActionId::OpenAgentDatasetFilter,
+        label: "Filter Agent Dataset",
+        description: "Choose a server-side component or agent-type filter",
+        shortcut: Some("ctrl+f"),
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Agents,
+        execution_kind: TuiActionExecutionKind::Internal,
+        palette_visible: true,
+        kind: TuiActionKind::OpenAgentDatasetFilter,
+    },
+    TuiAction {
+        id: TuiActionId::IncludeAgentMatches,
+        label: "Include Loaded Matches",
+        description: "Include every loaded agent matching the local find",
+        shortcut: Some("ctrl+a"),
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Agents,
+        execution_kind: TuiActionExecutionKind::Internal,
+        palette_visible: true,
+        kind: TuiActionKind::IncludeAgentMatches,
+    },
+    TuiAction {
+        id: TuiActionId::ExcludeAgentMatches,
+        label: "Exclude Loaded Matches",
+        description: "Exclude every loaded agent matching the local find",
+        shortcut: Some("ctrl+n"),
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Agents,
+        execution_kind: TuiActionExecutionKind::Internal,
+        palette_visible: true,
+        kind: TuiActionKind::ExcludeAgentMatches,
+    },
+    TuiAction {
+        id: TuiActionId::LoadMoreAgents,
+        label: "Load More Agents",
+        description: "Continue each unfinished server cursor",
+        shortcut: Some("ctrl+l"),
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Agents,
+        execution_kind: TuiActionExecutionKind::Direct,
+        palette_visible: true,
+        kind: TuiActionKind::LoadMoreAgents,
     },
     TuiAction {
         id: TuiActionId::ToggleAgentAutoRefresh,
@@ -8266,10 +10800,32 @@ const ACTIONS: [TuiAction; 27] = [
         kind: TuiActionKind::ToggleAgentDetails,
     },
     TuiAction {
+        id: TuiActionId::CycleOpsView,
+        label: "Switch Overview / Metrics",
+        description: "Switch the Ops explorer between agents and metrics",
+        shortcut: Some("ctrl+x v"),
+        category: TuiActionCategory::Navigation,
+        scope: TuiActionScope::Leader,
+        execution_kind: TuiActionExecutionKind::ViewNavigation,
+        palette_visible: true,
+        kind: TuiActionKind::CycleOpsView,
+    },
+    TuiAction {
+        id: TuiActionId::CycleAgentFindScope,
+        label: "Cycle Agent Find Field",
+        description: "Search loaded agents by AgentID, component, or agent type",
+        shortcut: Some("ctrl+x f"),
+        category: TuiActionCategory::Ops,
+        scope: TuiActionScope::Agents,
+        execution_kind: TuiActionExecutionKind::Internal,
+        palette_visible: true,
+        kind: TuiActionKind::CycleAgentFindScope,
+    },
+    TuiAction {
         id: TuiActionId::SelectHome,
         label: "Go to Home",
         description: "Switch to Home workspace",
-        shortcut: Some("1"),
+        shortcut: None,
         category: TuiActionCategory::Navigation,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::ViewNavigation,
@@ -8280,7 +10836,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::SelectDev,
         label: "Go to Dev",
         description: "Switch to Dev workspace",
-        shortcut: Some("2"),
+        shortcut: None,
         category: TuiActionCategory::Navigation,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::ViewNavigation,
@@ -8291,7 +10847,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::SelectOps,
         label: "Go to Ops",
         description: "Switch to Ops workspace",
-        shortcut: Some("3"),
+        shortcut: None,
         category: TuiActionCategory::Navigation,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::ViewNavigation,
@@ -8302,7 +10858,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::StartOrFocusRepl,
         label: "Start or Focus REPL",
         description: "Run golem repl and send input there",
-        shortcut: Some("r"),
+        shortcut: Some("ctrl+x r"),
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::NestedCli,
@@ -8313,7 +10869,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::FocusRepl,
         label: "Focus REPL",
         description: "Send keyboard input to the running REPL",
-        shortcut: Some("r"),
+        shortcut: Some("ctrl+x r"),
         category: TuiActionCategory::Repl,
         scope: TuiActionScope::Repl,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -8379,7 +10935,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::ShowHelp,
         label: "Show Help",
         description: "Show TUI shortcuts",
-        shortcut: Some("?"),
+        shortcut: Some("ctrl+h"),
         category: TuiActionCategory::System,
         scope: TuiActionScope::System,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -8390,7 +10946,7 @@ const ACTIONS: [TuiAction; 27] = [
         id: TuiActionId::Quit,
         label: "Quit",
         description: "Exit the TUI",
-        shortcut: Some("q"),
+        shortcut: Some("ctrl+q"),
         category: TuiActionCategory::System,
         scope: TuiActionScope::Global,
         execution_kind: TuiActionExecutionKind::Internal,
@@ -8423,11 +10979,16 @@ fn action_short_label(id: TuiActionId) -> &'static str {
 
 #[cfg(all(feature = "tui-preview", test))]
 fn preview_production_app() -> TuiApp {
-    TuiApp {
+    let mut app = TuiApp {
         should_quit: false,
-        active_workspace: TuiWorkspace::Home,
+        active_workspace: TuiWorkspace::Ops,
+        ops_view: OpsView::Overview,
+        fake_otlp: FakeOtlpExplorerState::default(),
         dev_focus: DevPanel::Repl,
         mode: TuiMode::Normal,
+        help_scroll: 0,
+        help_content_height: Cell::new(0),
+        help_viewport_height: Cell::new(0),
         palette: CommandPalette::default(),
         command_options: CommandOptions::default(),
         command_run: None,
@@ -8461,15 +11022,60 @@ fn preview_production_app() -> TuiApp {
         auth_prompt: None,
         layout: TuiLayoutState::default(),
         layout_snapshot: RefCell::new(None),
-    }
+    };
+    app.agents.agents = vec![
+        AgentListItem {
+            agent_id: "checkout(cart-17)".into(),
+            component: Some("checkout".into()),
+            agent_type: Some("CheckoutAgent".into()),
+            revision: "7".into(),
+            pending: "2".into(),
+            created_at: "2026-09-23T12:00:00Z".into(),
+            status: AgentStatus::Running,
+            last_error_kind: None,
+            raw: serde_json::json!({"name": "checkout(cart-17)"}),
+        },
+        AgentListItem {
+            agent_id: "orders(order-04)".into(),
+            component: Some("orders".into()),
+            agent_type: Some("OrderAgent".into()),
+            revision: "4".into(),
+            pending: "0".into(),
+            created_at: "2026-09-23T11:30:00Z".into(),
+            status: AgentStatus::Idle,
+            last_error_kind: None,
+            raw: serde_json::json!({"name": "orders(order-04)"}),
+        },
+    ];
+    app.agents.included.insert(app.agents.agents[0].identity());
+    app
 }
 
 fn palette_actions() -> Vec<TuiAction> {
     ACTIONS
         .iter()
         .copied()
-        .filter(|action| action.palette_visible)
+        .filter(|action| action.palette_visible && action_visible_in_ops_rebuild(action.id))
         .collect()
+}
+
+fn action_visible_in_ops_rebuild(id: TuiActionId) -> bool {
+    matches!(
+        id,
+        TuiActionId::RefreshAgents
+            | TuiActionId::OpenAgentDatasetFilter
+            | TuiActionId::IncludeAgentMatches
+            | TuiActionId::ExcludeAgentMatches
+            | TuiActionId::LoadMoreAgents
+            | TuiActionId::ToggleAgentAutoRefresh
+            | TuiActionId::CycleAgentMode
+            | TuiActionId::ToggleAgentDetails
+            | TuiActionId::CycleOpsView
+            | TuiActionId::CycleAgentFindScope
+            | TuiActionId::OpenContextPicker
+            | TuiActionId::ShowHelp
+            | TuiActionId::Quit
+    )
 }
 
 fn filtered_actions(query: &str) -> Vec<TuiAction> {
@@ -8481,7 +11087,7 @@ fn filtered_actions(query: &str) -> Vec<TuiAction> {
     let matcher = SkimMatcherV2::default();
     let mut matches = ACTIONS
         .iter()
-        .filter(|action| action.palette_visible)
+        .filter(|action| action.palette_visible && action_visible_in_ops_rebuild(action.id))
         .filter_map(|action| {
             let haystack = format!(
                 "{} {} {} {} {}",
@@ -8527,15 +11133,14 @@ mod tests {
             frame
                 .lines()
                 .next()
-                .is_some_and(|line| line.starts_with('┃')),
+                .is_some_and(|line| line.starts_with('┌')),
             "{frame}"
         );
-        assert!(frame.contains("Golem"), "{frame}");
-        assert!(frame.contains("app: sample-app"), "{frame}");
-        assert!(frame.contains("sample-app"), "{frame}");
-        assert!(frame.contains("Build"), "{frame}");
-        assert!(frame.contains("Deploy"), "{frame}");
-        assert!(frame.contains("Clean"), "{frame}");
+        assert!(frame.contains("GOLEM"), "{frame}");
+        assert!(frame.contains("app sample-app"), "{frame}");
+        assert!(frame.contains("Agents · Overview"), "{frame}");
+        assert!(!frame.contains(" Build "), "{frame}");
+        assert!(!frame.contains(" Deploy "), "{frame}");
     }
 
     #[test]
@@ -8543,17 +11148,13 @@ mod tests {
         let app = test_app();
         let frame = render_app_text(&app);
 
-        assert!(frame.contains("Home"), "{frame}");
-        assert!(frame.contains("Dev"), "{frame}");
-        assert!(frame.contains("Ops"), "{frame}");
-        assert!(frame.contains("[1] Home"), "{frame}");
-        assert!(frame.contains("[3] Ops"), "{frame}");
-        assert!(!frame.contains("[4]"), "{frame}");
-        assert!(!frame.contains("[5]"), "{frame}");
+        assert!(frame.contains("[ Ops ]"), "{frame}");
+        assert!(!frame.contains("Home"), "{frame}");
+        assert!(!frame.contains("Dev"), "{frame}");
     }
 
     #[test]
-    fn tabs_show_running_indicator_for_dev_workspace() {
+    fn legacy_dev_runtime_state_does_not_leak_into_ops_navigation() {
         let mut app = test_app();
         app.command_run = Some(CommandRun::new(
             1,
@@ -8566,9 +11167,9 @@ mod tests {
         app.repl.run.status = ReplStatus::Running;
 
         let frame = render_app_text(&app);
-        let indicator_count = frame.chars().filter(|character| *character == '●').count();
-
-        assert!(indicator_count >= 1, "{frame}");
+        assert!(!frame.contains("golem build"), "{frame}");
+        assert!(!frame.contains("REPL"), "{frame}");
+        assert!(frame.contains("[ Ops ]"), "{frame}");
     }
 
     #[test]
@@ -8598,9 +11199,13 @@ mod tests {
         terminal.draw(|frame| render(frame, &app)).unwrap();
 
         let buffer = terminal.backend().buffer();
-        for y in 3..23 {
+        assert_eq!(
+            buffer.cell((0, 1)).expect("missing title cell").symbol(),
+            "├"
+        );
+        for y in 2..21 {
             let symbol = buffer.cell((0, y)).expect("missing cell").symbol();
-            assert_eq!(symbol, "┃", "missing rail at row {y}");
+            assert_eq!(symbol, "│", "missing rail at row {y}");
         }
     }
 
@@ -8612,50 +11217,47 @@ mod tests {
         let frame = render_app_text(&app);
 
         assert_eq!(app.mode, TuiMode::LeaderNormal);
-        assert!(frame.contains("ctrl+x y"), "{frame}");
-        assert!(frame.contains("ctrl+x r"), "{frame}");
-        assert!(frame.contains("clean:off"), "{frame}");
+        assert!(frame.contains("Context"), "{frame}");
+        assert!(frame.contains("Columns"), "{frame}");
+        assert!(frame.contains("Commands"), "{frame}");
     }
 
     #[test]
-    fn switches_tabs_with_keys() {
+    fn leader_shortcut_switches_ops_views() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char(']')));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('v')));
         let frame = render_app_text(&app);
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert!(frame.contains("Dev"), "{frame}");
+        assert_eq!(app.ops_view, OpsView::Metrics);
+        assert!(frame.contains("Agents · Metrics"), "{frame}");
 
-        app.handle_key(key(KeyCode::Char('[')));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('v')));
         let frame = render_app_text(&app);
-        assert_eq!(app.active_workspace, TuiWorkspace::Home);
-        assert!(frame.contains("Home"), "{frame}");
+        assert_eq!(app.ops_view, OpsView::Overview);
+        assert!(frame.contains("Agents · Overview"), "{frame}");
     }
 
     #[test]
-    fn jumps_to_tab_with_number() {
+    fn alt_number_is_not_a_workspace_shortcut() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char('3')));
-        let frame = render_app_text(&app);
+        app.handle_key(modified_key(KeyCode::Char('1'), KeyModifiers::ALT));
 
         assert_eq!(app.active_workspace, TuiWorkspace::Ops);
-        assert!(frame.contains("agents"), "{frame}");
+        assert_eq!(app.mode, TuiMode::Normal);
     }
 
     #[test]
-    fn tab_cycles_dev_panel_focus() {
+    fn bare_workspace_number_starts_agent_find() {
         let mut app = test_app();
         app.handle_key(key(KeyCode::Char('2')));
 
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
         assert_eq!(app.dev_focus, DevPanel::Repl);
-
-        app.handle_key(key(KeyCode::Tab));
-        assert_eq!(app.dev_focus, DevPanel::Output);
-
-        app.handle_key(key(KeyCode::BackTab));
-        assert_eq!(app.dev_focus, DevPanel::Repl);
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.agents.query, "2");
     }
 
     #[test]
@@ -8665,47 +11267,29 @@ mod tests {
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
         let frame = render_app_text(&app);
 
-        assert!(frame.contains("Command Palette"), "{frame}");
-        assert!(frame.contains("Build"), "{frame}");
+        assert!(frame.contains("Commands"), "{frame}");
+        assert!(frame.contains("Refresh Agents"), "{frame}");
     }
 
     #[test]
-    fn palette_width_fits_visible_actions() {
-        let actions = filtered_actions("");
-        let visible = actions.iter().take(8).copied().collect::<Vec<_>>();
-        let label_width = palette_label_width(&visible);
-        let width = palette_width("", &visible, label_width, 0, 120);
-
-        assert!(width > 36);
-        assert!(width <= 116);
-    }
-
-    #[test]
-    fn palette_width_is_clamped_on_narrow_terminals() {
-        let actions = filtered_actions("");
-        let visible = actions.iter().take(8).copied().collect::<Vec<_>>();
-        let label_width = palette_label_width(&visible);
-
-        assert_eq!(palette_width("", &visible, label_width, 0, 30), 26);
-    }
-
-    #[test]
-    fn palette_width_does_not_shrink_when_filtering() {
-        let width_actions = palette_actions();
-        let label_width = palette_label_width(&width_actions);
+    fn adaptive_data_popups_use_available_space_and_keep_margins() {
+        assert_eq!(
+            adaptive_data_popup_rect(Rect::new(0, 0, 100, 40), 36, 10),
+            Rect::new(7, 3, 85, 34)
+        );
+        assert_eq!(
+            adaptive_data_popup_rect(Rect::new(0, 0, 40, 12), 48, 10),
+            Rect::new(1, 1, 38, 10)
+        );
+        assert_eq!(
+            adaptive_data_popup_rect(Rect::new(0, 0, 1, 1), 48, 12),
+            Rect::new(0, 0, 1, 1)
+        );
 
         assert_eq!(
-            palette_width("", &width_actions, label_width, 0, 120),
-            palette_width("comp", &width_actions, label_width, 0, 120)
+            centered_rect_fixed(52, 9, Rect::new(0, 0, 100, 40)),
+            Rect::new(24, 15, 52, 9)
         );
-    }
-
-    #[test]
-    fn palette_height_does_not_shrink_when_filtering() {
-        let height = palette_height(palette_actions().len().min(8), 40);
-
-        assert_eq!(height, palette_height(palette_actions().len().min(8), 40));
-        assert!(height > palette_height(1, 40));
     }
 
     #[test]
@@ -8729,6 +11313,18 @@ mod tests {
                     shortcut,
                     shortcut.to_lowercase(),
                     "shortcut should use lowercase notation: {shortcut}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn action_shortcuts_never_use_bare_printable_keys() {
+        for action in ACTIONS {
+            if let Some(shortcut) = action.shortcut {
+                assert!(
+                    shortcut.contains("ctrl+") || shortcut.contains("alt+"),
+                    "shortcut must include a modifier: {shortcut}"
                 );
             }
         }
@@ -8794,22 +11390,30 @@ mod tests {
     }
 
     #[test]
+    fn resized_production_footer_shows_palette_shortcut_once() {
+        let app = test_app();
+
+        for width in [48, 72, 100, 140] {
+            let frame = render_app_text_at(&app, width, 24);
+            assert_eq!(
+                frame.matches("ctrl+p").count(),
+                1,
+                "duplicate palette shortcut at width {width}:\n{frame}"
+            );
+        }
+    }
+
+    #[test]
     fn leader_hints_use_registered_actions() {
         let mut app = test_app();
         let driver = TuiTestDriver::new(120, 32);
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        driver.assert_visible(&app, action_shortcut(TuiActionId::ToggleYes));
-        driver.assert_visible(&app, action_shortcut(TuiActionId::ToggleReset));
-        driver.assert_visible(&app, action_shortcut(TuiActionId::ToggleServerClean));
-        driver.assert_visible(&app, action_shortcut(TuiActionId::OpenPalette));
-
-        app.handle_key(key(KeyCode::Esc));
-        app.handle_key(key(KeyCode::Char('r')));
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        driver.assert_visible(&app, action_shortcut(TuiActionId::LeaveRepl));
-        driver.assert_visible(&app, action_shortcut(TuiActionId::StopRepl));
-        driver.assert_visible(&app, action_shortcut(TuiActionId::RestartRepl));
+        driver.assert_visible(&app, "Context");
+        driver.assert_visible(&app, "Auto refresh");
+        driver.assert_visible(&app, "Agent mode");
+        driver.assert_visible(&app, "Columns");
+        driver.assert_visible(&app, "Commands");
     }
 
     #[test]
@@ -8841,11 +11445,11 @@ mod tests {
         assert!(frame.contains("Manifest Environments"), "{frame}");
         assert!(frame.contains("Servers"), "{frame}");
         assert!(!frame.contains("┃   Current"), "{frame}");
-        assert!(frame.contains(">   sample-app/local"), "{frame}");
+        assert!(frame.contains("▌ sample-app/local"), "{frame}");
         assert!(frame.contains("current"), "{frame}");
         assert!(!frame.contains("[manifest"), "{frame}");
-        assert!(frame.contains("    sample-app/prod"), "{frame}");
-        assert!(frame.contains("    Profile prod"), "{frame}");
+        assert!(frame.contains("sample-app/prod"), "{frame}");
+        assert!(frame.contains("Profile prod"), "{frame}");
         assert!(frame.contains("profile"), "{frame}");
     }
 
@@ -8878,7 +11482,7 @@ mod tests {
 
         assert_eq!(app.context_switcher.selected, 1);
         let frame = render_app_text_at(&app, 140, 32);
-        assert!(frame.contains(">   sample-app/prod"), "{frame}");
+        assert!(frame.contains("▌ sample-app/prod"), "{frame}");
     }
 
     #[test]
@@ -8979,7 +11583,8 @@ mod tests {
         let frame = render_app_text_at(&app, 100, 30);
 
         assert!(frame.contains("Loading app environments"), "{frame}");
-        assert!(frame.contains("esc cancel  q quit"), "{frame}");
+        assert!(frame.contains("esc Cancel"), "{frame}");
+        assert!(frame.contains("ctrl+q Quit"), "{frame}");
         assert!(frame.contains("| Loading app environments"), "{frame}");
     }
 
@@ -9028,18 +11633,18 @@ mod tests {
     }
 
     #[test]
-    fn context_environment_loading_q_quits() {
+    fn context_environment_loading_ctrl_q_quits() {
         let mut app = test_app();
         app.open_context_picker();
         app.context_switcher.environment_list_running = true;
 
-        app.handle_key(key(KeyCode::Char('q')));
+        app.handle_key(modified_key(KeyCode::Char('q'), KeyModifiers::CONTROL));
 
         assert!(app.should_quit);
     }
 
     #[test]
-    fn context_picker_width_expands_but_is_bounded() {
+    fn context_picker_rows_include_targets_and_app_environments() {
         let mut state = ContextSwitcherState::new(vec![
             test_current_context_target(),
             test_server_context_target(
@@ -9048,10 +11653,10 @@ mod tests {
                 "https://very-long-production-worker-service.internal.example.com:9443",
             ),
         ]);
-        let rows = context_picker_rows(&state, state.row_count());
-
-        assert_eq!(context_picker_width(&rows, 200), 120);
-        assert_eq!(context_picker_width(&rows, 50), 48);
+        let rows = context_picker_rows(&state);
+        assert!(rows.iter().any(|row| matches!(row,
+            ContextPickerRenderRow::Item { label, .. } if label.contains("production")
+        )));
 
         state.show_app_environments(
             "server:profile:prod".to_string(),
@@ -9067,8 +11672,10 @@ mod tests {
                 error: None,
             }],
         );
-        let rows = context_picker_rows(&state, state.row_count());
-        assert_eq!(context_picker_width(&rows, 200), 120);
+        let rows = context_picker_rows(&state);
+        assert!(rows.iter().any(|row| matches!(row,
+            ContextPickerRenderRow::Item { label, .. } if label == "large-application/prod"
+        )));
     }
 
     #[test]
@@ -9230,7 +11837,7 @@ mod tests {
     }
 
     #[test]
-    fn non_local_context_keeps_global_server_actions_available() {
+    fn non_local_context_does_not_expose_server_shortcut() {
         let mut app = test_app();
         app.context.uses_local_server = false;
         app.context.dev_eligible = false;
@@ -9242,9 +11849,8 @@ mod tests {
 
         app.handle_key(key(KeyCode::Char('s')));
 
-        assert_eq!(app.server.run.status, ServerStatus::Starting);
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert_eq!(app.dev_focus, DevPanel::Server);
+        assert_eq!(app.server.run.status, ServerStatus::Stopped);
+        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
     }
 
     #[test]
@@ -9307,12 +11913,8 @@ mod tests {
 
         app.handle_key(key(KeyCode::Char('b')));
 
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert_eq!(app.dev_focus, DevPanel::Output);
-        assert_eq!(
-            app.command_run.as_ref().map(|run| run.status),
-            Some(CommandStatus::Failed)
-        );
+        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert!(app.command_run.is_none());
     }
 
     #[test]
@@ -9398,20 +12000,488 @@ mod tests {
     }
 
     #[test]
-    fn agent_filter_matches_fuzzily_and_selection_moves() {
+    fn agent_filter_defaults_to_case_insensitive_agent_id_substrings() {
         let mut app = test_app();
         app.agents.agents = sample_agents();
 
+        assert_eq!(app.agents.query_scope, AgentQueryScope::AgentId);
         app.mode = TuiMode::AgentFilter;
-        for character in "cart".chars() {
+        for character in "CART".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
-        assert_eq!(app.filtered_agents().len(), 2);
+        assert_eq!(
+            app.filtered_agents()
+                .iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cart-1", "cart-2"]
+        );
 
         app.handle_key(key(KeyCode::Down));
         assert_eq!(app.agents.selected, 1);
         app.handle_key(key(KeyCode::Up));
         assert_eq!(app.agents.selected, 0);
+    }
+
+    #[test]
+    fn agent_filter_is_literal_scoped_and_preserves_loaded_order() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+
+        app.agents.query = "ct1".to_string();
+        assert!(app.filtered_agents().is_empty());
+
+        app.agents.query = "agent".to_string();
+        assert!(app.filtered_agents().is_empty());
+        app.agents.query_scope = AgentQueryScope::AgentType;
+        assert_eq!(
+            app.filtered_agents()
+                .iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cart-1", "cart-2", "order-1"]
+        );
+
+        app.agents.query_scope = AgentQueryScope::Component;
+        app.agents.query = "cart".to_string();
+        assert_eq!(
+            app.filtered_agents()
+                .iter()
+                .map(|agent| agent.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cart-1", "cart-2"]
+        );
+    }
+
+    #[test]
+    fn agent_find_scopes_loaded_rows_and_bulk_selection_preserves_hidden_agents() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.agents.included = app
+            .agents
+            .agents
+            .iter()
+            .map(AgentListItem::identity)
+            .collect();
+        app.agents.query = "cart".to_string();
+        app.agents.query_scope = AgentQueryScope::Component;
+
+        assert_eq!(app.filtered_agents().len(), 2);
+        app.exclude_filtered_agents();
+
+        assert_eq!(app.agents.included.len(), 1);
+        assert!(app.agents.included.contains(&AgentIdentity {
+            component: "orders".to_string(),
+            agent_id: "order-1".to_string(),
+        }));
+
+        app.include_filtered_agents();
+        assert_eq!(app.agents.included.len(), 3);
+    }
+
+    #[test]
+    fn agent_dataset_picker_uses_loaded_component_and_type_choices() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+
+        app.handle_key(modified_key(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        let frame = render_app_text_at(&app, 100, 30);
+
+        assert_eq!(app.mode, TuiMode::AgentDatasetFilter);
+        assert!(frame.contains("Agent dataset"), "{frame}");
+        assert!(
+            frame.contains("Server-side filter; applied before loading agents"),
+            "{frame}"
+        );
+        assert!(frame.contains("cart"), "{frame}");
+        assert!(frame.contains("CartAgent"), "{frame}");
+        assert!(frame.contains('│'), "{frame}");
+        assert!(!frame.contains("cartCartAgent"), "{frame}");
+        assert!(frame.contains("↑/↓ Navigate"), "{frame}");
+    }
+
+    #[test]
+    fn agent_columns_offer_live_operational_fields_and_navigation_hint() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('c')));
+        let frame = render_app_text_at(&app, 100, 30);
+
+        assert_eq!(app.mode, TuiMode::AgentColumns);
+        assert!(frame.contains("Revision"), "{frame}");
+        assert!(frame.contains("Pending"), "{frame}");
+        assert!(frame.contains("Created at"), "{frame}");
+        assert!(frame.contains("↑/↓ Navigate"), "{frame}");
+    }
+
+    #[test]
+    fn agent_table_panning_uses_the_rendered_list_width() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+
+        render_app_text_at(&app, 50, 24);
+        let narrow_width = app.agents.table_viewport_width.get();
+        assert!(narrow_width > 0);
+        assert_ne!(narrow_width, 72);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.agents.table.horizontal_offset, 1);
+
+        render_app_text_at(&app, 200, 24);
+        assert!(app.agents.table_viewport_width.get() > narrow_width);
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.agents.table.horizontal_offset, 0);
+    }
+
+    #[test]
+    fn resetting_agent_dataset_invalidates_an_in_flight_refresh() {
+        let mut app = test_app();
+        let (tx, _rx) = test_event_channel();
+        app.agents.refresh_generation = 4;
+        app.agents.refresh_context_id = Some(TuiContextId::new(1));
+        app.agents.refresh_running = true;
+
+        app.reset_agent_dataset();
+        assert_eq!(app.agents.refresh_generation, 5);
+        assert!(!app.agents.refresh_running);
+
+        app.handle_event(
+            TuiEvent::AgentRefreshFinished {
+                generation: 4,
+                append: false,
+                result: agent_refresh_success(
+                    1,
+                    sample_agents_metadata_response(vec![sample_agent_metadata_view(
+                        "old-dataset",
+                        "OldAgent(\"stale\")",
+                        AgentStatus::Running,
+                    )]),
+                ),
+            },
+            &tx,
+        );
+
+        assert!(app.agents.agents.is_empty());
+    }
+
+    #[test]
+    fn details_focus_scroll_and_split_resize_are_keyboard_accessible() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.agents.agents[0].raw = serde_json::json!({
+            "values": (0..100).collect::<Vec<_>>()
+        });
+        render_app_text_at(&app, 120, 30);
+
+        app.handle_key(key(KeyCode::Tab));
+        app.handle_key(key(KeyCode::PageDown));
+        assert_eq!(app.agents.focus, AgentOverviewFocus::Details);
+        assert!(app.agents.details_scroll > 0);
+
+        let old_ratio = app.layout.ops_details_ratio;
+        app.handle_key(modified_key(KeyCode::Right, KeyModifiers::ALT));
+        assert!(app.layout.ops_details_ratio > old_ratio);
+    }
+
+    #[test]
+    fn details_focus_and_resize_shortcuts_are_visible_and_work_from_find() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        render_app_text_at(&app, 120, 30);
+
+        app.handle_key(key(KeyCode::Char('c')));
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.mode, TuiMode::Normal);
+        assert_eq!(app.agents.focus, AgentOverviewFocus::Details);
+        assert!(app.agents.detail_visible);
+
+        let frame = render_app_text_at(&app, 120, 30);
+        assert!(frame.contains("tab / shift+tab Focus pane"), "{frame}");
+        assert!(frame.contains("alt+left/right Resize"), "{frame}");
+
+        let old_ratio = app.layout.ops_details_ratio;
+        app.handle_key(modified_key(KeyCode::Right, KeyModifiers::ALT));
+        assert!(app.layout.ops_details_ratio > old_ratio);
+
+        app.handle_key(key(KeyCode::BackTab));
+        assert_eq!(app.agents.focus, AgentOverviewFocus::List);
+    }
+
+    #[test]
+    fn control_arrows_are_not_consumed_for_pane_focus() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        render_app_text_at(&app, 120, 30);
+
+        app.handle_key(modified_key(KeyCode::Right, KeyModifiers::CONTROL));
+
+        assert_eq!(app.agents.focus, AgentOverviewFocus::List);
+        assert_eq!(app.mode, TuiMode::Normal);
+    }
+
+    #[test]
+    fn leader_shortcuts_remain_available_while_find_is_editing() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.handle_key(key(KeyCode::Char('c')));
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('f')));
+
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.agents.query, "c");
+        assert_eq!(app.agents.query_scope, AgentQueryScope::Component);
+    }
+
+    #[test]
+    fn modified_agent_shortcuts_remain_available_while_find_is_editing() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+
+        app.handle_key(key(KeyCode::Char('c')));
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.agents.query, "c");
+
+        let selected = app.filtered_agents()[app.agents.selected].identity();
+        app.handle_key(modified_key(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        assert!(app.agents.included.contains(&selected));
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+
+        app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(app.mode, TuiMode::Palette);
+    }
+
+    #[test]
+    fn agent_details_show_agent_metadata_before_agent_type_metadata() {
+        let agents = sample_agents();
+        let mut agent_types = BTreeMap::new();
+        agent_types.insert(
+            ("cart".to_string(), "CartAgent".to_string()),
+            serde_json::json!({"type": "CartAgent"}),
+        );
+
+        let text = build_ops_agent_details_lines(agents.first(), 0, &agent_types, None, 80)
+            .iter()
+            .map(|line| {
+                line.spans.iter().fold(String::new(), |mut text, span| {
+                    text.push_str(&span.content);
+                    text
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let agent_metadata = text.find("Agent metadata").expect("agent metadata heading");
+        let agent_type_metadata = text
+            .find("Agent type metadata")
+            .expect("agent type metadata heading");
+        assert!(agent_metadata < agent_type_metadata, "{text}");
+    }
+
+    #[test]
+    fn agent_id_list_and_detail_spans_share_semantic_highlighting() {
+        let id = r#"Cart("ann", 42, true)"#;
+        let cell = agent_id_table_cell(id);
+        let detail = agent_id_line_spans(id);
+
+        assert_eq!(
+            cell.spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>(),
+            id
+        );
+        assert!(
+            cell.spans
+                .iter()
+                .any(|span| { span.text == r#""ann""# && span.tone == Some(CellTone::Success) })
+        );
+        assert!(
+            cell.spans
+                .iter()
+                .any(|span| span.text == "42" && span.tone == Some(CellTone::Info))
+        );
+        assert!(
+            cell.spans
+                .iter()
+                .any(|span| span.text == "true" && span.tone == Some(CellTone::Warning))
+        );
+        assert_eq!(
+            detail.iter().fold(String::new(), |mut text, span| {
+                text.push_str(&span.content);
+                text
+            }),
+            id
+        );
+        assert!(
+            detail
+                .iter()
+                .any(|span| span.style.fg == Some(theme().success))
+        );
+        assert!(
+            detail
+                .iter()
+                .any(|span| span.style.fg == Some(theme().info))
+        );
+        assert!(
+            detail
+                .iter()
+                .any(|span| span.style.fg == Some(theme().marker))
+        );
+    }
+
+    #[test]
+    fn agent_find_exposes_only_explicit_scopes() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.mode = TuiMode::AgentFilter;
+
+        for (scope, label) in [
+            (AgentQueryScope::AgentId, "AgentID"),
+            (AgentQueryScope::Component, "Component"),
+            (AgentQueryScope::AgentType, "Agent type"),
+        ] {
+            app.agents.query_scope = scope;
+            let frame = render_app_text_at(&app, 120, 30);
+            assert!(frame.contains(label), "missing scope {label}:\n{frame}");
+            assert!(!frame.contains("All fields"), "{frame}");
+        }
+    }
+
+    #[test]
+    fn ops_shell_is_the_only_production_workspace() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+
+        let frame = render_app_text_at(&app, 120, 30);
+
+        assert!(frame.contains("[ Ops ]"), "{frame}");
+        assert!(frame.contains("Agents · Overview"), "{frame}");
+        assert!(frame.contains("app sample-app"), "{frame}");
+        assert!(frame.contains("env local"), "{frame}");
+        assert!(frame.contains("server local"), "{frame}");
+        assert!(!frame.contains("[ 2 Dev ]"), "{frame}");
+        assert!(!frame.contains("[ 3 Home ]"), "{frame}");
+    }
+
+    #[test]
+    fn leader_shortcut_switches_to_clearly_labelled_fake_otlp_explorer() {
+        let mut app = test_app();
+
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('v')));
+        let frame = render_app_text_at(&app, 120, 28);
+
+        assert_eq!(app.ops_view, OpsView::Metrics);
+        assert!(frame.contains("Agents · Metrics · FAKE OTLP"), "{frame}");
+        assert!(frame.contains("FAKE DATA"), "{frame}");
+        assert!(frame.contains("No OTLP receiver or query store"), "{frame}");
+        assert!(frame.contains("golem.agent.invocations"), "{frame}");
+
+        app.handle_key(key(KeyCode::Down));
+
+        assert_eq!(app.fake_otlp.selected, 1);
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("golem.agent.invocation.duration"), "{frame}");
+        assert!(frame.contains("42 ms p95"), "{frame}");
+
+        app.handle_key(modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        render_app_text_at(&app, 120, 28);
+        app.handle_key(key(KeyCode::PageDown));
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("Fake OTLP Metrics Demo"), "{frame}");
+        assert!(frame.contains("Select or scroll focused pane"), "{frame}");
+    }
+
+    #[test]
+    fn tab_focuses_and_scrolls_fake_otlp_details_without_switching_views() {
+        let mut app = test_app();
+        app.ops_view = OpsView::Metrics;
+        render_app_text_at(&app, 120, 16);
+
+        app.handle_key(key(KeyCode::Tab));
+        app.handle_key(key(KeyCode::PageDown));
+
+        assert_eq!(app.ops_view, OpsView::Metrics);
+        assert_eq!(app.fake_otlp.focus, FakeOtlpFocus::Details);
+        assert!(app.fake_otlp.details_scroll > 0);
+    }
+
+    #[test]
+    fn explicit_agent_selection_survives_filter_changes() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+
+        app.handle_key(modified_key(KeyCode::Char(' '), KeyModifiers::CONTROL));
+        assert!(app.agents.included.contains(&AgentIdentity {
+            component: "cart".to_string(),
+            agent_id: "cart-1".to_string(),
+        }));
+
+        app.mode = TuiMode::AgentFilter;
+        for character in "order".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(modified_key(KeyCode::Char(' '), KeyModifiers::CONTROL));
+
+        assert_eq!(app.agents.included.len(), 2);
+        assert!(app.agents.included.contains(&AgentIdentity {
+            component: "orders".to_string(),
+            agent_id: "order-1".to_string(),
+        }));
+    }
+
+    #[test]
+    fn column_chooser_applies_only_on_confirmation() {
+        let mut app = test_app();
+
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('c')));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Char(' ')));
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.agents.table.column_visible("type"));
+
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('c')));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Char(' ')));
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.agents.table.column_visible("type"));
+    }
+
+    #[test]
+    fn failed_refresh_keeps_stale_agents_visible() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+        app.agents.last_error = Some("server unavailable".to_string());
+
+        let frame = render_app_text_at(&app, 120, 30);
+
+        assert!(
+            frame.contains("showing the last successful result"),
+            "{frame}"
+        );
+        assert!(frame.contains("cart-1"), "{frame}");
+    }
+
+    #[test]
+    fn ops_shell_renders_at_supported_extremes() {
+        let app = test_app();
+
+        for (width, height) in [(160, 40), (100, 8), (32, 24), (12, 4), (1, 1)] {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                render_app_text_at(&app, width, height)
+            }));
+            assert!(result.is_ok(), "Ops shell panicked at {width}x{height}");
+        }
     }
 
     #[test]
@@ -9454,38 +12524,42 @@ mod tests {
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('d')));
         let frame = render_app_text(&app);
-        assert!(!frame.contains("Details"), "{frame}");
+        assert!(!frame.contains("( Details )"), "{frame}");
     }
 
     #[test]
-    fn enter_on_agent_opens_inspect_view() {
+    fn enter_toggles_agent_details() {
+        let mut app = test_app();
+        app.agents.agents = sample_agents();
+
+        assert!(app.agents.detail_visible);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.agents.detail_visible);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.agents.detail_visible);
+    }
+
+    #[test]
+    fn narrow_agent_view_keeps_keyboard_focus_on_the_visible_list() {
         let mut app = test_app();
         app.active_workspace = TuiWorkspace::Ops;
         app.agents.agents = sample_agents();
+        app.agents.focus = AgentOverviewFocus::Details;
 
-        app.handle_key(key(KeyCode::Enter));
+        render_app_text_at(&app, layout::OPS_DETAILS_BREAKPOINT.saturating_sub(1), 24);
 
-        assert_eq!(app.agents.view_mode, AgentsViewMode::Inspect);
-        assert_eq!(app.agents.inspect.agent_name.as_deref(), Some("cart-1"));
-        assert_eq!(app.agents.inspect.focus, AgentInspectPane::Oplog);
-        assert_eq!(
-            app.agents.inspect.oplog.args,
-            vec!["agent", "oplog", "cart-1"]
-        );
-        assert_eq!(
-            app.agents.inspect.stream.args,
-            vec!["agent", "stream", "cart-1"]
-        );
+        assert!(!app.agent_details_open());
+        assert!(app.agent_list_focused());
     }
 
     #[test]
     fn inspect_left_right_switches_focus() {
         let mut app = inspect_app();
 
-        app.handle_key(key(KeyCode::Right));
+        app.handle_agent_inspect_key(key(KeyCode::Right));
         assert_eq!(app.agents.inspect.focus, AgentInspectPane::Stream);
 
-        app.handle_key(key(KeyCode::Left));
+        app.handle_agent_inspect_key(key(KeyCode::Left));
         assert_eq!(app.agents.inspect.focus, AgentInspectPane::Oplog);
     }
 
@@ -9505,12 +12579,12 @@ mod tests {
                 .append(format!("stream {index}\n").as_bytes());
         }
 
-        app.handle_key(key(KeyCode::PageUp));
+        app.handle_agent_inspect_key(key(KeyCode::PageUp));
         assert_eq!(app.agents.inspect.oplog.output.scroll_offset, 10);
         assert_eq!(app.agents.inspect.stream.output.scroll_offset, 0);
 
-        app.handle_key(key(KeyCode::Right));
-        app.handle_key(key(KeyCode::PageUp));
+        app.handle_agent_inspect_key(key(KeyCode::Right));
+        app.handle_agent_inspect_key(key(KeyCode::PageUp));
         assert_eq!(app.agents.inspect.stream.output.scroll_offset, 10);
     }
 
@@ -9518,25 +12592,22 @@ mod tests {
     fn esc_returns_from_inspect_to_agent_list() {
         let mut app = inspect_app();
 
-        app.handle_key(key(KeyCode::Esc));
+        app.handle_agent_inspect_key(key(KeyCode::Esc));
 
         assert_eq!(app.agents.view_mode, AgentsViewMode::List);
     }
 
     #[test]
-    fn renders_agent_inspect_split_view() {
+    fn inactive_inspect_state_does_not_replace_ops_overview() {
         let mut app = inspect_app();
         app.agents.inspect.oplog.output.append(b"oplog entry\n");
         app.agents.inspect.stream.output.append(b"stream entry\n");
 
         let frame = render_app_text(&app);
 
-        assert!(frame.contains("inspect"), "{frame}");
-        assert!(frame.contains("agent:cart-1"), "{frame}");
-        assert!(frame.contains("Oplog"), "{frame}");
-        assert!(frame.contains("Stream"), "{frame}");
-        assert!(frame.contains("oplog entry"), "{frame}");
-        assert!(frame.contains("stream entry"), "{frame}");
+        assert!(frame.contains("Agents · Overview"), "{frame}");
+        assert!(!frame.contains("oplog entry"), "{frame}");
+        assert!(!frame.contains("stream entry"), "{frame}");
     }
 
     #[test]
@@ -9569,10 +12640,13 @@ mod tests {
 
         let items = agent_items_from_metadata_response(response);
 
-        assert_eq!(items[0].name, "CartAgent(\"cart-1\")");
+        assert_eq!(items[0].agent_id, "CartAgent(\"cart-1\")");
         assert_eq!(items[0].component.as_deref(), Some("cart"));
         assert_eq!(items[0].agent_type.as_deref(), Some("CartAgent"));
-        assert_eq!(items[0].status.as_deref(), Some("Running"));
+        assert_eq!(items[0].revision, "1");
+        assert_eq!(items[0].pending, "0");
+        assert_eq!(items[0].created_at, "2024-01-01T00:00:00.000Z");
+        assert_eq!(items[0].status, AgentStatus::Running);
         assert_eq!(items[0].raw["agentId"], "CartAgent(\"cart-1\")");
     }
 
@@ -9587,6 +12661,7 @@ mod tests {
         app.handle_event(
             TuiEvent::AgentRefreshFinished {
                 generation: 1,
+                append: false,
                 result: agent_refresh_success(
                     1,
                     sample_agents_metadata_response(vec![sample_agent_metadata_view(
@@ -9601,7 +12676,40 @@ mod tests {
 
         assert!(!app.agents.refresh_running);
         assert_eq!(app.agents.agents.len(), 1);
-        assert_eq!(app.agents.agents[0].name, "cart-1");
+        assert_eq!(app.agents.agents[0].agent_id, "cart-1");
+    }
+
+    #[test]
+    fn agent_refresh_append_deduplicates_rows_and_advances_page_depth() {
+        let mut app = test_app();
+        let (tx, _rx) = test_event_channel();
+        app.agents.agents = vec![agent_item_from_metadata(sample_agent_metadata_view(
+            "cart",
+            "cart-1",
+            AgentStatus::Idle,
+        ))];
+        app.agents.refresh_generation = 2;
+        app.agents.refresh_context_id = Some(TuiContextId::new(1));
+        app.agents.refresh_running = true;
+
+        app.handle_event(
+            TuiEvent::AgentRefreshFinished {
+                generation: 2,
+                append: true,
+                result: agent_refresh_success(
+                    1,
+                    sample_agents_metadata_response(vec![
+                        sample_agent_metadata_view("cart", "cart-1", AgentStatus::Idle),
+                        sample_agent_metadata_view("cart", "cart-2", AgentStatus::Running),
+                    ]),
+                ),
+            },
+            &tx,
+        );
+
+        assert_eq!(app.agents.agents.len(), 2);
+        assert_eq!(app.agents.paging.loaded_depth(), 2);
+        assert!(!app.agents.has_more());
     }
 
     #[test]
@@ -9615,6 +12723,7 @@ mod tests {
         app.handle_event(
             TuiEvent::AgentRefreshFinished {
                 generation: 1,
+                append: false,
                 result: agent_refresh_success(
                     2,
                     sample_agents_metadata_response(vec![sample_agent_metadata_view(
@@ -9642,10 +12751,11 @@ mod tests {
         app.handle_event(
             TuiEvent::AgentRefreshFinished {
                 generation: 1,
+                append: false,
                 result: TuiContextTaskResult::new(
                     TuiContextId::new(1),
-                    Err("refresh failed".to_string()),
-                    vec!["captured log".to_string()],
+                    Err("\u{1b}[31mrefresh failed\u{1b}[0m".to_string()),
+                    vec!["\u{1b}[33mcaptured log\u{1b}[0m".to_string()],
                 ),
             },
             &tx,
@@ -9668,7 +12778,7 @@ mod tests {
         }
         let frame = render_app_text(&app);
 
-        assert!(frame.contains("> agent"), "{frame}");
+        assert!(frame.contains("› agent"), "{frame}");
         assert!(frame.contains("Refresh Agents"), "{frame}");
     }
 
@@ -9677,86 +12787,113 @@ mod tests {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
-        for character in "go ops".chars() {
+        for character in "switch overview metrics".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
         app.handle_key(key(KeyCode::Enter));
 
         let frame = render_app_text(&app);
-        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
-        assert!(frame.contains("agents"), "{frame}");
-        assert!(!frame.contains("Command Palette"), "{frame}");
+        assert_eq!(app.ops_view, OpsView::Metrics);
+        assert!(frame.contains("FAKE OTLP"), "{frame}");
+        assert!(!frame.contains("[ Commands ]"), "{frame}");
     }
 
     #[test]
     fn opens_help() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char('?')));
+        app.handle_key(modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL));
         let frame = render_app_text(&app);
 
         assert!(frame.contains("Keyboard Shortcuts"), "{frame}");
-        assert!(frame.contains("ctrl+p / :"), "{frame}");
+        assert!(frame.contains("ctrl+p"), "{frame}");
     }
 
     #[test]
-    fn global_help_uses_registered_actions() {
+    fn help_scrolls_with_keyboard_and_mouse_while_its_footer_stays_visible() {
+        let mut app = test_app();
+        app.open_help();
+        let frame = render_app_text_at(&app, 80, 16);
+        assert!(app.help_content_height.get() > app.help_viewport_height.get());
+        assert!(frame.contains("esc Close"), "{frame}");
+
+        app.handle_key(key(KeyCode::PageDown));
+        let after_key = app.help_scroll;
+        assert!(after_key > 0);
+        app.handle_mouse(mouse(MouseEventKind::ScrollDown, 40, 8), None);
+        assert!(app.help_scroll >= after_key);
+
+        let frame = render_app_text_at(&app, 80, 16);
+        assert!(frame.contains("esc Close"), "{frame}");
+    }
+
+    #[test]
+    fn global_help_contains_only_ops_first_actions() {
         let mut app = test_app();
         let mut driver = TuiTestDriver::new(120, 48);
 
-        driver.key(&mut app, key(KeyCode::Char('?')));
+        driver.key(
+            &mut app,
+            modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL),
+        );
 
-        driver.assert_visible(&app, action(TuiActionId::Build).label);
-        driver.assert_visible(&app, action(TuiActionId::Deploy).label);
-        driver.assert_visible(&app, action(TuiActionId::Clean).label);
-        driver.assert_visible(&app, action(TuiActionId::StartOrFocusRepl).label);
+        driver.assert_visible(&app, action(TuiActionId::RefreshAgents).label);
+        driver.assert_visible(&app, "Switch Overview / Metrics");
         driver.assert_visible(&app, action(TuiActionId::ShowHelp).label);
+        driver.key(&mut app, key(KeyCode::End));
+        driver.assert_visible(&app, "Choose visible columns");
     }
 
     #[test]
-    fn agent_inspect_help_is_reachable_and_contextual() {
-        let mut app = inspect_app();
+    fn agent_help_is_reachable_and_contextual() {
+        let mut app = test_app();
         let mut driver = TuiTestDriver::new(120, 48);
 
-        driver.key(&mut app, key(KeyCode::Char('?')));
+        driver.key(
+            &mut app,
+            modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL),
+        );
 
         assert_eq!(app.mode, TuiMode::Help);
-        driver.assert_visible(&app, "Agent Inspect");
+        driver.assert_visible(&app, "Agents Overview");
         driver.assert_visible(&app, "left / right");
-        driver.assert_visible(&app, "Return to agent list");
+        driver.assert_visible(&app, "Include or exclude focused agent");
     }
 
     #[test]
-    fn repl_leader_help_is_contextual() {
+    fn legacy_repl_key_does_not_change_help_context() {
         let mut app = test_app();
         let mut driver = TuiTestDriver::new(120, 48);
 
         driver.key(&mut app, key(KeyCode::Char('r')));
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.agents.query, "r");
+        driver.key(&mut app, key(KeyCode::Esc));
         driver.key(
             &mut app,
-            modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL),
         );
-        driver.key(&mut app, key(KeyCode::Char('?')));
 
         assert_eq!(app.mode, TuiMode::Help);
-        driver.assert_visible(&app, "REPL");
-        driver.assert_visible(&app, action(TuiActionId::LeaveRepl).label);
-        driver.assert_visible(&app, action(TuiActionId::StopRepl).label);
-        driver.assert_visible(&app, action(TuiActionId::RestartRepl).label);
+        driver.assert_visible(&app, "Agents Overview");
     }
 
     #[test]
-    fn command_interaction_help_is_contextual() {
+    fn legacy_build_key_does_not_change_help_context() {
         let mut app = test_app();
         let mut driver = TuiTestDriver::new(120, 48);
 
         driver.key(&mut app, key(KeyCode::Char('b')));
-        driver.key(&mut app, key(KeyCode::Char('?')));
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.agents.query, "b");
+        driver.key(&mut app, key(KeyCode::Esc));
+        driver.key(
+            &mut app,
+            modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL),
+        );
 
         assert_eq!(app.mode, TuiMode::Help);
-        driver.assert_visible(&app, "Command");
-        driver.assert_visible(&app, "Cancel command");
-        driver.assert_visible(&app, "mouse wheel");
+        driver.assert_visible(&app, "Agents Overview");
     }
 
     #[test]
@@ -9770,7 +12907,7 @@ mod tests {
         let frame = render_app_text(&app);
 
         assert!(frame.contains("Refresh Agents"), "{frame}");
-        let frame = render_app_text_at(&app, 140, 30);
+        let frame = render_app_text_at(&app, 160, 30);
         assert!(frame.contains("context executor unavailable"), "{frame}");
 
         app.handle_key(key(KeyCode::Enter));
@@ -9784,12 +12921,12 @@ mod tests {
     fn closes_help_with_escape() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char('?')));
+        app.handle_key(modified_key(KeyCode::Char('h'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Esc));
         let frame = render_app_text(&app);
 
         assert!(!frame.contains("Keyboard Shortcuts"), "{frame}");
-        assert!(frame.contains("Home"), "{frame}");
+        assert!(frame.contains("[ Ops ]"), "{frame}");
     }
 
     #[test]
@@ -9804,11 +12941,11 @@ mod tests {
         let frame = render_app_text(&app);
 
         assert!(frame.contains("Keyboard Shortcuts"), "{frame}");
-        assert!(!frame.contains("Command Palette"), "{frame}");
+        assert!(!frame.contains("[ Commands ]"), "{frame}");
     }
 
     #[test]
-    fn toggles_command_options() {
+    fn legacy_command_option_shortcuts_are_not_exposed() {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
@@ -9816,62 +12953,45 @@ mod tests {
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('r')));
 
-        assert!(app.command_options.yes);
-        assert!(app.command_options.reset);
-        assert_eq!(
-            app.command_args(CommandKind::Deploy),
-            vec!["deploy", "--yes", "--reset"]
-        );
-        assert_eq!(app.command_args(CommandKind::Clean), vec!["clean", "--yes"]);
+        assert!(!app.command_options.yes);
+        assert!(!app.command_options.reset);
     }
 
     #[test]
-    fn renders_flags_in_footer() {
-        let mut app = test_app();
+    fn production_footer_omits_legacy_command_flags() {
+        let app = test_app();
 
         let frame = render_app_text(&app);
-        assert!(frame.contains("yes:off"), "{frame}");
-        assert!(frame.contains("reset:off"), "{frame}");
-
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('y')));
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('r')));
-        let frame = render_app_text(&app);
-        assert!(frame.contains("yes:on"), "{frame}");
-        assert!(frame.contains("reset:on"), "{frame}");
+        assert!(!frame.contains("yes:"), "{frame}");
+        assert!(!frame.contains("reset:"), "{frame}");
     }
 
     #[test]
-    fn build_key_switches_to_output_and_records_command() {
+    fn bare_build_key_starts_agent_find_in_ops_first_shell() {
         let mut app = test_app();
 
         app.handle_key(key(KeyCode::Char('b')));
 
-        let run = app.command_run.as_ref().expect("missing command run");
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert_eq!(app.dev_focus, DevPanel::Output);
-        assert_eq!(app.mode, TuiMode::CommandInteraction);
-        assert_eq!(run.kind, CommandKind::Build);
-        assert_eq!(run.args, vec!["build"]);
+        assert!(app.command_run.is_none());
+        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.agents.query, "b");
     }
 
     #[test]
-    fn clean_key_switches_to_output_and_records_command() {
+    fn bare_clean_key_starts_agent_find_in_ops_first_shell() {
         let mut app = test_app();
 
         app.handle_key(key(KeyCode::Char('c')));
 
-        let run = app.command_run.as_ref().expect("missing command run");
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert_eq!(app.dev_focus, DevPanel::Output);
-        assert_eq!(app.mode, TuiMode::CommandInteraction);
-        assert_eq!(run.kind, CommandKind::Clean);
-        assert_eq!(run.args, vec!["clean"]);
+        assert!(app.command_run.is_none());
+        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.agents.query, "c");
     }
 
     #[test]
-    fn clean_palette_action_starts_clean() {
+    fn clean_palette_action_is_not_exposed() {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
@@ -9880,26 +13000,24 @@ mod tests {
         }
         app.handle_key(key(KeyCode::Enter));
 
-        let run = app.command_run.as_ref().expect("missing command run");
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert_eq!(app.dev_focus, DevPanel::Output);
-        assert_eq!(run.kind, CommandKind::Clean);
+        assert!(app.command_run.is_none());
+        assert_eq!(app.mode, TuiMode::Normal);
     }
 
     #[test]
-    fn renders_compact_command_status() {
+    fn production_shell_omits_legacy_command_status() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char('b')));
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
         let frame = render_app_text(&app);
 
-        assert!(
-            frame.contains("build")
-                && frame.contains("running")
-                && frame.contains("yes:off")
-                && frame.contains("golem build"),
-            "{frame}"
-        );
+        assert!(!frame.contains("golem build"), "{frame}");
     }
 
     #[test]
@@ -9925,17 +13043,17 @@ mod tests {
     }
 
     #[test]
-    fn output_input_row_visibility_uses_current_run_yes_flag() {
+    fn production_shell_omits_legacy_command_input_row() {
         let mut app = test_app();
 
         app.handle_key(key(KeyCode::Char('b')));
         let frame = render_app_text(&app);
-        assert!(frame.contains("stdin"), "{frame}");
+        assert!(!frame.contains("stdin"), "{frame}");
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('y')));
         let frame = render_app_text(&app);
-        assert!(frame.contains("stdin"), "{frame}");
+        assert!(!frame.contains("stdin"), "{frame}");
     }
 
     #[test]
@@ -9951,14 +13069,13 @@ mod tests {
     }
 
     #[test]
-    fn sets_cursor_in_command_interaction() {
+    fn legacy_build_key_does_not_take_terminal_cursor() {
         let mut app = test_app();
 
         app.handle_key(key(KeyCode::Char('b')));
         let (_, cursor) = render_app_text_and_cursor(&app);
 
-        assert!(cursor.x > 0, "cursor should be visible after input prompt");
-        assert!(cursor.y > 0, "cursor should be visible after input prompt");
+        assert_eq!((cursor.x, cursor.y), (0, 0));
     }
 
     #[test]
@@ -10004,7 +13121,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_output_arrow_keys_and_mouse_scroll_output() {
+    fn output_scroll_helpers_remain_available_for_future_dev_views() {
         let mut app = test_app();
         app.active_workspace = TuiWorkspace::Dev;
         app.dev_focus = DevPanel::Output;
@@ -10020,38 +13137,22 @@ mod tests {
             app.append_command_output(format!("line {index}\n").as_bytes());
         }
 
-        app.handle_key(key(KeyCode::Up));
+        app.scroll_output_up();
         assert_eq!(
             app.command_run.as_ref().map(|run| run.output.scroll_offset),
-            Some(1)
+            Some(10)
         );
 
-        app.handle_mouse(
-            MouseEvent {
-                kind: MouseEventKind::ScrollUp,
-                column: 10,
-                row: 10,
-                modifiers: KeyModifiers::empty(),
-            },
-            None,
-        );
+        app.scroll_output_up_by(3);
         assert_eq!(
             app.command_run.as_ref().map(|run| run.output.scroll_offset),
-            Some(4)
+            Some(13)
         );
 
-        app.handle_mouse(
-            MouseEvent {
-                kind: MouseEventKind::ScrollDown,
-                column: 10,
-                row: 10,
-                modifiers: KeyModifiers::empty(),
-            },
-            None,
-        );
+        app.scroll_output_down_by(3);
         assert_eq!(
             app.command_run.as_ref().map(|run| run.output.scroll_offset),
-            Some(1)
+            Some(10)
         );
     }
 
@@ -10059,14 +13160,14 @@ mod tests {
     fn esc_cancels_then_force_kills_running_command() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char('b')));
-        app.handle_key(key(KeyCode::Esc));
+        app.start_command(CommandKind::Build, None);
+        app.handle_command_interaction_key(key(KeyCode::Esc));
         assert_eq!(
             app.command_run.as_ref().map(|run| run.status),
             Some(CommandStatus::Cancelling)
         );
 
-        app.handle_key(key(KeyCode::Esc));
+        app.handle_command_interaction_key(key(KeyCode::Esc));
         assert_eq!(
             app.command_run.as_ref().map(|run| run.status),
             Some(CommandStatus::Killed)
@@ -10079,7 +13180,7 @@ mod tests {
         let mut app = test_app();
         let (tx, _rx) = test_event_channel();
 
-        app.handle_key(key(KeyCode::Char('b')));
+        app.start_command(CommandKind::Build, None);
         assert_eq!(
             app.command_run.as_ref().map(|run| run.spinner_frame),
             Some(0)
@@ -10090,14 +13191,7 @@ mod tests {
             app.command_run.as_ref().map(|run| run.spinner_frame),
             Some(1)
         );
-        let frame = render_app_text(&app);
-        assert!(
-            frame.contains("\\ running")
-                || frame.contains("- running")
-                || frame.contains("| running")
-                || frame.contains("/ running"),
-            "{frame}"
-        );
+        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
     }
 
     #[test]
@@ -10109,27 +13203,22 @@ mod tests {
     }
 
     #[test]
-    fn server_tab_renders_initial_state() {
+    fn production_shell_does_not_render_legacy_server_panel() {
         let mut app = test_app();
 
         app.open_dev_workspace(DevPanel::Server);
         let frame = render_app_text(&app);
 
         assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert_eq!(app.dev_focus, DevPanel::Server);
-        assert!(frame.contains("server"), "{frame}");
-        assert!(frame.contains("stopped"), "{frame}");
-        assert!(frame.contains("clean:off"), "{frame}");
+        assert!(frame.contains("[ Ops ]"), "{frame}");
+        assert!(!frame.contains("clean:off"), "{frame}");
     }
 
     #[test]
     fn server_clean_toggle_affects_next_start() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
-
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('s')));
-        app.handle_key(key(KeyCode::Char('s')));
+        app.server.clean = true;
+        app.start_server(ServerStartMode::Current, None);
 
         assert!(app.server.clean);
         assert!(app.server.run.clean);
@@ -10139,18 +13228,15 @@ mod tests {
     #[test]
     fn server_start_stop_and_restart_state() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
-
-        app.handle_key(key(KeyCode::Char('s')));
+        app.toggle_server(None);
         assert_eq!(app.server.run.status, ServerStatus::Starting);
         assert_eq!(app.server.run.args, vec!["server", "run"]);
 
-        app.handle_key(key(KeyCode::Char('s')));
+        app.toggle_server(None);
         assert_eq!(app.server.run.status, ServerStatus::Stopping);
 
         app.server.run.status = ServerStatus::Running;
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('R')));
+        app.restart_server(ServerStartMode::Current, None);
         assert_eq!(app.server.run.status, ServerStatus::Stopping);
         assert_eq!(
             app.server.run.restart_after_stop,
@@ -10158,8 +13244,7 @@ mod tests {
         );
 
         app.server.run.status = ServerStatus::Running;
-        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        app.handle_key(key(KeyCode::Char('C')));
+        app.restart_server(ServerStartMode::Clean, None);
         assert_eq!(
             app.server.run.restart_after_stop,
             Some(ServerStartMode::Clean)
@@ -10167,17 +13252,16 @@ mod tests {
     }
 
     #[test]
-    fn server_can_be_started_from_global_shortcut_or_enter() {
+    fn server_shortcut_is_not_exposed_in_ops_first_shell() {
         let mut app = test_app();
 
         app.handle_key(key(KeyCode::Char('s')));
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
-        assert_eq!(app.dev_focus, DevPanel::Server);
-        assert_eq!(app.server.run.status, ServerStatus::Starting);
+        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
+        assert_eq!(app.server.run.status, ServerStatus::Stopped);
 
         app.server.run.status = ServerStatus::Running;
         app.handle_key(key(KeyCode::Enter));
-        assert_eq!(app.server.run.status, ServerStatus::Stopping);
+        assert_eq!(app.server.run.status, ServerStatus::Running);
     }
 
     #[test]
@@ -10192,24 +13276,28 @@ mod tests {
     }
 
     #[test]
-    fn server_logs_are_separate_from_command_output() {
+    fn server_logs_are_separate_from_command_output_buffers() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char('b')));
+        app.start_command(CommandKind::Build, None);
         app.append_command_output(b"command log\n");
         app.server.run.output.append(b"server log\n");
 
-        app.active_workspace = TuiWorkspace::Dev;
-        app.dev_focus = DevPanel::Output;
-        let output_frame = render_app_text_at(&app, 80, 24);
-        assert!(output_frame.contains("command log"), "{output_frame}");
-        assert!(!output_frame.contains("server log"), "{output_frame}");
-
-        app.active_workspace = TuiWorkspace::Dev;
-        app.dev_focus = DevPanel::Server;
-        let server_frame = render_app_text_at(&app, 80, 24);
-        assert!(server_frame.contains("server log"), "{server_frame}");
-        assert!(!server_frame.contains("command log"), "{server_frame}");
+        let command = String::from_utf8_lossy(
+            &app.command_run
+                .as_ref()
+                .unwrap()
+                .output
+                .visible_lines(10)
+                .concat(),
+        )
+        .to_string();
+        let server =
+            String::from_utf8_lossy(&app.server.run.output.visible_lines(10).concat()).to_string();
+        assert!(command.contains("command log"));
+        assert!(!command.contains("server log"));
+        assert!(server.contains("server log"));
+        assert!(!server.contains("command log"));
     }
 
     #[test]
@@ -10238,97 +13326,64 @@ mod tests {
     }
 
     #[test]
-    fn mouse_wheel_scrolls_panel_under_pointer_independent_of_focus() {
-        let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
-        app.dev_focus = DevPanel::Server;
-        app.command_run = Some(CommandRun::new(
-            1,
-            CommandKind::Build,
-            vec!["build".to_string()],
-            CommandOptions::default(),
-            "sample-app:local".to_string(),
-        ));
-        app.set_command_status(CommandStatus::Succeeded);
-        for index in 0..20 {
-            app.append_command_output(format!("output line {index}\n").as_bytes());
-            app.server
-                .run
-                .output
-                .append(format!("server line {index}\n").as_bytes());
-        }
+    fn production_layout_omits_legacy_dev_panel_regions() {
+        let app = test_app();
         render_app_text_at(&app, 120, 32);
-        let output = snapshot_region(&app, RegionKind::DevPanelBody(DevPanel::Output));
-
-        app.handle_mouse(
-            mouse(MouseEventKind::ScrollUp, output.x + 2, output.y + 1),
-            None,
+        assert!(
+            app.layout_snapshot
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .region(RegionKind::DevPanelBody(DevPanel::Output))
+                .is_none()
         );
-
-        assert_eq!(
-            app.command_run.as_ref().map(|run| run.output.scroll_offset),
-            Some(3)
-        );
-        assert_eq!(app.server.run.output.scroll_offset, 0);
     }
 
     #[test]
-    fn mouse_wheel_scrolls_server_drawer_from_any_workspace() {
+    fn production_layout_omits_server_drawer_region() {
         let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Home;
         app.layout.server_drawer_open = true;
-        for index in 0..20 {
-            app.server
-                .run
-                .output
-                .append(format!("server line {index}\n").as_bytes());
-        }
         render_app_text_at(&app, 120, 32);
-        let drawer = snapshot_region(&app, RegionKind::ServerDrawer);
-
-        app.handle_mouse(
-            mouse(MouseEventKind::ScrollUp, drawer.x + 2, drawer.y + 2),
-            None,
+        assert!(
+            app.layout_snapshot
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .region(RegionKind::ServerDrawer)
+                .is_none()
         );
-
-        assert_eq!(app.server.run.output.scroll_offset, 3);
     }
 
     #[test]
-    fn mouse_click_workspace_tab_switches_workspace() {
-        let mut app = test_app();
+    fn production_layout_exposes_only_ops_workspace_tab() {
+        let app = test_app();
         render_app_text_at(&app, 120, 32);
-        let dev_tab = snapshot_region(&app, RegionKind::HeaderTab(TuiWorkspace::Dev));
-
-        app.handle_mouse(
-            mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                dev_tab.x + 1,
-                dev_tab.y,
-            ),
-            None,
+        let snapshot = app.layout_snapshot.borrow();
+        let snapshot = snapshot.as_ref().unwrap();
+        assert!(
+            snapshot
+                .region(RegionKind::HeaderTab(TuiWorkspace::Ops))
+                .is_some()
         );
-
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert!(
+            snapshot
+                .region(RegionKind::HeaderTab(TuiWorkspace::Dev))
+                .is_none()
+        );
     }
 
     #[test]
-    fn mouse_click_dev_panel_focuses_panel() {
-        let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
+    fn production_layout_does_not_expose_dev_panel_hit_targets() {
+        let app = test_app();
         render_app_text_at(&app, 120, 32);
-        let output = snapshot_region(&app, RegionKind::DevPanelBody(DevPanel::Output));
-
-        app.handle_mouse(
-            mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                output.x + 2,
-                output.y + 1,
-            ),
-            None,
+        assert!(
+            app.layout_snapshot
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .region(RegionKind::DevPanelBody(DevPanel::Output))
+                .is_none()
         );
-
-        assert_eq!(app.dev_focus, DevPanel::Output);
     }
 
     #[test]
@@ -10340,10 +13395,16 @@ mod tests {
         let list = snapshot_region(&app, RegionKind::OpsList);
 
         app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), list.x + 4, list.y),
+            None,
+        );
+        assert_eq!(app.agents.selected, 0);
+
+        app.handle_mouse(
             mouse(
                 MouseEventKind::Down(MouseButton::Left),
                 list.x + 4,
-                list.y + 1,
+                list.y + 3,
             ),
             None,
         );
@@ -10352,21 +13413,100 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_agent_inspect_pane_changes_focus() {
-        let mut app = inspect_app();
-        render_app_text_at(&app, 120, 32);
-        let stream = snapshot_region(&app, RegionKind::OpsInspectPane(AgentInspectPane::Stream));
+    fn mouse_click_keeps_the_visible_agent_viewport_anchored() {
+        let mut app = test_app();
+        let template = sample_agents()[0].clone();
+        app.agents.agents = (0..40)
+            .map(|index| {
+                let mut agent = template.clone();
+                agent.agent_id = format!("cart-{index:02}");
+                agent
+            })
+            .collect();
+        render_app_text_at(&app, 120, 16);
+        app.scroll_agent_list(14, false);
+        render_app_text_at(&app, 120, 16);
+        let first = app.agents.table_first_visible_row.get();
+        assert!(first > 0);
+        let list = snapshot_region(&app, RegionKind::OpsList);
 
         app.handle_mouse(
             mouse(
                 MouseEventKind::Down(MouseButton::Left),
-                stream.x + 2,
-                stream.y + 1,
+                list.x + 4,
+                list.y + 3,
             ),
             None,
         );
+        render_app_text_at(&app, 120, 16);
 
-        assert_eq!(app.agents.inspect.focus, AgentInspectPane::Stream);
+        assert_eq!(app.agents.selected, first + 1);
+        assert_eq!(app.agents.table_first_visible_row.get(), first);
+    }
+
+    #[test]
+    fn mouse_wheel_moves_the_agent_list_selection() {
+        let mut app = test_app();
+        app.active_workspace = TuiWorkspace::Ops;
+        app.agents.agents = sample_agents();
+        render_app_text_at(&app, 120, 32);
+        let list = snapshot_region(&app, RegionKind::OpsList);
+
+        app.handle_mouse(
+            mouse(MouseEventKind::ScrollDown, list.x + 4, list.y + 4),
+            None,
+        );
+        assert_eq!(app.agents.selected, 2);
+        assert_eq!(app.agents.focus, AgentOverviewFocus::List);
+
+        app.handle_mouse(
+            mouse(MouseEventKind::ScrollUp, list.x + 4, list.y + 4),
+            None,
+        );
+        assert_eq!(app.agents.selected, 0);
+    }
+
+    #[test]
+    fn mouse_selection_near_loaded_end_requests_cursor_continuation() {
+        let mut app = test_app();
+        let (tx, _rx) = test_event_channel();
+        app.active_workspace = TuiWorkspace::Ops;
+        app.agents.agents = sample_agents();
+        app.agents.paging.finish_request(
+            false,
+            BTreeMap::from([("cart".to_string(), "0/42".parse().unwrap())]),
+        );
+        render_app_text_at(&app, 120, 32);
+        let list = snapshot_region(&app, RegionKind::OpsList);
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                list.x + 4,
+                list.y + 4,
+            ),
+            Some(&tx),
+        );
+
+        assert_eq!(app.agents.selected, 2);
+        assert_eq!(
+            app.agents.last_error.as_deref(),
+            Some("TUI context executor is not available")
+        );
+    }
+
+    #[test]
+    fn production_layout_does_not_expose_inactive_inspect_panes() {
+        let app = inspect_app();
+        render_app_text_at(&app, 120, 32);
+        assert!(
+            app.layout_snapshot
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .region(RegionKind::OpsInspectPane(AgentInspectPane::Stream))
+                .is_none()
+        );
     }
 
     #[test]
@@ -10421,99 +13561,52 @@ mod tests {
     }
 
     #[test]
-    fn mouse_drag_dev_split_changes_session_ratio() {
-        let mut app = test_app();
-        app.active_workspace = TuiWorkspace::Dev;
+    fn production_layout_omits_dev_resize_split() {
+        let app = test_app();
         render_app_text_at(&app, 120, 32);
-        let before = app.layout.dev_primary_ratio;
-        let split = snapshot_region(&app, RegionKind::DevPrimarySplit);
-
-        app.handle_mouse(
-            mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                split.x,
-                split.y + 1,
-            ),
-            None,
+        assert!(
+            app.layout_snapshot
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .region(RegionKind::DevPrimarySplit)
+                .is_none()
         );
-        app.handle_mouse(
-            mouse(
-                MouseEventKind::Drag(MouseButton::Left),
-                split.x + 12,
-                split.y + 1,
-            ),
-            None,
-        );
-        app.handle_mouse(
-            mouse(
-                MouseEventKind::Up(MouseButton::Left),
-                split.x + 12,
-                split.y + 1,
-            ),
-            None,
-        );
-
-        assert_ne!(app.layout.dev_primary_ratio, before);
-        assert!(app.layout.dragging.is_none());
     }
 
     #[test]
-    fn mouse_drag_drawer_split_changes_session_width() {
+    fn production_layout_omits_drawer_resize_split() {
         let mut app = test_app();
         app.layout.server_drawer_open = true;
         render_app_text_at(&app, 120, 32);
-        let before = app.layout.server_drawer_ratio;
-        let split = snapshot_region(&app, RegionKind::ServerDrawerSplit);
-
-        app.handle_mouse(
-            mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                split.x,
-                split.y + 1,
-            ),
-            None,
+        assert!(
+            app.layout_snapshot
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .region(RegionKind::ServerDrawerSplit)
+                .is_none()
         );
-        app.handle_mouse(
-            mouse(
-                MouseEventKind::Drag(MouseButton::Left),
-                split.x - 10,
-                split.y + 1,
-            ),
-            None,
-        );
-        app.handle_mouse(
-            mouse(
-                MouseEventKind::Up(MouseButton::Left),
-                split.x - 10,
-                split.y + 1,
-            ),
-            None,
-        );
-
-        assert_ne!(app.layout.server_drawer_ratio, before);
-        assert!(app.layout.dragging.is_none());
     }
 
     #[test]
-    fn repl_key_switches_to_repl_and_records_command() {
+    fn bare_repl_key_starts_agent_find_in_ops_first_shell() {
         let mut app = test_app();
 
         app.handle_key(key(KeyCode::Char('r')));
 
-        assert_eq!(app.active_workspace, TuiWorkspace::Dev);
+        assert_eq!(app.active_workspace, TuiWorkspace::Ops);
         assert_eq!(app.dev_focus, DevPanel::Repl);
-        assert_eq!(app.mode, TuiMode::Repl);
-        assert_eq!(app.repl.run.status, ReplStatus::Starting);
-        assert_eq!(app.repl.run.args, vec!["repl"]);
+        assert_eq!(app.mode, TuiMode::AgentFilter);
+        assert_eq!(app.agents.query, "r");
+        assert_eq!(app.repl.run.status, ReplStatus::Stopped);
 
         let frame = render_app_text(&app);
-        assert!(frame.contains("REPL"), "{frame}");
-        assert!(frame.contains("starting"), "{frame}");
-        assert!(frame.contains("golem repl"), "{frame}");
+        assert!(!frame.contains("golem repl"), "{frame}");
     }
 
     #[test]
-    fn repl_output_is_rendered_as_terminal_screen() {
+    fn inactive_repl_output_is_not_rendered_in_ops_shell() {
         let mut app = test_app();
         let (tx, _rx) = test_event_channel();
 
@@ -10521,11 +13614,11 @@ mod tests {
         app.handle_event(TuiEvent::ReplOutput(b"hello\x1b[2DXY".to_vec()), &tx);
 
         let frame = render_app_text(&app);
-        assert!(frame.contains("helXY"), "{frame}");
+        assert!(!frame.contains("helXY"), "{frame}");
     }
 
     #[test]
-    fn repl_focus_sets_cursor_from_terminal_screen() {
+    fn inactive_repl_does_not_take_terminal_cursor() {
         let mut app = test_app();
         let (tx, _rx) = test_event_channel();
 
@@ -10533,35 +13626,37 @@ mod tests {
         app.handle_event(TuiEvent::ReplOutput(b"abc".to_vec()), &tx);
         let (_, cursor) = render_app_text_and_cursor(&app);
 
-        assert!(cursor.x > 2, "cursor should be inside REPL terminal");
-        assert!(cursor.y > 3, "cursor should be inside REPL terminal");
+        assert_eq!((cursor.x, cursor.y), (0, 0));
     }
 
     #[test]
-    fn repl_leader_can_leave_or_stop_repl() {
+    fn repl_leader_actions_are_not_exposed() {
         let mut app = test_app();
 
-        app.handle_key(key(KeyCode::Char('r')));
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
-        assert_eq!(app.mode, TuiMode::LeaderRepl);
+        assert_eq!(app.mode, TuiMode::LeaderNormal);
 
         app.handle_key(key(KeyCode::Char('q')));
         assert_eq!(app.mode, TuiMode::Normal);
-        assert_eq!(app.repl.run.status, ReplStatus::Starting);
+        assert_eq!(app.repl.run.status, ReplStatus::Stopped);
 
-        app.handle_key(key(KeyCode::Char('r')));
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('k')));
         assert_eq!(app.mode, TuiMode::Normal);
-        assert_eq!(app.repl.run.status, ReplStatus::Stopping);
+        assert_eq!(app.repl.run.status, ReplStatus::Stopped);
     }
 
     fn test_app() -> TuiApp {
         TuiApp {
             should_quit: false,
-            active_workspace: TuiWorkspace::Home,
+            active_workspace: TuiWorkspace::Ops,
+            ops_view: OpsView::Overview,
+            fake_otlp: FakeOtlpExplorerState::default(),
             dev_focus: DevPanel::Repl,
             mode: TuiMode::Normal,
+            help_scroll: 0,
+            help_content_height: Cell::new(0),
+            help_viewport_height: Cell::new(0),
             palette: CommandPalette::default(),
             command_options: CommandOptions::default(),
             command_run: None,
@@ -10730,8 +13825,15 @@ environments:
     fn agent_refresh_success(
         context_id: u64,
         response: AgentsMetadataResponseView,
-    ) -> TuiContextTaskResult<AgentsMetadataResponseView> {
-        TuiContextTaskResult::new(TuiContextId::new(context_id), Ok(response), Vec::new())
+    ) -> TuiContextTaskResult<AgentRefreshPayload> {
+        TuiContextTaskResult::new(
+            TuiContextId::new(context_id),
+            Ok(AgentRefreshPayload {
+                agents: response,
+                agent_types: None,
+            }),
+            Vec::new(),
+        )
     }
 
     fn sample_agents_metadata_response(
@@ -10812,24 +13914,36 @@ environments:
     fn sample_agents() -> Vec<AgentListItem> {
         vec![
             AgentListItem {
-                name: "cart-1".to_string(),
+                agent_id: "cart-1".to_string(),
                 component: Some("cart".to_string()),
                 agent_type: Some("CartAgent".to_string()),
-                status: Some("Running".to_string()),
+                revision: "1".to_string(),
+                pending: "0".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                status: AgentStatus::Running,
+                last_error_kind: None,
                 raw: serde_json::json!({"name":"cart-1"}),
             },
             AgentListItem {
-                name: "cart-2".to_string(),
+                agent_id: "cart-2".to_string(),
                 component: Some("cart".to_string()),
                 agent_type: Some("CartAgent".to_string()),
-                status: Some("Idle".to_string()),
+                revision: "1".to_string(),
+                pending: "0".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                status: AgentStatus::Idle,
+                last_error_kind: None,
                 raw: serde_json::json!({"name":"cart-2"}),
             },
             AgentListItem {
-                name: "order-1".to_string(),
+                agent_id: "order-1".to_string(),
                 component: Some("orders".to_string()),
                 agent_type: Some("OrderAgent".to_string()),
-                status: Some("Running".to_string()),
+                revision: "1".to_string(),
+                pending: "0".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                status: AgentStatus::Running,
+                last_error_kind: None,
                 raw: serde_json::json!({"name":"order-1"}),
             },
         ]
@@ -10839,7 +13953,7 @@ environments:
         let mut app = test_app();
         app.active_workspace = TuiWorkspace::Ops;
         app.agents.agents = sample_agents();
-        app.handle_key(key(KeyCode::Enter));
+        app.open_agent_inspect(None);
         app
     }
 

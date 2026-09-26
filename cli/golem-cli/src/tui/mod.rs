@@ -22,12 +22,11 @@ mod preview;
 mod terminal;
 pub(crate) mod terminal_screen;
 mod visual;
-#[cfg(feature = "tui-preview")]
 mod widgets;
 
 use crate::context::Context;
-use crate::model::agent::AgentsMetadataResponseView;
 use crate::model::environment::EnvironmentReference;
+use app::AgentRefreshPayload;
 use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
 use golem_client::model::EnvironmentWithDetails;
@@ -63,7 +62,8 @@ enum TuiEvent {
     AgentRefreshTick,
     AgentRefreshFinished {
         generation: u64,
-        result: TuiContextTaskResult<AgentsMetadataResponseView>,
+        append: bool,
+        result: TuiContextTaskResult<AgentRefreshPayload>,
     },
     ContextSwitchFinished {
         generation: u64,

@@ -137,7 +137,106 @@ The first Dev layout presets are:
 - top: side panels top, REPL primary bottom;
 - bottom: REPL primary top, side panels bottom.
 
-The global local server service is exposed as a right-side drawer across Home,
-Dev, and Ops. The drawer is closed by default, toggled by action/shortcut, and
-resizable for the current TUI session. It is the v1 primary full server surface;
-when open, Dev should avoid rendering a second large Server log panel.
+The earlier global local-server drawer is not part of the Ops-first production
+surface. Its process and output primitives may be reused when a real Dev
+workflow returns, but the drawer and its actions must not remain reachable only
+for compatibility.
+
+## Ops-First Product Model
+
+The initial production shell contains one workspace, Ops, and starts there.
+The footer renders `[Ops]` so the accepted workspace-selector geometry remains
+without reserving an `alt`+number binding. Future workspaces must choose
+keyboard-layout-safe navigation when they are introduced.
+
+Ops separates the thing being inspected from the way it is inspected:
+
+- subject: Agents initially; components and other Golem entity families can be
+  added later without changing the view vocabulary;
+- view: Overview and Metrics in production, followed by Activity when its data
+  provider is ready;
+- scope: the selected server plus optional app/environment from the global
+  context header;
+- selection: a focused table row is distinct from the explicit set of agents
+  included in cross-agent analysis.
+
+Agent Overview uses the existing typed list request. Refreshes retain explicit
+selection identities rather than interpreting an incomplete cursor page as
+deletion. Failed refreshes retain the previous rows and mark them stale.
+Filtering may hide selected identities without silently clearing them; a later
+cross-agent view must resolve and report unavailable selections explicitly.
+
+Agent collection navigation has two deliberately separate layers:
+
+- the dataset filter is server-side and exact. It selects all deployed agent
+  components, one component, or one deployed agent type before rows are loaded;
+- Find is a local fuzzy jump/filter over only the rows currently loaded. Its
+  active field and loaded-match count remain visible while it is active;
+- the first request and each component continuation request are bounded to 200
+  rows per component cursor. The UI reports the loaded count and `more
+  available`; it does not invent page numbers or a global total the API does
+  not provide;
+- reaching the end of the loaded list may continue every unfinished component
+  cursor, and `Load more` remains an explicit action;
+- include-all and exclude-all operate on loaded rows matching the local Find,
+  never on unloaded server results. Explicit selections hidden by a Find remain
+  selected until the user changes them.
+
+Refreshes preserve the currently loaded depth so auto-refresh does not collapse
+the collection back to its first batch. Changing the server dataset or agent
+mode resets cursors and loaded depth before fetching the new dataset.
+
+Reusable collection surfaces own query/status rows, cursor-backed table state,
+semantic table cells, pane-header status, scrollable documents, colored JSON,
+and resizable list/details splits. Product views compose these blocks and own
+their request-specific mapping rather than recreating their rendering rules.
+Cursor-backed state owns the per-source continuation cursors, configured batch
+size, and loaded depth. The view supplies typed cursors and maps typed results;
+it does not maintain a second, view-local notion of page depth.
+
+Metrics may aggregate the complete matched set through a backend query. Oplog
+and live activity require an explicit, bounded set of concrete agents. Limits
+must be visible and user-adjustable only up to source-specific hard caps; the
+UI must never silently pick the first or busiest agents.
+
+Activity is one view with two representations. Timeline groups and interprets
+diagnostic events. Journal exposes exact oplog entries, indexes, and payload
+details. A merged multi-agent presentation retains component, agent, and oplog
+index. Timestamp ordering is presentation only; per-agent oplog index remains
+authoritative unless trace or invocation links establish causality.
+
+## Local Metrics Direction
+
+Until the live receiver and query contracts are implemented, Metrics contains a
+deterministic fake OTLP explorer for layout and interaction review. Every demo
+pane must say `FAKE`, the details must state that no receiver or query store was
+read, and fake samples must never be mixed with or presented as live context
+data.
+
+The minimal local path is owned by the single `golem` process:
+
+- keep the existing combined Prometheus `/metrics` surface for Golem service
+  metrics;
+- add a metrics-only OTLP HTTP receiver for agent exports;
+- persist normalized samples in a dedicated bounded `observability.db` under
+  the local server data directory, not in `registry.db`;
+- accept metrics only in the first receiver; native logs and oplogs remain on
+  their existing APIs, and OTLP traces/logs are not duplicated;
+- resolve the current granted built-in OTLP exporter instead of hard-coding a
+  plugin version;
+- add the exporter only as an effective deployment overlay during a normal
+  deploy/update, never by editing `golem.yaml` and never by revising components
+  or agents at server startup;
+- preserve a user-configured external exporter rather than overriding or
+  attempting to install the same grant twice.
+
+Existing agents on older revisions remain valid and show agent metrics as
+unavailable until a normal update/deploy. Fixed local router ports use a
+loopback connect host even when bound on all interfaces. Dynamic router ports
+need an explicit degraded rule before the overlay can be enabled safely.
+
+Before implementing ingestion, validate agent-to-router loopback and real OTLP
+payload/batch shapes, then lock series identity, retention/pruning and database
+size bounds, the local query contract, and receiver/exporter degradation
+reporting. Supporting every distributed server topology is not a requirement
+for this local-first slice.

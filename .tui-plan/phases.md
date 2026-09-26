@@ -38,18 +38,36 @@ Acceptance criteria:
 - jobs capture immutable launch context;
 - unavailable actions show a reason.
 
-## 5. Dev/Ops Workspace Structure
+## 5. Ops-First Production Rebuild
 
 Acceptance criteria:
 
-- dev and ops actions are categorized and surfaced intentionally;
-- context help and palette can distinguish dev and ops workflows;
-- component/environment/resource views can be added without overloading global shortcuts.
+- the accepted Frame Base is the sole production visual system;
+- the TUI starts in Ops and renders only `[Ops]` until a rebuilt Dev workflow
+  is ready;
+- Agents is the first subject, with Overview and Metrics as production views;
+- Agents Overview distinguishes server Dataset filtering from local Find,
+  loads bounded component cursors incrementally, and never invents totals or
+  page numbers;
+- reusable list/details blocks expose refresh state, semantic cells, resizable
+  focus, independent scrolling, and structured metadata;
+- the temporary OTLP explorer uses deterministic samples, labels all panes as
+  fake, and explicitly states that it does not read a receiver or query store;
+- old Home, Dev, drawer, REPL, output, and nested inspect surfaces are not
+  reachable from footer, palette, help, or direct shortcuts;
+- component and other entity subjects can be added without renaming Metrics or
+  Activity.
 
-## 6. Local Observability For Issue #3456
+## 6. Local Observability For GOL-162
 
 Acceptance criteria:
 
-- the TUI has a clear role in the local OTel metrics experience;
-- baseline stack and POC direction are documented;
-- the TUI can launch, monitor, or link to the chosen local observability workflow as appropriate.
+- the local `golem` process owns a metrics-only OTLP HTTP receiver and bounded
+  persistent observability store without requiring Docker, Prometheus, or
+  Grafana;
+- normal deploy/update may add the local exporter to the effective deployment,
+  but startup never revises components and the manifest is never edited;
+- the TUI distinguishes server and agent metric availability without
+  fabricating data;
+- Activity keeps Timeline and Journal modes but remains out of production until
+  its direct typed provider supports explicit bounded multi-agent selection.

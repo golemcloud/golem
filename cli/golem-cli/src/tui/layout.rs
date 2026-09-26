@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::app::{
-    AgentInspectPane, AgentsViewMode, ContextPickerStep, DevPanel, TuiMode, TuiWorkspace,
-};
+use super::app::{AgentInspectPane, AgentsViewMode, DevPanel, TuiMode, TuiWorkspace};
+use super::widgets::PaneLayout;
 use ratatui::layout::Rect;
 
 pub(super) const DEV_MIN_PRIMARY_SIZE: u16 = 28;
@@ -23,6 +22,10 @@ pub(super) const DEV_MIN_STACKED_SIZE: u16 = 3;
 pub(super) const DRAWER_MIN_WIDTH: u16 = 24;
 pub(super) const DRAWER_MAX_WIDTH: u16 = 72;
 pub(super) const DRAWER_DEFAULT_RATIO: u16 = 38;
+pub(super) const OPS_DETAILS_DEFAULT_RATIO: u16 = 60;
+pub(super) const OPS_LIST_MIN_WIDTH: u16 = 36;
+pub(super) const OPS_DETAILS_MIN_WIDTH: u16 = 24;
+pub(super) const OPS_DETAILS_BREAKPOINT: u16 = 72;
 const SPLIT_SIZE: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +69,7 @@ pub(super) enum DragTarget {
     DevPrimary,
     DevSecondary,
     ServerDrawer,
+    OpsDetails,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +79,7 @@ pub(super) struct TuiLayoutState {
     pub(super) dev_secondary_ratio: u16,
     pub(super) server_drawer_open: bool,
     pub(super) server_drawer_ratio: u16,
+    pub(super) ops_details_ratio: u16,
     pub(super) dragging: Option<DragTarget>,
 }
 
@@ -86,6 +91,7 @@ impl Default for TuiLayoutState {
             dev_secondary_ratio: 34,
             server_drawer_open: false,
             server_drawer_ratio: DRAWER_DEFAULT_RATIO,
+            ops_details_ratio: OPS_DETAILS_DEFAULT_RATIO,
             dragging: None,
         }
     }
@@ -102,6 +108,7 @@ pub(super) enum RegionKind {
     DevSecondarySplit,
     OpsList,
     OpsDetails,
+    OpsDetailsSplit,
     OpsInspectPane(AgentInspectPane),
     ContextPickerRow(usize),
     ContextConfirm,
@@ -151,8 +158,9 @@ pub(super) struct LayoutInput {
     pub(super) active_workspace: TuiWorkspace,
     pub(super) focused_dev_panel: DevPanel,
     pub(super) mode: TuiMode,
-    pub(super) context_picker_rows: usize,
-    pub(super) context_picker_step: ContextPickerStep,
+    pub(super) context_picker_rows: Vec<Option<usize>>,
+    pub(super) context_picker_selected: usize,
+    pub(super) context_picker_prefix_height: usize,
     pub(super) agents_view_mode: AgentsViewMode,
     pub(super) agent_details_visible: bool,
     pub(super) layout: TuiLayoutState,
@@ -217,6 +225,55 @@ pub(super) fn compute(input: LayoutInput) -> LayoutSnapshot {
     }
 }
 
+pub(super) fn compute_ops_shell(input: LayoutInput) -> LayoutSnapshot {
+    let compact = input.area.width < 72 || input.area.height < 20;
+    let footer_height = if compact { 2 } else { 3 };
+    let [header, body, footer] = vertical_split(
+        input.area,
+        &[
+            SplitSpec::Length(1),
+            SplitSpec::Min(1),
+            SplitSpec::Length(footer_height),
+        ],
+    );
+    let workspace_selector = Rect {
+        height: footer.height.min(1),
+        ..footer
+    };
+    let global_footer = Rect {
+        y: footer.bottom().saturating_sub(1),
+        height: footer.height.min(1),
+        ..footer
+    };
+    let mut regions = vec![
+        Region {
+            kind: RegionKind::HeaderTab(TuiWorkspace::Ops),
+            area: workspace_selector,
+        },
+        Region {
+            kind: RegionKind::Footer,
+            area: global_footer,
+        },
+        Region {
+            kind: RegionKind::WorkspaceBody,
+            area: body,
+        },
+    ];
+    add_ops_regions(body, &input, &mut regions);
+    add_modal_regions(&input, &mut regions);
+
+    LayoutSnapshot {
+        header,
+        tabs: workspace_selector,
+        separator: Rect::default(),
+        body,
+        workspace_body: body,
+        footer,
+        server_drawer: None,
+        regions,
+    }
+}
+
 pub(super) fn clamp_dev_primary_ratio(area: Rect, preset: DevLayoutPreset, ratio: u16) -> u16 {
     let total = if preset.primary_is_horizontal() {
         area.width
@@ -275,6 +332,26 @@ pub(super) fn secondary_ratio_from_pointer(
 pub(super) fn drawer_ratio_from_pointer(body: Rect, x: u16) -> u16 {
     let drawer_width = body.x.saturating_add(body.width).saturating_sub(x);
     ratio(drawer_width, body.width)
+}
+
+pub(super) fn clamp_ops_details_ratio(area: Rect, ratio: u16) -> u16 {
+    clamp_ratio_for_min(
+        area.width.saturating_sub(SPLIT_SIZE),
+        ratio,
+        OPS_LIST_MIN_WIDTH,
+        OPS_DETAILS_MIN_WIDTH,
+    )
+}
+
+pub(super) fn ops_details_ratio_from_pointer(area: Rect, x: u16) -> u16 {
+    ratio(
+        x.saturating_sub(area.x),
+        area.width.saturating_sub(SPLIT_SIZE),
+    )
+}
+
+pub(super) fn ops_details_visible(area: Rect, requested: bool) -> bool {
+    requested && area.width >= OPS_DETAILS_BREAKPOINT
 }
 
 fn add_dev_regions(area: Rect, input: &LayoutInput, regions: &mut Vec<Region>) {
@@ -396,19 +473,26 @@ fn add_ops_regions(area: Rect, input: &LayoutInput, regions: &mut Vec<Region>) {
             kind: RegionKind::OpsInspectPane(AgentInspectPane::Stream),
             area: right,
         });
-    } else if input.agent_details_visible {
-        let [list, details] = horizontal_split(
-            content,
-            &[SplitSpec::Percentage(60), SplitSpec::Percentage(40)],
-        );
+    } else if ops_details_visible(content, input.agent_details_visible) {
+        let ratio = clamp_ops_details_ratio(content, input.layout.ops_details_ratio);
+        let layout = PaneLayout::horizontal(content, &[ratio as u32, (100 - ratio) as u32]);
+        let [list, details] = layout.panes.as_slice() else {
+            return;
+        };
         regions.push(Region {
             kind: RegionKind::OpsList,
-            area: list,
+            area: *list,
         });
         regions.push(Region {
             kind: RegionKind::OpsDetails,
-            area: details,
+            area: *details,
         });
+        if let Some(divider) = layout.dividers.first() {
+            regions.push(Region {
+                kind: RegionKind::OpsDetailsSplit,
+                area: *divider,
+            });
+        }
     } else {
         regions.push(Region {
             kind: RegionKind::OpsList,
@@ -420,24 +504,49 @@ fn add_ops_regions(area: Rect, input: &LayoutInput, regions: &mut Vec<Region>) {
 fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
     match input.mode {
         TuiMode::ContextPicker => {
-            let height =
-                context_picker_height(input.context_picker_rows.min(10), input.area.height);
-            let width = input.area.width.min(72).max(36);
-            let area = centered(input.area, width, height);
-            let first_row = area.y.saturating_add(3);
-            for index in 0..input.context_picker_rows.min(10) {
+            let area = adaptive_data_popup_rect(input.area, 48, 10);
+            let content = Rect {
+                x: area.x.saturating_add(2),
+                y: area.y.saturating_add(2),
+                width: area.width.saturating_sub(4),
+                height: area.height.saturating_sub(4),
+            };
+            let row_capacity = (content.height as usize)
+                .saturating_sub(input.context_picker_prefix_height)
+                .saturating_sub(2)
+                .max(1);
+            let selected_line = input
+                .context_picker_rows
+                .iter()
+                .position(|index| *index == Some(input.context_picker_selected))
+                .unwrap_or_default();
+            let mut start = selected_line.saturating_sub(row_capacity.saturating_sub(1));
+            if start > 0
+                && input.context_picker_rows.get(start.saturating_sub(1)) == Some(&None)
+                && selected_line.saturating_sub(start).saturating_add(2) <= row_capacity
+            {
+                start = start.saturating_sub(1);
+            }
+            for (offset, index) in input
+                .context_picker_rows
+                .iter()
+                .skip(start)
+                .take(row_capacity)
+                .enumerate()
+                .filter_map(|(offset, index)| index.map(|index| (offset, index)))
+            {
                 regions.push(Region {
                     kind: RegionKind::ContextPickerRow(index),
                     area: Rect {
-                        x: area.x.saturating_add(2),
-                        y: first_row.saturating_add(index as u16),
-                        width: area.width.saturating_sub(4),
-                        height: 1,
+                        x: content.x,
+                        y: content
+                            .y
+                            .saturating_add(input.context_picker_prefix_height as u16)
+                            .saturating_add(offset as u16),
+                        width: content.width,
+                        height: content.height.min(1),
                     },
                 });
-            }
-            if input.context_picker_step == ContextPickerStep::AppEnvironments {
-                // Row numbering remains local to the visible environment list.
             }
         }
         TuiMode::ContextSwitchConfirm => {
@@ -450,7 +559,10 @@ fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
                 kind: RegionKind::ContextConfirm,
                 area: Rect {
                     x: area.x.saturating_add(2),
-                    y: area.y.saturating_add(area.height.saturating_sub(2)),
+                    y: area
+                        .y
+                        .saturating_add(6)
+                        .min(area.bottom().saturating_sub(2)),
                     width: 24,
                     height: 1,
                 },
@@ -459,7 +571,10 @@ fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
                 kind: RegionKind::ContextCancel,
                 area: Rect {
                     x: area.x.saturating_add(28),
-                    y: area.y.saturating_add(area.height.saturating_sub(2)),
+                    y: area
+                        .y
+                        .saturating_add(6)
+                        .min(area.bottom().saturating_sub(2)),
                     width: 24,
                     height: 1,
                 },
@@ -709,9 +824,25 @@ fn ratio(value: u16, total: u16) -> u16 {
     }
 }
 
-fn context_picker_height(rows: usize, terminal_height: u16) -> u16 {
-    let base = rows.saturating_add(6) as u16;
-    base.min(terminal_height.saturating_sub(2)).max(7)
+pub(super) fn adaptive_data_popup_rect(
+    area: Rect,
+    minimum_width: u16,
+    minimum_height: u16,
+) -> Rect {
+    fn dimension(available: u16, minimum: u16) -> u16 {
+        if available <= 2 {
+            return available;
+        }
+        let maximum = available.saturating_sub(2);
+        let target = ((available as u32 * 85) / 100) as u16;
+        target.max(minimum.min(maximum)).min(maximum)
+    }
+
+    centered(
+        area,
+        dimension(area.width, minimum_width),
+        dimension(area.height, minimum_height),
+    )
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -813,8 +944,9 @@ mod tests {
             active_workspace: TuiWorkspace::Dev,
             focused_dev_panel: DevPanel::Repl,
             mode: TuiMode::Normal,
-            context_picker_rows: 0,
-            context_picker_step: ContextPickerStep::Targets,
+            context_picker_rows: Vec::new(),
+            context_picker_selected: 0,
+            context_picker_prefix_height: 2,
             agents_view_mode: AgentsViewMode::List,
             agent_details_visible: true,
             layout: TuiLayoutState {
@@ -822,6 +954,26 @@ mod tests {
                 ..TuiLayoutState::default()
             },
         }
+    }
+
+    #[test]
+    fn context_picker_hit_rows_follow_adaptive_popup_and_visual_sections() {
+        let mut input = input(DevLayoutPreset::Right);
+        input.area = Rect::new(0, 0, 100, 40);
+        input.mode = TuiMode::ContextPicker;
+        input.context_picker_rows = vec![None, Some(0), Some(1), None, Some(2)];
+        input.context_picker_selected = 2;
+
+        let snapshot = compute_ops_shell(input);
+
+        assert_eq!(
+            snapshot.region(RegionKind::ContextPickerRow(0)),
+            Some(Rect::new(9, 8, 81, 1))
+        );
+        assert_eq!(
+            snapshot.region(RegionKind::ContextPickerRow(2)),
+            Some(Rect::new(9, 11, 81, 1))
+        );
     }
 
     #[test]
@@ -879,5 +1031,41 @@ mod tests {
         assert!(clamp_dev_primary_ratio(area, DevLayoutPreset::Right, 1) > 1);
         assert!(clamp_dev_primary_ratio(area, DevLayoutPreset::Right, 99) < 99);
         assert!(clamp_drawer_ratio(area, 99) < 99);
+    }
+
+    #[test]
+    fn ops_details_split_is_hit_testable_and_preserves_minimum_panes() {
+        let mut input = input(DevLayoutPreset::Right);
+        input.active_workspace = TuiWorkspace::Ops;
+        input.layout.ops_details_ratio = 99;
+        let snapshot = compute(input);
+        let list = snapshot.region(RegionKind::OpsList).expect("agent list");
+        let details = snapshot
+            .region(RegionKind::OpsDetails)
+            .expect("agent details");
+        let divider = snapshot
+            .region(RegionKind::OpsDetailsSplit)
+            .expect("details divider");
+
+        assert!(list.width >= OPS_LIST_MIN_WIDTH);
+        assert!(details.width >= OPS_DETAILS_MIN_WIDTH);
+        assert_eq!(list.right(), divider.x);
+        assert_eq!(divider.right(), details.x);
+        assert_eq!(
+            snapshot.hit_test(divider.x, divider.y),
+            Some(RegionKind::OpsDetailsSplit)
+        );
+    }
+
+    #[test]
+    fn narrow_ops_layout_hides_details_and_its_split() {
+        let mut input = input(DevLayoutPreset::Right);
+        input.area.width = OPS_DETAILS_BREAKPOINT.saturating_sub(1);
+        input.active_workspace = TuiWorkspace::Ops;
+        let snapshot = compute(input);
+
+        assert!(snapshot.region(RegionKind::OpsList).is_some());
+        assert!(snapshot.region(RegionKind::OpsDetails).is_none());
+        assert!(snapshot.region(RegionKind::OpsDetailsSplit).is_none());
     }
 }

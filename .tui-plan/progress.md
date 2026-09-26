@@ -1,5 +1,172 @@
 # Progress
 
+## 2026-09-26
+
+- Replaced ambiguous notice prefixes with bracketed semantic badges such as
+  `[i Notice]` and `[○ Empty]`, keeping glyph color distinct from the muted
+  label and message boundary.
+- Made Help, Commands, context, Dataset, and Columns data overlays adapt toward
+  85 percent of the available terminal while retaining pinned control footers
+  and trailing-right scrollbars for overflowing bodies. Confirmations and
+  blocking/loading dialogs remain compact.
+- Reused the CLI AgentID tokenizer for syntax-colored AgentID cells and Details,
+  preserving semantic foregrounds through ellipsis, zebra rows, and selection.
+- Added explicit unpadded `│` separators to compact decision tables, including
+  the Component/Agent type Dataset selector, and restored the normal pane
+  surface across unused rows below short main-pane tables.
+- Replaced loaded-row fuzzy `All fields` Find with a case-insensitive literal
+  substring search scoped to AgentID by default, Component, or Agent type.
+  Matches retain server-loaded order.
+- Prevented contextual footer overflow from injecting a second `ctrl+p`; only
+  its global owner may fall back to Commands, while other rows use an ellipsis.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo test -p golem-cli --lib --features tui-preview --config 'profile.test.package.golem-cli.debug=0' tui:: -- --report-time` (212 passed)
+- `cargo test -p golem-cli --lib --features tui-preview --config 'profile.test.package.golem-cli.debug=0' agent_id_display::highlight::tests:: -- --report-time` (13 passed)
+- `cargo check -p golem-cli --features tui-preview --tests`
+- `cargo make install-golem-dev-release`
+- Installed `/home/noise64/.cargo/bin/golem` reports
+  `golem v1.5.3-301-g6f0c10e4d`.
+
+## 2026-09-25
+
+- Reserved `tab` and `shift+tab` for pane focus in both Agents Overview and
+  the fake Metrics explorer. Overview/Metrics switching now uses `ctrl+x v`,
+  local Find-field switching uses `ctrl+x f`, and active Ops navigation no
+  longer consumes `alt`+number or `ctrl`+arrow combinations.
+- Kept bare `space` as the explicit Columns-overlay exception for toggling an
+  optional column; normal pane commands continue to require modifiers while
+  printable input belongs to Find.
+- Made Agent rows single-line because full values belong in Details. AgentID
+  now ellipsizes in the table, responsive column widths expand toward actual
+  content when room is available, and the selection rail is always one cell
+  high per logical row.
+- Persisted the vertical table viewport independently from selection. Pointer
+  selection now preserves the clicked row's visible position instead of
+  rebuilding the window with that row at the bottom.
+- Rebuilt Help and Commands results as left-aligned, fixed-height table rows so
+  long labels, shortcuts, descriptions, and unavailable reasons truncate in
+  place rather than producing centered or wrapped layouts.
+- Stripped ANSI escape sequences at the TUI agent-error boundary so styled CLI
+  and server diagnostics render as plain semantic error text.
+
+## 2026-09-24
+
+- Migrated every reachable production popup—Commands, Help, context picker,
+  context confirmation, and context loading—to the shared bordered overlay,
+  notice, selection-row, and shortcut-row grammar. Dormant legacy Dev/Home
+  renderers remain unreachable for later workflow rebuilding.
+- Kept modified global and Agent actions active while loaded-row Find owns bare
+  typing, including Commands, Help, pane focus/resize, refresh, dataset, and
+  loaded-match inclusion actions.
+- Made pane focus and `alt+left/right` resize explicit in the
+  contextual footer and scoped Help, including direct focus of a previously
+  hidden details pane.
+- Routed mouse-wheel events over the Agents list to loaded-row selection and
+  the same near-end continuation check used by keyboard navigation, while
+  preserving independent details-pane scrolling.
+- Closed the post-review Agents Overview gaps: the live table now exposes the
+  CLI's operational fields as AgentID, Status, Type, Component, Revision,
+  Pending, and Created at, with the latter three optional by default.
+- Prototyped selected-row wrapping before settling on single-line Agent rows
+  during the next review pass.
+- Made horizontal panning clamp against the table's actual rendered viewport
+  instead of an assumed terminal width.
+- Extracted cursor-backed collection depth and continuation bookkeeping into a
+  reusable collection state shared by initial loads, continuation requests,
+  refreshes, and dataset resets.
+- Invalidated in-flight refreshes when the server dataset changes, and made
+  mouse selection near the loaded boundary trigger the same continuation path
+  as keyboard navigation.
+- Kept explicit inclusion markers accented independently of focus and retained
+  the full-height selection rail for wrapped rows.
+- Reordered Agent details so instance metadata precedes agent-type metadata.
+- Reserved bare printable keys for focused-pane input, made typing in the
+  Agents list start loaded-row Find, and moved command actions to `ctrl`, `alt`,
+  or `ctrl+x` shortcuts. Direct structural keys such as arrows, `enter`, and
+  `esc` remain local navigation controls.
+- Replaced the Metrics availability placeholder with a deterministic fake OTLP
+  series explorer for UI review. Both panes retain `FAKE` labels and the detail
+  pane states that no receiver or query store was read.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo test -p golem-cli --features tui-preview tui:: -- --report-time`
+- `cargo check -p golem-cli --features tui-preview --tests`
+- Installed the rebuilt `golem` binary and restarted the existing demo server
+  without resetting `./data`; it resolved router `19881`, custom-request
+  `19006`, and MCP `19007` from the demo manifest.
+- Queried a real 200-agent batch with a continuation cursor, then smoke-tested
+  the installed TUI's column chooser, AgentID details formatting, horizontal
+  panning, details focus/scroll/resize, auto-refresh indicator, and loaded-row
+  Find scope/count against that dataset.
+
+## 2026-09-23
+
+- Chose an Ops-first production rebuild rather than restyling the legacy
+  Home/Dev/Ops workbench. Ops is the only initial workspace and keeps
+  `[Ops]` as the single workspace-selector row.
+- Defined Agents as the initial subject. Overview and Metrics are the first
+  production views; Activity remains one future view with interpreted Timeline
+  and exact Journal modes.
+- Chose live typed agent data plus truthful metrics availability states as the
+  first implementation slice. The metrics receiver, store, and query backend
+  remain deliberately out of scope until their contracts are locked.
+- Recorded the local observability direction for GOL-162: a metrics-only OTLP
+  receiver owned by local `golem`, a bounded dedicated `observability.db`, and
+  an effective deployment overlay applied only during normal deploy/update.
+- Preserved user-configured external exporters, prohibited startup revisions
+  and manifest edits, and retained native APIs for logs and oplogs.
+- Defined explicit cross-agent selection, visible source limits, authoritative
+  per-agent oplog ordering, and timestamp merging as presentation rather than
+  global causality.
+- Rebuilt the production shell around Ops and Agents, promoting the accepted
+  frame, pane, table, selection, scrollbar, and compact-layout patterns.
+- Added the live Agents Overview with filtering, explicit multi-agent
+  inclusion, horizontal column panning, a transactional column chooser,
+  optional details, typed refresh, and stale-data preservation on errors.
+- Split collection filtering into an exact server-side Dataset selector and a
+  field-scoped fuzzy Find over loaded rows. The UI now keeps dataset, Find
+  scope/query, loaded match count, loaded row count, and cursor availability
+  explicit.
+- Added bounded cursor continuation at 200 rows per component, automatic
+  continuation near the loaded end, explicit Load More, and bulk All/None over
+  loaded Find matches only. No page number or global total is synthesized.
+- Made refresh state visible in the pane header, including auto-refresh,
+  refreshing, and loading-more states.
+- Made Agent details focusable, mouse/keyboard scrollable, and mouse/keyboard
+  resizable. Details reuse the CLI AgentID formatter, semantic status colors,
+  deployed agent-type metadata, instance metadata, and colored JSON.
+- Added reusable collection query bars, pane-header status, semantic table
+  cells, scrollable documents, colored JSON, and resizable split state.
+- Added a reachable Metrics view that reports current availability without
+  inventing series. The receiver, store, query API, and deployment adaptation
+  remain future observability work.
+- Removed the legacy Home, Dev, server, output, REPL, and nested inspect routes
+  from the visible production shell while retaining their dormant foundations
+  for later rebuilt workflows.
+- Added deterministic preview stories for the production Ops views and the
+  future Activity Timeline and Journal contract. The production rebuild is now
+  awaiting visual acceptance.
+
+## 2026-09-21
+
+- Accepted odd/even row surfaces as the main-pane table decoration, retaining
+  cell rules for compact non-wrapping tables.
+- Added a restrained amber tint to selected odd/even row surfaces and used the
+  stronger accent for the full-height `▌` rail without changing selected text.
+- Closed the pane-table foundation review and advanced the active preview focus
+  to normal and 50×16 compact shell layouts.
+- Accepted the compact shell below 72 columns or 20 rows: the header uses the
+  existing `app/environment/server` path grammar, workspace navigation retains
+  numbered Home/Dev/Ops labels while they fit, and the footer preserves only
+  workspace navigation plus Commands/Help/Quit.
+- Completed the generic visual-foundation review and advanced planning to a
+  user-goal inventory for the minimum developer and DevOps workflows.
+
 ## 2026-09-02
 
 - Added semantic content primitives for section headings, aligned fields,
@@ -288,7 +455,7 @@ Current status:
   GOLEM yellow accent with neutral `[ Title ]` brackets.
 - Made the search field lighter than its popup and centered it with one cell of
   popup-surface margin on every side.
-- Replaced search `>` markers with a muted `›` prompt and `◆` selection marker,
+- Replaced search `>` markers with a muted `›` prompt and `▌` selection marker,
   added darker green query text, centered popup content, and aligned popup
   shortcut styling with the main footer.
 - Centralized one-cell popup content padding on every side and used blank rows,
@@ -692,9 +859,9 @@ Current status:
 - Standardized shortcut notation on lowercase forms such as `ctrl+x`, `ctrl+p`,
   `esc`, `enter`, and `tab`; uppercase letters must not imply `shift` unless
   `shift` is explicitly part of the shortcut.
-- Recorded the target interaction grammar: few globals, number-based workspace
-  jumps, `ctrl+x` as a visible transient leader menu, leader-based run actions,
-  `tab` for panel focus, `esc` for step-out, `q` for quit with confirmation,
+- Recorded the target interaction grammar: few globals, modified number-based
+  workspace jumps, `ctrl+x` as a visible transient leader menu, leader-based
+  run actions, `tab` for panel focus, `esc` for step-out, `ctrl+q` for quit,
   explicit REPL raw-input focus, text input ownership of printable keys, and
   arrow-first list/table navigation.
 - Reordered the TUI backlog around the accepted design direction: design review

@@ -22,21 +22,28 @@ a separate explicit decision and never creates a user-selectable theme.
 
 ## Current Focus
 
-- Focus: Pane data tables (`UX-019`)
-- Cases: `table-decoration`, `table-long`, `table-details`, `table-columns`
-- Decision: compare main-pane table decoration and validate long columns,
-  selected-row expansion, optional details, and column visibility.
-- Options: Frame Base
-- Scratch observations: odd/even is the only candidate that permits multi-line
-  selected rows; it uses four high-contrast row surfaces. Cell rules occupy one
-  unpadded column, and the Columns chooser follows popup-table navigation.
-- Queued next: Adaptive and minimal layouts
-- Exit: select the pane-table decoration or record a concrete table-level
-  change before responsive reduction begins.
+- Focus: Ops-first production rebuild (`UX-022`)
+- Cases: `ops-agents`, `ops-metrics-demo`, `activity-timeline`,
+  `activity-journal`, plus `shell-compact`
+- Decision: promote the accepted foundation as the sole production visual
+  system, start directly in Ops, and rebuild around Agents Overview and a
+  permanently labelled fake OTLP explorer for Metrics layout review.
+- Options: no legacy visual variant. Activity is preview-only until its direct
+  typed provider is ready.
+- Scratch observations: the focused row and explicit cross-agent selection are
+  separate states. The frozen marker slot must communicate both without
+  changing column alignment. Reachable overlays now share the accepted frame,
+  notice, selected-row, and shortcut grammar. Agent Find retains modified
+  shortcuts, and pane focus/resize plus list mouse scrolling are discoverable
+  and covered by interaction tests.
+- Queued next: live Agents Overview visual acceptance
+- Exit: production and deterministic previews share the same shell/table
+  components, legacy workspaces are unreachable, and wide/compact agent and
+  metric states are accepted.
 
-The `shell-compact` case is available for the queued responsive review. It
-reuses the default shell content at 50×16 so compact behavior can be evaluated
-without introducing another workflow or visual direction.
+The `shell-compact` case reuses the default shell content at 50×16 so compact
+behavior can be evaluated without introducing another workflow or visual
+direction.
 
 ## Sources Of Truth
 
@@ -476,7 +483,7 @@ explicit review.
 
 ### UX-019 — Establish pane data tables
 
-- Status: implemented; awaiting visual review
+- Status: accepted
 - Preview: `http://127.0.0.1:4173/?mode=focus&focus=pane-data-tables&font=fira&size=14`
 - Area: main-pane data tables, selected-row details, and column visibility
 - Theme: content | interaction | layout
@@ -493,8 +500,83 @@ explicit review.
   chooser applies or cancels visibility changes transactionally.
 - Outcome: four deterministic stories and reusable pane-table state, schema,
   rendering, details composition, and chooser primitives are implemented;
-  decoration selection awaits visual review. Cell rules now occupy one cell
-  without padding. Multi-line selection is restricted to odd/even tables,
-  which distinguish odd/even × selected/unselected with four row surfaces.
+  odd/even decoration is selected for main-pane tables. Cell rules remain
+  available for compact tables and occupy one cell without padding. Multi-line
+  selection is restricted to odd/even tables, which distinguish odd/even ×
+  selected/unselected with four row surfaces. Selected surfaces carry the
+  accepted restrained amber tint and accent-colored full-height rail.
+
+### UX-020 — Establish adaptive and minimal layouts
+
+- Status: accepted
+- Preview: `http://127.0.0.1:4173/?mode=focus&focus=adaptive-minimal-layouts&font=fira&size=14`
+- Area: global shell and compact terminal layouts
+- Theme: layout | navigation | responsive
+- Problem: the accepted foundation has not yet defined which shell content and
+  controls survive or regroup when terminal width and height are constrained.
+- Desired outcome: a compact-shell contract that preserves orientation and
+  primary navigation without crowding or clipping essential content.
+- Scope: preview-only Frame Base normal and 50×16 shell stories. Production
+  remains unchanged.
+- Dependencies: accepted foundation decisions through `UX-019`.
+- Acceptance: the compact shell remains legible, persistent controls retain a
+  clear hierarchy, and every hidden, shortened, stacked, or moved element has a
+  deterministic width- or height-driven rule.
+- Outcome: accepted. Below 72 columns or 20 rows, the context header uses the
+  existing `app/environment/server` path grammar; workspace navigation keeps
+  numbered Home/Dev/Ops labels while they fit and falls back to numbered
+  selection shapes only at narrower widths; contextual hints collapse while
+  the workspace and Commands/Help/Quit rows remain. `ContextHeader`,
+  `WorkspaceSelector`, `design_lab_compact_shell`, and focused size-boundary
+  render tests enforce the contract.
+
+### UX-021 — Inventory user goals and derive workflows
+
+- Status: accepted
+- Preview: `http://127.0.0.1:4173/?mode=focus&focus=user-goals-workflows&font=fira&size=14`
+- Area: Home, Dev, and Ops product responsibilities
+- Theme: product | navigation | workflow
+- Problem: the visual foundation is coherent, but the minimum developer and
+  DevOps jobs have not yet been ranked into goal-led views and stories.
+- Desired outcome: a deliberately small product path that supports essential
+  development and operations work while providing a clear first home for the
+  GOL-162 metrics view.
+- Scope: user-goal inventory, workspace ownership, and the first workflow story;
+  metrics acquisition and signal selection follow once view responsibility is
+  clear.
+- Dependencies: accepted visual foundation through `UX-020`.
+- Acceptance: each retained goal has a user, trigger, desired result, workspace
+  owner, and minimum data/actions; the first workflow story is explicit enough
+  for deterministic preview fixtures.
+- Outcome: the first product is an Ops-only explorer. Agents is the initial
+  subject; Overview and Metrics are production views; Activity later provides
+  Timeline and Journal over an explicit bounded agent selection. Home is
+  dropped, and Dev returns only with a rebuilt workflow.
+
+### UX-022 — Promote the foundation into an Ops-first product
+
+- Status: awaiting visual acceptance
+- Preview: deterministic Ops agent, fake-OTLP-explorer, and Activity stories
+- Area: production shell and Ops explorer
+- Theme: product | navigation | content | implementation
+- Problem: the accepted components remain preview-only while production still
+  renders the obsolete Home/Dev/Ops workbench and visual baseline.
+- Desired outcome: one production renderer using the accepted shell, pane,
+  table, overlay, scrollbar, and compact-layout rules.
+- Scope: Ops-only shell, live Agents Overview, fake OTLP Metrics demo, and
+  preview-only Activity contract.
+- Dependencies: accepted foundation through `UX-021`.
+- Acceptance: `[Ops]` is the only workspace selector; old workflows are not
+  reachable; Agents uses live typed data; every invented Metrics series is
+  persistently marked `FAKE` and states that no receiver/store was queried;
+  Activity is absent from production; all cases survive wide, compact, and
+  extreme non-zero sizes.
+- Outcome: implemented; awaiting visual acceptance.
   The Columns chooser uses the popup-table selection grammar and exposes
   `↑/↓ Navigate` explicitly.
+  Agents now distinguishes exact server-side Dataset filtering from local
+  fuzzy Find over loaded rows. Cursor loading reports only loaded count and
+  `more available`, and loaded-match All/None actions are explicit. The details
+  pane is focusable, scrollable, resizable, and shows structured AgentID plus
+  colored agent-type and instance metadata. Auto-refresh state is visible in
+  the pane header.

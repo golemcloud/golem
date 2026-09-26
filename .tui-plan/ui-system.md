@@ -216,11 +216,12 @@ Dev may keep a compact Server panel when the drawer is closed, but when the
 drawer is open the drawer is the primary server surface and Dev should avoid a
 second large server log panel.
 
-Ops is the operations and resource workspace. Ops opens on curated dashboard
-tabs, not on a raw entity list. Dashboard tabs should be grouped by lifecycle
-and user intent, not mechanically by CLI command names.
+Ops is the first and only production workspace during the rebuild. It starts on
+the Agents subject rather than a generic dashboard. The accepted footer retains
+`[Ops]` without a shortcut; Home is removed and Dev is added back only with a real rebuilt
+workflow.
 
-The initial Ops dashboard group names are placeholders:
+The earlier Ops dashboard group names are deferred implementation history:
 
 - Dev;
 - Deploy;
@@ -237,9 +238,16 @@ The design intent is:
 - devops monitoring, including future server metrics and exposed operational
   telemetry.
 
-Each Ops dashboard tab should drill into scoped explorer/detail views. The
-generic explorer behavior lives inside the relevant dashboard scope rather than
-as a separate top-level workspace.
+Ops uses separate subject and view axes. Agents is the initial subject.
+Overview and Metrics are the first production views. Activity is a later view
+with Timeline and Journal modes and is not exposed until a direct typed
+provider supports the agreed multi-agent rules. The selected server and
+optional app/environment remain the scope shown by the global context header.
+
+Before live metrics ingestion exists, Metrics may use deterministic sample
+series as an interaction demo only. Both the series and details panes must
+retain visible `FAKE` labels, details must say that no OTLP receiver or query
+store was read, and demo samples must never be combined with live data.
 
 Agents and components are shared entities between Dev and Ops. The UI must not
 invent separate Dev-agent and Ops-agent concepts. Dev may show app-local
@@ -248,17 +256,10 @@ underlying entity model used by Ops.
 
 ## Layout And Navigation
 
-Top-level navigation switches only between Home, Dev, and Ops.
-
-Top-level workspace jumps should use stable number keys:
-
-- `1` for Home;
-- `2` for Dev;
-- `3` for Ops.
-
-Next/previous workspace cycling should remain available. The exact shortcut can
-be decided during implementation, but it must not require punctuation-heavy keys
-as the only path because those are awkward on some keyboard layouts.
+Ops is currently the only top-level workspace, so it has no keyboard shortcut.
+When Dev or another workspace is introduced, its navigation must avoid
+`alt`+number bindings and punctuation-heavy keys that produce characters or
+conflict with desktop navigation on common keyboard layouts.
 
 Workspace tabs mean stable sub-pages. They are not user-opened documents or
 browser-style resource tabs.
@@ -295,8 +296,8 @@ navigation.
 focus modes next, then exits the current drilldown one level. Normal shell
 `esc` should not be the primary quit command.
 
-`q` quits from a normal shell state. If jobs are running or state may be lost,
-quit must show a confirmation modal.
+`ctrl+q` quits from a normal shell state. If jobs are running or state may be
+lost, quit must show a confirmation modal.
 
 The initial navigation history model is back/step-out only. Forward history is
 deferred until there is a concrete workflow that needs it.
@@ -307,6 +308,24 @@ Shortcut notation must be lowercase. Documentation should use forms such as
 `ctrl+x`, `ctrl+x n`, `ctrl+p`, `esc`, `enter`, and `tab`. It must not use
 capital letters in a way that implies `shift` unless `shift` is explicitly part
 of the shortcut.
+
+Command shortcuts must not consume bare printable keys. Commands use `ctrl`,
+`alt`, or the `ctrl+x` leader so ordinary typing can belong to the focused pane.
+Direct non-printable structural controls such as arrows, `enter`, `esc`,
+`pageup`, `pagedown`, `home`, and `end` remain unmodified. In a pane with a
+primary Find or filter field, typing should enter that mode and insert the
+character without requiring a separate activation shortcut.
+Entering a text-editing mode transfers only bare printable input. Modified
+global and pane shortcuts remain active while the field is being edited, so a
+user can open Commands or Help, change pane focus, resize a split, refresh, or
+apply loaded-match actions without first leaving Find.
+
+`tab` and `shift+tab` are reserved for pane focus. They do not switch explorer
+views or change the Find field. Ops uses `ctrl+x v` for Overview/Metrics and
+`ctrl+x f` for the local Find field. `ctrl`+arrow is avoided because macOS uses
+it for Spaces navigation, and `alt`+number is avoided because it produces
+characters on some keyboard layouts. The Columns overlay deliberately permits
+bare `space` to toggle its focused row.
 
 Only a few shortcuts should be truly global:
 
@@ -337,19 +356,32 @@ cover:
 
 Leader hints should show immediate available keys. Scoped help should provide
 the full reference for the current workspace, sub-page, panel, and focus.
+Help and Commands use left-aligned, fixed-height table rows with stable key,
+label, shortcut, and description columns. Long content ellipsizes within its
+column; it must not wrap one action across multiple visual records.
 
 The persistent footer names concrete scoped actions rather than a generic
 `ctrl+x More` entry. At narrow widths it keeps whole actions in priority order
-and exposes `ctrl+p Commands` when lower-priority actions do not fit.
+and exposes `ctrl+p Commands` when lower-priority actions do not fit. A fallback
+belongs only to the row that owns that action; contextual overflow uses a
+neutral ellipsis and must not duplicate a global shortcut in another row.
 
 Workspace navigation is the first row of the bottom control zone and joins its
 top boundary using the same connected geometry as pane titles. Global,
 workspace, and focused-pane rows continue beneath it on one left spine, which
 opens with `┌` on the identity row and closes with `└` on the final row.
 
-The workspace selector containing `1`, `2`, and `3` is always visible. The
-remaining global, workspace, and focused-pane shortcut-hint rows will be
+The workspace selector containing `[Ops]` is always visible. The remaining
+global, workspace, and focused-pane shortcut-hint rows will be
 toggleable as a group, without hiding or moving that primary selector.
+
+Frame Base enters its compact shell below 72 columns or 20 rows. Compact mode
+keeps the workspace selector and one global Commands/Help/Quit row, while
+omitting contextual hint rows so the body retains vertical space. The selector
+keeps the canonical short workspace name without clipping.
+`design_lab_compact_shell`,
+`WorkspaceSelector`, and focused render tests are the executable contract for
+these reductions.
 
 Structural decorators never change color to communicate focus or mode. Rails,
 junctions, rules, and popup borders use one neutral decorator color; semantic
@@ -391,7 +423,7 @@ the popup by the shared content padding and spans the full padded content width.
 Search inputs use a muted `›` prompt and a darker green query color derived from
 the active/success family. Search results use equal-width centered rows with a
 two-cell marker slot, keeping every label on the same left edge. Selection uses
-`◆` without shifting the label and fills the entire fixed row with a slightly
+`▌` without shifting the label and fills the entire fixed row with a slightly
 darkened light-gray background and dark text. Popup content is centered except
 for text typed inside the full-width input field. Popup shortcut rows reuse the
 main footer grammar:
@@ -403,6 +435,18 @@ Components do not add their own outer margin within that area. Distinct content
 groups use one blank row between them; search separates its input, result list,
 and shortcut row this way. Confirmation and nested modals also place one blank
 row immediately after their leading `!` or `×` message.
+Every reachable popup, including Commands, Help, context selection,
+confirmation, and blocking loading state, uses the shared overlay frame,
+notices, selection rows, and shortcut row rather than a local border or rail
+variant.
+
+Data-browsing overlays—Help, Commands, context selection, Dataset, and
+Columns—adapt toward 85 percent of both terminal dimensions while retaining a
+one-cell outer margin where possible. Their control footer stays pinned while
+the body scrolls, and an overflowing body reserves one trailing-right cell for
+its scrollbar. Compact confirmations and blocking/loading dialogs remain sized
+to their action and message content instead of expanding to the data-overlay
+footprint.
 
 Lists of affected jobs in confirmation modals use an equal-width, fixed-column
 table with muted `Job` and `State` headers. Fields are left-aligned to stable
@@ -421,12 +465,20 @@ stable glyph and text label so color is supplementary: `●` running, `○` idle
 Informational, active, success, loading, warning, error, unavailable, and empty
 states use the shared notice representation with a stable glyph, kind label,
 and message. The glyph vocabulary is `i` notice, `●` active, `✓` success, `…`
-loading, `!` warning, `×` error, `—` unavailable, and `○` empty. Content tables own
+loading, `!` warning, `×` error, `—` unavailable, and `○` empty. The glyph and
+label form a bracketed badge—such as `[i Notice] message` or `[○ Empty]
+message`—so the marker, state name, and message have explicit visual
+boundaries. The glyph keeps its semantic color while the label and brackets use
+the shared muted structural hierarchy. Content tables own
 their marker slot, fixed column starts, character-safe ellipsis, and full-row
 selection surface. Log and output rows reserve a muted stream prefix and
 truncate safely to the available row width. These rules are identical in
 single-pane, split-pane, scrolling, and long-content layouts; stories may vary
 data and geometry but may not recreate the styling locally.
+
+CLI and server diagnostics entering semantic notices are stripped of ANSI
+control sequences. The TUI applies its own styles; embedded terminal escapes
+must never appear as visible error-message characters.
 
 `OutputLine` receives the actual usable row width, including its stream prefix.
 When truncation is necessary, the ellipsis occupies the final usable cell; a
@@ -434,33 +486,74 @@ caller must not invent trailing padding by subtracting from that width.
 
 Compact fixed-column rows remain suitable for popups and small summaries. Main
 pane datasets use the separate pane-table model: columns have stable IDs,
-explicit widths, required or optional visibility, and an `ellipsis` or
-`wrap-selected` content policy. Unselected records stay one line. Multi-line
-selected records are available only with odd/even row surfaces, because the
-row background is what keeps a wrapped record visually coherent; its selected
-surface covers every line.
+explicit widths and required or optional visibility. The Agents collection is
+single-line because Details owns full values; columns resolve from their
+minimums toward configured and observed content widths before horizontal
+panning is needed.
 The frozen two-cell marker does not pan with the virtual data columns. Selected
-records use a solid `▌` rail in the first marker cell, repeated on every visual
-line so wrapped records retain one continuous full-height selection edge.
+records use a solid `▌` rail in the first marker cell.
+AgentID cells reuse the CLI formatter's semantic tokenization: strings use the
+positive color, numbers the informational color, literals the warning color,
+and punctuation the muted color. The same token colors apply to the inline or
+structured multiline AgentID in Details. Ellipsis and row selection preserve
+those foreground distinctions over the selected row background.
 
 When enabled columns exceed the pane width, plain left and right arrows pan the
-table's data viewport while it owns focus. Required columns cannot be disabled.
+table's actual rendered data viewport while it owns focus. Required columns
+cannot be disabled.
 Optional columns are changed transactionally in a scoped Columns overlay and
-remain session-local. Enter opens an optional 60/40 right details pane without
-moving focus from the table; selection changes update details, Tab may focus
-them, and Escape closes them or returns table focus. Table and details panes
-own independent scrollbars and preserve the shared pane boundary rules.
+remain session-local. Enter toggles an optional 60/40 right details pane;
+selection changes update details without stealing focus. Pointer clicks or
+`tab`/`shift+tab` move focus between list and details, and
+`alt+left/right` or pointer dragging resizes their shared divider. The details
+document scrolls independently with arrows, paging keys, boundaries, and the
+mouse wheel. Its AgentID remains inline when it fits and uses the CLI's
+structured multiline formatter otherwise. Status is semantically colored, and
+agent-type plus instance metadata use the shared colored-JSON document.
+The agent list itself accepts the mouse wheel under its pointer region, moves
+the focused selection through loaded logical rows, and follows the same
+near-end continuation rule as keyboard navigation. Split focus and resize
+shortcuts are present in contextual footer hints whenever the details pane is
+visible and in scoped Help.
+Table and details panes own independent trailing-right scrollbars and preserve
+the shared pane boundary rules.
 
-The pane-table decoration is under active review. The candidates are minimal
-rows, faint one-cell `│` rules directly between cells without space padding,
-and odd/even background rows. Odd/even tables own four surfaces: odd and even,
-each in selected and unselected forms. Pane-table selection uses a restrained
-fill plus full-height `▌` rail; the brighter selection surface remains reserved
-for search overlays.
+Main-pane tables use odd/even background rows. Their four surfaces cover odd
+and even rows in selected and unselected states so wrapped selected records
+remain visually coherent. Pane-table selection uses a restrained, desaturated
+amber fill plus an accent-colored full-height `▌` rail; the brighter selection
+surface remains reserved for search overlays. Faint one-cell `│` rules directly
+between cells without space padding remain available for compact tables where
+row wrapping is not needed.
 
-The Columns overlay uses the compact popup-table grammar with `Column` and
-`Visibility` columns, one selected row, required/shown/hidden states, and an
-explicit `↑/↓ Navigate` hint alongside toggle, apply, and cancel actions.
+Rows below a short table return to the pane surface across the complete pane
+width; virtual table width must not leave a differently shaded text-width
+rectangle behind.
+
+The Columns and Dataset overlays use the compact popup-table grammar with a
+one-cell `│` separator and no padding around that separator. Columns has
+`Column` and `Visibility` fields, one selected row, required/shown/hidden
+states, and an explicit `↑/↓ Navigate` hint alongside bare `space` toggle,
+apply, and cancel actions. Dataset uses the same grammar for Component and
+Agent type so adjacent values can never visually concatenate.
+
+Agents Overview offers AgentID, Status, Type, Component, Revision, Pending, and
+Created at. AgentID and Status are required; Type and Component are shown by
+default; Revision, Pending, and Created at are optional and initially hidden.
+AgentID ellipsizes in the table and uses the structured full-value formatter in
+Details. Pointer hit testing uses the persisted visible window, so selecting a
+visible row does not move it to a different screen position.
+
+Paged collections show two different query layers in a shared query/status
+bar. `Dataset` names the exact server-side component/type restriction. `Find`
+names a local, case-insensitive literal substring query over one explicit field:
+AgentID by default, Component, or Agent type. There is no ambiguous `All fields`
+scope, fuzzy subsequence matching, or relevance reordering; matching rows retain
+their loaded order. The bar reports
+the real loaded count and `more available` whenever any server cursor remains;
+it never displays a guessed total or synthetic page number. Explicit All/None
+actions affect only loaded Find matches. A pane-header status separately shows
+refreshing, loading-more, auto-refresh-active, or auto-refresh-off state.
 
 Active and success use the positive green semantic family. Orange remains the
 focus/accent family and is not used to color active operational state.
@@ -472,14 +565,16 @@ block.
 Footer workspace selection relies on square-active/round-idle shape and neutral
 text hierarchy rather than the orange accent. Shortcut keys use subdued amber,
 darker than the active-pane accent, so they remain recognizable as keys without
-competing with pane focus. This includes the `1`, `2`, and `3` workspace keys
-inside the footer navigation labels.
+competing with pane focus.
 
 Application, environment, and server metadata use uniform `label value` pairs
 with a single space between the muted label and bright value, and neutral middle
 dots between pairs. A matching dot separates the padded GOLEM
-identity from the first application pair. The identity row does not use chips,
-path notation, or unconnected vertical dividers for these fields.
+identity from the first application pair. In compact mode, the same values use
+the existing `app/environment/server` path grammar without labels. The identity
+row does not use chips, new punctuation conventions, or unconnected vertical
+dividers for these fields. `ContextHeader` selects the full or compact grammar
+from the available width before text clips.
 
 Text input owns printable keys. When a filter, search box, command input, or
 other text field is focused, printable keys must type into that field. Only
@@ -695,10 +790,11 @@ Current registered actions cover build, deploy, clean, server control, agent
 refresh/settings, view navigation, REPL control, context switching, palette,
 help, and quit.
 
-Current global bare run keys such as `b`, `d`, `c`, `s`, and `r` are scaffolding
-and should not be treated as final design. Current `tab` behavior cycles views,
-which conflicts with the target focus model. Current numeric jumps should be
-retained conceptually but remapped to Home, Dev, and Ops when workspaces land.
+Bare printable global run keys have been removed: command actions now use
+modified shortcuts or the `ctrl+x` leader, while typing in the Agents list
+starts loaded-row Find. Current `tab` behavior cycles views, which conflicts
+with the target focus model. Modified numeric jumps should be retained
+conceptually and remapped to Home, Dev, and Ops when workspaces land.
 
 Agents list refresh already uses a direct typed context-executor call.
 

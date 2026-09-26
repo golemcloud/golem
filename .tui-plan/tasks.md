@@ -123,11 +123,66 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - [ ] Split help derivation and interaction documentation helpers out of `app.rs`.
 - [ ] Split selected context, job lifecycle, layout, and Ops view state modules only after behavior has settled.
 
-### Milestone 6: Local Observability
+### Milestone 6: Ops-First Production Rebuild
 
-- [ ] Plan the TUI role for local observability from issue #3456.
-- [ ] Decide how local/server metrics fit into Dev and Ops Monitor dashboard surfaces.
-- [ ] Keep observability as workspace panels and dashboard content, not as a new top-level workspace.
+- [x] Choose Ops as the only initial production workspace and retain `[Ops]`
+  without an `alt`+number binding.
+- [x] Choose Agents as the initial subject and Overview/Metrics as production
+  views.
+- [x] Keep Activity as one future view with Timeline and Journal modes.
+- [x] Promote the accepted Frame Base tokens and widgets into production and
+  remove the obsolete visual comparison baseline.
+- [x] Rebuild live Agents Overview with the pane table, details, column chooser,
+  filtering, explicit agent inclusion, and typed refresh.
+- [x] Separate exact server dataset filtering from fuzzy loaded-row Find and
+  keep both scopes visible in the Agents collection header.
+- [x] Add cursor-backed incremental loading at 200 rows per component cursor,
+  with truthful loaded/more-available status, end-of-list continuation, and an
+  explicit Load More action.
+- [x] Reserve bare printable keys for focused-pane input, move commands behind
+  modifiers or the `ctrl+x` leader, and let typing in Agents start loaded-row
+  Find directly.
+- [x] Show instance metadata before agent-type metadata in Agent details.
+- [x] Scope bulk All/None inclusion to loaded Find matches without clearing
+  hidden explicit selections.
+- [x] Make Agent details focusable, keyboard/mouse scrollable, and resizable;
+  reuse structured AgentID formatting and colored JSON metadata.
+- [x] Extract reusable collection query/status, semantic cell, pane status,
+  scrollable document, JSON, and resizable split primitives.
+- [x] Extract cursor continuation/depth state and visual-row table windowing;
+  use the rendered viewport for panning and pointer hit testing.
+- [x] Expose the live operational columns from the CLI list, keep Agent rows
+  single-line with responsive ellipsis widths, and preserve inclusion markers,
+  zebra parity, and the vertical viewport independently from selection.
+- [x] Reserve `tab`/`shift+tab` for pane focus, use `ctrl+x v` for the Ops view
+  and `ctrl+x f` for the local Find field, and avoid `ctrl`+arrow and
+  `alt`+number bindings.
+- [x] Align Help and Commands into fixed-height rows and strip ANSI escapes
+  from agent/server errors before semantic TUI rendering.
+- [x] Invalidate stale refreshes on dataset changes and trigger continuation
+  from both keyboard and pointer selection near the loaded boundary.
+- [x] Keep modified shortcuts available while loaded-row Find owns printable
+  input, and expose details focus/resize controls in contextual footer hints.
+- [x] Route mouse-wheel input over the Agents list to row movement and
+  near-boundary continuation without stealing details-pane scrolling.
+- [x] Migrate every reachable production popup to the accepted shared overlay,
+  notice, selection, and shortcut primitives.
+- [x] Add a reachable deterministic fake OTLP Metrics explorer for UI review;
+  label both panes as fake and state that no receiver or query store is read.
+- [x] Remove Home, Dev, drawer, REPL, output, server, and nested inspect actions
+  from the visible shell until their rebuilt workflows exist.
+- [x] Keep Activity out of production until a direct typed provider implements
+  the agreed scope and ordering rules.
+
+### Milestone 7: Local Observability For GOL-162
+
+- [x] Record the local embedded receiver, dedicated store, deployment-overlay,
+  and external-exporter decisions from the discovery work in issue #3456.
+- [ ] Validate agent-to-local-router OTLP delivery and capture real payload and
+  batch shapes.
+- [ ] Define series identity, retention, pruning, and database-size limits.
+- [ ] Define discovery, range, aggregation, and availability query contracts.
+- [ ] Implement the receiver/store only after those contracts are accepted.
 
 ## Deferred Goal: DX/UX Hardening
 
@@ -145,12 +200,12 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - [x] Accept shared content primitives across single-pane, split-pane,
   scrolling, and long-content stories, retaining compact tables for popups and
   simple summaries.
-- [~] Review pane data tables across decoration, long/panned content, selected
-  details, and column-chooser stories; implementation is awaiting visual
-  selection among minimal, cell-rule, and odd/even treatments.
-- [~] Add the compact shell case after the normal-sized foundation is coherent
+- [x] Review pane data tables across decoration, long/panned content, selected
+  details, and column-chooser stories; main panes use odd/even rows with a
+  restrained amber selection fill and accent-colored full-height rail.
+- [x] Add the compact shell case after the normal-sized foundation is coherent
   and use it as the responsive acceptance gate.
-- [ ] Inventory user goals after the foundation is accepted and redefine
+- [x] Inventory user goals after the foundation is accepted and redefine
   navigation, workspace grouping, and workflows before adding flow stories.
 - [ ] Implement explicitly approved feedback as small themed batches and keep
   the design system, tasks, progress, and tests synchronized.

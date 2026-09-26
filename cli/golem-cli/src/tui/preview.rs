@@ -44,6 +44,10 @@ struct PreviewCase {
 }
 
 const CASES: &[PreviewCase] = &[
+    PreviewCase::new("ops-agents", "Ops / agents overview", 120, 30),
+    PreviewCase::new("ops-metrics-demo", "Ops / fake OTLP explorer", 120, 28),
+    PreviewCase::new("activity-timeline", "Activity / timeline", 110, 24),
+    PreviewCase::new("activity-journal", "Activity / journal", 110, 24),
     PreviewCase::new("shell-default", "Shell / default", 100, 24),
     PreviewCase::new("shell-compact", "Shell / compact", 50, 16),
     PreviewCase::new("shell-scrollbar", "Shell / scrollbar", 100, 24),
@@ -86,17 +90,18 @@ struct CurrentFocus {
 }
 
 const CURRENT_FOCUS: CurrentFocus = CurrentFocus {
-    id: "pane-data-tables",
-    title: "Pane data tables",
-    decision: "Compare main-pane table decoration and validate long columns, selected-row expansion, optional details, and column visibility.",
+    id: "ops-first-production",
+    title: "Ops-first production rebuild",
+    decision: "Promote live Agents Overview and a permanently labelled fake OTLP explorer for Metrics layout review while keeping Activity preview-only.",
     case_ids: &[
-        "table-decoration",
-        "table-long",
-        "table-details",
-        "table-columns",
+        "ops-agents",
+        "ops-metrics-demo",
+        "activity-timeline",
+        "activity-journal",
+        "shell-compact",
     ],
-    queued_next: "Adaptive and minimal layouts",
-    variants: &[TuiVisualVariant::FrameBase],
+    queued_next: "Live Agents Overview visual acceptance",
+    variants: &[TuiVisualVariant::Production],
 };
 
 impl PreviewCase {
@@ -650,11 +655,13 @@ mod tests {
             )
         };
 
-        let shell = render("shell-default");
+        let shell = render("ops-agents");
         assert!(
-            shell.contains("app:")
-                && shell.contains("server:")
-                && shell.contains("ctrl+x")
+            shell.contains("app preview-app")
+                && shell.contains("env local")
+                && shell.contains("server local")
+                && shell.contains("Agents · Overview")
+                && shell.contains("space Include")
                 && shell.contains("Quit")
         );
 
@@ -691,11 +698,11 @@ mod tests {
         assert!(long_content.contains("Location") && long_content.contains("…"));
 
         let split = render("split-focus");
-        assert!(split.contains("● Focused panel") && split.contains("○ Secondary"));
+        assert!(split.contains("Focused panel") && split.contains("Secondary"));
 
         let leader = render("shortcut-leader");
         assert!(
-            leader.contains("workspace") && leader.contains("layout") && leader.contains("help")
+            leader.contains("Workspace") && leader.contains("Layout") && leader.contains("Help")
         );
 
         let search = render("overlay-search");
@@ -779,6 +786,29 @@ mod tests {
     }
 
     #[test]
+    fn compact_shell_reduces_header_and_footer_before_body_content() {
+        let compact =
+            render_preview_buffer("shell-compact", TuiVisualVariant::FrameBase, 50, 16).unwrap();
+        let text = buffer_text(&compact);
+        assert!(text.contains("GOLEM · preview-app/local/local"));
+        assert!(!text.contains("app preview-app"));
+        assert!(text.contains("├─[ Home ]──( Dev )──( Ops )"));
+        let navigation = (0..50)
+            .map(|x| compact[(x, 14)].symbol())
+            .collect::<String>();
+        assert!(
+            navigation.contains("Home") && navigation.contains("Dev") && navigation.contains("Ops")
+        );
+        assert!(text.contains("ctrl+p Commands"));
+        assert!(text.contains("ctrl+h Help"));
+        assert!(text.contains("ctrl+q Quit"));
+        assert!(!text.contains("Layout"));
+        assert!(!text.contains("Refresh"));
+        assert_eq!(compact[(0, 14)].symbol(), "├");
+        assert_eq!(compact[(0, 15)].symbol(), "└");
+    }
+
+    #[test]
     fn scrollbar_cases_contrast_edge_content_with_real_scrollbar_cells() {
         let plain =
             render_preview_buffer("shell-default", TuiVisualVariant::FrameBase, 100, 24).unwrap();
@@ -845,8 +875,10 @@ mod tests {
         assert!(long_text.contains("durable payment"));
         assert_eq!(long[(1, 3)].symbol(), "▌");
         assert_eq!(long[(1, 4)].symbol(), "▌");
-        assert_eq!(long[(1, 3)].bg, Color::Rgb(36, 36, 46));
-        assert_eq!(long[(1, 4)].bg, Color::Rgb(36, 36, 46));
+        assert_eq!(long[(1, 3)].fg, Color::Rgb(232, 165, 56));
+        assert_eq!(long[(1, 4)].fg, Color::Rgb(232, 165, 56));
+        assert_eq!(long[(1, 3)].bg, Color::Rgb(45, 38, 25));
+        assert_eq!(long[(1, 4)].bg, Color::Rgb(45, 38, 25));
 
         let details =
             render_preview_buffer("table-details", TuiVisualVariant::FrameBase, 120, 28).unwrap();
@@ -858,7 +890,7 @@ mod tests {
             (2..25).any(|y| matches!(details[(divider_x - 1, y)].symbol(), "▲" | "║" | "█" | "▼"))
         );
         assert!((2..25).any(|y| matches!(details[(119, y)].symbol(), "▲" | "║" | "█" | "▼")));
-        assert!(buffer_text(&details).contains("Tab focuses details"));
+        assert!(buffer_text(&details).contains("Ctrl+Right focuses details"));
 
         let chooser = buffer_text(
             &render_preview_buffer("table-columns", TuiVisualVariant::FrameBase, 100, 24).unwrap(),
@@ -920,7 +952,7 @@ mod tests {
         assert_eq!(search[(18, 9)].bg, search[(17, 8)].bg);
         assert_eq!(search[(17, 8)].symbol(), " ");
         assert_eq!(search[(82, 8)].symbol(), " ");
-        assert_eq!(search[(21, 10)].symbol(), "◆");
+        assert_eq!(search[(21, 10)].symbol(), "▌");
         assert_eq!(search[(23, 10)].symbol(), "D");
         assert_eq!(search[(23, 11)].symbol(), "O");
         assert_eq!(search[(23, 12)].symbol(), "D");
@@ -949,11 +981,12 @@ mod tests {
         assert_eq!(decision[(20, 6)].fg, Color::Rgb(232, 165, 56));
         assert!((18..82).all(|x| decision[(x, 9)].symbol() == " "));
         assert_eq!(decision[(31, 10)].symbol(), "J");
-        assert_eq!(decision[(55, 10)].symbol(), "S");
+        assert_eq!(decision[(55, 10)].symbol(), "│");
+        assert_eq!(decision[(56, 10)].symbol(), "S");
         assert_eq!(decision[(31, 11)].symbol(), "b");
-        assert_eq!(decision[(55, 11)].symbol(), "r");
+        assert_eq!(decision[(56, 11)].symbol(), "r");
         assert_eq!(decision[(31, 12)].symbol(), "a");
-        assert_eq!(decision[(55, 12)].symbol(), "c");
+        assert_eq!(decision[(56, 12)].symbol(), "c");
 
         let error =
             render_preview_buffer("overlay-error", TuiVisualVariant::FrameBase, 100, 24).unwrap();
@@ -1022,8 +1055,11 @@ mod tests {
             .map(|case| case.id)
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(ids.len(), CASES.len());
-        assert_eq!(CASES.len(), 19);
-        assert_eq!(CASES[0].id, "shell-default");
+        assert_eq!(CASES.len(), 23);
+        assert_eq!(CASES[0].id, "ops-agents");
+        assert!(CASES.iter().any(|case| case.id == "ops-metrics-demo"));
+        assert!(CASES.iter().any(|case| case.id == "activity-timeline"));
+        assert!(CASES.iter().any(|case| case.id == "activity-journal"));
         assert!(CASES.iter().any(|case| case.id == "shell-compact"));
         assert!(CASES.iter().any(|case| case.id == "split-focus"));
         assert!(CASES.iter().any(|case| case.id == "content-split"));
@@ -1034,12 +1070,11 @@ mod tests {
     #[test]
     fn current_focus_is_small_unique_and_renderable() {
         assert!((1..=4).contains(&CURRENT_FOCUS.variants.len()));
-        assert!((1..=4).contains(&CURRENT_FOCUS.case_ids.len()));
+        assert!((1..=6).contains(&CURRENT_FOCUS.case_ids.len()));
         for case_id in CURRENT_FOCUS.case_ids {
             assert!(CASES.iter().any(|case| case.id == *case_id));
         }
         for (index, variant) in CURRENT_FOCUS.variants.iter().enumerate() {
-            assert_ne!(*variant, TuiVisualVariant::Production);
             assert!(!CURRENT_FOCUS.variants[..index].contains(variant));
         }
     }
@@ -1048,9 +1083,12 @@ mod tests {
     fn gallery_defaults_to_linkable_current_focus() {
         let html = gallery_html().unwrap();
         assert!(html.contains("data-mode=\"focus\""));
-        assert!(html.contains("Current focus: Pane data tables"));
-        assert!(html.contains("Queued next: Adaptive and minimal layouts"));
-        assert_eq!(html.matches("data-focus=\"true\"").count(), 4);
+        assert!(html.contains("Current focus: Ops-first production rebuild"));
+        assert!(html.contains("Queued next: Live Agents Overview visual acceptance"));
+        assert_eq!(
+            html.matches("data-focus=\"true\"").count(),
+            CURRENT_FOCUS.case_ids.len() * CURRENT_FOCUS.variants.len()
+        );
         assert!(html.contains("<details id=\"tools\">"));
         assert!(!html.contains("<details id=\"tools\" open>"));
         assert!(html.contains("if(mode.value!=='focus')tools.open=true"));

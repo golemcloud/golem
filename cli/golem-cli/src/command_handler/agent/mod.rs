@@ -88,7 +88,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -997,6 +997,7 @@ impl AgentCommandHandler {
                     &filters,
                     mode_overlay.as_ref(),
                     scan_cursor.as_ref(),
+                    None,
                     max_count,
                     precise,
                     false,
@@ -1032,6 +1033,7 @@ impl AgentCommandHandler {
             &filters,
             mode_overlay.as_ref(),
             request.scan_cursor.as_ref(),
+            request.component_scan_cursors.as_ref(),
             request.max_count,
             request.precise,
             request.stable_sort,
@@ -1064,6 +1066,7 @@ impl AgentCommandHandler {
                         filters,
                         mode_overlay,
                         scan_cursor,
+                        None,
                         max_count,
                         precise,
                         true,
@@ -1202,6 +1205,7 @@ impl AgentCommandHandler {
         filters: &[String],
         mode_overlay: Option<&AgentFilter>,
         scan_cursor: Option<&ScanCursor>,
+        component_scan_cursors: Option<&BTreeMap<String, ScanCursor>>,
         max_count: Option<u64>,
         precise: bool,
         stable_sort: bool,
@@ -1226,13 +1230,22 @@ impl AgentCommandHandler {
         let mut view = AgentsMetadataResponseView::default();
 
         for component in components {
+            let component_cursor = if let Some(component_scan_cursors) = component_scan_cursors {
+                let Some(cursor) = component_scan_cursors.get(component.component_name.as_str())
+                else {
+                    continue;
+                };
+                Some(cursor)
+            } else {
+                scan_cursor
+            };
             let (agents, component_scan_cursor) = self
                 .list_component_agents(
                     &component.component_name,
                     &component.id,
                     Some(filters),
                     mode_overlay,
-                    scan_cursor,
+                    component_cursor,
                     max_count,
                     precise,
                 )
