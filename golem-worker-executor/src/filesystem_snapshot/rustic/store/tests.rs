@@ -4175,9 +4175,10 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
 
 mod sweep;
 
-/// The largest number of steps of one turn. A delete takes at most 15 steps of the protocol, so a
-/// turn of 16 steps runs a delete to its end.
-const SWEEP_TURN: usize = 16;
+/// The largest number of steps of one turn. A delete takes at most 21 steps of the protocol, and
+/// its prune writes at least one new marker of its claim, so a turn of 22 steps runs a delete to
+/// its end when its prune writes one new marker.
+const SWEEP_TURN: usize = 22;
 
 /// The number of random orders that the property test tries.
 const SWEEP_CASES: u32 = 1000;

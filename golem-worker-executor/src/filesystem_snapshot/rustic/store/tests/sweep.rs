@@ -17,7 +17,9 @@
 //! Each delete has its own store over its own scripted storage, and the two storages share one
 //! in-memory storage, as two executors share a bucket. Each blob call of the prune protocol is a
 //! step: it waits until the test gives its delete one step. So the test sets the order of the
-//! calls of the two deletes, and nothing else changes it.
+//! calls of the two deletes. The grace period is short, so a prune writes new markers of its claim
+//! while it runs. A timer starts each such write, so its place in the order can change from run to
+//! run, and the log of a case gives the call that took each step.
 
 use super::*;
 use futures::TryStreamExt;
@@ -34,9 +36,11 @@ const STEP_LABELS: &[&str] = &[
     "list_freed",
     "list_data",
     "list_claims",
-    "read_claim",
+    "write_marker",
     "write_claim",
+    "delete_marker",
     "refresh_claim",
+    "final_marker",
     "write_ledger",
     "list_ledgers",
     "delete_ledger",
@@ -47,7 +51,8 @@ const STEP_LABELS: &[&str] = &[
     "delete_claims",
 ];
 
-/// The most steps that one delete takes before the test gives up on it.
+/// The most steps that one delete takes before the test gives up on it, without the writes of
+/// new markers. Those writes end with the prune.
 const MOST_STEPS: usize = 64;
 
 fn is_step(op_label: &str, path: &Path) -> bool {
@@ -58,8 +63,18 @@ fn is_step(op_label: &str, path: &Path) -> bool {
 
 /// Tells whether the call writes or deletes, so that it can reach the storage late.
 fn can_be_late(op_label: &str) -> bool {
-    op_label.starts_with("write_") || op_label.starts_with("delete") || op_label == "refresh_claim"
+    op_label.starts_with("write_") || op_label.starts_with("delete") || op_label == "final_marker"
 }
+
+/// Tells whether the call writes a new marker of a claim while its prune runs. A timer starts
+/// such a call, so the schedule neither counts it nor makes it fail.
+fn is_refresh(op_label: &str) -> bool {
+    op_label == "refresh_claim"
+}
+
+/// The grace period of the deletes of a case. The claim of a prune gets a new marker at each
+/// quarter of it, so the markers come while the prune runs.
+const SWEEP_GRACE: Duration = Duration::from_millis(16);
 
 fn is_forget(op_label: &str, path: &Path) -> bool {
     op_label == "delete" && path.starts_with("snapshots")
@@ -70,10 +85,11 @@ fn is_prune_start(op_label: &str, path: &str) -> bool {
 }
 
 /// The order of the steps of one case: the delete that goes first, and the numbers of steps that
-/// the deletes take in turn. After the listed turns, the delete whose turn is next runs to its
-/// end, and then the other one does. `fail` refuses one step of one delete. `late` makes one
-/// write or delete of one delete give no answer at its step, and reach the storage after the
-/// given number of further steps of the case.
+/// the deletes take in turn. A turn counts each step, also the write of a new marker. After the
+/// listed turns, the delete whose turn is next runs to its end, and then the other one does.
+/// `fail` refuses one step of one delete. `late` makes one write or delete of one delete give no
+/// answer at its step, and reach the storage after the given number of further steps of the case.
+/// The steps of `fail` and `late` are numbered without the writes of new markers.
 #[derive(Clone, Debug)]
 pub(super) struct Schedule {
     pub(super) first: usize,
@@ -99,6 +115,7 @@ struct Step {
 struct Delete {
     storage: Arc<ScriptedBlobStorage>,
     task: JoinHandle<Result<(), SnapshotStoreError>>,
+    /// The steps that the delete took, other than the writes of new markers.
     taken: usize,
 }
 
@@ -132,9 +149,27 @@ async fn until(condition: impl Fn() -> bool) -> bool {
     .is_ok()
 }
 
-/// Waits until the delete waits for a step or ended.
+/// Waits until the delete waits for a step or ended. While the prune waits for the listing of
+/// the packs, it also waits until the first new marker of the claim waits for a step, so each
+/// prune writes a new marker right after that listing.
 async fn settle(delete: &Delete) -> bool {
-    until(|| delete.storage.waiting_steps() > 0 || delete.finished()).await
+    until(|| {
+        let waiting = delete.storage.waiting_steps();
+        delete.finished() || waiting > usize::from(prune_waits(&delete.storage))
+    })
+    .await
+}
+
+/// Tells whether the prune of the delete waits for its step: the storage has a call for the
+/// listing of the packs that took no step yet.
+fn prune_waits(storage: &ScriptedBlobStorage) -> bool {
+    let starts = |calls: Vec<(&'static str, String)>| {
+        calls
+            .iter()
+            .filter(|(op_label, path)| is_prune_start(op_label, path))
+            .count()
+    };
+    starts(storage.calls()) > starts(storage.took())
 }
 
 impl Case {
@@ -173,26 +208,32 @@ impl Case {
         if self.deletes[who].finished() {
             return Ok(());
         }
-        let calls = self.deletes[who].storage.calls();
-        let (op_label, path) = calls
-            .iter()
-            .rev()
-            .find(|(op_label, path)| is_step(op_label, Path::new(path)))
-            .cloned()
-            .ok_or_else(|| format!("delete {who} waits for a step with no step call"))?;
-        let number = self.deletes[who].taken;
-        let refused = self.schedule.fail == Some((who, number));
-        let late = self.schedule.late.filter(|(late_who, late_step, _)| {
-            (*late_who, *late_step) == (who, number) && can_be_late(op_label)
-        });
         let storage = self.deletes[who].storage.clone();
-        let before = storage.stepped();
+        let (before, taker) = (storage.stepped(), storage.took().len());
         storage.step();
         if !until(|| storage.stepped() > before).await {
             return Err(format!(
-                "the step {op_label} {path} of delete {who} did not end"
+                "a step of delete {who} did not end; its last calls {:?}",
+                storage.calls().iter().rev().take(6).collect::<Vec<_>>()
             ));
         }
+        let took = storage.took();
+        if took.len() != taker + 1 {
+            return Err(format!(
+                "one step of delete {who} was taken by {:?}",
+                took.get(taker..)
+            ));
+        }
+        let (op_label, path) = took
+            .get(taker)
+            .cloned()
+            .ok_or_else(|| format!("a step of delete {who} ended, and no call took it"))?;
+        let number = self.deletes[who].taken;
+        let counted = !is_refresh(op_label);
+        let refused = counted && self.schedule.fail == Some((who, number));
+        let late = self.schedule.late.filter(|(late_who, late_step, _)| {
+            counted && (*late_who, *late_step) == (who, number) && can_be_late(op_label)
+        });
         let step = Step {
             delete: who,
             op_label,
@@ -204,7 +245,7 @@ impl Case {
         if let Some((_, _, delay)) = late {
             self.pending = Some((who, self.log.len() + delay, step));
         }
-        self.deletes[who].taken += 1;
+        self.deletes[who].taken += usize::from(counted);
         if self.deletes[who].taken > MOST_STEPS {
             return Err(format!("delete {who} took more than {MOST_STEPS} steps"));
         }
@@ -232,6 +273,20 @@ impl Case {
             .await
             .map(|_| ())
     }
+
+    /// Gives the delete steps until it ends.
+    async fn run_to_end(&mut self, who: usize) -> Result<(), String> {
+        futures::stream::unfold(self, |case| async move {
+            if case.deletes[who].finished() {
+                None
+            } else {
+                let stepped = case.take_step(who).await;
+                Some((stepped, case))
+            }
+        })
+        .try_for_each(|()| std::future::ready(Ok(())))
+        .await
+    }
 }
 
 /// What a case found.
@@ -258,7 +313,12 @@ pub(super) async fn run_case(
         let counter = Arc::new(AtomicUsize::new(0));
         let (fail, late) = (schedule.fail, schedule.late);
         let storage = ScriptedBlobStorage::new(shared.clone(), move |op_label, path| {
-            if is_step(op_label, path) {
+            if is_refresh(op_label) {
+                Script::Step {
+                    refuse: false,
+                    late: false,
+                }
+            } else if is_step(op_label, path) {
                 let number = counter.fetch_add(1, Ordering::SeqCst);
                 Script::Step {
                     refuse: fail == Some((who, number)),
@@ -271,10 +331,7 @@ pub(super) async fn run_case(
                 Script::Pass
             }
         });
-        let deleting = store(
-            storage.clone(),
-            policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
-        );
+        let deleting = store(storage.clone(), policy(LONG_DEADLINE, ALWAYS, SWEEP_GRACE));
         let scope = scope.clone();
         let task =
             tokio::spawn(async move { deleting.delete(&scope, &name(["p-1", "p-2"][who])).await });
@@ -317,8 +374,8 @@ async fn run_turns(case: &mut Case, schedule: &Schedule, turns: &[usize]) -> Res
         })
         .await
         .map(|_| (schedule.first + turns.len()) % 2)?;
-    case.take_steps(next, MOST_STEPS + 1).await?;
-    case.take_steps((next + 1) % 2, MOST_STEPS + 1).await?;
+    case.run_to_end(next).await?;
+    case.run_to_end((next + 1) % 2).await?;
     case.land(true).await
 }
 
@@ -346,6 +403,89 @@ fn forgotten_at(log: &[Step], who: usize) -> Option<usize> {
     })
 }
 
+/// Gives each claim, or marker of a claim, that a delete wrote and that stays, when the first
+/// failed call of that delete came after it took its claim and before it called for the listing of
+/// the packs. A claim that the other delete wrote later at the same path is not the claim of the
+/// delete. A blob whose own delete failed is left out, because no call can remove it then, and a
+/// claim or a marker that stays only delays a prune.
+fn kept_claims(log: &[Step], claims: &[String]) -> Vec<String> {
+    [0, 1]
+        .into_iter()
+        .filter_map(|who| {
+            let own = |step: &Step| step.delete == who;
+            let claimed_at = log.iter().position(|step| {
+                own(step) && step.op_label == "write_claim" && step.effect && !step.failed
+            })?;
+            let failed_at = log.iter().position(|step| own(step) && step.failed)?;
+            let pruning = log[..=failed_at]
+                .iter()
+                .any(|step| own(step) && is_prune_start(step.op_label, &step.path));
+            (claimed_at < failed_at && !pruning).then_some((who, claimed_at))
+        })
+        .flat_map(|(who, claimed_at)| {
+            let claim = &log[claimed_at].path;
+            let taken_again = log[claimed_at..].iter().any(|step| {
+                step.delete != who
+                    && step.op_label == "write_claim"
+                    && step.effect
+                    && step.path == *claim
+            });
+            let written = log
+                .iter()
+                .filter(|step| {
+                    step.delete == who
+                        && step.effect
+                        && matches!(
+                            step.op_label,
+                            "write_marker" | "refresh_claim" | "final_marker"
+                        )
+                })
+                .map(|step| step.path.clone())
+                .chain((!taken_again).then(|| claim.clone()))
+                .collect::<Vec<_>>();
+            let refused = log
+                .iter()
+                .filter(|step| {
+                    step.delete == who
+                        && step.failed
+                        && matches!(step.op_label, "delete_claim" | "delete_marker")
+                })
+                .map(|step| step.path.clone())
+                .collect::<Vec<_>>();
+            claims
+                .iter()
+                .filter(move |path| written.contains(path) && !refused.contains(path))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Gives the claim of each delete whose prune started and that wrote no ledger entry, when that
+/// claim is gone. A prune that started keeps its claim, so the next prune waits for the hold.
+fn started_claims_gone(log: &[Step], claims: &[String]) -> Vec<String> {
+    [0, 1]
+        .into_iter()
+        .filter_map(|who| {
+            let own = |step: &&Step| step.delete == who;
+            let claim = log
+                .iter()
+                .filter(own)
+                .find(|step| step.op_label == "write_claim" && step.effect && !step.failed)?;
+            let started = log
+                .iter()
+                .filter(own)
+                .any(|step| is_prune_start(step.op_label, &step.path));
+            let ledger_written = log
+                .iter()
+                .filter(own)
+                .any(|step| step.op_label == "write_ledger" && step.effect);
+            (started && !ledger_written && !claims.contains(&claim.path))
+                .then(|| claim.path.clone())
+        })
+        .collect()
+}
+
 /// Checks the rules on the end state of a case.
 async fn check(
     shared: &Arc<InMemoryBlobStorage>,
@@ -371,7 +511,9 @@ async fn check(
         return fail("more than one prune ran");
     }
     if !failed && prunes != 1 {
-        return fail("no prune ran, although a prune was due and no call failed");
+        return fail(&format!(
+            "no prune ran, although a prune was due and no call failed: {results:?}"
+        ));
     }
     if !failed && results.iter().any(|result| !matches!(result, Ok(Ok(())))) {
         return fail(&format!("a delete failed with no failed call: {results:?}"));
@@ -379,6 +521,18 @@ async fn check(
     let claims = blobs(&**shared, &scope.0, "golem/prune-claims/").await;
     if !failed && !claims.is_empty() {
         return fail(&format!("claims stay: {claims:?}"));
+    }
+    let released = kept_claims(log, &claims);
+    if !released.is_empty() {
+        return fail(&format!(
+            "a delete that failed after its claim and before its prune kept its claim: {released:?}"
+        ));
+    }
+    let dropped = started_claims_gone(log, &claims);
+    if !dropped.is_empty() {
+        return fail(&format!(
+            "a delete whose prune started and wrote no ledger lost its claim: {dropped:?}"
+        ));
     }
     let records = blobs(&**shared, &scope.0, "golem/prune-freed/").await;
     let entries = blobs(&**shared, &scope.0, "golem/prune-ledgers/").await;

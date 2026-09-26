@@ -71,8 +71,10 @@ pub(super) struct ScriptedBlobStorage {
     steps: Semaphore,
     /// The calls that wait for a step.
     waiting: AtomicUsize,
-    /// The calls that took a step and ended.
+    /// The calls that took a step and ended, or that dropped after they took a step.
     stepped: AtomicUsize,
+    /// The operation label and the path of each call that took a step, in the order of the steps.
+    took: Mutex<Vec<(&'static str, Box<Path>)>>,
     /// The landings that the test gave and that no late call took yet.
     landings: Arc<Semaphore>,
     /// The late calls that reached the storage.
@@ -92,6 +94,7 @@ impl ScriptedBlobStorage {
             steps: Semaphore::new(0),
             waiting: AtomicUsize::new(0),
             stepped: AtomicUsize::new(0),
+            took: Mutex::new(Vec::new()),
             landings: Arc::new(Semaphore::new(0)),
             landed: Arc::new(AtomicUsize::new(0)),
         })
@@ -117,6 +120,32 @@ impl ScriptedBlobStorage {
         self.stepped.load(Ordering::SeqCst)
     }
 
+    /// Gives the operation label and the path of each call that took a step, in the order of the
+    /// steps. Two calls can wait for a step at one time, and the one that waited first takes it.
+    pub(super) fn took(&self) -> Vec<(&'static str, String)> {
+        self.took
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(op_label, path)| (*op_label, path.display().to_string()))
+            .collect()
+    }
+
+    /// Waits until the test gives the call a step. The call counts as waiting until it takes the
+    /// step or drops, and it counts as stepped when the returned guard drops.
+    async fn wait_for_step(&self, op_label: &'static str, path: &Path) -> Stepped<'_> {
+        let waiting = Waiting::new(&self.waiting);
+        if let Ok(permit) = self.steps.acquire().await {
+            permit.forget();
+        }
+        drop(waiting);
+        self.took
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((op_label, path.into()));
+        Stepped(&self.stepped)
+    }
+
     /// Lets one late call, now or later, reach the storage.
     pub(super) fn land_late(&self) {
         self.landings.add_permits(1);
@@ -136,12 +165,7 @@ impl ScriptedBlobStorage {
         landing: impl Future<Output = anyhow::Result<()>> + Send + 'static,
     ) -> anyhow::Result<T> {
         self.record(op_label, path);
-        self.waiting.fetch_add(1, Ordering::SeqCst);
-        let permit = self.steps.acquire().await;
-        self.waiting.fetch_sub(1, Ordering::SeqCst);
-        if let Ok(permit) = permit {
-            permit.forget();
-        }
+        let stepped = self.wait_for_step(op_label, path).await;
         let (landings, landed) = (self.landings.clone(), self.landed.clone());
         tokio::spawn(async move {
             if let Ok(permit) = landings.acquire().await {
@@ -150,7 +174,7 @@ impl ScriptedBlobStorage {
             let _ = landing.await;
             landed.fetch_add(1, Ordering::SeqCst);
         });
-        self.stepped.fetch_add(1, Ordering::SeqCst);
+        drop(stepped);
         Err(anyhow::anyhow!(
             "the call got no answer within its deadline"
         ))
@@ -209,21 +233,39 @@ impl ScriptedBlobStorage {
             }
             Script::Vanish | Script::AnswerAlreadyExists => call.await,
             Script::Step { refuse, .. } => {
-                self.waiting.fetch_add(1, Ordering::SeqCst);
-                let permit = self.steps.acquire().await;
-                self.waiting.fetch_sub(1, Ordering::SeqCst);
-                if let Ok(permit) = permit {
-                    permit.forget();
-                }
-                let answer = if refuse {
+                let _stepped = self.wait_for_step(op_label, path).await;
+                if refuse {
                     Err(anyhow::anyhow!("the storage refused the call"))
                 } else {
                     call.await
-                };
-                self.stepped.fetch_add(1, Ordering::SeqCst);
-                answer
+                }
             }
         }
+    }
+}
+
+/// Counts a call that waits for a step, until the guard drops.
+struct Waiting<'a>(&'a AtomicUsize);
+
+impl<'a> Waiting<'a> {
+    fn new(waiting: &'a AtomicUsize) -> Self {
+        waiting.fetch_add(1, Ordering::SeqCst);
+        Self(waiting)
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Counts a call that took a step as stepped when the guard drops.
+struct Stepped<'a>(&'a AtomicUsize);
+
+impl Drop for Stepped<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
     }
 }
 
