@@ -210,7 +210,9 @@ const CLAIM_RELEASED: u8 = 2;
 /// delete drops before that, the guard releases the claim in a task, and it moves its token of the
 /// tracker into that task, so `shut_down` waits for the release. The prune and the guard change the
 /// state from pending with one atomic step each, so only one of them wins: a released claim never
-/// starts a prune, and a started prune never loses its claim.
+/// starts a prune, and a drop after the prune started does not release the claim. After the start,
+/// only the delete releases the claim, when each attempt of the prune found a snapshot file gone,
+/// because such a prune changed nothing and counts as a prune that did not run.
 struct ClaimGuard {
     /// The blobs of the scope, with a token that nothing cancels, so a release also runs after a
     /// cancel or a drop.
