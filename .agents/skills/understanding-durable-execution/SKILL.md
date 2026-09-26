@@ -347,6 +347,12 @@ span-specific terminal-tail consumption. Long-lived resource and guest spans the
 one operation and close through a later short local operation; a span lifetime never keeps the
 opening durable call or an atomic lease open.
 
+`AgentInvocationStarted` records the executing context, including the invocation span added by
+the invocation loop, for every invocation kind. The live hook passes that context explicitly to
+the oplog writer; it must not derive it from `AgentInvocation::into_parts`, which synthesizes a
+fresh context for oplog-processor invocations. Replay restores this recorded stack before guest
+execution so HTTP, RPC, and guest span parents resolve to the same ids as in the live execution.
+
 ## Durable host call lifecycle
 
 Two-step callers use `DurableCallSession::begin` (returning `BegunCall`) → `BegunCall::resolve` →

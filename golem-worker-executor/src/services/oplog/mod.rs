@@ -33,6 +33,7 @@ use golem_common::model::durable_stream::{
     StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, DurableStreamEventSummary, HostRequest, HostResponse, OplogEntry,
@@ -1113,10 +1114,11 @@ pub trait OplogOps: Oplog {
     async fn add_agent_invocation_started(
         &self,
         invocation: AgentInvocation,
+        invocation_context: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
     ) -> Result<OplogEntry, String> {
         let entry = self
-            .agent_invocation_started_entry(invocation, wallet_pin)
+            .agent_invocation_started_entry(invocation, invocation_context, wallet_pin)
             .await?;
         self.add(entry.clone()).await;
         Ok(entry)
@@ -1125,10 +1127,11 @@ pub trait OplogOps: Oplog {
     async fn add_agent_invocation_started_with_index(
         &self,
         invocation: AgentInvocation,
+        invocation_context: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
     ) -> Result<OplogIndex, String> {
         let entry = self
-            .agent_invocation_started_entry(invocation, wallet_pin)
+            .agent_invocation_started_entry(invocation, invocation_context, wallet_pin)
             .await?;
         Ok(self.add(entry).await)
     }
@@ -1136,9 +1139,10 @@ pub trait OplogOps: Oplog {
     async fn agent_invocation_started_entry(
         &self,
         invocation: AgentInvocation,
+        ctx: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
     ) -> Result<OplogEntry, String> {
-        let (idempotency_key, invocation_payload, ctx) = invocation.into_parts();
+        let (idempotency_key, invocation_payload, _) = invocation.into_parts();
         let payload = self.upload_payload_owned(invocation_payload).await?;
         let invocation_context = ctx.to_oplog_data();
         Ok(OplogEntry::AgentInvocationStarted {
