@@ -218,7 +218,7 @@ use golem_common::model::entity::{
 #[cfg(test)]
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+    InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
@@ -1450,6 +1450,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )),
             _ => {
                 if let Some(scope) = &scope {
+                    if let Some(started) = scope.span_started() {
+                        let span = InvocationContextSpan::local()
+                            .with_span_id(started.span_id.clone())
+                            .with_start(started.started_at)
+                            .parent(started.parent_span_id.as_ref().map(|span_id| {
+                                InvocationContextSpan::external_parent(span_id.clone())
+                            }))
+                            .with_attributes(started.attributes.0.clone())
+                            .build();
+                        let stack = InvocationContextStack::new(
+                            started.trace_id.clone(),
+                            span,
+                            started.trace_states.clone(),
+                        )
+                        .limit_depth(self.state.config.limits.max_invocation_context_stack_depth);
+                        let (context, current_span_id) = InvocationContext::from_stack(stack)
+                            .map_err(WorkerExecutorError::runtime)?;
+                        self.state.invocation_context.switch_to(context);
+                        self.state.current_span_id = current_span_id;
+                    }
                     self.state
                         .set_current_idempotency_key(scope.idempotency_key().clone());
                     self.state.assume_idempotence = scope.assume_idempotence();
@@ -3136,6 +3156,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
+        let trace_context = self
+            .state
+            .invocation_context
+            .span_origin(&self.state.current_span_id)
+            .map(
+                |(trace_id, _)| golem_common::model::oplog::LogTraceContext {
+                    trace_id,
+                    span_id: self.state.current_span_id.clone(),
+                },
+            );
         logging::policy::emit_log_event_with_state::<Ctx>(
             event,
             self.owner_component_metadata()
@@ -3147,6 +3177,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &self.state.oplog,
             self.state.is_live(),
             self.entity_parent_start_index(),
+            trace_context,
         )
         .await;
     }
@@ -3155,10 +3186,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        self.begin_function_impl(function_type, None)
+            .await
+            .map(|(index, _)| index)
+    }
+
+    pub async fn begin_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
+        let (index, recorded) = self
+            .begin_function_impl(function_type, Some(span_started))
+            .await?;
+        let recorded = recorded.ok_or_else(|| {
+            WorkerExecutorError::unexpected_oplog_entry(
+                "durable scope Start carrying span_started",
+                format!("durable scope Start at {index} without span metadata"),
+            )
+        })?;
+        Ok((index, recorded))
+    }
+
+    async fn begin_function_impl(
+        &mut self,
+        function_type: &DurableFunctionType,
+        span_started: Option<golem_common::model::oplog::SpanStarted>,
+    ) -> Result<(OplogIndex, Option<golem_common::model::oplog::SpanStarted>), WorkerExecutorError>
+    {
         if self.state.durability_is_suppressed() {
             let begin_index = self.state.current_oplog_index().await;
             self.state.current_retry_point = begin_index;
-            return Ok(begin_index);
+            return Ok((begin_index, span_started));
         }
 
         if self.state.opens_durable_scope(function_type) {
@@ -3178,7 +3237,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.claim_durable_scope_start(&scope_name, function_type)
                     .await?
             };
+            let mut recorded_span_started = span_started.clone();
             let result = if let Some((begin_index, scope_handle)) = claimed_scope {
+                // The recorded span metadata is authoritative on replay: the owning host path
+                // restores `SpanStarted` from the claimed scope `Start` rather than from the
+                // live caller's value.
+                recorded_span_started = match self.state.oplog.read(begin_index).await {
+                    OplogEntry::Start { span_started, .. } => span_started.map(|span| *span),
+                    other => {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "durable scope Start",
+                            format!("{other:?}"),
+                        ));
+                    }
+                };
                 // The begin-side completion / legality probe stays a non-consuming forward scan: it
                 // decides whether the scope is safe to continue replaying or must be retried *before*
                 // the scope body is replayed. Only the `End` *consumption* moves to the resolver.
@@ -3293,6 +3365,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     observational_owner: None,
                     request: None,
                     durable_function_type: function_type.clone(),
+                    span_started: span_started.map(Box::new),
                 };
                 let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
                 Ok(begin_index)
@@ -3315,7 +3388,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // The effective retry point now derives from the open scope; keep the global fallback
             // pointing at the scope `Start` so it survives the scope being closed.
             self.state.current_retry_point = result;
-            Ok(result)
+            Ok((result, recorded_span_started))
         } else {
             // When there is no scope `Start` entry, the current retry point can only
             // point to the last written non-hint entry. Hint entries must be ignored
@@ -3342,7 +3415,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             };
             self.state.current_retry_point = new_retry_point;
 
-            Ok(begin_index)
+            Ok((begin_index, span_started))
         }
     }
 
@@ -3350,6 +3423,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        self.end_function_impl(function_type, begin_index, None)
+            .await
+    }
+
+    async fn end_function_impl(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.durability_is_suppressed() {
             return Ok(());
@@ -3361,13 +3444,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 // through the resolver (never positionally, which under overlap could steal a
                 // concurrently-replaying sibling call's terminal). This also repairs a
                 // crash-induced half-pair and closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
+                self.close_durable_scope_replay(begin_index, span_finished)
+                    .await?;
             } else {
                 let entry = OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
                     start_index: begin_index,
                     response: None,
                     forced_commit: true,
+                    span_finished,
+                    span_attributes: None,
                 };
                 self.state.oplog.add(entry).await;
                 // The durable scope opened in `begin_function` is now closed.
@@ -3439,6 +3525,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn close_durable_scope_replay(
         &mut self,
         begin_index: OplogIndex,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
         match self.state.take_durable_scope_replay_handle(begin_index) {
             Some(handle) => {
@@ -3487,6 +3574,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 start_index: begin_index,
                                 response: None,
                                 forced_commit: true,
+                                span_finished,
+                                span_attributes: None,
                             })
                             .await;
                     }
@@ -3557,6 +3646,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 observational_owner: None,
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+                span_started: None,
             };
             let (begin_index, _) = self
                 .public_state
@@ -3830,7 +3920,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if marker.is_some() {
                 // The scope `End` was folded into the resolver at scope-open, so await it (the
                 // terminal marker stays positional). Also closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
+                self.close_durable_scope_replay(begin_index, None).await?;
             } else if self.state.replay_state.is_live() {
                 // The external commit succeeded, but the process crashed before persisting the
                 // marker pair. The preceding pre-commit marker exhausted replay, so repair the
@@ -3875,7 +3965,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if marker.is_some() {
                 // The scope `End` was folded into the resolver at scope-open, so await it (the
                 // terminal marker stays positional). Also closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
+                self.close_durable_scope_replay(begin_index, None).await?;
             } else if self.state.replay_state.is_live() {
                 // The external rollback succeeded, but the process crashed before persisting the
                 // marker pair. Repair the missing local terminal without issuing the rollback again.
@@ -3916,6 +4006,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     start_index: begin_index,
                     response: None,
                     forced_commit: true,
+                    span_finished: None,
+                    span_attributes: None,
                 },
             )
             .await
@@ -5169,7 +5261,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
-        mut invocation: AgentInvocation,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         if !self.state.durability_is_suppressed() {
             let stack = self.get_current_invocation_context().await;
@@ -5204,29 +5296,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 return Err(WorkerExecutorError::permission_denied("permission denied"));
             }
 
-            match &mut invocation {
-                AgentInvocation::AgentInitialization {
-                    invocation_context, ..
-                } => {
-                    *invocation_context = stack;
-                }
-                AgentInvocation::AgentMethod {
-                    invocation_context, ..
-                }
-                | AgentInvocation::ExternalTool {
-                    invocation_context, ..
-                } => {
-                    *invocation_context = stack;
-                }
-                _ => {}
-            }
-
             let start_index = self
                 .public_state
                 .worker()
                 .oplog()
                 .add_agent_invocation_started_with_index(
                     invocation,
+                    stack,
                     InvocationWalletPin {
                         wallet_token: WalletVersionToken {
                             wallet_id_hash: self.state.wallet_id_hash,
@@ -5466,8 +5542,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if !is_live {
             // Mirror the live-path drain: events enqueued from synchronous drops during replay
-            // (e.g. `DropEvent::FinishSpan` for a p3 HTTP response dropped unconsumed) must consume
-            // their positional entries (recorded by the live drain at this same point) before the
+            // (e.g. cleanup for a p3 HTTP response dropped unconsumed) must settle
+            // their durable operations before the
             // `AgentInvocationFinished` entry is read.
             concurrent::drain_queued_dropped_call_events(self)
                 .await
@@ -5728,101 +5804,6 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let span_id = self.state.current_span_id.clone();
-        let span = self.start_child_span(&span_id, initial_attributes).await?;
-        if activate {
-            self.state.current_span_id = span.span_id().clone();
-        }
-        Ok(span)
-    }
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let current_span_id = self.state.current_span_id.clone();
-
-        let replay_entry = self.get_oplog_entry_or_continue_live("StartSpan").await?;
-        let continued_live = replay_entry.is_none();
-
-        let span = if continued_live {
-            self.state
-                .invocation_context
-                .start_span(parent, None)
-                .map_err(WorkerExecutorError::runtime)?
-        } else {
-            let (_, entry) = replay_entry.expect("replay entry was checked above");
-
-            let (timestamp, span_id) = match entry {
-                OplogEntry::StartSpan {
-                    timestamp, span_id, ..
-                } => (timestamp, span_id),
-                other => {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "StartSpan",
-                        format!("{other:?}"),
-                    ));
-                }
-            };
-
-            let parent_span = self.state.invocation_context.get(parent).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "parent span {parent} missing during StartSpan replay: {err}"
-                ))
-            })?;
-            let span = InvocationContextSpan::local()
-                .with_span_id(span_id)
-                .with_start(timestamp)
-                .with_parent(parent_span)
-                .build();
-            self.state.invocation_context.add_span(span.clone());
-            span
-        };
-
-        if &current_span_id != parent
-            && !self
-                .state
-                .invocation_context
-                .has_in_stack(&current_span_id, parent)
-        {
-            // The parent span is not in the current invocation stack. This can happen if it was created in a previous
-            // invocation and stored in some global state.
-            // To preserve the current invocation context stack but also have the information from the desired parent
-            // span, we add a _link_ to the newly created span.
-
-            self.state
-                .invocation_context
-                .add_link(span.span_id(), parent)
-                .map_err(WorkerExecutorError::runtime)?;
-        };
-
-        for (name, value) in initial_attributes {
-            span.set_attribute(name.clone(), value.clone());
-        }
-
-        if continued_live {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::StartSpan {
-                    timestamp: span.start().unwrap_or(Timestamp::now_utc()),
-                    parent_start_index: self.entity_parent_start_index(),
-                    span_id: span.span_id().clone(),
-                    parent: Some(parent.clone()),
-                    linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
-                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()).into(),
-                })
-                .await;
-        }
-
-        Ok(span)
-    }
-
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.current_span_id == span_id {
             // Walk up to the parent if it still exists in the invocation context;
@@ -5843,77 +5824,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .invocation_context
             .finish_span(span_id)
             .map_err(WorkerExecutorError::runtime);
-        Ok(())
-    }
-
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if let Some((_, entry)) = self.get_oplog_entry_or_continue_live("FinishSpan").await? {
-            if !matches!(entry, OplogEntry::FinishSpan { .. }) {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "FinishSpan",
-                    format!("{entry:?}"),
-                ));
-            }
-        } else {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::finish_span(
-                    self.entity_parent_start_index(),
-                    span_id.clone(),
-                ))
-                .await;
-        }
-
-        if &self.state.current_span_id == span_id {
-            let span = self.state.invocation_context.get(span_id).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "span {span_id} missing during finish_span replay: {err}"
-                ))
-            })?;
-            self.state.current_span_id = span
-                .parent()
-                .map(|p| p.span_id().clone())
-                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
-        }
-        let _ = self
-            .state
-            .invocation_context
-            .finish_span(span_id)
-            .map_err(WorkerExecutorError::runtime);
-        Ok(())
-    }
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError> {
-        self.state
-            .invocation_context
-            .set_attribute(span_id, key.to_string(), value.clone())
-            .map_err(WorkerExecutorError::runtime)?;
-        if let Some((_, entry)) = self
-            .get_oplog_entry_or_continue_live("SetSpanAttribute")
-            .await?
-        {
-            if !matches!(entry, OplogEntry::SetSpanAttribute { .. }) {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "SetSpanAttribute",
-                    format!("{entry:?}"),
-                ));
-            }
-        } else {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::set_span_attribute(
-                    self.entity_parent_start_index(),
-                    span_id.clone(),
-                    key.to_string(),
-                    value,
-                ))
-                .await;
-        }
         Ok(())
     }
 
@@ -6123,10 +6033,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         .instrument(span)
                         .await;
 
-                        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-                        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-                        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
-                        // are finished at AgentInvocationFinished.
+                        // Invocation-owned spans are closed by AgentInvocationFinished in the
+                        // oplog processor; removing their resident context records no transition.
                         for span_id in local_span_ids {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
@@ -9736,7 +9644,9 @@ pub(crate) struct HttpRequestSession {
 struct HttpRequestSessionInner {
     begin_index: OplogIndex,
     span_id: SpanId,
+    persisted: bool,
     phase: AtomicU8,
+    outcome: Mutex<golem_common::model::oplog::SpanOutcome>,
     drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
 }
 
@@ -9748,13 +9658,16 @@ impl HttpRequestSession {
     pub(crate) fn new(
         begin_index: OplogIndex,
         span_id: SpanId,
+        persisted: bool,
         drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
     ) -> Self {
         Self {
             inner: Arc::new(HttpRequestSessionInner {
                 begin_index,
                 span_id,
+                persisted,
                 phase: AtomicU8::new(HTTP_REQUEST_OPEN),
+                outcome: Mutex::new(golem_common::model::oplog::SpanOutcome::Cancelled),
                 drop_sink,
             }),
         }
@@ -9766,6 +9679,22 @@ impl HttpRequestSession {
 
     pub(crate) fn span_id(&self) -> &SpanId {
         &self.inner.span_id
+    }
+
+    pub(crate) fn persisted(&self) -> bool {
+        self.inner.persisted
+    }
+
+    pub(crate) fn outcome(&self) -> golem_common::model::oplog::SpanOutcome {
+        self.inner.outcome.lock().unwrap().clone()
+    }
+
+    pub(crate) fn record_outcome(&self, outcome: golem_common::model::oplog::SpanOutcome) {
+        let mut current = self.inner.outcome.lock().unwrap();
+        // A later EOF must not erase an error already exposed to the guest.
+        if *current != golem_common::model::oplog::SpanOutcome::Failed {
+            *current = outcome;
+        }
     }
 
     pub(crate) fn mark_closed(&self) {
@@ -9793,15 +9722,22 @@ impl HttpRequestSessionInner {
         let phase = self.phase.swap(HTTP_REQUEST_CLOSED, Ordering::AcqRel);
         if let Some(sink) = &self.drop_sink {
             let event = match phase {
-                HTTP_REQUEST_OPEN => Some(concurrent::DropEvent::CloseDurableScope {
-                    function_type: DurableFunctionType::WriteRemoteBatched(None),
-                    begin_index: self.begin_index,
-                    span_id: Some(self.span_id.clone()),
-                }),
-                HTTP_REQUEST_SCOPE_CLOSED => Some(concurrent::DropEvent::FinishSpan {
-                    span_id: self.span_id.clone(),
-                    durable: true,
-                }),
+                HTTP_REQUEST_OPEN if self.persisted => {
+                    Some(concurrent::DropEvent::CloseDurableScope {
+                        function_type: DurableFunctionType::WriteRemoteBatched(None),
+                        begin_index: self.begin_index,
+                        span_finished: Some(golem_common::model::oplog::SpanFinished {
+                            span_id: self.span_id.clone(),
+                            finished_at: Timestamp::now_utc(),
+                            outcome: self.outcome.lock().unwrap().clone(),
+                        }),
+                    })
+                }
+                HTTP_REQUEST_OPEN | HTTP_REQUEST_SCOPE_CLOSED => {
+                    Some(concurrent::DropEvent::FinishSpan {
+                        span_id: self.span_id.clone(),
+                    })
+                }
                 _ => None,
             };
             if let Some(event) = event {

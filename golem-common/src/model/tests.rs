@@ -1546,6 +1546,7 @@ fn durable_stream_session_index_rejects_unloaded_external_payload() {
     let entry = OplogEntry::StreamSession {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
+        summary: None,
         record: OplogPayload::External {
             payload_id: PayloadId::new(),
             md5_hash: vec![0; 16],
@@ -1566,6 +1567,7 @@ fn durable_stream_session_index_rejects_unsupported_inline_payload_version() {
     let entry = OplogEntry::StreamSession {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
+        summary: None,
         record: OplogPayload::SerializedInline {
             bytes: vec![0xff],
             cached: None,
@@ -1585,6 +1587,7 @@ fn durable_stream_session_index_rejects_malformed_inline_payload() {
     let entry = OplogEntry::StreamSession {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
+        summary: None,
         record: OplogPayload::SerializedInline {
             bytes: vec![crate::serialization::SERIALIZATION_VERSION_V3, 0xff],
             cached: None,

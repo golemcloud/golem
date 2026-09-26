@@ -67,9 +67,7 @@ use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::invocation_context::{
-    self, AttributeValue, InvocationContextStack, SpanId,
-};
+use golem_common::model::invocation_context::{self, InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
     TimestampedUpdateDescription,
@@ -891,49 +889,11 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
 
 #[async_trait]
 impl InvocationContextManagement for Context {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_span(initial_attributes, activate)
-            .await
-    }
-
-    async fn start_child_span(
-        &mut self,
-        parent: &invocation_context::SpanId,
-        initial_attributes: &[(String, invocation_context::AttributeValue)],
-    ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_child_span(parent, initial_attributes)
-            .await
-    }
-
     fn remove_span(
         &mut self,
         span_id: &invocation_context::SpanId,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.remove_span(span_id)
-    }
-
-    async fn finish_span(
-        &mut self,
-        span_id: &invocation_context::SpanId,
-    ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.finish_span(span_id).await
-    }
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx
-            .set_span_attribute(span_id, key, value)
-            .await
     }
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {

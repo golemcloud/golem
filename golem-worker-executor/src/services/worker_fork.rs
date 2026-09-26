@@ -64,7 +64,9 @@ use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogIndexRange};
+use golem_common::model::oplog::{
+    DurableStreamEventSummary, OplogEntry, OplogIndex, OplogIndexRange,
+};
 use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::read_only_lock;
@@ -885,11 +887,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .upload_payload(&StreamSessionRecord::ForkCut(fork_cut.clone()))
             .await
             .map_err(WorkerExecutorError::runtime)?;
+        let summary =
+            DurableStreamEventSummary::session(&StreamSessionRecord::ForkCut(fork_cut.clone()));
         new_oplog
             .add(OplogEntry::StreamSession {
                 timestamp: now,
                 entity_parent_start_index: None,
                 record,
+                summary,
             })
             .await;
 

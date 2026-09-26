@@ -88,9 +88,6 @@ where
         | OplogEntry::DeactivatePlugin { .. }
         | OplogEntry::Revert { .. }
         | OplogEntry::CancelPendingInvocation { .. }
-        | OplogEntry::StartSpan { .. }
-        | OplogEntry::FinishSpan { .. }
-        | OplogEntry::SetSpanAttribute { .. }
         | OplogEntry::BeginRemoteTransaction { .. }
         | OplogEntry::PreCommitRemoteTransaction { .. }
         | OplogEntry::PreRollbackRemoteTransaction { .. }
@@ -182,7 +179,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(payload, OplogPayload::Inline(Box::new(vec![1u8, 9])));
-        let mut entry = OplogEntry::end(OplogIndex::INITIAL, None, false);
+        let mut entry = OplogEntry::end(OplogIndex::INITIAL, None, false, None, None);
         copy_entry_payloads(
             &mut entry,
             |_, _| -> std::future::Ready<Result<RawOplogPayload, String>> {
@@ -203,11 +200,11 @@ mod tests {
             }
         }
         let mut entries = vec![
-            OplogEntry::stream_registered(None, external()),
-            OplogEntry::stream_items(None, external()),
-            OplogEntry::stream_end(None, external()),
-            OplogEntry::stream_cancel(None, external()),
-            OplogEntry::stream_session(None, external()),
+            OplogEntry::stream_registered(None, external(), None),
+            OplogEntry::stream_items(None, external(), None),
+            OplogEntry::stream_end(None, external(), None),
+            OplogEntry::stream_cancel(None, external(), None),
+            OplogEntry::stream_session(None, external(), None),
             OplogEntry::pending_update(UpdateDescription::SnapshotBased {
                 target_revision: golem_common::model::component::ComponentRevision::INITIAL,
                 payload: external(),

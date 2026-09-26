@@ -141,6 +141,7 @@ interface oplog {
         observational-owner: option<oplog-index>,
         request: option<typed-schema-value>,
         durable-function-type: wrapped-function-type,
+        span-started: option<span-started>,
     }
 
     /// Parameters of an enriched durable host-call `end` entry. Like the
@@ -151,6 +152,8 @@ interface oplog {
         start-index: oplog-index,
         response: option<typed-schema-value>,
         forced-commit: bool,
+        span-finished: option<span-finished>,
+        span-attributes: option<span-attributes>,
     }
 
     /// Parameters of an enriched durable host-call `cancelled` entry. Like the
@@ -160,6 +163,54 @@ interface oplog {
         timestamp: datetime,
         start-index: oplog-index,
         partial: option<typed-schema-value>,
+        span-finished: option<span-finished>,
+    }
+
+    enum span-kind {
+        internal,
+        client,
+        server,
+    }
+
+    enum span-outcome {
+        completed,
+        failed,
+        cancelled,
+        abandoned,
+        denied,
+    }
+
+    record span-link {
+        trace-id: trace-id,
+        span-id: span-id,
+        trace-states: list<string>,
+    }
+
+    /// The span name remains in the `name` attribute. An embedded opening must
+    /// be explicitly closed; invocation boundaries do not close it automatically.
+    record span-started {
+        span-id: span-id,
+        trace-id: trace-id,
+        trace-states: list<string>,
+        parent-span-id: option<span-id>,
+        links: list<span-link>,
+        started-at: datetime,
+        attributes: list<attribute>,
+        kind: span-kind,
+    }
+
+    /// A compact close records the outcome but no error-message payload. Consumers
+    /// must not decode the opaque host request to manufacture one.
+    record span-finished {
+        span-id: span-id,
+        finished-at: datetime,
+        outcome: span-outcome,
+    }
+
+    /// Attributes applied by `end` before the span is closed.
+    record span-attributes {
+        span-id: span-id,
+        attributes: list<attribute>,
     }
 
     /// Parameters of a `completion-discarded` entry: the durable host call started at
@@ -505,7 +556,13 @@ interface oplog {
         timestamp: datetime,
         level: log-level,
         context: string,
-        message: string
+        message: string,
+        trace-context: option<log-trace-context>,
+    }
+
+    record log-trace-context {
+        trace-id: trace-id,
+        span-id: span-id,
     }
 
     record activate-plugin-parameters {
@@ -526,26 +583,6 @@ interface oplog {
     record cancel-pending-invocation-parameters {
         timestamp: datetime,
         idempotency-key: string
-    }
-
-    record start-span-parameters {
-        timestamp: datetime,
-        span-id: span-id,
-        parent: option<span-id>,
-        linked-context-id: option<span-id>,
-        attributes: list<attribute>,
-    }
-
-    record finish-span-parameters {
-        timestamp: datetime,
-        span-id: span-id
-    }
-
-    record set-span-attribute-parameters {
-        timestamp: datetime,
-        span-id: span-id,
-        key: string,
-        value: attribute-value
     }
 
     record begin-remote-transaction-parameters {
@@ -662,6 +699,7 @@ interface oplog {
         observational-owner: option<oplog-index>,
         request: option<oplog-payload>,
         durable-function-type: wrapped-function-type,
+        span-started: option<span-started>,
     }
 
     record raw-end-parameters {
@@ -669,12 +707,15 @@ interface oplog {
         start-index: oplog-index,
         response: option<oplog-payload>,
         forced-commit: bool,
+        span-finished: option<span-finished>,
+        span-attributes: option<span-attributes>,
     }
 
     record raw-cancelled-parameters {
         timestamp: datetime,
         start-index: oplog-index,
         partial: option<oplog-payload>,
+        span-finished: option<span-finished>,
     }
 
     record raw-completion-discarded-parameters {
@@ -700,6 +741,23 @@ interface oplog {
     record raw-durable-stream-record-parameters {
         timestamp: datetime,
         %record: oplog-payload,
+        summary: option<durable-stream-event-summary>,
+    }
+
+    enum durable-stream-outcome {
+        success,
+        error,
+    }
+
+    variant durable-stream-event-summary {
+        registered,
+        items(u64),
+        end(durable-stream-outcome),
+        cancelled,
+        session-result,
+        session-finished(durable-stream-outcome),
+        session-cancellation,
+        session-expired,
     }
 
     record raw-agent-invocation-started-parameters {
@@ -883,12 +941,6 @@ interface oplog {
         revert(revert-parameters),
         /// Cancel a pending invocation
         cancel-pending-invocation(cancel-pending-invocation-parameters),
-        /// Start a new span in the invocation context
-        start-span(start-span-parameters),
-        /// Finish an open span in the invocation context
-        finish-span(finish-span-parameters),
-        /// Set an attribute on an open span in the invocation context
-        set-span-attribute(set-span-attribute-parameters),
         /// Begins a transaction operation
         begin-remote-transaction(raw-begin-remote-transaction-parameters),
         /// Pre-Commit of the transaction, indicating that the transaction will be committed
@@ -1007,12 +1059,6 @@ interface oplog {
         revert(revert-parameters),
         /// Cancel a pending invocation
         cancel-pending-invocation(cancel-pending-invocation-parameters),
-        /// Start a new span in the invocation context
-        start-span(start-span-parameters),
-        /// Finish an open span in the invocation context
-        finish-span(finish-span-parameters),
-        /// Set an attribute on an open span in the invocation context
-        set-span-attribute(set-span-attribute-parameters),
         /// Begins a transaction operation
         begin-remote-transaction(begin-remote-transaction-parameters),
         /// Pre-Commit of the transaction, indicating that the transaction will be committed

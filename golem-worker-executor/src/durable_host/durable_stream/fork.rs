@@ -803,6 +803,7 @@ mod tests {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
                     record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+                    summary: None,
                 })
                 .await;
             let rebuilt = DurableStreamStore::read_complete_index(
@@ -962,6 +963,7 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+                summary: None,
             })
             .await;
         let forked = DurableStreamStore::load(
@@ -2286,11 +2288,13 @@ mod tests {
                             )))
                             .await
                             .unwrap(),
+                        summary: None,
                     },
                     2 => OplogEntry::StreamRegistered {
                         timestamp,
                         entity_parent_start_index: None,
                         record: oplog.upload_payload(&registration.record).await.unwrap(),
+                        summary: None,
                     },
                     3 | 1026 => {
                         let first_sequence = if position == 3 { 0 } else { 2 };
@@ -2319,6 +2323,7 @@ mod tests {
                                 })
                                 .await
                                 .unwrap(),
+                            summary: None,
                         }
                     }
                     1025 => OplogEntry::StreamSession {
@@ -2328,6 +2333,7 @@ mod tests {
                             .upload_payload(&StreamSessionRecord::ForkCut(cut.clone()))
                             .await
                             .unwrap(),
+                        summary: None,
                     },
                     _ => OplogEntry::NoOp {
                         timestamp,

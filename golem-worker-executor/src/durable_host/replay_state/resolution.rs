@@ -38,6 +38,7 @@ impl ReplayState {
     /// Drives only terminal entries, without waiting for another positional consumer. A direct
     /// composite call can resolve a terminal-only result or a retained Start before reconstructing
     /// its own positional entries. Readiness does not authorize live execution.
+    #[cfg(test)]
     pub(crate) async fn resolution_ready(
         &self,
         handle: &ReplayCallHandle,

@@ -310,8 +310,9 @@ agents retain their clean fail-stop lifecycle and never append it.
 Entries are positional or hints (`OplogEntry::is_hint()`). Replay consumes positional entries in
 order and skips hints. Key kinds:
 
-- `Start { parent_start_index, observational_owner, request }` paired with
-  `End { start_index, response }` or `Cancelled { start_index, partial }`. A call is identified by
+- `Start { parent_start_index, observational_owner, request, span_started }` paired with
+  `End { start_index, response, span_finished, span_attributes }` or
+  `Cancelled { start_index, partial, span_finished }`. A call is identified by
   its `Start` index; `End`/`Cancelled` is its *terminal*. A terminal is *visible* when it lies
   below the replay target and outside a `Jump`/`Revert`-skipped region
   (`has_visible_terminal` / `visible_terminal_record`, `replay_state/cursor.rs`). Request-less Start/End pairs are *scopes* (batched writes, transactions),
@@ -336,6 +337,21 @@ Hints are skipped by `skip_forward` (the physical cursor moves past them, but
 `last_replayed_non_hint_index` does not), take part in no `Start`/terminal pairing, and never
 satisfy a claim. `Jump`/`Revert` do not relocate entries: they mark a region as skipped or deleted,
 and the atomic-region logical counter is rebuilt from them (see RPC section).
+
+Span lifecycle is metadata on ordinary durable operations, not a second positional protocol.
+There are no standalone `StartSpan`, `FinishSpan`, or `SetSpanAttribute` entries. Replay first
+claims the operation by its normal function/owner/request identity, then the owning host path
+restores `SpanStarted` and applies `SpanFinished` or successful attribute updates. Span ids,
+timestamps, parents, and links never select a claim, and the generic cursor performs no
+span-specific terminal-tail consumption. Long-lived resource and guest spans therefore open on
+one operation and close through a later short local operation; a span lifetime never keeps the
+opening durable call or an atomic lease open.
+
+`AgentInvocationStarted` records the executing context, including the invocation span added by
+the invocation loop, for every invocation kind. The live hook passes that context explicitly to
+the oplog writer; it must not derive it from `AgentInvocation::into_parts`, which synthesizes a
+fresh context for oplog-processor invocations. Replay restores this recorded stack before guest
+execution so HTTP, RPC, and guest span parents resolve to the same ids as in the live execution.
 
 ## Durable host call lifecycle
 
@@ -497,7 +513,7 @@ reported if nobody claims it.
 
 ## Replay-to-live
 
-Positional operations (`NoOp`, `BeginAtomicRegion`, spans and retry-policy entries) use
+Positional operations (`NoOp`, `BeginAtomicRegion`, and retry-policy entries) use
 `get_oplog_entry_or_continue_live` and `prepare_live_continuation_at_replay_tail` in
 `durable_host/mod.rs`. The positional read waits out reserved completion-delivery gates and
 distinguishes an entry from `ReplayEnded`. Continuation is allowed only for the primary agent
@@ -668,6 +684,14 @@ delivery must be the tail operation of a host function. Tests: `tests/concurrent
 is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
 
+For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
+cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's
+span-only cleanup is a short local durable operation: live drop submits its complete pair to the
+oplog actor, and replay cleanup is retained as one shared future so cancelling a waiter cannot
+re-submit or lose ownership. Failure terminals and response/body owners claim the same close once.
+This machinery changes only span ownership; network execution, call drop policy, terminals, and
+the existing non-span cancellation behavior stay with their original owners.
+
 Spawned tasks may park across invocation settlement at guest-driven waits or passive markerless replay-tail waits after durable finalization.
 Cursor operations and recorded-marker waits stay active; durable `Start`/`End` work must precede `AgentInvocationFinished` (`tail_work.rs`).
 
@@ -790,6 +814,9 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
   every completed body has validated (`completed_reconstruction_claim_blocks_concurrent_replay_to_live`).
 - A body trap fails the owner invocation without inventing entity terminals.
+- Entity and native-tool invocation spans open on the invocation `Start` and close on its
+  `End`/`Cancelled` terminal. `set_entity_invocation_scope` restores the recorded invocation
+  context before the body runs; keep this reconstruction boundary covered.
 - The ambient call authorizes once against the outer surface. Its root `Start` records the pinned
   chain plan; descendants record root plus position, and every occurrence retains the original
   calling principal and typed static installation parameters. Component and host leaves use the

@@ -20,7 +20,7 @@ use golem_common::model::durable_stream::{
     StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionExpiryPolicy,
     StreamSessionRecord,
 };
-use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::{DurableStreamEventSummary, OplogEntry};
 use golem_common::model::{
     AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp,
 };
@@ -426,11 +426,13 @@ async fn append_target_initialization(
         .upload_payload(&initialized)
         .await
         .map_err(WorkerExecutorError::runtime)?;
+    let summary = DurableStreamEventSummary::session(&initialized);
     oplog
         .add(OplogEntry::StreamSession {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
             record,
+            summary,
         })
         .await;
     Ok(())

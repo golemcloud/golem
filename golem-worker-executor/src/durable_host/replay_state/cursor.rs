@@ -3525,17 +3525,6 @@ impl ReplayState {
         }
     }
 
-    /// Owned-task variant of [`Self::get_oplog_entry_or_replay_end`].
-    pub async fn get_oplog_entry_or_replay_end_owned(
-        &self,
-        scope: Option<OplogIndex>,
-    ) -> Result<PositionalRead, WorkerExecutorError> {
-        self.run_owned_cursor_op(
-            |state| async move { state.get_oplog_entry_or_replay_end(scope).await },
-        )
-        .await
-    }
-
     /// Returns true if the given log entry has unmatched persisted occurrences since the last
     /// non-hint oplog entry.
     pub async fn seen_log(&self, level: LogLevel, context: &str, message: &str) -> bool {
@@ -3874,18 +3863,6 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::Log {
             parent_start_index: Some(parent_start_index),
             ..
-        }
-        | OplogEntry::StartSpan {
-            parent_start_index: Some(parent_start_index),
-            ..
-        }
-        | OplogEntry::FinishSpan {
-            parent_start_index: Some(parent_start_index),
-            ..
-        }
-        | OplogEntry::SetSpanAttribute {
-            parent_start_index: Some(parent_start_index),
-            ..
         } => Some(*parent_start_index),
         OplogEntry::Error { retry_from, .. } => Some(*retry_from),
         OplogEntry::BeginRemoteTransaction {
@@ -3932,18 +3909,6 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::DeactivatePlugin { .. }
         | OplogEntry::Revert { .. }
         | OplogEntry::CancelPendingInvocation { .. }
-        | OplogEntry::StartSpan {
-            parent_start_index: None,
-            ..
-        }
-        | OplogEntry::FinishSpan {
-            parent_start_index: None,
-            ..
-        }
-        | OplogEntry::SetSpanAttribute {
-            parent_start_index: None,
-            ..
-        }
         | OplogEntry::Snapshot { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
@@ -4029,9 +3994,6 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::DeactivatePlugin { .. }
         | OplogEntry::Revert { .. }
         | OplogEntry::CancelPendingInvocation { .. }
-        | OplogEntry::StartSpan { .. }
-        | OplogEntry::FinishSpan { .. }
-        | OplogEntry::SetSpanAttribute { .. }
         | OplogEntry::BeginRemoteTransaction { .. }
         | OplogEntry::PreCommitRemoteTransaction { .. }
         | OplogEntry::PreRollbackRemoteTransaction { .. }

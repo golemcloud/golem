@@ -50,9 +50,6 @@ message OplogEntry {
     DeactivatePluginParameters DeactivatePlugin = 27;
     RevertParameters Revert = 28;
     CancelInvocationParameters CancelInvocation = 29;
-    StartSpanParameters StartSpan = 30;
-    FinishSpanParameters FinishSpan = 31;
-    SetSpanAttributeParameters SetSpanAttribute = 32;
     BeginRemoteTransactionParameters BeginRemoteTransaction = 34;
     RemoteTransactionParameters PreCommitRemoteTransaction = 35;
     RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
@@ -147,6 +144,7 @@ message StartParameters {
   WrappedFunctionType durable_function_type = 6;
   optional golem.common.UUID invocation_id = 7;
   optional uint64 observational_owner = 8;
+  optional SpanStarted span_started = 9;
 }
 
 message EndParameters {
@@ -154,12 +152,62 @@ message EndParameters {
   uint64 start_index = 2;
   optional golem.schema.TypedSchemaValue response = 3;
   bool forced_commit = 4;
+  optional SpanFinished span_finished = 5;
+  optional SpanAttributes span_attributes = 6;
 }
 
 message CancelledParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 start_index = 2;
   optional golem.schema.TypedSchemaValue partial = 3;
+  optional SpanFinished span_finished = 4;
+}
+
+enum SpanKind {
+  SPAN_KIND_INTERNAL = 0;
+  SPAN_KIND_CLIENT = 1;
+  SPAN_KIND_SERVER = 2;
+}
+
+enum SpanOutcome {
+  SPAN_OUTCOME_COMPLETED = 0;
+  SPAN_OUTCOME_FAILED = 1;
+  SPAN_OUTCOME_CANCELLED = 2;
+  SPAN_OUTCOME_ABANDONED = 3;
+  SPAN_OUTCOME_DENIED = 4;
+}
+
+message SpanLink {
+  string trace_id = 1;
+  uint64 span_id = 2;
+  repeated string trace_states = 3;
+}
+
+// The span name remains an attribute whose key is "name". An embedded opening
+// must be explicitly closed; invocation boundaries do not close it automatically.
+message SpanStarted {
+  uint64 span_id = 1;
+  string trace_id = 2;
+  repeated string trace_states = 3;
+  optional uint64 parent_span_id = 4;
+  repeated SpanLink links = 5;
+  google.protobuf.Timestamp started_at = 6;
+  map<string, AttributeValue> attributes = 7;
+  SpanKind kind = 8;
+}
+
+// This compact close records an outcome but has no error-message payload.
+// Consumers must not decode the opaque host request to manufacture one.
+message SpanFinished {
+  uint64 span_id = 1;
+  google.protobuf.Timestamp finished_at = 2;
+  SpanOutcome outcome = 3;
+}
+
+// End applies these attributes before closing the span.
+message SpanAttributes {
+  uint64 span_id = 1;
+  map<string, AttributeValue> attributes = 2;
 }
 
 message CompletionDiscardedParameters {
@@ -610,26 +658,6 @@ message CancelInvocationParameters {
   IdempotencyKey idempotency_key = 2;
 }
 
-message StartSpanParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 span_id = 2;
-  optional uint64 parent_id = 3;
-  optional uint64 linked_context = 4;
-  map<string, AttributeValue> attributes = 5;
-}
-
-message FinishSpanParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 span_id = 2;
-}
-
-message SetSpanAttributeParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 span_id = 2;
-  string key = 3;
-  AttributeValue value = 4;
-}
-
 enum OplogLogLevel {
   OPLOG_STDOUT = 0;
   OPLOG_STDERR = 1;
@@ -646,6 +674,12 @@ message LogParameters {
   OplogLogLevel level = 2;
   string context = 3;
   string message = 4;
+  optional LogTraceContext trace_context = 5;
+}
+
+message LogTraceContext {
+  string trace_id = 1;
+  string span_id = 2;
 }
 
 message SnapshotDataParameters {

@@ -2242,6 +2242,67 @@ async fn explicit_commit_reports_threshold_commits_once_and_preserves_add_receip
 }
 
 #[test]
+async fn synchronously_enqueued_pair_is_atomic_ordered_and_independent_of_receipt(
+    _tracing: &Tracing,
+) {
+    let service = PrimaryOplogService::new(
+        Arc::new(InMemoryIndexedStorage::new()),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "synchronous-pair".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = service
+        .create_fresh(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            create_test_entry(
+                agent_id.clone(),
+                AgentMode::Durable,
+                ComponentRevision::new(1).unwrap(),
+                environment_id,
+                account_id,
+                Uuid::new_v4(),
+            )
+            .rounded(),
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let pair = oplog.enqueue_add_pair(
+        OplogEntry::suspend().rounded(),
+        Box::new(|_| OplogEntry::exited().rounded()),
+    );
+    drop(pair);
+    let later = oplog.enqueue_add(OplogEntry::restart().rounded()).await;
+
+    let entries = oplog
+        .read_exact(OplogIndex::INITIAL.next(), 3)
+        .await
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+        vec![later.previous().previous(), later.previous(), later]
+    );
+    assert!(matches!(entries[0].1, OplogEntry::Suspend { .. }));
+    assert!(matches!(entries[1].1, OplogEntry::Exited { .. }));
+    assert!(matches!(entries[2].1, OplogEntry::Restart { .. }));
+}
+
+#[test]
 async fn archiving_auto_committed_entries_does_not_consume_explicit_commit_report(
     _tracing: &Tracing,
 ) {
@@ -4159,6 +4220,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
                 principal: Principal::anonymous(),
                 scope_card: None,
             },
+            InvocationContextStack::fresh_rounded(),
             invocation_wallet_pin(),
         )
         .await
@@ -4387,6 +4449,117 @@ async fn completed_host_call_response_upload_failure_writes_no_start(_tracing: &
 }
 
 #[test]
+async fn invocation_start_records_executing_context_for_processor_and_method(_tracing: &Tracing) {
+    use crate::model::InvocationContext;
+    use golem_common::model::invocation_context::AttributeValue;
+
+    let oplog_service = PrimaryOplogService::new(
+        Arc::new(InMemoryIndexedStorage::new()),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "invocation-span-context".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let metadata = make_agent_metadata(agent_id, account_id, environment_id);
+    let oplog = oplog_service
+        .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let invocations = [
+        AgentInvocation::ProcessOplogEntries {
+            idempotency_key: IdempotencyKey::fresh(),
+            account_id,
+            config: Vec::new(),
+            metadata: metadata.into(),
+            first_entry_index: OplogIndex::INITIAL,
+            entries: Vec::new(),
+        },
+        AgentInvocation::AgentMethod {
+            idempotency_key: IdempotencyKey::fresh(),
+            method_name: "run".to_string(),
+            input: SchemaValue::Tuple {
+                elements: Vec::new(),
+            },
+            invocation_context: InvocationContextStack::fresh_rounded(),
+            principal: Principal::anonymous(),
+            scope_card: None,
+        },
+    ];
+    for invocation in invocations {
+        let mut executing_context = InvocationContextStack::fresh_rounded();
+        executing_context.trace_states = vec!["vendor=recorded".to_string()];
+        let invocation_span = executing_context.spans.first().start_span(None);
+        invocation_span.set_attribute(
+            "name".to_string(),
+            AttributeValue::String("invoke-exported-function".to_string()),
+        );
+        executing_context.push(invocation_span.clone());
+        let idempotency_key = invocation.idempotency_key().unwrap().clone();
+        let start_index = oplog
+            .add_agent_invocation_started_with_index(
+                invocation,
+                executing_context.clone(),
+                invocation_wallet_pin(),
+            )
+            .await
+            .unwrap();
+        oplog.commit(CommitLevel::Always).await;
+
+        let OplogEntry::AgentInvocationStarted {
+            idempotency_key: recorded_key,
+            trace_id,
+            trace_states,
+            invocation_context,
+            ..
+        } = oplog.read(start_index).await
+        else {
+            panic!("expected AgentInvocationStarted");
+        };
+        assert_eq!(recorded_key, idempotency_key);
+        assert_eq!(trace_id, executing_context.trace_id);
+        assert_eq!(trace_states, executing_context.trace_states);
+        let restored =
+            InvocationContextStack::from_oplog_data(trace_id, trace_states, invocation_context);
+        let (restored, current_span_id) = InvocationContext::from_stack(restored).unwrap();
+        assert_eq!(&current_span_id, invocation_span.span_id());
+        assert_eq!(
+            restored
+                .get(invocation_span.span_id())
+                .unwrap()
+                .parent()
+                .unwrap()
+                .span_id(),
+            executing_context.spans.last().span_id(),
+        );
+        assert_eq!(
+            restored
+                .get_attribute(invocation_span.span_id(), "name", false)
+                .unwrap(),
+            Some(AttributeValue::String(
+                "invoke-exported-function".to_string()
+            )),
+        );
+    }
+}
+
+#[test]
 async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(ReadCountingBlobStorage::failing_on_put(1));
@@ -4432,6 +4605,7 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
                 principal: Principal::anonymous(),
                 scope_card: None,
             },
+            InvocationContextStack::fresh_rounded(),
             invocation_wallet_pin(),
         )
         .await;
@@ -4505,6 +4679,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
                 principal: Principal::anonymous(),
                 scope_card: None,
             },
+            InvocationContextStack::fresh_rounded(),
             invocation_wallet_pin(),
         )
         .await
@@ -4775,6 +4950,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             observational_owner: None,
             request: Some(request),
             durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
         }
         .rounded();
         oplog.add(entry.clone()).await;
@@ -6587,6 +6763,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             LogLevel::Debug,
                             "test".to_string(),
                             "test".to_string(),
+                            None,
                         ))
                         .await;
                 }
@@ -6606,6 +6783,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             LogLevel::Debug,
                             "test".to_string(),
                             "test".to_string(),
+                            None,
                         ))
                         .await;
                 }
@@ -6621,6 +6799,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             LogLevel::Debug,
                             "test".to_string(),
                             "test".to_string(),
+                            None,
                         ))
                         .await;
                 }
@@ -7815,6 +7994,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
             observational_owner: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
+            span_started: None,
         })
         .await
         .unwrap();
@@ -7900,6 +8080,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
             observational_owner: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
+            span_started: None,
         })
         .await
         .unwrap();
@@ -7951,6 +8132,7 @@ fn reserved_start_entry_builder(
         observational_owner: None,
         request: Some(request_payload),
         durable_function_type: DurableFunctionType::ReadRemote,
+        span_started: None,
     }
 }
 

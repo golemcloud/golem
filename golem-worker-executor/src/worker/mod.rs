@@ -143,8 +143,8 @@ use golem_common::model::entity::{
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload, ReadOnlyViolationError,
-    TimestampedUpdateDescription, UpdateDescription,
+    AgentError, DurableStreamEventSummary, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
+    ReadOnlyViolationError, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
@@ -3324,14 +3324,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Ok(record) => record,
             Err(admission) => return Ok(admission),
         };
+        let record = StreamSessionRecord::ExportForkAdmitted(record);
+        let summary = DurableStreamEventSummary::session(&record);
         let payload = self
             .oplog
-            .upload_payload_owned(StreamSessionRecord::ExportForkAdmitted(record))
+            .upload_payload_owned(record)
             .await
             .map_err(WorkerExecutorError::runtime)?;
         self.state_actor
             .append_and_commit_attached(
-                OplogEntry::stream_session(None, payload),
+                OplogEntry::stream_session(None, payload, summary),
                 self.clone(),
                 instance_guard,
                 None,
@@ -6082,18 +6084,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .add_pair(
                     pending,
                     Box::new(move |pending_invocation_oplog_index| {
+                        let record = StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                            format_version: 1,
+                            session_key: attached_attempt.session_key.idempotency_key,
+                            attachment_id: attached_attempt.attachment_id,
+                            attempt_id: attached_attempt.attempt_id,
+                            epoch: initial_epoch,
+                            pending_invocation_oplog_index,
+                        });
+                        let summary = DurableStreamEventSummary::session(&record);
                         OplogEntry::stream_session(
                             None,
-                            OplogPayload::Inline(Box::new(StreamSessionRecord::Attached(
-                                StreamSessionAttachedRecord {
-                                    format_version: 1,
-                                    session_key: attached_attempt.session_key.idempotency_key,
-                                    attachment_id: attached_attempt.attachment_id,
-                                    attempt_id: attached_attempt.attempt_id,
-                                    epoch: initial_epoch,
-                                    pending_invocation_oplog_index,
-                                },
-                            ))),
+                            OplogPayload::Inline(Box::new(record)),
+                            summary,
                         )
                     }),
                 )

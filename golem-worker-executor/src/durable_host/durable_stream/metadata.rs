@@ -3352,6 +3352,7 @@ mod tests {
                         newly_registered_stream_ids: vec![],
                         payload: StreamItemsPayload::PackedU8(bytes),
                     })),
+                    summary: None,
                 }
             };
         for entry in [
@@ -3361,11 +3362,13 @@ mod tests {
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::Prepared(
                     crate::services::worker_fork::lineage::tests::prepared(&source.invocation),
                 ))),
+                summary: None,
             },
             OplogEntry::StreamRegistered {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(registration.record)),
+                summary: None,
             },
             items(
                 4,
@@ -3385,11 +3388,13 @@ mod tests {
                         lease_expires_at_millis: 1000,
                     },
                 ))),
+                summary: None,
             },
             OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+                summary: None,
             },
             items(
                 7,
@@ -3571,6 +3576,7 @@ mod tests {
                         &fixture.identity.invocation,
                     ),
                 ))),
+                summary: None,
             })
             .await;
         let producer = fixture.producer().await;
@@ -3604,6 +3610,7 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+                summary: None,
             })
             .await;
         fixture.persist().await;
@@ -3764,6 +3771,7 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+                summary: None,
             })
             .await;
         let oplog = copied;
@@ -3927,6 +3935,7 @@ mod tests {
                         timestamp: Timestamp::now_utc(),
                         entity_parent_start_index: None,
                         record: OplogPayload::Inline(Box::new(record)),
+                        summary: None,
                     })
                     .await;
                 if prepared {
@@ -4125,6 +4134,7 @@ mod tests {
                                 recursive_mappings: vec![],
                             }),
                         )),
+                        summary: None,
                     })
                     .await;
                 fixture.persist().await;
@@ -4337,7 +4347,7 @@ mod tests {
         assert!(matches!(record, OplogPayload::External { .. }));
         fixture
             .oplog
-            .add(OplogEntry::stream_session(None, record))
+            .add(OplogEntry::stream_session(None, record, None))
             .await;
         fixture.oplog.commit(CommitLevel::Always).await;
         let horizon = fixture.oplog.current_oplog_index().await;

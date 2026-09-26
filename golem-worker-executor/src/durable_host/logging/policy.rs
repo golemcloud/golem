@@ -27,7 +27,7 @@ use crate::services::HasWorker;
 use crate::services::oplog::Oplog;
 use crate::workerctx::{LogEventEmitBehaviour, PublicWorkerIo, WorkerCtx};
 use golem_common::model::OwnedAgentId;
-use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
+use golem_common::model::oplog::{LogLevel, LogTraceContext, OplogEntry, OplogIndex};
 use std::sync::Arc;
 
 /// Applies the common log emission policy for a single worker log event.
@@ -45,6 +45,7 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
     oplog: &Arc<dyn Oplog>,
     is_live: bool,
     parent_start_index: Option<OplogIndex>,
+    trace_context: Option<LogTraceContext>,
 ) {
     if let Some(mut entry) = event.as_oplog_entry() {
         if let OplogEntry::Log {
@@ -53,6 +54,13 @@ pub async fn emit_log_event_with_state<Ctx: WorkerCtx>(
         } = &mut entry
         {
             *recorded_parent = parent_start_index;
+        }
+        if let OplogEntry::Log {
+            trace_context: recorded_context,
+            ..
+        } = &mut entry
+        {
+            *recorded_context = trace_context;
         }
         if let OplogEntry::Log {
             level,

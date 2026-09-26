@@ -51,9 +51,7 @@ use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
-};
+use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     AgentError, HostResponse, HostResponseEntityInvocation,
     HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload, PayloadId, RawOplogPayload,
@@ -2998,43 +2996,8 @@ impl HostFutureInvokeResult for TestWorkerCtx {
 
 #[async_trait]
 impl InvocationContextManagement for TestWorkerCtx {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_span(initial_attributes, activate)
-            .await
-    }
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx
-            .start_child_span(parent, initial_attributes)
-            .await
-    }
-
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.remove_span(span_id)
-    }
-
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.finish_span(span_id).await
-    }
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx
-            .set_span_attribute(span_id, key, value)
-            .await
     }
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
@@ -4209,9 +4172,10 @@ impl TestOplog {
                 self.rpc_starts.lock().unwrap().insert(index);
                 Some(RpcCheckpoint::Start)
             }
-            OplogEntry::StartSpan { .. } if !self.rpc_starts.lock().unwrap().is_empty() => {
-                Some(RpcCheckpoint::StartSpan)
-            }
+            OplogEntry::Start {
+                span_started: Some(_),
+                ..
+            } if !self.rpc_starts.lock().unwrap().is_empty() => Some(RpcCheckpoint::StartSpan),
             OplogEntry::End { start_index, .. }
                 if self.rpc_starts.lock().unwrap().contains(start_index) =>
             {
@@ -4548,6 +4512,18 @@ impl Oplog for TestOplog {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
         let committed = self.oplog.commit(level).await;
+        if committed.values().any(|entry| {
+            matches!(
+                entry,
+                OplogEntry::End {
+                    span_finished: Some(_),
+                    ..
+                }
+            )
+        }) {
+            self.additional_test_deps
+                .record_oplog_call(&self.owned_agent_id, "commit-span-finish");
+        }
         let append = self
             .additional_test_deps
             .append_after_commit
@@ -4766,12 +4742,12 @@ impl Oplog for TestOplog {
         Ok(ordered)
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
-        self.oplog.add_pair(start, make_second).await
+    ) -> golem_worker_executor::services::oplog::OplogAddPairReceipt {
+        self.oplog.enqueue_add_pair(start, make_second)
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {

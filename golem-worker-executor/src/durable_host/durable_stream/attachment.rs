@@ -225,10 +225,12 @@ impl DurableStreamStore {
             self.producer_fingerprint,
         )?;
         context.begin_durable_effect();
+        let summary = DurableStreamEventSummary::session(&record);
         self.oplog
             .add(OplogEntry::stream_session(
                 entity_parent_start_index,
                 OplogPayload::Inline(Box::new(record)),
+                summary,
             ))
             .await;
         self.commit(context).await;
@@ -330,10 +332,12 @@ impl DurableStreamStore {
         });
         if outcome == AttachmentApplyOutcome::Changed {
             context.begin_durable_effect();
+            let summary = DurableStreamEventSummary::session(&record);
             self.oplog
                 .add(OplogEntry::stream_session(
                     entity_parent_start_index,
                     OplogPayload::Inline(Box::new(record)),
+                    summary,
                 ))
                 .await;
             self.commit(context).await;
@@ -831,10 +835,12 @@ impl DurableStreamStore {
             result,
         });
         context.begin_durable_effect();
+        let summary = DurableStreamEventSummary::session(&record);
         self.oplog
             .add(OplogEntry::stream_session(
                 entity_parent_start_index,
                 OplogPayload::Inline(Box::new(record.clone())),
+                summary,
             ))
             .await;
         self.commit(context).await;

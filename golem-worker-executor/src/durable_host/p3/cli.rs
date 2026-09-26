@@ -341,8 +341,19 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
         oplog,
         is_live,
         parent_start_index,
+        trace_context,
     ) = accessor.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        let trace_context = ctx
+            .state
+            .invocation_context
+            .span_origin(&ctx.state.current_span_id)
+            .map(
+                |(trace_id, _)| golem_common::model::oplog::LogTraceContext {
+                    trace_id,
+                    span_id: ctx.state.current_span_id.clone(),
+                },
+            );
         (
             ctx.owner_component_metadata()
                 .metadata
@@ -353,6 +364,7 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
             ctx.state.oplog.clone(),
             ctx.state.is_live(),
             ctx.entity_parent_start_index(),
+            trace_context,
         )
     });
 
@@ -365,6 +377,7 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
         &oplog,
         is_live,
         parent_start_index,
+        trace_context,
     )
     .await;
 }

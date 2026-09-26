@@ -129,29 +129,26 @@ Tests: `tests/api.rs::lost_card_transfer_response_converges_after_source_and_tar
 `tests/rpc.rs::counter_resource_test_2_with_restart` covers the weaker "completed call is not
 re-executed across restart" property (1 then 2).
 
-The serialized `invoke` and non-streaming `invoke_and_await` paths record
-`Start → StartSpan → End → FinishSpan` for admitted calls.
-Replay must reconstruct `StartSpan` before awaiting the RPC terminal; the positional span entry
-otherwise blocks the terminal resolver. Each committed prefix is recoverable:
+The serialized `invoke` and non-streaming `invoke_and_await` paths record an admitted call as
+`Start(span_started = S) → End(span_finished = S)` (or a `Cancelled` carrying the close).
+Replay claims the ordinary request identity before restoring `S`; tracing metadata does not
+participate in matching and the cursor has no span-specific tail. Each committed prefix is
+recoverable:
 
-- After `Start` alone, resolve the incomplete call through the normal re-execution eligibility
-  and checked live-admission path before creating the missing span.
-- After `StartSpan`, reconstruct the span, then repair the incomplete call under the original key.
-- After `End`, reuse the recorded result without dispatching. If the cursor is exhausted, perform
-  the checked `switch_to_live` transition before appending the missing `FinishSpan`.
-- With `FinishSpan` recorded, consume it normally during replay.
+- After `Start` alone, restore its opening and repair the incomplete call under the original key
+  through normal re-execution eligibility.
+- After `End`, reuse the recorded result without dispatching and apply its embedded close. There
+  is no separate positional span entry to consume or append.
+- After `Cancelled`, replay the existing cancellation owner and apply its embedded close once.
 
-Synchronous local denials instead record `Start → End(Denied)` without an invocation span.
-The non-streaming synchronous path probes terminal readiness without waiting on positional
-entries. It resolves a ready no-span denial or an exhausted Start-only prefix through normal
-call replay; otherwise it reconstructs its span before resolving the result. The readiness probe
-does not consume `StartSpan`, relax matching, or authorize a live effect. A remote denial after
-dispatch still has a span and follows ordinary admitted-call replay.
+Synchronous local denials remain spanless and persist the denial decision in the request before
+`End(Denied)`, so incomplete replay completes the denial without dispatch or re-authorization.
+Asynchronous validation and activation denials use their existing short durable operation with
+an embedded opening and failed/denied close; their baked future owns no later cleanup.
 
-Tests: `tests/rpc.rs::completed_fire_and_forget_rpc_replays_span_before_result`,
-`raw_sync_rpc_completed_history_replays`, `raw_sync_rpc_resumes_after_suspension`,
-`raw_sync_rpc_local_denial_replays_without_span_or_dispatch`, and the synchronous and
-fire-and-forget crash-prefix tests, using committed `Start`, `StartSpan`, and `End` gates.
+Resource and guest-created spans can outlive their opening call. Finish, drop, and successful
+attribute mutation are short ordinary local operations whose terminals carry the close or
+applied updates; they do not hold the opening call or an atomic lease for the span lifetime.
 
 ## 7. Atomic region rollback keeps the RPC key
 

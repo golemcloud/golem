@@ -182,20 +182,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.asInstanceOf[OplogEntry.CancelPendingInvocation].params.idempotencyKey == "idem-123"
       )
     },
-    test("FinishSpan from dynamic") {
-      val raw = wrapEntry(
-        "finish-span",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          spanId = "span-42"
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      assertTrue(
-        parsed.isInstanceOf[OplogEntry.FinishSpan],
-        parsed.asInstanceOf[OplogEntry.FinishSpan].params.spanId == "span-42"
-      )
-    },
     test("BeginRemoteTransaction from dynamic") {
       val raw = wrapEntry(
         "begin-remote-transaction",
@@ -344,7 +330,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           timestamp = ts(),
           level = "info",
           context = "main",
-          message = "Agent started"
+          message = "Agent started",
+          traceContext = js.Dynamic.literal(traceId = "trace-1", spanId = "span-1")
         )
       )
       val parsed = OplogEntry.fromJs(raw)
@@ -353,7 +340,8 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.isInstanceOf[OplogEntry.Log],
         l.params.level == LogLevel.Info,
         l.params.context == "main",
-        l.params.message == "Agent started"
+        l.params.message == "Agent started",
+        l.params.traceContext.contains(LogTraceContext("trace-1", "span-1"))
       )
     },
     test("AgentInvocationFinished with response from dynamic (agent-method result)") {
@@ -415,64 +403,187 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         i.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote
       )
     },
-    test("Start durable host-call marker from dynamic") {
+    test("Start durable host-call marker parses span lifecycle data") {
       val raw = wrapEntry(
         "start",
         js.Dynamic.literal(
-          timestamp = ts(),
+          timestamp = ts(1700000001, 100),
           parentStartIndex = js.undefined,
           functionName = "wasi:io/read",
           invocationId = js.Dynamic.literal(highBits = js.BigInt("1"), lowBits = js.BigInt("2")),
           observationalOwner = js.BigInt("11"),
           request = sampleTypedJs,
-          durableFunctionType = js.Dynamic.literal(tag = "read-remote")
+          durableFunctionType = js.Dynamic.literal(tag = "read-remote"),
+          spanStarted = js.Dynamic.literal(
+            spanId = "span-1",
+            traceId = "trace-1",
+            traceStates = js.Array("vendor=opaque", "sampled=true"),
+            parentSpanId = "parent-1",
+            links = js.Array(
+              js.Dynamic.literal(
+                traceId = "other-trace",
+                spanId = "other-span",
+                traceStates = js.Array("other-vendor=value")
+              )
+            ),
+            startedAt = ts(1700000002, 200),
+            attributes = js.Array(
+              js.Dynamic.literal(
+                key = "operation",
+                value = js.Dynamic.literal(tag = "string", `val` = "read")
+              )
+            ),
+            kind = "client"
+          )
         )
       )
       val parsed = OplogEntry.fromJs(raw)
       val s      = parsed.asInstanceOf[OplogEntry.Start]
+      val span   = s.params.spanStarted.get
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Start],
+        s.params.timestamp == ContextApi.DateTime(BigInt(1700000001), 100),
         s.params.functionName == "wasi:io/read",
         s.params.invocationId.contains(golem.Uuid(BigInt(1), BigInt(2))),
         s.params.observationalOwner.contains(BigInt(11)),
         s.params.request.isDefined,
-        s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote
+        s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote,
+        span.spanId == "span-1",
+        span.traceId == "trace-1",
+        span.traceStates == List("vendor=opaque", "sampled=true"),
+        span.parentSpanId.contains("parent-1"),
+        span.links == List(SpanLink("other-trace", "other-span", List("other-vendor=value"))),
+        span.startedAt == ContextApi.DateTime(BigInt(1700000002), 200),
+        span.attributes == List(ContextApi.Attribute("operation", ContextApi.AttributeValue.StringValue("read"))),
+        span.kind == SpanKind.Client
       )
     },
-    test("End durable host-call marker from dynamic") {
+    test("End durable host-call marker parses span outcome and attributes") {
       val raw = wrapEntry(
         "end",
         js.Dynamic.literal(
-          timestamp = ts(),
+          timestamp = ts(1700000003, 300),
           startIndex = js.BigInt("12"),
           response = js.undefined,
-          forcedCommit = true
+          forcedCommit = true,
+          spanFinished = js.Dynamic.literal(
+            spanId = "span-1",
+            finishedAt = ts(1700000004, 400),
+            outcome = "failed"
+          ),
+          spanAttributes = js.Dynamic.literal(
+            spanId = "span-1",
+            attributes = js.Array(
+              js.Dynamic.literal(
+                key = "error.type",
+                value = js.Dynamic.literal(tag = "string", `val` = "timeout")
+              )
+            )
+          )
         )
       )
       val parsed = OplogEntry.fromJs(raw)
       val e      = parsed.asInstanceOf[OplogEntry.End]
       assertTrue(
         parsed.isInstanceOf[OplogEntry.End],
+        e.params.timestamp == ContextApi.DateTime(BigInt(1700000003), 300),
         e.params.startIndex == BigInt(12),
         e.params.response == None,
-        e.params.forcedCommit
+        e.params.forcedCommit,
+        e.params.spanFinished.contains(
+          SpanFinished("span-1", ContextApi.DateTime(BigInt(1700000004), 400), SpanOutcome.Failed)
+        ),
+        e.params.spanAttributes.contains(
+          SpanAttributes(
+            "span-1",
+            List(ContextApi.Attribute("error.type", ContextApi.AttributeValue.StringValue("timeout")))
+          )
+        )
       )
     },
-    test("Cancelled durable host-call marker from dynamic") {
+    test("Cancelled durable host-call marker parses cancelled span outcome") {
       val raw = wrapEntry(
         "cancelled",
         js.Dynamic.literal(
-          timestamp = ts(),
+          timestamp = ts(1700000005, 500),
           startIndex = js.BigInt("13"),
-          partial = js.undefined
+          partial = sampleTypedJs,
+          spanFinished = js.Dynamic.literal(
+            spanId = "span-2",
+            finishedAt = ts(1700000006, 600),
+            outcome = "cancelled"
+          )
         )
       )
       val parsed = OplogEntry.fromJs(raw)
       val c      = parsed.asInstanceOf[OplogEntry.Cancelled]
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Cancelled],
+        c.params.timestamp == ContextApi.DateTime(BigInt(1700000005), 500),
         c.params.startIndex == BigInt(13),
-        c.params.partial == None
+        c.params.partial.exists(_.value == SchemaValue.S32Value(42)),
+        c.params.spanFinished.contains(
+          SpanFinished("span-2", ContextApi.DateTime(BigInt(1700000006), 600), SpanOutcome.Cancelled)
+        )
+      )
+    },
+    test("Span lifecycle fields are optional on durable host-call markers") {
+      val start = OplogEntry
+        .fromJs(
+          wrapEntry(
+            "start",
+            js.Dynamic.literal(
+              timestamp = ts(),
+              parentStartIndex = js.undefined,
+              functionName = "fn",
+              invocationId = js.undefined,
+              observationalOwner = js.undefined,
+              request = js.undefined,
+              durableFunctionType = js.Dynamic.literal(tag = "read-local"),
+              spanStarted = js.undefined
+            )
+          )
+        )
+        .asInstanceOf[OplogEntry.Start]
+      val end = OplogEntry
+        .fromJs(
+          wrapEntry(
+            "end",
+            js.Dynamic.literal(
+              timestamp = ts(),
+              startIndex = js.BigInt("14"),
+              response = js.undefined,
+              forcedCommit = false,
+              spanFinished = js.undefined,
+              spanAttributes = js.undefined
+            )
+          )
+        )
+        .asInstanceOf[OplogEntry.End]
+      val cancelled = OplogEntry
+        .fromJs(
+          wrapEntry(
+            "cancelled",
+            js.Dynamic.literal(
+              timestamp = ts(),
+              startIndex = js.BigInt("15"),
+              partial = js.undefined,
+              spanFinished = js.undefined
+            )
+          )
+        )
+        .asInstanceOf[OplogEntry.Cancelled]
+      assertTrue(
+        start.params.spanStarted.isEmpty,
+        end.params.spanFinished.isEmpty,
+        end.params.spanAttributes.isEmpty,
+        cancelled.params.spanFinished.isEmpty,
+        start.params.parentStartIndex.isEmpty,
+        start.params.invocationId.isEmpty,
+        start.params.observationalOwner.isEmpty,
+        start.params.request.isEmpty,
+        end.params.response.isEmpty,
+        cancelled.params.partial.isEmpty
       )
     },
     test("CreateResource from dynamic") {
@@ -560,70 +671,6 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.isInstanceOf[OplogEntry.Revert],
         r.params.start == BigInt(0),
         r.params.end == BigInt(10)
-      )
-    },
-    test("StartSpan from dynamic with attributes") {
-      val raw = wrapEntry(
-        "start-span",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          spanId = "span-1",
-          parent = "parent-span",
-          linkedContextId = "linked",
-          attributes = js.Array(
-            js.Dynamic.literal(
-              key = "env",
-              value = js.Dynamic.literal(tag = "string", `val` = "prod")
-            )
-          )
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      val s      = parsed.asInstanceOf[OplogEntry.StartSpan]
-      assertTrue(
-        parsed.isInstanceOf[OplogEntry.StartSpan],
-        s.params.spanId == "span-1",
-        s.params.parent == Some("parent-span"),
-        s.params.linkedContext == Some("linked"),
-        s.params.attributes.size == 1,
-        s.params.attributes.head.key == "env"
-      )
-    },
-    test("StartSpan from dynamic without optional fields") {
-      val raw = wrapEntry(
-        "start-span",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          spanId = "span-2",
-          parent = js.undefined,
-          linkedContextId = js.undefined,
-          attributes = js.Array[js.Any]()
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      val s      = parsed.asInstanceOf[OplogEntry.StartSpan]
-      assertTrue(
-        s.params.parent == None,
-        s.params.linkedContext == None,
-        s.params.attributes.isEmpty
-      )
-    },
-    test("SetSpanAttribute from dynamic") {
-      val raw = wrapEntry(
-        "set-span-attribute",
-        js.Dynamic.literal(
-          timestamp = ts(),
-          spanId = "span-1",
-          key = "priority",
-          value = js.Dynamic.literal(tag = "string", `val` = "high")
-        )
-      )
-      val parsed = OplogEntry.fromJs(raw)
-      val sa     = parsed.asInstanceOf[OplogEntry.SetSpanAttribute]
-      assertTrue(
-        parsed.isInstanceOf[OplogEntry.SetSpanAttribute],
-        sa.params.key == "priority",
-        sa.params.value == ContextApi.AttributeValue.StringValue("high")
       )
     },
     test("FailedUpdate with details from dynamic") {

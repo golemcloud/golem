@@ -39,7 +39,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequestHttpRequest, HostRequestNoInput,
     HostResponseStreamCheckWrite, HostResponseStreamChunk, HostResponseStreamSkip,
     HostResponseStreamWriteResult, HostResponseStreamWriteWithBytes, HostResponseStreamWriteZeroes,
-    OplogIndex,
+    OplogIndex, SpanOutcome,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime_wasi::p2::bindings::io::streams::{
@@ -1311,6 +1311,17 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
     handle: u32,
     result: &Result<T, SerializableStreamError>,
 ) -> Result<(), WorkerExecutorError> {
+    if let Err(error) = result
+        && let Some(state) = ctx.state.open_http_requests.get(&handle)
+    {
+        state
+            .session
+            .record_outcome(if matches!(error, SerializableStreamError::Closed) {
+                SpanOutcome::Completed
+            } else {
+                SpanOutcome::Failed
+            });
+    }
     if matches!(result, Err(SerializableStreamError::Closed))
         && let Some(state) = ctx.state.open_http_requests.get(&handle)
     {
