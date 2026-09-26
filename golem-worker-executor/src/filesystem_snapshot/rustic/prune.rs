@@ -416,19 +416,31 @@ pub(super) enum ClaimChoice {
     Held,
 }
 
-/// Gives how long a marker write that succeeds lets the prune of its claim go on: the grace period
-/// less one storage call deadline, but at least one deadline, so the lease is above zero for each
-/// deadline above zero.
-pub(super) fn lease_span(grace: Duration, deadline: Duration) -> Duration {
+/// The unit of the time in the name of a marker.
+const MARKER_TIME_UNIT: Duration = Duration::from_millis(1);
+
+/// Gives the time from the start of a marker write to the end of the lease that the marker gives,
+/// as the other deletes count it from the time in the name: the grace period less one storage call
+/// deadline, but at least one deadline.
+fn lease_bound(grace: Duration, deadline: Duration) -> Duration {
     grace.saturating_sub(deadline).max(deadline)
 }
 
-/// Gives how long a marker holds the claims of its ledger: the lease, then one margin for clock
-/// skew, then one storage call deadline. A marker write that the storage received can still land up
-/// to one deadline after the call gave up, and another delete sees the marker time with up to one
-/// margin of skew. So a prune whose lease ran out stops before another delete can take its claim.
+/// Gives how long a marker write that succeeds lets the prune of its claim go on: the lease bound
+/// less one millisecond. The name of a marker keeps its time in whole milliseconds, so the time in
+/// the name can be up to one millisecond before the time that the delete read. So the lease is above
+/// zero for each deadline above one millisecond.
+pub(super) fn lease_span(grace: Duration, deadline: Duration) -> Duration {
+    lease_bound(grace, deadline).saturating_sub(MARKER_TIME_UNIT)
+}
+
+/// Gives how long a marker holds the claims of its ledger: the lease bound, then one margin for
+/// clock skew, then one storage call deadline. A marker write that the storage received can still
+/// land up to one deadline after the call gave up, and another delete sees the marker time with up
+/// to one margin of skew. So a prune whose lease ran out stops before another delete can take its
+/// claim.
 pub(super) fn claim_hold(grace: Duration, deadline: Duration) -> Duration {
-    lease_span(grace, deadline)
+    lease_bound(grace, deadline)
         .saturating_add(CLOCK_SKEW_MARGIN)
         .saturating_add(deadline)
 }
@@ -478,10 +490,13 @@ pub(super) async fn list_claims(
 }
 
 /// Gives the time of a new marker: the instant, from which a write of the marker moves the lease,
-/// and the wall time in the name of the marker, both read at one moment. So the lease never ends
-/// later than the hold that other deletes read from the name.
+/// and then the wall time in the name of the marker. The instant is read first, so the lease starts
+/// no later than the time in the name, and it never ends later than the hold that other deletes
+/// count from the name.
 pub(super) fn marker_time() -> (Instant, Timestamp) {
-    (Instant::now(), Timestamp::now_utc())
+    let started = Instant::now();
+    let time = Timestamp::now_utc();
+    (started, time)
 }
 
 /// Gives a new path of a marker of the claim with the number, with the time. The name is unique.
@@ -747,6 +762,7 @@ mod tests {
     /// The grace period and the margin for clock skew, in milliseconds.
     const HELD_MILLIS: u64 = 15 * 60 * 1000 + 2 * 60 * 1000;
     const DEADLINE: Duration = Duration::from_secs(2);
+    const MILLI: Duration = Duration::from_millis(1);
 
     fn at(millis: u64) -> Timestamp {
         Timestamp::from(millis)
@@ -949,7 +965,8 @@ mod tests {
     }
 
     #[test]
-    fn the_lease_is_the_grace_period_less_one_deadline_and_at_least_one_deadline() {
+    fn the_lease_is_the_grace_period_less_one_deadline_and_at_least_one_deadline_less_one_millisecond()
+     {
         let second = Duration::from_secs(1);
         let minute = Duration::from_secs(60);
 
@@ -962,7 +979,7 @@ mod tests {
                 lease_span(minute, Duration::ZERO),
                 lease_span(Duration::ZERO, second),
             ],
-            [GRACE - minute, minute, minute, minute, minute, second]
+            [GRACE - minute, minute, minute, minute, minute, second].map(|span| span - MILLI)
         );
     }
 
@@ -994,7 +1011,7 @@ mod tests {
             (GRACE, minute),
             (GRACE, DEADLINE),
             (Duration::ZERO, minute),
-            (Duration::ZERO, Duration::from_millis(1)),
+            (Duration::ZERO, 2 * MILLI),
             (Duration::from_millis(16), minute),
             (Duration::from_secs(2), Duration::from_secs(1)),
         ];
@@ -1002,12 +1019,12 @@ mod tests {
         assert_eq!(
             cases.map(|(grace, deadline)| refresh_period(grace, deadline)),
             [
-                (GRACE - minute) / 4,
-                (GRACE - DEADLINE) / 4,
-                minute / 4,
+                (GRACE - minute - MILLI) / 4,
+                (GRACE - DEADLINE - MILLI) / 4,
+                (minute - MILLI) / 4,
                 Duration::from_micros(250),
                 Duration::from_millis(4),
-                Duration::from_millis(250),
+                Duration::from_micros(249_750),
             ]
         );
         assert!(cases.iter().all(|(grace, deadline)| {

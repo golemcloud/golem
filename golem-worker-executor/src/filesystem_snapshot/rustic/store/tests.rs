@@ -1353,7 +1353,7 @@ async fn claim_entries(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> 
 #[test]
 #[timeout("60s")]
 async fn a_prune_whose_refreshes_fail_stops_when_its_lease_runs_out_and_keeps_its_claim() {
-    // A zero grace period and a deadline of 200 ms give a lease of 200 ms. The claim write and the
+    // A zero grace period and a deadline of 200 ms give a lease of 199 ms. The claim write and the
     // second read of the ledger each take 150 ms, so the lease has run out when the prune makes its
     // first call. Each refresh fails.
     let deadline = Duration::from_millis(200);
@@ -1415,9 +1415,9 @@ async fn a_prune_whose_refreshes_fail_stops_when_its_lease_runs_out_and_keeps_it
 #[test]
 #[timeout("60s")]
 async fn a_prune_goes_on_after_one_failed_refresh_when_the_later_refreshes_succeed() {
-    // A zero grace period and a deadline of 200 ms give a lease of 200 ms and a refresh each 50 ms.
-    // Each call of the prune takes 40 ms, so the prune runs for more than one lease. The first
-    // refresh fails, and the later ones succeed.
+    // A zero grace period and a deadline of 200 ms give a lease of 199 ms and a refresh about each
+    // 50 ms. Each call of the prune takes 40 ms, so the prune runs for more than one lease. The
+    // first refresh fails, and the later ones succeed.
     let deadline = Duration::from_millis(200);
     let claimed = Arc::new(AtomicBool::new(false));
     let refused = Arc::new(AtomicBool::new(false));
