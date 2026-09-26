@@ -229,7 +229,8 @@ struct ClaimGuard {
     files: SnapshotFiles,
     directory: Box<Path>,
     number: u64,
-    /// Whether this delete wrote the claim. A delete that did not delete only its markers.
+    /// Whether this delete wrote the claim. A delete that did not write it deletes only its
+    /// markers.
     claimed: AtomicBool,
     /// The markers of the claim that this delete wrote: the first marker, and each new marker while
     /// the prune runs.
@@ -554,10 +555,10 @@ impl RusticSnapshotStore {
     /// A due prune runs only after the delete takes a claim of its ledger, and only when the ledger
     /// did not change after the claim. After an error before the prune ran, the claim is deleted,
     /// so a retry of the delete prunes again, and a claim write that the storage completes after
-    /// that delete can delay that prune by up to the grace period. A prune that found a snapshot
+    /// that delete can delay that prune by up to the hold of a claim. A prune that found a snapshot
     /// file gone at each attempt changed nothing, so it counts as an error before the prune ran.
     /// After a prune that started, the claim stays on each outcome, also when the prune or its
-    /// ledger write fails, so the next prune waits the grace period from the end of this one. A
+    /// ledger write fails, so the next prune waits the hold of a claim from the end of this one. A
     /// prune that succeeds deletes each claim of its ledger.
     async fn prune_when_due(
         &self,
