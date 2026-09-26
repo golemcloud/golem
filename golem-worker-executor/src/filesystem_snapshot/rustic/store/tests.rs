@@ -3277,6 +3277,73 @@ fn taken_calls(calls: &NiceCalls) -> Vec<(String, String, i32)> {
     .collect()
 }
 
+/// Takes the recorded calls with the operation label and a path below the directory, as the path
+/// and the name of the thread of each call.
+#[cfg(target_os = "linux")]
+fn taken_threads(calls: &NiceCalls, op_label: &str, directory: &str) -> Vec<(String, String)> {
+    std::mem::take(
+        &mut *calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+    .into_iter()
+    .filter(|(op, path, _, _)| op == op_label && path.starts_with(directory))
+    .map(|(_, path, thread, _)| (path, thread))
+    .collect()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn the_forget_of_a_delete_runs_its_storage_calls_in_a_rayon_pool_of_its_own() {
+    let (storage, calls) = nice_recording_storage();
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1"]).await;
+    taken_calls(&calls);
+
+    store.delete(&scope, &name("p-1")).await.unwrap();
+    let forgets = taken_threads(&calls, "delete", "snapshots/");
+
+    assert_eq!(
+        (
+            forgets.len(),
+            forgets
+                .iter()
+                .filter(|(_, thread)| !thread.starts_with("fs-snap-delete-"))
+                .collect::<Vec<_>>()
+        ),
+        (1, Vec::<&(String, String)>::new())
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+async fn the_index_load_of_a_restore_runs_its_storage_calls_in_a_rayon_pool_of_its_own() {
+    let (storage, calls) = nice_recording_storage();
+    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1"]).await;
+    taken_calls(&calls);
+
+    let into = Scratch::new();
+    store
+        .restore(&scope, &name("p-1"), into.path())
+        .await
+        .unwrap();
+    let index_reads = taken_threads(&calls, "read", "index/");
+
+    assert_eq!(
+        (
+            index_reads.is_empty(),
+            index_reads
+                .iter()
+                .filter(|(_, thread)| !thread.starts_with("fs-snap-restore-"))
+                .collect::<Vec<_>>()
+        ),
+        (false, Vec::<&(String, String)>::new())
+    );
+}
+
 /// Gives the operation labels of the calls, and each call that does not run at nice 19.
 #[cfg(target_os = "linux")]
 fn labels_and_calls_not_at_nice_19(

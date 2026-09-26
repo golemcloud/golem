@@ -503,17 +503,25 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let options = store_restore_options(&self.policy);
         let name = name.clone();
         let into: Box<Path> = into.into();
+        // The index load of a restore uses rayon, so the restore runs in a pool of its own, with the
+        // reader threads of a restore.
+        let pool = LowPriority {
+            threads: Some(self.policy.restore_reader_threads),
+            ..self.low_priority
+        };
         self.blocking(Operation::Restore, move || {
-            let Some(repository) = open_existing(backend, &key)? else {
-                return Ok(Lookup::Missing);
-            };
-            match lookup(scope_snapshots(&repository)?, &name) {
-                Lookup::Found(snapshot, info) => {
-                    restore_snapshot(repository, &snapshot, &into, &options)?;
-                    Ok(Lookup::Found(snapshot, info))
+            pool.run_at_normal_priority("fs-snap-restore", move || {
+                let Some(repository) = open_existing(backend, &key)? else {
+                    return Ok(Lookup::Missing);
+                };
+                match lookup(scope_snapshots(&repository)?, &name) {
+                    Lookup::Found(snapshot, info) => {
+                        restore_snapshot(repository, &snapshot, &into, &options)?;
+                        Ok(Lookup::Found(snapshot, info))
+                    }
+                    other => Ok(other),
                 }
-                other => Ok(other),
-            }
+            })
         })
         .await?
         .into_info()?
@@ -598,9 +606,13 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
                 .await
                 .map_err(storage_failure)?;
         }
+        // The forget deletes the snapshot files with rayon, so it runs in a pool of its own.
+        let pool = self.low_priority;
         self.blocking(Operation::Repository, move || {
-            repository.delete_snapshots(&ids)?;
-            Ok(())
+            pool.run_at_normal_priority("fs-snap-delete", move || {
+                repository.delete_snapshots(&ids)?;
+                Ok(())
+            })
         })
         .await?;
         self.prune_when_due(scope, &token).await
