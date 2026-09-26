@@ -166,7 +166,7 @@ pub(super) fn newest_ledger(listed: &[ListedBlob], now: Timestamp) -> PruneLedge
 
 /// Gives the paths of the listed entries whose time is before `ended`, in whole milliseconds as
 /// an entry name holds it.
-pub(super) fn older_entries(listed: &[ListedBlob], ended: Timestamp) -> Vec<Box<Path>> {
+pub(super) fn older_entries(listed: &[ListedBlob], ended: Timestamp) -> Box<[Box<Path>]> {
     listed
         .iter()
         .filter(|blob| {
@@ -239,7 +239,7 @@ pub(super) async fn remove_older_ledgers(files: &SnapshotFiles, ended: Timestamp
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct FreedRecords {
     pub(super) bytes: u64,
-    pub(super) counted: Vec<Box<Path>>,
+    pub(super) counted: Box<[Box<Path>]>,
 }
 
 /// Reads the freed bytes from the name of a record, `<bytes>-<unique part>`.
@@ -254,20 +254,20 @@ pub(super) fn parse_freed(name: &str) -> Option<u64> {
 /// Sums the freed bytes of the listed records. A record whose name does not parse counts as zero
 /// bytes, and it is not counted, so a prune leaves it in place.
 pub(super) fn count_freed(listed: &[ListedBlob]) -> FreedRecords {
-    listed
+    let parsed = listed
         .iter()
         .filter_map(|blob| {
             let bytes = parse_freed(blob.path.file_name()?.to_str()?)?;
             Some((bytes, blob.path.clone()))
         })
-        .fold(FreedRecords::default(), |records, (bytes, path)| {
-            let mut counted = records.counted;
-            counted.push(path);
-            FreedRecords {
-                bytes: records.bytes.saturating_add(bytes),
-                counted,
-            }
-        })
+        .collect::<Box<[_]>>();
+    FreedRecords {
+        bytes: parsed
+            .iter()
+            .map(|(bytes, _)| *bytes)
+            .fold(0, u64::saturating_add),
+        counted: parsed.iter().map(|(_, path)| path.clone()).collect(),
+    }
 }
 
 /// Writes a record of the freed bytes of one delete.
@@ -349,25 +349,26 @@ pub(super) fn claims_directory(ledger: &PruneLedger) -> PathBuf {
 pub(super) async fn list_claims(
     files: &SnapshotFiles,
     directory: &Path,
-) -> anyhow::Result<Vec<ListedClaim>> {
+) -> anyhow::Result<Box<[ListedClaim]>> {
     let listed = files.list_below("list_claims", directory).await?;
     let numbered = listed
         .iter()
         .filter_map(|blob| {
             let number = blob.path.file_name()?.to_str()?.parse::<u64>().ok()?;
-            Some((number, blob.path.clone()))
+            Some((number, &blob.path))
         })
-        .collect::<Vec<_>>();
-    stream::iter(numbered)
+        .collect::<Box<[_]>>();
+    stream::iter(numbered.iter())
         .then(|(number, path)| async move {
-            let content = files.get("read_claim", &path).await?;
+            let content = files.get("read_claim", path).await?;
             Ok::<_, anyhow::Error>(ListedClaim {
-                number,
+                number: *number,
                 claimed_at: content.as_deref().and_then(parse_claim),
             })
         })
-        .try_collect()
+        .try_collect::<Vec<_>>()
         .await
+        .map(Vec::into_boxed_slice)
 }
 
 /// Writes the claim with the number, and tells whether this call wrote it.
@@ -441,14 +442,15 @@ pub(super) async fn release_claim(files: &SnapshotFiles, directory: &Path, numbe
 }
 
 /// Gives each claim directory of the listed claims, other than the directory to keep.
-pub(super) fn claim_directories_except(listed: &[ListedBlob], keep: &Path) -> Vec<PathBuf> {
-    listed
+pub(super) fn claim_directories_except(listed: &[ListedBlob], keep: &Path) -> Box<[PathBuf]> {
+    let mut directories = listed
         .iter()
         .filter_map(|blob| blob.path.parent().map(Path::to_path_buf))
         .filter(|directory| directory != keep)
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
+        .collect::<Vec<_>>();
+    directories.sort();
+    directories.dedup();
+    directories.into_boxed_slice()
 }
 
 /// Deletes each claim directory other than the directory of the new ledger. It never deletes the
@@ -749,7 +751,12 @@ mod tests {
         let listed = list_claims(&files, &directory).await.unwrap();
 
         assert_eq!(
-            (directory.display().to_string(), first, again, listed),
+            (
+                directory.display().to_string(),
+                first,
+                again,
+                listed.to_vec()
+            ),
             (
                 "golem/prune-claims/42".to_string(),
                 true,
@@ -780,7 +787,8 @@ mod tests {
                     claim("300", "0"),
                 ],
                 &directory("300")
-            ),
+            )
+            .to_vec(),
             vec![directory("100"), directory("200"), directory("none")]
         );
     }
@@ -857,7 +865,8 @@ mod tests {
                     entry("bad"),
                 ],
                 at(9)
-            ),
+            )
+            .to_vec(),
             vec![Path::new(LEDGERS_PATH).join("5-0-a").into_boxed_path()]
         );
     }
@@ -895,10 +904,10 @@ mod tests {
             records,
             FreedRecords {
                 bytes: u64::MAX,
-                counted: vec![
+                counted: Box::new([
                     Path::new(FREED_PATH).join("5-a").into(),
                     Path::new(FREED_PATH).join(format!("{}-b", u64::MAX)).into(),
-                ],
+                ]),
             }
         );
     }

@@ -41,7 +41,8 @@ pub(super) async fn copy_scope(from: &SnapshotFiles, to: &SnapshotFiles) -> anyh
     let listed = stream::iter(LISTING_ORDER)
         .then(|directory| from.list_below("copy_list", Path::new(directory)))
         .try_collect::<Vec<_>>()
-        .await?;
+        .await?
+        .into_boxed_slice();
     let paths = listed
         .iter()
         .rev()
