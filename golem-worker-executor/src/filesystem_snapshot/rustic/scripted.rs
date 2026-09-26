@@ -49,8 +49,9 @@ pub(super) enum Script {
     /// passes.
     Vanish,
     /// Waits until the test gives the storage one step, and then passes the call, or refuses it
-    /// when `refuse` is true.
-    Step { refuse: bool },
+    /// when `refuse` is true. A `late` write or delete gives an error at its step, as a call that
+    /// got no answer within its deadline, and it reaches the storage when the test lands it.
+    Step { refuse: bool, late: bool },
 }
 
 /// A rule that gives the script of a call from its operation label and its path.
@@ -69,6 +70,10 @@ pub(super) struct ScriptedBlobStorage {
     waiting: AtomicUsize,
     /// The calls that took a step and ended.
     stepped: AtomicUsize,
+    /// The landings that the test gave and that no late call took yet.
+    landings: Arc<Semaphore>,
+    /// The late calls that reached the storage.
+    landed: Arc<AtomicUsize>,
 }
 
 impl ScriptedBlobStorage {
@@ -84,6 +89,8 @@ impl ScriptedBlobStorage {
             steps: Semaphore::new(0),
             waiting: AtomicUsize::new(0),
             stepped: AtomicUsize::new(0),
+            landings: Arc::new(Semaphore::new(0)),
+            landed: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -105,6 +112,45 @@ impl ScriptedBlobStorage {
     /// Gives the number of calls that took a step and ended.
     pub(super) fn stepped(&self) -> usize {
         self.stepped.load(Ordering::SeqCst)
+    }
+
+    /// Lets one late call, now or later, reach the storage.
+    pub(super) fn land_late(&self) {
+        self.landings.add_permits(1);
+    }
+
+    /// Gives the number of late calls that reached the storage.
+    pub(super) fn landed(&self) -> usize {
+        self.landed.load(Ordering::SeqCst)
+    }
+
+    /// Takes one step for a late call: the caller gets an error, and the call reaches the storage
+    /// in a task when the test lands it.
+    async fn late<T>(
+        &self,
+        op_label: &'static str,
+        path: &Path,
+        landing: impl Future<Output = anyhow::Result<()>> + Send + 'static,
+    ) -> anyhow::Result<T> {
+        self.record(op_label, path);
+        self.waiting.fetch_add(1, Ordering::SeqCst);
+        let permit = self.steps.acquire().await;
+        self.waiting.fetch_sub(1, Ordering::SeqCst);
+        if let Ok(permit) = permit {
+            permit.forget();
+        }
+        let (landings, landed) = (self.landings.clone(), self.landed.clone());
+        tokio::spawn(async move {
+            if let Ok(permit) = landings.acquire().await {
+                permit.forget();
+            }
+            let _ = landing.await;
+            landed.fetch_add(1, Ordering::SeqCst);
+        });
+        self.stepped.fetch_add(1, Ordering::SeqCst);
+        Err(anyhow::anyhow!(
+            "the call got no answer within its deadline"
+        ))
     }
 
     /// Gives the operation label and the path of each call, in the order of the calls.
@@ -159,7 +205,7 @@ impl ScriptedBlobStorage {
                 call.await
             }
             Script::Vanish => call.await,
-            Script::Step { refuse } => {
+            Script::Step { refuse, .. } => {
                 self.waiting.fetch_add(1, Ordering::SeqCst);
                 let permit = self.steps.acquire().await;
                 self.waiting.fetch_sub(1, Ordering::SeqCst);
@@ -268,7 +314,20 @@ impl BlobStorage for ScriptedBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> anyhow::Result<()> {
-        self.answer(
+        let script = (self.rule)(op_label, path);
+        if let Script::Step { late: true, .. } = script {
+            let (inner, owned_path, owned_data) =
+                (self.inner.clone(), path.to_path_buf(), data.to_vec());
+            return self
+                .late(op_label, path, async move {
+                    inner
+                        .put_raw(target_label, op_label, namespace, &owned_path, &owned_data)
+                        .await
+                })
+                .await;
+        }
+        self.follow(
+            script,
             op_label,
             path,
             self.inner
@@ -285,7 +344,27 @@ impl BlobStorage for ScriptedBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> anyhow::Result<PutIfAbsent> {
-        self.answer(
+        let script = (self.rule)(op_label, path);
+        if let Script::Step { late: true, .. } = script {
+            let (inner, owned_path, owned_data) =
+                (self.inner.clone(), path.to_path_buf(), data.to_vec());
+            return self
+                .late(op_label, path, async move {
+                    inner
+                        .put_raw_if_absent(
+                            target_label,
+                            op_label,
+                            namespace,
+                            &owned_path,
+                            &owned_data,
+                        )
+                        .await
+                        .map(|_| ())
+                })
+                .await;
+        }
+        self.follow(
+            script,
             op_label,
             path,
             self.inner
@@ -318,7 +397,19 @@ impl BlobStorage for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> anyhow::Result<()> {
-        self.answer(
+        let script = (self.rule)(op_label, path);
+        if let Script::Step { late: true, .. } = script {
+            let (inner, owned_path) = (self.inner.clone(), path.to_path_buf());
+            return self
+                .late(op_label, path, async move {
+                    inner
+                        .delete(target_label, op_label, namespace, &owned_path)
+                        .await
+                })
+                .await;
+        }
+        self.follow(
+            script,
             op_label,
             path,
             self.inner.delete(target_label, op_label, namespace, path),
@@ -380,7 +471,20 @@ impl BlobStorage for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> anyhow::Result<bool> {
-        self.answer(
+        let script = (self.rule)(op_label, path);
+        if let Script::Step { late: true, .. } = script {
+            let (inner, owned_path) = (self.inner.clone(), path.to_path_buf());
+            return self
+                .late(op_label, path, async move {
+                    inner
+                        .delete_dir(target_label, op_label, namespace, &owned_path)
+                        .await
+                        .map(|_| ())
+                })
+                .await;
+        }
+        self.follow(
+            script,
             op_label,
             path,
             self.inner

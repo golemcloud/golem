@@ -1543,7 +1543,10 @@ async fn a_forget_that_lands_while_a_prune_runs_keeps_its_record_for_the_next_pr
     save_each(&plain, &scope, &["p-1", "p-2", "p-3"]).await;
     let forgetting = ScriptedBlobStorage::new(inner.clone(), |op_label, path| {
         if is_forget(op_label, path) {
-            Script::Step { refuse: false }
+            Script::Step {
+                refuse: false,
+                late: false,
+            }
         } else {
             Script::Pass
         }
@@ -1556,7 +1559,10 @@ async fn a_forget_that_lands_while_a_prune_runs_keeps_its_record_for_the_next_pr
                 claimed.store(true, Ordering::SeqCst);
             }
             if op_label == "list" && path == Path::new("data") && claimed.load(Ordering::SeqCst) {
-                Script::Step { refuse: false }
+                Script::Step {
+                    refuse: false,
+                    late: false,
+                }
             } else {
                 Script::Pass
             }
@@ -3644,9 +3650,9 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
 
 mod sweep;
 
-/// The largest number of steps of one turn. A delete takes at most 13 steps of the protocol, so a
-/// turn of 14 steps runs a delete to its end.
-const SWEEP_TURN: usize = 14;
+/// The largest number of steps of one turn. A delete takes at most 15 steps of the protocol, so a
+/// turn of 16 steps runs a delete to its end.
+const SWEEP_TURN: usize = 16;
 
 /// The number of random orders that the property test tries.
 const SWEEP_CASES: u32 = 1000;
@@ -3676,6 +3682,7 @@ async fn two_deletes_make_at_most_one_prune_in_each_order_with_up_to_two_switche
                 first,
                 turns: vec![one, two],
                 fail: None,
+                late: None,
             })
         })
     });
@@ -3696,8 +3703,8 @@ async fn two_deletes_make_at_most_one_prune_in_each_order_with_up_to_two_switche
 #[test]
 #[timeout("60s")]
 async fn two_deletes_make_at_most_one_prune_in_random_orders_with_a_failed_call() {
-    // The test generates the order of the steps and a call that fails, and shrinks a failing case
-    // to the shortest order. The seed is fixed, and no file keeps a failing case.
+    // The test generates the order of the steps, a call that fails, and a call that gets no answer
+    // and reaches the storage later, and shrinks a failing case to the shortest order. The seed is fixed, and no file keeps a failing case.
     use proptest::prelude::{Strategy, prop};
     use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
     let (shared, prepared) = prepared_scope().await;
@@ -3706,8 +3713,14 @@ async fn two_deletes_make_at_most_one_prune_in_random_orders_with_a_failed_call(
         0usize..2,
         prop::collection::vec(0usize..=SWEEP_TURN, 0..=8),
         prop::option::of((0usize..2, 0usize..SWEEP_TURN)),
+        prop::option::of((0usize..2, 0usize..SWEEP_TURN, 0usize..8)),
     )
-        .prop_map(|(first, turns, fail)| sweep::Schedule { first, turns, fail });
+        .prop_map(|(first, turns, fail, late)| sweep::Schedule {
+            first,
+            turns,
+            fail,
+            late,
+        });
     let started = std::time::Instant::now();
 
     let outcome = tokio::task::spawn_blocking(move || {
