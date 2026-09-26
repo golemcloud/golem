@@ -89,13 +89,15 @@ fn is_prune_start(op_label: &str, path: &str) -> bool {
 /// listed turns, the delete whose turn is next runs to its end, and then the other one does.
 /// `fail` refuses one step of one delete. `late` makes one write or delete of one delete give no
 /// answer at its step, and reach the storage after the given number of further steps of the case.
-/// The steps of `fail` and `late` are numbered without the writes of new markers.
+/// `drop` drops one delete right after one of its steps, as a caller that stops waiting does. The
+/// steps of `fail`, `late` and `drop` are numbered without the writes of new markers.
 #[derive(Clone, Debug)]
 pub(super) struct Schedule {
     pub(super) first: usize,
     pub(super) turns: Vec<usize>,
     pub(super) fail: Option<(usize, usize)>,
     pub(super) late: Option<(usize, usize, usize)>,
+    pub(super) drop: Option<(usize, usize)>,
 }
 
 /// One step that a delete took, or a late call that reached the storage, in the order of all
@@ -111,17 +113,23 @@ struct Step {
     effect: bool,
 }
 
-/// One delete of the case: its scripted storage and its task.
+/// One delete of the case: its store, its scripted storage and its task.
 struct Delete {
+    store: Arc<RusticSnapshotStore>,
     storage: Arc<ScriptedBlobStorage>,
     task: JoinHandle<Result<(), SnapshotStoreError>>,
     /// The steps that the delete took, other than the writes of new markers.
     taken: usize,
+    /// Whether the case dropped the delete. A dropped delete makes a call only for the release of
+    /// its claim.
+    dropped: bool,
 }
 
 impl Delete {
+    /// Tells whether the delete ended and its store has no work left, such as the release of the
+    /// claim of a dropped delete.
     fn finished(&self) -> bool {
-        self.task.is_finished()
+        self.task.is_finished() && self.store.work_in_flight() == 0
     }
 }
 
@@ -208,6 +216,15 @@ impl Case {
         if self.deletes[who].finished() {
             return Ok(());
         }
+        if self.deletes[who].dropped {
+            let delete = &self.deletes[who];
+            if !until(|| delete.storage.waiting_steps() > 0 || delete.finished()).await {
+                return Err(format!("the dropped delete {who} did not end"));
+            }
+            if delete.finished() {
+                return Ok(());
+            }
+        }
         let storage = self.deletes[who].storage.clone();
         let (before, taker) = (storage.stepped(), storage.took().len());
         storage.step();
@@ -250,6 +267,25 @@ impl Case {
             return Err(format!("delete {who} took more than {MOST_STEPS} steps"));
         }
         self.land(false).await?;
+        if counted && self.schedule.drop == Some((who, number)) {
+            self.deletes[who].task.abort();
+            self.deletes[who].dropped = true;
+            // An abort only asks the task to end. Its waiting call counts as waiting until the
+            // task ends, so the case gives no step before that.
+            let task = &self.deletes[who].task;
+            if !until(|| task.is_finished()).await {
+                return Err(format!("the dropped delete {who} did not end"));
+            }
+            // The drop counts as a failed step of the delete, so the rules on a delete that
+            // stopped after its claim apply to it.
+            self.log.push(Step {
+                delete: who,
+                op_label: "drop",
+                path: String::new(),
+                failed: true,
+                effect: false,
+            });
+        }
         if settle(&self.deletes[who]).await {
             Ok(())
         } else {
@@ -333,12 +369,16 @@ pub(super) async fn run_case(
         });
         let deleting = store(storage.clone(), policy(LONG_DEADLINE, ALWAYS, SWEEP_GRACE));
         let scope = scope.clone();
-        let task =
-            tokio::spawn(async move { deleting.delete(&scope, &name(["p-1", "p-2"][who])).await });
+        let task = tokio::spawn({
+            let deleting = deleting.clone();
+            async move { deleting.delete(&scope, &name(["p-1", "p-2"][who])).await }
+        });
         Delete {
+            store: deleting,
             storage,
             task,
             taken: 0,
+            dropped: false,
         }
     });
     let mut case = Case {
@@ -404,8 +444,8 @@ fn forgotten_at(log: &[Step], who: usize) -> Option<usize> {
 }
 
 /// Gives each claim, or marker of a claim, that a delete wrote and that stays, when the first
-/// failed call of that delete came after it took its claim and before it called for the listing of
-/// the packs. A claim that the other delete wrote later at the same path is not the claim of the
+/// failed call of that delete, or its drop, came after it took its claim and before it called for
+/// the listing of the packs. A claim that the other delete wrote later at the same path is not the claim of the
 /// delete. A blob whose own delete failed is left out, because no call can remove it then, and a
 /// claim or a marker that stays only delays a prune.
 fn kept_claims(log: &[Step], claims: &[String]) -> Vec<String> {

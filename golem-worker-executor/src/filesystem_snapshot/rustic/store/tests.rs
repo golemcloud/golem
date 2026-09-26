@@ -4502,6 +4502,7 @@ async fn two_deletes_make_at_most_one_prune_in_each_order_with_up_to_two_switche
                 turns: vec![one, two],
                 fail: None,
                 late: None,
+                drop: None,
             })
         })
     });
@@ -4533,12 +4534,14 @@ async fn two_deletes_make_at_most_one_prune_in_random_orders_with_a_failed_call(
         prop::collection::vec(0usize..=SWEEP_TURN, 0..=8),
         prop::option::of((0usize..2, 0usize..SWEEP_TURN)),
         prop::option::of((0usize..2, 0usize..SWEEP_TURN, 0usize..8)),
+        prop::option::of((0usize..2, 0usize..SWEEP_TURN)),
     )
-        .prop_map(|(first, turns, fail, late)| sweep::Schedule {
+        .prop_map(|(first, turns, fail, late, drop)| sweep::Schedule {
             first,
             turns,
             fail,
             late,
+            drop,
         });
     let started = std::time::Instant::now();
 
