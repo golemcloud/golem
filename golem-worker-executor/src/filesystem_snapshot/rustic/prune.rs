@@ -1064,6 +1064,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("60s")]
     async fn the_refresh_of_a_claim_ends_when_its_operation_is_cancelled() {
         let files = new_files();
         files.cancel.cancel();
@@ -1208,6 +1209,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("60s")]
     async fn a_claim_is_taken_after_its_marker_and_a_loser_deletes_its_marker() {
         let files = new_files();
         let directory = claims_directory(&ledger(Some(42), false));
@@ -1437,6 +1439,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("60s")]
     async fn a_record_of_freed_bytes_is_written_and_listed() {
         let files = new_files();
 
@@ -1449,6 +1452,7 @@ mod tests {
     }
 
     #[test]
+    #[timeout("60s")]
     async fn a_written_entry_is_the_ledger_that_a_read_gives() {
         let files = new_files();
         let ended = Timestamp::from(Timestamp::now_utc().to_millis());
