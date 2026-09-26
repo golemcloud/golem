@@ -1314,6 +1314,39 @@ async fn a_prune_deletes_the_claims_of_old_ledgers() {
 }
 
 #[test]
+async fn a_forget_that_fails_after_the_record_write_leaves_the_record() {
+    // The forget deletes the snapshot file, and the storage refuses that call.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "delete" && path.starts_with("snapshots") {
+                Script::Refuse
+            } else {
+                Script::Pass
+            }
+        });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1"]).await;
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+
+    assert!(
+        deleted.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{deleted:?}"
+    );
+    assert_eq!(
+        (
+            freed(&storage, &scope).await > 0,
+            listed_names(&store, &scope).await
+        ),
+        (true, vec!["p-1".to_string()])
+    );
+}
+
+#[test]
 #[timeout("60s")]
 async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
     // The first read after the first claim is the start of the first prune. The gate holds it,

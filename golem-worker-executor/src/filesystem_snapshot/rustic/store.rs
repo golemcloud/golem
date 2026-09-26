@@ -295,9 +295,8 @@ impl RusticSnapshotStore {
         }
     }
 
-    /// Writes a record of the freed bytes, and prunes the repository when a prune is due. The
-    /// record stays until a prune succeeds, so a delete that runs again after a failed prune prunes
-    /// again. It lists the packs only when their size can make a prune due.
+    /// Prunes the repository when a prune is due. The records of freed bytes stay until a prune
+    /// succeeds, so a delete that runs again after a failed prune prunes again. It lists the packs only when their size can make a prune due.
     /// A due prune runs only after the delete takes a claim of its ledger, and only when the ledger
     /// did not change after the claim. A failed prune deletes the claim, and a prune that succeeds
     /// deletes each claim of its ledger.
@@ -305,12 +304,8 @@ impl RusticSnapshotStore {
         &self,
         scope: &SnapshotScope,
         token: &CancellationToken,
-        freed: u64,
     ) -> Result<(), SnapshotStoreError> {
         let files = self.files(scope, token);
-        if freed > 0 {
-            record_freed(&files, freed).await.map_err(storage_failure)?;
-        }
         let ledger = read_ledger(&files).await.map_err(storage_failure)?;
         let records = list_freed(&files).await.map_err(storage_failure)?;
         let now = Timestamp::now_utc();
@@ -513,7 +508,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let backend = Arc::new(self.backend(scope, &token)?);
         let key = self.key.clone();
         let name = name.clone();
-        let freed = self
+        let found = self
             .blocking(Operation::Repository, move || {
                 let Some(repository) = open_existing(backend, &key)? else {
                     return Ok(None);
@@ -527,14 +522,26 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
                     .iter()
                     .map(|snapshot| snapshot.id)
                     .collect::<Box<[SnapshotId]>>();
-                repository.delete_snapshots(&ids)?;
-                Ok(Some(named.iter().map(added_packed_bytes).sum::<u64>()))
+                let freed = named.iter().map(added_packed_bytes).sum::<u64>();
+                Ok(Some((repository, ids, freed)))
             })
             .await?;
-        match freed {
-            Some(freed) => self.prune_when_due(scope, &token, freed).await,
-            None => Ok(()),
+        let Some((repository, ids, freed)) = found else {
+            return Ok(());
+        };
+        // The record comes before the forget, so a stop between the two cannot lose the bytes. A
+        // forget that then fails gives its error, and the record stays, which only brings a prune
+        // earlier.
+        let files = self.files(scope, &token);
+        if freed > 0 {
+            record_freed(&files, freed).await.map_err(storage_failure)?;
         }
+        self.blocking(Operation::Repository, move || {
+            repository.delete_snapshots(&ids)?;
+            Ok(())
+        })
+        .await?;
+        self.prune_when_due(scope, &token).await
     }
 
     async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError> {
