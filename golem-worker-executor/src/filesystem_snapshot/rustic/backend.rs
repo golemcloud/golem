@@ -457,7 +457,7 @@ fn missing_file(path: &Path) -> Box<RusticError> {
     RusticError::with_source(
         ErrorKind::Backend,
         "The blob storage holds no file at `{path}`.",
-        FileMissing,
+        FileMissing { path: path.into() },
     )
     .attach_context("path", path.display().to_string())
 }

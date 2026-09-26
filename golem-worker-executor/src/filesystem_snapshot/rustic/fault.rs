@@ -18,10 +18,12 @@
 //! rustic gives no public kind of an error. So the classification reads the chain of sources: the
 //! markers of this module, the name errors of the blob storage, and the I/O errors.
 
+use super::prune::SNAPSHOTS_PATH;
 use crate::filesystem_snapshot::SnapshotStoreError;
 use golem_service_base::storage::blob::BlobNameError;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::path::Path;
 
 /// A blob storage call of the backend that failed, got no answer within its deadline, or did not
 /// start because its operation was cancelled. The source is the failure.
@@ -74,12 +76,19 @@ impl Error for ConfigExists {}
 
 /// The blob storage holds no file at the path that rustic reads, for example because a delete
 /// removed it after a listing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct FileMissing;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FileMissing {
+    /// The path of the file, relative to the root of the repository.
+    pub(super) path: Box<Path>,
+}
 
 impl Display for FileMissing {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("the blob storage holds no file at the path")
+        write!(
+            formatter,
+            "the blob storage holds no file at {}",
+            self.path.display()
+        )
     }
 }
 
@@ -88,6 +97,15 @@ impl Error for FileMissing {}
 /// Tells whether an error in the chain is [`FileMissing`].
 pub(super) fn is_file_missing(error: &(dyn Error + 'static)) -> bool {
     chain(error).any(|error| error.is::<FileMissing>())
+}
+
+/// Tells whether an error in the chain is [`FileMissing`] for a snapshot file.
+pub(super) fn is_snapshot_missing(error: &(dyn Error + 'static)) -> bool {
+    chain(error).any(|error| {
+        error
+            .downcast_ref::<FileMissing>()
+            .is_some_and(|missing| missing.path.starts_with(SNAPSHOTS_PATH))
+    })
 }
 
 /// Tells whether an error in the chain is [`ConfigExists`].

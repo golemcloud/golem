@@ -2223,6 +2223,93 @@ async fn a_release_whose_marker_delete_is_refused_still_deletes_the_claim() {
     );
 }
 
+/// A storage that gives no blob to the first `vanishing` reads of a snapshot file after the first
+/// claim write, as a forget of another delete between the listing and the read does. It counts
+/// those reads.
+fn vanishing_snapshots_after_the_claim(
+    vanishing: usize,
+) -> (Arc<ScriptedBlobStorage>, Arc<AtomicUsize>) {
+    let claimed = Arc::new(AtomicBool::new(false));
+    let vanished = Arc::new(AtomicUsize::new(0));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let vanished = vanished.clone();
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            let snapshot_read = claimed.load(Ordering::SeqCst)
+                && path.starts_with("snapshots")
+                && !is_forget(op_label, path)
+                && op_label != "list";
+            if snapshot_read
+                && vanished
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                        (count < vanishing).then_some(count + 1)
+                    })
+                    .is_ok()
+            {
+                Script::Vanish
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    (storage, vanished)
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_plans_again_when_a_snapshot_file_is_gone_at_its_read_and_prunes_once() {
+    let (storage, vanished) = vanishing_snapshots_after_the_claim(1);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (
+            vanished.load(Ordering::SeqCst),
+            prunes(&storage.calls()),
+            ledger(&storage, &scope).await.last_prune.is_some(),
+        ),
+        (1, 1, true)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_releases_its_claim_and_gives_a_retryable_error()
+ {
+    let (storage, vanished) = vanishing_snapshots_after_the_claim(usize::MAX);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let failed = store.delete(&scope, &name("p-1")).await;
+
+    assert!(
+        failed.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{failed:?}"
+    );
+    assert_eq!(
+        (
+            vanished.load(Ordering::SeqCst),
+            prunes(&storage.calls()),
+            ledger(&storage, &scope).await.last_prune.is_some(),
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (3, 0, false, Vec::<String>::new())
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_prune_that_fails_keeps_its_claim_so_no_second_prune_runs_within_the_hold() {

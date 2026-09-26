@@ -21,7 +21,9 @@
 //! [`RusticSnapshotStore::shut_down`] waits for them.
 
 use super::backend::BlobBackend;
-use super::fault::{Operation, classify, is_file_missing, is_storage_failure, storage_failure};
+use super::fault::{
+    Operation, classify, is_file_missing, is_snapshot_missing, is_storage_failure, storage_failure,
+};
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
@@ -59,7 +61,7 @@ use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::pin::pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -187,8 +189,24 @@ pub(super) struct PublishGate {
 struct Claim<'a> {
     directory: &'a Path,
     number: u64,
-    /// The first marker of the claim, the only marker before the prune starts.
-    marker: &'a Path,
+    /// The markers of the claim that this delete wrote: the first marker, and each new marker
+    /// while the prune runs.
+    markers: Mutex<Vec<Box<Path>>>,
+}
+
+/// The number of times that a prune plans again when a snapshot file that it listed is gone at
+/// its read.
+const PRUNE_ATTEMPTS: usize = 3;
+
+/// The error of a delete whose prune found a snapshot file gone at each attempt. A concurrent
+/// delete removed the files, so a retry of the delete can prune.
+fn snapshots_changed_error() -> SnapshotStoreError {
+    SnapshotStoreError::Storage {
+        retryable: true,
+        source: anyhow::anyhow!(
+            "a concurrent delete removed a snapshot file at each attempt of the prune"
+        ),
+    }
 }
 
 /// The error of an operation of a store that is shut down.
@@ -369,7 +387,7 @@ impl RusticSnapshotStore {
         let claim = Claim {
             directory: &claims,
             number,
-            marker: &marker,
+            markers: Mutex::new(vec![marker]),
         };
         // Only an error before the prune starts releases the claim, so a retry of the delete
         // prunes again. A prune that started can have marked packs, so its claim stays.
@@ -380,7 +398,15 @@ impl RusticSnapshotStore {
                 return other.map(|_| ());
             }
         };
-        let pruned = self.run_prune(backend, &files, &claim, grace).await;
+        // No attempt of a prune that found a snapshot file gone changed the repository, so no
+        // prune ran, and the claim goes.
+        let pruned = match self.run_prune(backend, &files, &claim, grace).await {
+            Ok(None) => {
+                self.release(&files, &claim).await;
+                return Err(snapshots_changed_error());
+            }
+            other => other.map(|marked| marked.unwrap_or_default()),
+        };
         // The final marker holds the claim for the grace period from the end of this prune, also
         // when the prune or its ledger write fails.
         if let Err(error) = write_marker(
@@ -412,19 +438,23 @@ impl RusticSnapshotStore {
         Ok(())
     }
 
-    /// Deletes the claim and then its first marker in a task that the tracker counts. The task has
-    /// a token of its own, so a drop of the delete, a cancel or a shut down does not stop it.
+    /// Deletes the claim and then its markers in a task that the tracker counts. The task has a
+    /// token of its own, so a drop of the delete, a cancel or a shut down does not stop it.
     async fn release(&self, files: &SnapshotFiles, claim: &Claim<'_>) {
         let files = SnapshotFiles {
             cancel: CancellationToken::new(),
             ..files.clone()
         };
-        let (directory, marker): (Box<Path>, Box<Path>) =
-            (claim.directory.into(), claim.marker.into());
+        let directory: Box<Path> = claim.directory.into();
+        let markers = claim
+            .markers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         let number = claim.number;
         let releasing = self
             .tracker
-            .spawn(async move { release_claim(&files, &directory, number, &marker).await });
+            .spawn(async move { release_claim(&files, &directory, number, &markers).await });
         if let Err(error) = releasing.await {
             warn!(
                 error = %error,
@@ -452,26 +482,44 @@ impl RusticSnapshotStore {
     }
 
     /// Runs the prune with a new marker of the claim at each refresh period, and tells whether the
-    /// prune leaves marked packs.
+    /// prune leaves marked packs. It gives `None` when each attempt found a snapshot file gone.
     async fn run_prune(
         &self,
         backend: Arc<BlobBackend>,
         files: &SnapshotFiles,
         claim: &Claim<'_>,
         grace: Duration,
-    ) -> Result<bool, SnapshotStoreError> {
+    ) -> Result<Option<bool>, SnapshotStoreError> {
         let key = self.key.clone();
         let settings = self.policy.prune;
         let low_priority = self.low_priority;
+        // The plan of a prune reads each snapshot file before the prune changes the repository.
+        // A forget of another delete can remove a listed file before its read, so the prune
+        // plans again from a new listing.
         let pruning = self.blocking(Operation::Prune, move || {
-            low_priority.run("fs-snap-prune", move || prune(backend, &key, &settings))
+            low_priority.run("fs-snap-prune", move || {
+                Ok(
+                    std::iter::repeat_with(|| prune(backend.clone(), &key, &settings))
+                        .take(PRUNE_ATTEMPTS)
+                        .find(|attempt| {
+                            !attempt
+                                .as_ref()
+                                .is_err_and(|error| is_snapshot_missing(&**error))
+                        }),
+                )
+            })
         });
         // The claim gets a new marker while the prune runs, so a prune slower than the grace
         // period keeps its claim. The markers stop when the prune ends or the operation is
         // cancelled. The tracker counts the whole step, so no timer of it runs after a shut down.
-        let refreshing =
-            keep_claim_fresh(files, claim.directory, claim.number, refresh_period(grace));
-        let report = self
+        let refreshing = keep_claim_fresh(
+            files,
+            claim.directory,
+            claim.number,
+            refresh_period(grace),
+            &claim.markers,
+        );
+        let attempts = self
             .tracker
             .track_future(async {
                 match future::select(pin!(pruning), pin!(refreshing)).await {
@@ -480,7 +528,13 @@ impl RusticSnapshotStore {
                 }
             })
             .await?;
-        Ok(report.as_ref().is_some_and(leaves_marked_packs))
+        attempts
+            .map(|report| {
+                report
+                    .map(|report| report.as_ref().is_some_and(leaves_marked_packs))
+                    .map_err(|error| classify(Operation::Prune, error))
+            })
+            .transpose()
     }
 }
 

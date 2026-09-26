@@ -30,6 +30,7 @@ use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 use tracing::warn;
 
@@ -253,7 +254,7 @@ pub(super) struct FreedRecord {
 }
 
 /// The directory of the snapshot files of a repository.
-const SNAPSHOTS_PATH: &str = "snapshots";
+pub(super) const SNAPSHOTS_PATH: &str = "snapshots";
 
 /// Gives the content of a record: the id of each snapshot file of the delete, one on each line.
 pub(super) fn record_content(snapshots: &[Box<str>]) -> String {
@@ -521,18 +522,20 @@ pub(super) fn refresh_period(grace: Duration) -> Duration {
 }
 
 /// Writes a new marker of the claim with the number at each period, until the caller drops the
-/// future or the operation of the files is cancelled. A failed write gives a warning.
+/// future or the operation of the files is cancelled, and adds the path of each written marker to
+/// `written`. A failed write gives a warning.
 pub(super) async fn keep_claim_fresh(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
     period: Duration,
+    written: &Mutex<Vec<Box<Path>>>,
 ) {
     stream::repeat(())
         .then(|()| tokio::time::sleep(period))
         .take_until(files.cancel.cancelled())
         .for_each(|()| async move {
-            let written = write_marker(
+            let marker = write_marker(
                 files,
                 "refresh_claim",
                 directory,
@@ -540,36 +543,46 @@ pub(super) async fn keep_claim_fresh(
                 Timestamp::now_utc(),
             )
             .await;
-            if let Err(error) = written {
-                warn!(
+            match marker {
+                Ok(path) => written
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(path),
+                Err(error) => warn!(
                     error = %format!("{error:#}"),
                     "Failed to write a new marker of the prune claim of a filesystem snapshot scope"
-                );
+                ),
             }
         })
         .await;
 }
 
-/// Deletes the claim with the number, and then its first marker by its path. It tries each delete
-/// also when the other one fails, and each failure gives a warning. A claim that stays without
-/// its marker is old, and a marker that stays only delays a prune until its hold passed.
+/// Deletes the claim with the number, and then each of its markers by its path. It tries each
+/// delete also when another one fails, and each failure gives a warning. A claim that stays
+/// without its markers is old, and a marker that stays only delays a prune until its hold passed.
 pub(super) async fn release_claim(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
-    marker: &Path,
+    markers: &[Box<Path>],
 ) {
     let claim = directory.join(number.to_string());
-    stream::iter([("delete_claim", claim.as_path()), ("delete_marker", marker)])
-        .for_each(|(op_label, path)| async move {
-            if let Err(error) = files.delete(op_label, path).await {
-                warn!(
-                    error = %format!("{error:#}"),
-                    "Failed to delete the prune claim of a filesystem snapshot scope"
-                );
-            }
-        })
-        .await;
+    stream::iter(
+        std::iter::once(("delete_claim", claim.as_path())).chain(
+            markers
+                .iter()
+                .map(|marker| ("delete_marker", marker.as_ref())),
+        ),
+    )
+    .for_each(|(op_label, path)| async move {
+        if let Err(error) = files.delete(op_label, path).await {
+            warn!(
+                error = %format!("{error:#}"),
+                "Failed to delete the prune claim of a filesystem snapshot scope"
+            );
+        }
+    })
+    .await;
 }
 
 /// Gives the claim directory of each listed path below the directory of all claims, other than the
@@ -911,6 +924,7 @@ mod tests {
                 &claims_directory(&ledger(None, false)),
                 0,
                 Duration::from_secs(3600),
+                &std::sync::Mutex::default(),
             ),
         )
         .await
