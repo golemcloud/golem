@@ -187,6 +187,8 @@ pub(super) struct PublishGate {
 struct Claim<'a> {
     directory: &'a Path,
     number: u64,
+    /// The first marker of the claim, the only marker before the prune starts.
+    marker: &'a Path,
 }
 
 /// The error of an operation of a store that is shut down.
@@ -358,15 +360,16 @@ impl RusticSnapshotStore {
         let ClaimChoice::Claim(number) = next_claim(&listed, now, grace) else {
             return Ok(());
         };
-        if !take_claim(&files, &claims, number, now)
+        let Some(marker) = take_claim(&files, &claims, number, now)
             .await
             .map_err(storage_failure)?
-        {
+        else {
             return Ok(());
-        }
+        };
         let claim = Claim {
             directory: &claims,
             number,
+            marker: &marker,
         };
         // Only an error before the prune starts releases the claim, so a retry of the delete
         // prunes again. A prune that started can have marked packs, so its claim stays.
@@ -409,18 +412,19 @@ impl RusticSnapshotStore {
         Ok(())
     }
 
-    /// Deletes the claim and then its markers in a task that the tracker counts. The task has a
-    /// token of its own, so a drop of the delete, a cancel or a shut down does not stop it.
+    /// Deletes the claim and then its first marker in a task that the tracker counts. The task has
+    /// a token of its own, so a drop of the delete, a cancel or a shut down does not stop it.
     async fn release(&self, files: &SnapshotFiles, claim: &Claim<'_>) {
         let files = SnapshotFiles {
             cancel: CancellationToken::new(),
             ..files.clone()
         };
-        let directory: Box<Path> = claim.directory.into();
+        let (directory, marker): (Box<Path>, Box<Path>) =
+            (claim.directory.into(), claim.marker.into());
         let number = claim.number;
         let releasing = self
             .tracker
-            .spawn(async move { release_claim(&files, &directory, number).await });
+            .spawn(async move { release_claim(&files, &directory, number, &marker).await });
         if let Err(error) = releasing.await {
             warn!(
                 error = %error,

@@ -2146,6 +2146,83 @@ async fn a_shut_down_after_the_claim_still_releases_it() {
     );
 }
 
+/// A storage that refuses the first call after the first claim write, which is the second read of
+/// the ledger, and each call of the release with the operation label.
+fn refusing_the_release_call(release_label: &'static str) -> Arc<ScriptedBlobStorage> {
+    let claimed = Arc::new(AtomicBool::new(false));
+    let refused = Arc::new(AtomicBool::new(false));
+    ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), move |op_label, _| {
+        if op_label == "write_claim" {
+            claimed.store(true, Ordering::SeqCst);
+            Script::Pass
+        } else if op_label == release_label
+            || (claimed.load(Ordering::SeqCst) && !refused.swap(true, Ordering::SeqCst))
+        {
+            Script::Refuse
+        } else {
+            Script::Pass
+        }
+    })
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_release_whose_claim_delete_is_refused_still_deletes_its_marker_and_the_next_delete_prunes()
+ {
+    let storage = refusing_the_release_call("delete_claim");
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let failed = store.delete(&scope, &name("p-1")).await;
+    let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
+    let retried = store.delete(&scope, &name("p-1")).await;
+
+    assert!(
+        failed.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{failed:?}"
+    );
+    assert!(retried.is_ok(), "{retried:?}");
+    assert_eq!(
+        (
+            claims_after_failure,
+            prunes(&storage.calls()),
+            ledger(&storage, &scope).await.last_prune.is_some(),
+        ),
+        (vec!["golem/prune-claims/none/0".to_string()], 1, true)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_release_whose_marker_delete_is_refused_still_deletes_the_claim() {
+    let storage = refusing_the_release_call("delete_marker");
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let failed = store.delete(&scope, &name("p-1")).await;
+    let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
+
+    assert!(
+        failed.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{failed:?}"
+    );
+    assert_eq!(
+        claims_after_failure
+            .iter()
+            .map(|path| path.starts_with("golem/prune-claims/none/0@"))
+            .collect::<Vec<_>>(),
+        vec![true]
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_prune_that_fails_keeps_its_claim_so_no_second_prune_runs_within_the_hold() {

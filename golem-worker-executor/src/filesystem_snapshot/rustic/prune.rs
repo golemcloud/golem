@@ -485,20 +485,21 @@ pub(super) async fn write_marker(
     Ok(path)
 }
 
-/// Writes the first marker of the claim with the number, then takes the claim, and tells whether
-/// this delete holds it. A delete that loses the claim deletes its marker.
+/// Writes the first marker of the claim with the number, then takes the claim, and gives the path
+/// of that marker when this delete holds the claim. A delete that loses the claim deletes its
+/// marker.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
     now: Timestamp,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Option<PathBuf>> {
     let marker = write_marker(files, "write_marker", directory, number, now).await?;
     let written = files
         .put_if_absent("write_claim", &directory.join(number.to_string()), &[])
         .await?;
     if written == PutIfAbsent::Written {
-        return Ok(true);
+        return Ok(Some(marker));
     }
     if let Err(error) = files.delete("delete_marker", &marker).await {
         warn!(
@@ -506,7 +507,7 @@ pub(super) async fn take_claim(
             "Failed to delete the marker of a prune claim that a filesystem snapshot delete lost"
         );
     }
-    Ok(false)
+    Ok(None)
 }
 
 /// Gives the time between two markers of a live claim: a fourth of the grace period, or a fourth
@@ -549,31 +550,26 @@ pub(super) async fn keep_claim_fresh(
         .await;
 }
 
-/// Deletes the claim with the number, and then its markers. A failure gives a warning, because a
-/// claim only delays a prune until its hold passed.
-pub(super) async fn release_claim(files: &SnapshotFiles, directory: &Path, number: u64) {
-    let released = async {
-        files
-            .delete("delete_claim", &directory.join(number.to_string()))
-            .await?;
-        let listed = files.list_below("list_claims", directory).await?;
-        stream::iter(listed.iter().filter(|blob| {
-            blob.path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(parse_claim_entry)
-                .is_some_and(|entry| matches!(entry, ClaimEntry::Marker(own, _) if own == number))
-        }))
-        .map(Ok)
-        .try_for_each(|blob| files.delete("delete_marker", &blob.path))
-        .await
-    };
-    if let Err(error) = released.await {
-        warn!(
-            error = %format!("{error:#}"),
-            "Failed to delete the prune claim of a filesystem snapshot scope"
-        );
-    }
+/// Deletes the claim with the number, and then its first marker by its path. It tries each delete
+/// also when the other one fails, and each failure gives a warning. A claim that stays without
+/// its marker is old, and a marker that stays only delays a prune until its hold passed.
+pub(super) async fn release_claim(
+    files: &SnapshotFiles,
+    directory: &Path,
+    number: u64,
+    marker: &Path,
+) {
+    let claim = directory.join(number.to_string());
+    stream::iter([("delete_claim", claim.as_path()), ("delete_marker", marker)])
+        .for_each(|(op_label, path)| async move {
+            if let Err(error) = files.delete(op_label, path).await {
+                warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to delete the prune claim of a filesystem snapshot scope"
+                );
+            }
+        })
+        .await;
 }
 
 /// Gives the claim directory of each listed path below the directory of all claims, other than the
@@ -938,8 +934,8 @@ mod tests {
         assert_eq!(
             (
                 directory.display().to_string(),
-                first,
-                again,
+                first.is_some(),
+                again.is_some(),
                 listed.len(),
                 listed.contains(&ClaimEntry::Claim(0)),
                 listed.contains(&ClaimEntry::Marker(0, now)),
