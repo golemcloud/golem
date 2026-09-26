@@ -436,6 +436,26 @@ jobs:
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # Host Go for `go test`/tooling. Components are built with the Go
+          # toolchain the CLI installs (cached below), not with this one.
+          go-version-file: sdks/go/golem/go.mod
+          cache-dependency-path: sdks/go/golem/go.sum
+
+      - name: Cache componentize-go toolchain
+        uses: actions/cache@v5
+        with:
+          # On first `golem build` of a Go component the CLI installs Golem's Go
+          # toolchain into this dir — hundreds of MB — and componentize-go caches
+          # its own binary next to it. Keyed on the pinned toolchain release
+          # (versions.rs) and the pinned componentize-go version (go.sum).
+          path: ~/.cache/componentize-go
+          key: componentize-go-${{ runner.os }}-${{ hashFiles('cli/golem-cli/src/versions.rs', 'sdks/go/golem/go.sum') }}
+          restore-keys: |
+            componentize-go-${{ runner.os }}-
+
       - name: Sync WIT dependencies
         run: cargo make wit
 
@@ -853,6 +873,93 @@ jobs:
         run: cargo test --all-features --doc
         working-directory: sdks/rust
 
+  build-golem-go:
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # Tracks the version pinned in the module (currently go 1.27.1); stock
+          # Go only — the SDK deliberately does not use TinyGo.
+          go-version-file: sdks/go/golem/go.mod
+          cache-dependency-path: sdks/go/golem/go.sum
+
+      # cargo-make drives the WIT dep sync and the go-bindgen-fixup step that the
+      # bindings regeneration runs. componentize-go itself is a pinned `go tool`
+      # (go.mod), so no wasm-tools / WASI SDK are needed here.
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-make: 'true'
+
+      # Regenerate the committed WIT bindings (syncs wit/deps first via the task's
+      # `wit` dependency) and fail if they drift from what's checked in — mirrors
+      # the "types are committed" gate the TS and Scala SDKs use.
+      - name: Regenerate Go WIT bindings
+        run: cargo make generate-sdk-go-bindings
+
+      - name: Verify Go WIT bindings are committed
+        run: |
+          if ! git diff --exit-code sdks/go/golem/internal/wit; then
+            echo "❌ sdks/go/golem/internal/wit differs from the committed version."
+            echo "Please run 'cargo make generate-sdk-go-bindings' and commit the result."
+            exit 1
+          fi
+
+      # Lint the hand-written package with golangci-lint (the standard Go
+      # meta-linter: govet, errcheck, ineffassign, staticcheck, unused + the
+      # doc-comment-form checks). Config + generated-code exclusions live in
+      # sdks/go/golem/.golangci.yml. The official action fetches a pinned binary
+      # and caches analysis — this replaces the host `go vet` step too, since its
+      # govet covers it (and the .golangci.yml exclusions handle the generated
+      # internal/wit bindings that forced the old vet flag workaround).
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # >= v2.13 is required: earlier releases are built with Go 1.26 and
+          # cannot parse the SDK's generic methods (a Go 1.27 feature).
+          version: v2.13.2
+          working-directory: sdks/go/golem
+
+      - name: Vet (wasip1)
+        working-directory: sdks/go/golem
+        run: GOOS=wasip1 GOARCH=wasm go vet -unsafeptr=false -composites=false .
+
+      - name: Build for wasip1
+        working-directory: sdks/go/golem
+        run: GOOS=wasip1 GOARCH=wasm go build ./...
+
+      - name: Run tests
+        working-directory: sdks/go/golem
+        run: go test ./...
+
+      # core and bridge are separate modules with their own go.mod, so the steps
+      # above do not reach them. core is the shared schema model and the one
+      # canonical-JSON implementation in Go; bridge is the external runtime.
+      # Neither builds for wasip1 — core is stdlib-only and bridge is an
+      # ordinary net/http client — so there is no wasm step for them.
+      - name: Lint core (golangci-lint)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          working-directory: sdks/go/core
+
+      - name: Run core tests
+        working-directory: sdks/go/core
+        run: go test ./...
+
+      - name: Lint bridge (golangci-lint)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          working-directory: sdks/go/bridge
+
+      - name: Run bridge tests
+        working-directory: sdks/go/bridge
+        run: go test ./...
+
   build-golem-ts:
     runs-on: blacksmith
     env:
@@ -1166,6 +1273,30 @@ jobs:
         if: matrix.chunk.needs-node
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
+
+      - name: Setup Go
+        if: matrix.chunk.needs-go
+        uses: actions/setup-go@v5
+        with:
+          # Host Go for tooling; components are built with the Go toolchain the
+          # CLI installs (cached below).
+          go-version-file: sdks/go/golem/go.mod
+          cache-dependency-path: sdks/go/golem/go.sum
+
+      - name: Cache componentize-go toolchain
+        if: matrix.chunk.needs-go
+        uses: actions/cache@v5
+        with:
+          # The CLI installs Golem's Go toolchain here on first build, next to
+          # componentize-go's own cached binary.
+          path: ~/.cache/componentize-go
+          key: componentize-go-${{ runner.os }}-${{ hashFiles('cli/golem-cli/src/versions.rs', 'sdks/go/golem/go.sum') }}
+          restore-keys: |
+            componentize-go-${{ runner.os }}-
+
+      - name: Install wasm-tools for Go components
+        if: matrix.chunk.needs-go
+        run: cargo binstall --force --locked wasm-tools@1.248.0
 
       - name: Remove any pre-existing WASMs
         run: find test-components -maxdepth 1 -name '*.wasm' -delete

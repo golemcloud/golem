@@ -16,7 +16,7 @@ use crate::app::template::AppTemplate;
 use crate::app::template::repo::TEMPLATES_DIR;
 use crate::app::template::snippet::{APP_MANIFEST_HEADER, DEP_ENV_VARS_DOC};
 use crate::fs;
-use crate::sdk_overrides::sdk_overrides;
+use crate::sdk_overrides::{GO_CORE_MODULE, GO_SDK_MODULE, sdk_overrides};
 use crate::versions;
 use anyhow::{anyhow, bail};
 use golem_common::base_model::application::ApplicationName;
@@ -103,6 +103,7 @@ enum Transform {
     RustSdk,
     ScalaSdk,
     MoonBitSdk,
+    GoSdk,
     ApplicationName,
 }
 
@@ -291,6 +292,7 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                             Transform::ManifestHints,
                             Transform::ApplicationName,
                             Transform::MoonBitSdk,
+                            Transform::GoSdk,
                         ]
                     }
                     (true, "package.json") => match ctx.template.language {
@@ -320,6 +322,7 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                         ]
                     }
                     (false, "package.json") => vec![Transform::TsSdk],
+                    (false, "go.mod") => vec![Transform::ComponentName, Transform::GoSdk],
                     (false, "Cargo.toml") => vec![Transform::ComponentName, Transform::RustSdk],
                     (false, "build.sbt") => vec![
                         Transform::ComponentName,
@@ -478,6 +481,24 @@ fn transform(
                     sdk_overrides.moonbit_sdk_build_path(),
                 );
             }
+            Transform::GoSdk => {
+                replacements.insert("GOLEM_GO_DEP_SDK_MODULE", GO_SDK_MODULE.to_string());
+                replacements.insert("GOLEM_GO_DEP_SDK_VERSION", sdk_overrides.go_sdk_dep());
+                replacements.insert("GOLEM_GO_DEP_CORE_MODULE", GO_CORE_MODULE.to_string());
+                // Locked to the guest SDK's version: the two are released
+                // together, so there is no compatibility question to answer.
+                replacements.insert("GOLEM_GO_DEP_CORE_VERSION", sdk_overrides.go_sdk_dep());
+                // Empty unless a local SDK checkout is being used.
+                replacements.insert("GOLEM_GO_DEP_SDK_REPLACE", sdk_overrides.go_sdk_replace());
+                replacements.insert(
+                    "GOLEM_GO_DEP_GO_VERSION",
+                    versions::build_tool::GO_MIN.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_GO_DEP_COMPONENTIZE_GO_VERSION",
+                    versions::go_dep::COMPONENTIZE_GO.to_string(),
+                );
+            }
             Transform::TsSdk => {
                 replacements.insert(
                     "GOLEM_TS_SDK_VERSION_OR_PATH",
@@ -610,7 +631,8 @@ fn transform_file_name(
     file_name: impl AsRef<str>,
 ) -> anyhow::Result<String> {
     Ok(transform(ctx, file_name, &[Transform::ComponentName])?
-        .replace("Cargo.toml._", "Cargo.toml"))
+        .replace("Cargo.toml._", "Cargo.toml")
+        .replace("go.mod._", "go.mod"))
 }
 
 fn transform_target_file_path(

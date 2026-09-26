@@ -1,0 +1,78 @@
+package golem:tool@0.1.0;
+
+/// Runtime-owned next-layer capabilities, independent of ambient tool dispatch.
+interface underlying {
+  use common.{tool-error};
+  use streams.{byte-stream-item};
+  use golem:core/types@2.0.0.{typed-schema-value};
+
+  variant underlying-error {
+    tool-error(tool-error),
+    protocol-error(string),
+    denied(string),
+    internal-error(string),
+    /// This call's explicit cancellation won terminal arbitration.
+    cancelled,
+    resource-exhausted(string),
+  }
+
+  resource underlying-tool {
+    /// Admits one call to the pinned next layer. Calls on this capability may
+    /// overlap. The stdout reader can be consumed before awaiting the result.
+    /// Invoking after the owning handler returned traps.
+    invoke: async func(
+      command-path: list<string>,
+      input: typed-schema-value,
+      stdin: option<stream<byte-stream-item>>,
+    ) -> tuple<own<underlying-invoke-result>, option<stream<byte-stream-item>>>;
+  }
+
+  resource underlying-invoke-result {
+    /// Returns the immutable terminal. Only one get may be outstanding.
+    get: async func() -> result<option<typed-schema-value>, underlying-error>;
+    /// Requests cancellation of this call only. Dropping this resource detaches
+    /// observation; it does not cancel work admitted by the runtime.
+    cancel: func();
+  }
+}
+
+/// Interface exported by components that provide tool middleware.
+interface tool-middleware-guest {
+  use common.{invocation-result, tool, tool-error, tool-middleware};
+  use streams.{byte-stream-item, tool-stdout-writer};
+  use underlying.{underlying-tool};
+  use golem:agent/common@2.0.0.{principal};
+  use golem:core/types@2.0.0.{typed-schema-value};
+
+  /// Enumerate every middleware definition exported by this component.
+  discover-tool-middlewares: func() -> result<list<tool-middleware>, tool-error>;
+
+  /// Look up one middleware definition by canonical name.
+  get-tool-middleware: func(name: string) -> result<tool-middleware, tool-error>;
+
+  /// Invoke one middleware layer around its runtime-bound next inner layer.
+  invoke-tool-middleware: async func(
+    middleware-name: string,
+    tool-name:       string,
+    tool-metadata:   tool,
+    parameters:      typed-schema-value,
+    command-path:    list<string>,
+    input:           typed-schema-value,
+    stdin:           option<stream<byte-stream-item>>,
+    stdout:          option<own<tool-stdout-writer>>,
+    principal:       principal,
+    wrapped:         underlying-tool,
+  ) -> result<invocation-result, tool-error>;
+}
+
+/// Runtime binding projection for invoking middleware exports from a component
+/// built against the unified agent guest world.
+world tool-middleware-runtime {
+  import golem:api/host@1.5.0;
+  import golem:agent/host@2.0.0;
+  import common;
+  import streams;
+  import host;
+  import underlying;
+  export tool-middleware-guest;
+}

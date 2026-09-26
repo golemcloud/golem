@@ -463,6 +463,10 @@ impl BridgeSdkTargetKind {
                 | GuestLanguage::Scala
                 | GuestLanguage::MoonBit,
             ) => false,
+            // Go generates agent clients in both modes. Guest tool clients are
+            // not generated yet.
+            (Self::Agent, _, GuestLanguage::Go) => true,
+            (Self::Tool, _, GuestLanguage::Go) => false,
         }
     }
 

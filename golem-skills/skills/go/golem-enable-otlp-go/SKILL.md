@@ -1,0 +1,155 @@
+---
+name: golem-enable-otlp-go
+description: "Enabling the OpenTelemetry (OTLP) exporter plugin for a Go Golem agent — exporting traces, logs, and metrics to an OTLP collector via golem.yaml. Use when the user asks to add observability, OpenTelemetry, OTLP, tracing, or metrics export to a Go Golem project."
+---
+
+# Enabling OpenTelemetry for a Go Agent
+
+The `golem-otlp-exporter` is a built-in plugin that exports agent telemetry (traces, logs, metrics) to any OTLP-compatible collector via OTLP/HTTP. It runs on the platform side (as an oplog processor), so enabling it is a **manifest concern** — the configuration is the same regardless of the agent's language. No plugin installation is needed; just enable it in `golem.yaml`.
+
+## Step 1 — Enable the Plugin in golem.yaml
+
+Add the plugin to the component (or agent) that should emit telemetry:
+
+```yaml
+components:
+  my-app:service:
+    plugins:
+      - name: golem-otlp-exporter
+        version: "1.5.0"
+        parameters:
+          endpoint: "http://localhost:4318"
+          signals: "traces,logs,metrics"
+```
+
+### Plugin Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `endpoint` | Yes | OTLP collector base URL (e.g., `http://localhost:4318`) |
+| `signals` | No | Comma-separated: `traces`, `logs`, `metrics`. Default: `traces` |
+| `headers` | No | Comma-separated `key=value` HTTP headers (e.g., `x-api-key=secret`) |
+| `service-name-mode` | No | `agent-id` (default) or `agent-type` |
+
+## Step 2 — Deploy
+
+```shell
+golem deploy --yes
+```
+
+After deployment, newly created agents from this component automatically send telemetry to the configured collector.
+
+## What Gets Exported
+
+### Traces
+
+Spans are created automatically for:
+- Agent invocations
+- RPC calls to other agents
+- Outgoing HTTP requests
+
+Trace and span IDs propagate from inbound HTTP requests (via code-first routes) and are included in outgoing HTTP request headers automatically.
+
+> **Custom spans:** the Rust SDK exposes a `golem::api::context` API (`start_span`, attributes, `current_context`) for creating your own spans in guest code. **The Go SDK does not currently expose a public wrapper for this** — the underlying `golem:api/context` bindings exist internally but are not part of the public Go API. Go agents get the automatic invocation/RPC/HTTP spans above; hand-authored custom spans are not available from Go yet.
+
+### Logs
+
+When `logs` is included in `signals`, all log output is forwarded to the OTLP collector. Use the standard library `log/slog` — the runtime routes it through the host logging channel and, in turn, to the collector. See the `golem-logging-go` skill for full logging guidance.
+
+```go
+import "log/slog"
+
+slog.Info("hello from Go")
+slog.Debug("this is a debug log entry", "step", 1)
+```
+
+### Metrics
+
+When `metrics` is included in `signals`, the following metrics are exported:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `golem_invocation_count` | Counter | Number of agent method invocations |
+| `golem_invocation_duration_ns` | Counter | Invocation duration |
+| `golem_invocation_fuel_consumed` | Counter | Fuel consumed by invocations |
+| `golem_invocation_pending_count` | Counter | Number of pending invocations |
+| `golem_host_call_count` | Counter | Number of internal host calls |
+| `golem_log_count` | Counter | Number of log entries emitted |
+| `golem_memory_initial_bytes` | Gauge | Initially allocated memory |
+| `golem_memory_total_bytes` | Gauge | Total allocated memory |
+| `golem_memory_growth_bytes` | Counter | Memory growth since start |
+| `golem_component_size_bytes` | Gauge | Component size in bytes |
+| `golem_error_count` | Counter | Number of recorded errors |
+| `golem_interruption_count` | Counter | Number of interrupt requests |
+| `golem_exit_count` | Counter | Number of process exit signals |
+| `golem_restart_count` | Counter | Number of times a fresh state was created |
+| `golem_resources_created` | Counter | Number of internal resources created |
+| `golem_resources_dropped` | Counter | Number of internal resources dropped |
+| `golem_resources_active` | Gauge | Number of active internal resources |
+| `golem_update_success_count` | Counter | Number of successful updates |
+| `golem_update_failure_count` | Counter | Number of failed updates |
+| `golem_transaction_committed` | Counter | Number of committed database transactions |
+| `golem_transaction_rolled_back` | Counter | Number of rolled back database transactions |
+| `golem_snapshot_size_bytes` | Counter | Snapshot size in bytes |
+| `golem_oplog_processor_lag` | Gauge | Oplog processor delivery lag |
+
+Each metric includes `service.name`, `golem.agent.id`, `golem.component.id`, and `golem.component.version` attributes.
+
+## Local Observability Stack
+
+The Golem repository includes a ready-made Docker Compose setup at `docker-examples/otlp-collector/`:
+
+```shell
+docker compose -f docker-examples/otlp-collector/docker-compose.yml up -d
+```
+
+This starts:
+- **OTel Collector** on port 4318 (OTLP/HTTP)
+- **Jaeger** on http://localhost:16686 (traces)
+- **Prometheus** on http://localhost:9090 (metrics)
+- **Loki** via Grafana (logs)
+- **Grafana** on http://localhost:3000 (admin/admin)
+
+Configure the plugin with `endpoint: "http://localhost:4318"` to use this stack.
+
+## Per-Environment Configuration
+
+Use presets to vary the endpoint across environments:
+
+```yaml
+components:
+  my-app:service:
+    plugins:
+      - name: golem-otlp-exporter
+        version: "1.5.0"
+        parameters:
+          endpoint: "http://localhost:4318"
+          signals: "traces,logs,metrics"
+    presets:
+      production:
+        pluginsMergeMode: replace
+        plugins:
+          - name: golem-otlp-exporter
+            version: "1.5.0"
+            parameters:
+              endpoint: "https://otel.prod.example.com:4318"
+              headers: "x-api-key={{ OTLP_API_KEY }}"
+              signals: "traces,logs,metrics"
+```
+
+Parameter values support Jinja-style `{{ VAR_NAME }}` substitution resolved against the host machine's environment variables at deploy time.
+
+## Key Points
+
+- **Built-in** — no `golem plugin register` needed, just add to `golem.yaml`.
+- **Deploy required** — run `golem deploy` after adding the plugin configuration.
+- Trace context propagates automatically through HTTP routes and RPC calls.
+- **Custom spans are not available from the Go SDK yet** — Go agents get automatic spans (invocation, RPC, outgoing HTTP) only.
+- Plugin can be activated/deactivated per agent with `golem agent activate-plugin` / `golem agent deactivate-plugin`.
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-logging-go` | Structured logging from Go agent code (forwarded when `logs` is enabled) |
+| `golem-manage-plugins` | General plugin installation model (manifest sections, CLI, priority, per-environment config) |

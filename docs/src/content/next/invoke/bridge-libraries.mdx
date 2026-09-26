@@ -2,7 +2,7 @@ import { Callout, Tabs } from "nextra/components"
 
 # Bridge Libraries
 
-Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates, Node.js TypeScript and Effect TypeScript npm packages, Scala sbt projects, and MoonBit modules that implement a fully typed client for specific agents.
+Bridge libraries let you invoke Golem agents from **non-Golem applications** in a type-safe way. Golem generates self-contained Rust crates, Node.js TypeScript and Effect TypeScript npm packages, Scala sbt projects, MoonBit modules, and Go modules that implement a fully typed client for specific agents.
 
 Methods without streams use the existing REST invocation API and remain compatible with previously generated clients. A method whose input or output contains a stream instead opens the public streaming WebSocket endpoint described below.
 
@@ -29,15 +29,18 @@ bridge:
   moonbit:
     external:
       agents: ReportAgent
+  go:
+    external:
+      agents: SyncAgent
 ```
 
-This will generate TypeScript packages for `InboxAgent` and `EscalationAgent`, an Effect-native TypeScript package for `WorkflowAgent`, a Rust crate for `AuditAgent`, a Scala sbt project for `BillingAgent`, and a MoonBit module for `ReportAgent`.
+This will generate TypeScript packages for `InboxAgent` and `EscalationAgent`, an Effect-native TypeScript package for `WorkflowAgent`, a Rust crate for `AuditAgent`, a Scala sbt project for `BillingAgent`, a MoonBit module for `ReportAgent`, and a Go module for `SyncAgent`.
 
 ## Using Bridge Libraries
 
 Once generated, you can use the bridge libraries like any other typed client. First configure the connection, then interact with agents:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { CounterAgent, configure } from 'counter-agent-client/counter-agent-client.js'
@@ -106,11 +109,46 @@ async fn main {
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+// go.mod requires golem.local/bridge/counter-agent-client and replaces it with
+// the generated directory.
+import (
+	"context"
+	"fmt"
+
+	"github.com/golemcloud/golem/sdks/go/bridge"
+	client "golem.local/bridge/counter-agent-client"
+)
+
+func run(ctx context.Context) error {
+	if err := bridge.Configure(bridge.Configuration{
+		Server: bridge.Local(), AppName: "bridgetest", EnvName: "local",
+	}); err != nil {
+		return err
+	}
+	c1, err := client.GetCounterAgent(client.CounterAgentId{Name: "c1"})
+	if err != nil {
+		return err
+	}
+	value, err := c1.Increment(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Println(value)
+	return nil
+}
+```
+</Tabs.Tab>
 </Tabs>
 
 ## Streaming Methods
 
 Generated clients preserve streams wherever they occur in a method's typed input or output, including nested values and multiple sibling streams. The examples below assume a `MediaAgent` with input-only `upload`, output-only `transcribe`, and mixed `transform` methods. The generated method names and parameter order follow the agent definition; there is no separate streaming method suffix.
+
+<Callout type="info">
+Go clients do not generate stream-bearing methods yet: generating a Go client for an agent that has one fails with an error naming the agent.
+</Callout>
 
 <Tabs items={["Rust", "TypeScript", "Effect TypeScript", "Scala", "MoonBit"]} storageKey="bridge-streaming-languages-effect">
 <Tabs.Tab>

@@ -78,6 +78,7 @@ Then broaden only as warranted:
 | Broad CLI behavior | Targeted `cargo-test-r` filters, then `cargo make cli-integration-tests` only if needed |
 | HTTP or gRPC endpoint behavior | Relevant endpoint tests; use the full HTTP/gRPC API suite for cross-cutting endpoint changes |
 | SDK behavior used by the platform | Relevant SDK tests plus only the platform tests that exercise the changed integration |
+| Go SDK (`sdks/go/golem/`) | `go test ./...` there; host-call paths only build under a generated app, so also build one — see the `sdk-development` skill |
 | CLI structured output/schema | `cargo test -p golem-cli cli_output_schema_ --lib` + `cargo make check-cli-output-schema` |
 | CLI JSON output affecting skill tests | Update and run affected skill harness tests/scenarios; run harness build/tests only if harness code or tests changed |
 
@@ -95,6 +96,7 @@ These are hard requirements when their inputs change:
 | TS SDK runtime bundle/WIT inputs | Build `@golemcloud/golem-ts-sdk`, then run `npx pnpm run build-agent-template` in `sdks/ts/` |
 | Scala guest runtime WIT/input | Regenerate `agent_guest.wasm` using the Scala SDK workflow |
 | Skill catalog (`golem-skills/skills/**`) | `cargo make generate-docs-skills` |
+| Go SDK WIT bindings (after a WIT change) | `cargo make generate-sdk-go-bindings` |
 | CLI output schema summary | `cargo make update-cli-output-schema-summary` |
 
 Review generated diffs and commit them with their source changes. Do not replace an owning generator with a hand edit.

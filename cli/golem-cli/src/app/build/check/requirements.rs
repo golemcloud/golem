@@ -39,12 +39,21 @@ pub enum ToolRequirementCheck {
     RustTargetInstalled {
         target: &'static str,
     },
+    /// The Go toolchain the CLI installs and builds Go components with.
+    GolemGoToolchain,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct TsConfigSettingRequirement {
     pub path: &'static [&'static str],
     pub expected_literal: Option<&'static str>,
+}
+
+/// Whether a missing or too old tool fails the build or is only reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolRequirementSeverity {
+    Required,
+    Recommended,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -54,6 +63,7 @@ pub struct ToolRequirement {
     pub check: ToolRequirementCheck,
     pub version_range: Option<VersionRange>,
     pub install_hint: &'static str,
+    pub severity: ToolRequirementSeverity,
 }
 
 const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
@@ -66,6 +76,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::RUSTC_MIN)),
         install_hint: "Install stable Rust using your system package manager or rustup (example: rustup install stable && rustup default stable)",
+        severity: ToolRequirementSeverity::Required,
     },
     ToolRequirement {
         key: "cargo",
@@ -76,6 +87,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::CARGO_MIN)),
         install_hint: "Cargo is installed together with a Rust toolchain",
+        severity: ToolRequirementSeverity::Required,
     },
     ToolRequirement {
         key: "rust-target-wasm32-wasip2",
@@ -85,6 +97,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         },
         version_range: None,
         install_hint: "Install the Rust target wasm32-wasip2 using your toolchain manager (for rustup: rustup target add wasm32-wasip2)",
+        severity: ToolRequirementSeverity::Required,
     },
 ];
 
@@ -98,6 +111,7 @@ const TYPESCRIPT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::NODE_MIN)),
         install_hint: "Install Node.js: https://nodejs.org/",
+        severity: ToolRequirementSeverity::Required,
     },
     ToolRequirement {
         key: "npm",
@@ -108,6 +122,7 @@ const TYPESCRIPT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::NPM_MIN)),
         install_hint: "npm is installed with Node.js",
+        severity: ToolRequirementSeverity::Required,
     },
 ];
 
@@ -126,6 +141,7 @@ const SCALA_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::JAVA_MIN)),
         install_hint: "Install Java 17 or newer: https://adoptium.net/",
+        severity: ToolRequirementSeverity::Required,
     },
     ToolRequirement {
         key: "sbt",
@@ -136,6 +152,7 @@ const SCALA_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         },
         version_range: None,
         install_hint: "Install sbt: https://www.scala-sbt.org/download/",
+        severity: ToolRequirementSeverity::Required,
     },
 ];
 
@@ -149,6 +166,7 @@ const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::MOON_MIN)),
         install_hint: "Install MoonBit toolchain: https://docs.moonbitlang.com",
+        severity: ToolRequirementSeverity::Required,
     },
     ToolRequirement {
         key: "wasm-tools",
@@ -159,6 +177,54 @@ const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::WASM_TOOLS_MIN)),
         install_hint: "Install wasm-tools: https://github.com/bytecodealliance/wasm-tools",
+        severity: ToolRequirementSeverity::Required,
+    },
+];
+
+// Go components are built with the Go toolchain the CLI installs (see
+// `crate::app::build::go_toolchain`), not with the developer's own `go`:
+// componentize-go needs runtime patches that upstream Go does not have. A host
+// Go is still what an IDE, `go test` and `go vet` use, so it is checked and
+// reported, but a build does not need it.
+const GO_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
+    ToolRequirement {
+        key: "golem-go-toolchain",
+        name: "Golem Go toolchain",
+        check: ToolRequirementCheck::GolemGoToolchain,
+        version_range: Some(VersionRange::at_least(versions::build_tool::GO_MIN)),
+        install_hint: concat!(
+            "The Golem CLI installs it on demand; building offline requires it to be installed \
+             already, or GOLEM_GO_TOOLCHAIN to point at a Go toolchain that has Golem's patches: ",
+            "https://github.com/golemcloud/go"
+        ),
+        severity: ToolRequirementSeverity::Required,
+    },
+    ToolRequirement {
+        key: "go",
+        name: "Go",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "go",
+            args: &["version"],
+        },
+        version_range: Some(VersionRange::at_least(versions::build_tool::GO_MIN)),
+        install_hint: concat!(
+            "The Golem CLI builds Go components with its own Go toolchain, so this is not \
+             required to build. Install Go 1.27.1 or newer for development (IDE, go test): ",
+            "https://go.dev/dl/"
+        ),
+        severity: ToolRequirementSeverity::Recommended,
+    },
+    // Used by the release preset's `wasm-tools strip` step.
+    ToolRequirement {
+        key: "wasm-tools",
+        name: "wasm-tools",
+        check: ToolRequirementCheck::CommandVersion {
+            command: "wasm-tools",
+            args: &["--version"],
+        },
+        version_range: Some(VersionRange::at_least(versions::build_tool::WASM_TOOLS_MIN)),
+        install_hint: "Install wasm-tools: https://github.com/bytecodealliance/wasm-tools",
+        severity: ToolRequirementSeverity::Required,
     },
 ];
 
@@ -168,6 +234,7 @@ pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [Tool
         GuestLanguage::TypeScript | GuestLanguage::Effect => TYPESCRIPT_TOOL_REQUIREMENTS,
         GuestLanguage::Scala => SCALA_TOOL_REQUIREMENTS,
         GuestLanguage::MoonBit => MOONBIT_TOOL_REQUIREMENTS,
+        GuestLanguage::Go => GO_TOOL_REQUIREMENTS,
     }
 }
 

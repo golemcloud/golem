@@ -1557,6 +1557,95 @@ async fn test_rust_counter() {
     }
 }
 
+/// End-to-end test for the Go SDK: creates a Go app from the composable counter
+/// template, adds a second agent package via the snapshotting template (proving
+/// the merged main.go barrel deploys and runs, not just compiles), then deploys
+/// and invokes methods on both agents against a live local server. This is the
+/// CLI-driven integration layer for the Go SDK — the wasi-touching RPC/host path
+/// only links and runs on wasm, so it is covered here rather than by `go test`.
+///
+/// Requires the Go toolchain + componentize-go on the PATH.
+#[test]
+#[timeout("15 minutes")]
+async fn test_go_counter() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+    let component_name = "counter:svc";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::COMPONENT_NAME,
+            component_name,
+            flag::TEMPLATE,
+            "go",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    // Compose a second agent (its own package) into the same component, so the
+    // merged main.go barrel is exercised at runtime.
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::COMPONENT_NAME,
+            component_name,
+            flag::TEMPLATE,
+            "go/snapshotting",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    // CounterAgent: increment -> 1, add 5 -> 6, value -> 6.
+    let counter = format!("CounterAgent(\"{}\")", Uuid::new_v4());
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &counter, "increment"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(!outputs.stderr_contains("error"));
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "1"]));
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &counter, "add", "5"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "6"]));
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &counter, "value"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "6"]));
+
+    // SessionAgent (from the snapshotting template): spend 10 -> 10, total -> 10.
+    // Invoking it at all proves the composed second package registered and runs.
+    let session = format!("SessionAgent(\"{}\")", Uuid::new_v4());
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &session, "spend", "10"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "10"]));
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &session, "total"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(["Invocation result", "10"]));
+}
+
 /// Builds a real Scala component and exercises streaming through both the
 /// direct guest ABI and native same-component agent RPC. This does not depend
 /// on generated cross-component bridges or public streaming bridge clients.
@@ -1814,6 +1903,156 @@ async fn test_scala_bridge_e2e() {
     assert!(
         stdout.contains("SCALA_BRIDGE_E2E_OK first=1 second=2"),
         "Scala bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
+}
+
+/// End-to-end test for the Go external bridge: deploys the Rust counter agent,
+/// generates a Go client for it, then builds and runs a small Go program that
+/// invokes the live agent through the generated client.
+#[test]
+#[timeout("10 minutes")]
+async fn test_go_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let bridge_root = ctx.cwd_path_join("go-bridge");
+    let outputs = ctx
+        .cli([
+            cmd::GENERATE_BRIDGE,
+            flag::LANGUAGE,
+            "go",
+            flag::AGENT_TYPE_NAME,
+            "CounterAgent",
+            flag::OUTPUT_DIR,
+            bridge_root.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let client_dir = bridge_root.join("counter-agent-client");
+    assert!(
+        client_dir.join("go.mod").exists(),
+        "generated Go bridge module is missing at {}",
+        client_dir.display()
+    );
+
+    // An ordinary Go program, requiring the generated client the way a user's
+    // would. A replace in a dependency's go.mod is ignored, so the program
+    // points the bridge runtime and core at this checkout itself.
+    let program_dir = ctx.cwd_path_join("go-e2e");
+    std::fs::create_dir_all(&program_dir).unwrap();
+    let sdks = workspace_path().join("sdks/go");
+    std::fs::write(
+        program_dir.join("go.mod"),
+        formatdoc! {r#"
+            module example.com/go-e2e
+
+            go {go}
+
+            require (
+            	golem.local/bridge/counter-agent-client v0.0.0
+            	github.com/golemcloud/golem/sdks/go/bridge v0.0.0
+            	github.com/golemcloud/golem/sdks/go/core v0.0.0
+            )
+
+            replace golem.local/bridge/counter-agent-client => {client}
+
+            replace github.com/golemcloud/golem/sdks/go/bridge => {bridge}
+
+            replace github.com/golemcloud/golem/sdks/go/core => {core}
+            "#,
+            go = versions::build_tool::GO_MIN,
+            client = client_dir.display(),
+            bridge = sdks.join("bridge").display(),
+            core = sdks.join("core").display(),
+        },
+    )
+    .unwrap();
+    let server_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+    std::fs::write(
+        program_dir.join("main.go"),
+        formatdoc! {r#"
+            package main
+
+            import (
+            	"context"
+            	"fmt"
+            	"log"
+
+            	"github.com/golemcloud/golem/sdks/go/bridge"
+            	client "golem.local/bridge/counter-agent-client"
+            )
+
+            func main() {{
+            	err := bridge.Configure(bridge.Configuration{{
+            		Server:  bridge.Custom("{server_url}", "{token}"),
+            		AppName: "{app_name}",
+            		EnvName: "local",
+            	}})
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	counter, err := client.GetCounterAgent(client.CounterAgentId{{Name: "go-e2e-counter"}})
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	ctx := context.Background()
+            	first, err := counter.Increment(ctx)
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	second, err := counter.Increment(ctx)
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d\n", first, second)
+            }}
+            "#
+        },
+    )
+    .unwrap();
+
+    let toolchain = golem_cli::app::build::go_toolchain::ensure_go_toolchain(
+        &golem_cli::model::app::ApplicationConfig {
+            offline: false,
+            dev_mode: false,
+            should_colorize: false,
+            enable_wasmtime_fs_cache: false,
+        },
+    )
+    .await
+    .expect("the Golem Go toolchain");
+    let output = std::process::Command::new(&toolchain.go)
+        .args(["run", "."])
+        .current_dir(&program_dir)
+        .env("GOTOOLCHAIN", "local")
+        .env("GOFLAGS", "-mod=mod")
+        .output()
+        .expect("go runs");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "go run failed in {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+        program_dir.display()
+    );
+    assert!(
+        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2"),
+        "Go bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
 }
 
@@ -3311,6 +3550,166 @@ async fn test_ts_tool_guest_bridge_e2e() {
     assert!(
         outputs.stdout_contains("ok:echo:hello"),
         "expected the TypeScript consumer to return the provider's echo result"
+    );
+}
+
+/// A Go component calling an agent in another component through the guest
+/// client `golem build` generates for it. Asserts that the CLI generated the
+/// client where the consumer's go.mod points, and that a call made through it
+/// reaches the provider and comes back.
+///
+/// The consumer calls straight after deploying, while the larger Rust provider
+/// may still be compiling. That call can outlast the executor's RPC idle
+/// window, so this also covers a Go caller being suspended mid-call and resumed
+/// with the result.
+#[test]
+#[tag(agents_guest_bridge)]
+#[timeout("15 minutes")]
+async fn test_go_agent_guest_bridge_e2e() {
+    let mut ctx = TestContext::new();
+    let app_name = "go-agent-bridge";
+
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    for (template, component_name) in [
+        ("rust", "go-agent-bridge:provider"),
+        ("go", "go-agent-bridge:consumer"),
+    ] {
+        let outputs = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                template,
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    merge_into_manifest(
+        &ctx.cwd_path_join("golem.yaml"),
+        indoc! {r#"
+            components:
+              go-agent-bridge:consumer:
+                dependencies:
+                  agents:
+                    - go-agent-bridge:provider/CounterAgent
+        "#},
+    )
+    .unwrap();
+
+    // The Go template brings its own CounterAgent, which would collide with the
+    // provider's; the consumer gets an agent of its own instead. The component
+    // directory, and so the Go module path, is whatever `golem new` chose, so
+    // it is read back rather than assumed.
+    let consumer = ctx.cwd_path_join("consumer");
+    let go_mod = consumer.join("go.mod");
+    let module = fs::read_to_string(&go_mod)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
+        .expect("the consumer's go.mod names its module");
+    fs::remove(consumer.join("agents/counter")).unwrap();
+    fs::write_str(
+        consumer.join("agents/consumer/consumer.go"),
+        indoc! {r#"
+            package consumer
+
+            import "github.com/golemcloud/golem/sdks/go/golem"
+
+            type ID struct{ Name string }
+
+            type IncrementProviderIn struct{ ProviderName string }
+
+            var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterConsumerAgent"})
+
+            var IncrementProvider = Agent.Method[IncrementProviderIn, string]("incrementProvider")
+        "#},
+    )
+    .unwrap();
+    fs::write_str(
+        consumer.join("agents/consumer/impl/impl.go"),
+        formatdoc! {r#"
+            package impl
+
+            import (
+            	"fmt"
+
+            	"{module}/agents/consumer"
+
+            	provider "golem.local/bridge/counter-agent-guest-client"
+
+            	"github.com/golemcloud/golem/sdks/go/golem"
+            )
+
+            type state struct{{}}
+
+            var agent = consumer.Agent.Implement(func(consumer.ID) *state {{ return &state{{}} }})
+
+            func init() {{
+            	agent.Handle(consumer.IncrementProvider, func(_ *golem.Context[state], in consumer.IncrementProviderIn) string {{
+            		counter := provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName}})
+            		return fmt.Sprintf("ok:%d", counter.Increment())
+            	}})
+            }}
+        "#},
+    )
+    .unwrap();
+    let main_go = consumer.join("main.go");
+    fs::write_str(
+        &main_go,
+        fs::read_to_string(&main_go).unwrap().replace(
+            &format!("{module}/agents/counter/impl"),
+            &format!("{module}/agents/consumer/impl"),
+        ),
+    )
+    .unwrap();
+
+    // As in every other SDK, the consumer names the generated client itself.
+    fs::write_str(
+        &go_mod,
+        fs::read_to_string(&go_mod).unwrap()
+            + indoc! {r#"
+
+                require golem.local/bridge/counter-agent-guest-client v0.0.0
+
+                replace golem.local/bridge/counter-agent-guest-client => ../golem-temp/bridge-sdk/go/internal/counter-agent-guest-client
+            "#},
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        ctx.cwd_path_join("golem-temp/bridge-sdk/go/internal/counter-agent-guest-client/client.go")
+            .exists(),
+        "golem build should generate the Go guest client where the consumer's go.mod points"
+    );
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let consumer_name = Uuid::new_v4().to_string();
+    let provider_name = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("CounterConsumerAgent(\"{consumer_name}\")"),
+            "incrementProvider",
+            &format!("\"{provider_name}\""),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("ok:1"),
+        "expected the Go consumer to return ok:1 through the generated guest client"
     );
 }
 
