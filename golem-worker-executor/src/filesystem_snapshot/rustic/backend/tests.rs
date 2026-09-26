@@ -775,8 +775,14 @@ fn a_cancelled_backend_makes_no_storage_call() {
 #[test]
 fn a_cancel_ends_a_call_that_runs() {
     let runtime = Runtime::new().unwrap();
-    let (storage, _gate, _dropped) =
-        holding_storage(Arc::new(InMemoryBlobStorage::new()), |_, _| true);
+    let held = CancellationToken::new();
+    let (storage, _gate, _dropped) = holding_storage(Arc::new(InMemoryBlobStorage::new()), {
+        let held = held.clone();
+        move |_, _| {
+            held.cancel();
+            true
+        }
+    });
     let cancel = CancellationToken::new();
     let backend = BlobBackend::new(
         storage,
@@ -786,7 +792,7 @@ fn a_cancel_ends_a_call_that_runs() {
     )
     .cancelled_by(cancel.clone());
     runtime.spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        held.cancelled().await;
         cancel.cancel();
     });
 
