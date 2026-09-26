@@ -2319,8 +2319,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             context: "generated".to_string(),
             message: "message".to_string(),
             trace_context: Some(LogTraceContext {
-                trace_id: TraceId::from_string("00112233445566778899aabbccddeeff".to_string())
-                    .unwrap(),
+                trace_id: TraceId::from_string("00112233445566778899aabbccddeeff").unwrap(),
                 span_id: SpanId::from_string("0123456789abcdef").unwrap(),
             }),
         }),

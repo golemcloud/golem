@@ -1292,28 +1292,28 @@ async fn partial_fanout_restart_replays_completed_child_repairs_pending_and_keep
     }
 
     for before in &before_crash {
-        if let PublicOplogEntry::Start(parameters) = &before.entry {
-            if parameters.function_name == "golem::entity::invoke" {
-                let after = oplog
-                    .iter()
-                    .find(|entry| entry.oplog_index == before.oplog_index)
-                    .expect("reconstruction retains the original entity Start");
-                let PublicOplogEntry::Start(after) = &after.entry else {
-                    panic!("reconstruction must preserve the entry kind");
-                };
-                let mut before = parameters.clone();
-                let mut after = after.clone();
-                // The public projection converts an attribute map into an unordered list.
-                for parameters in [&mut before, &mut after] {
-                    parameters
-                        .span_started
-                        .as_mut()
-                        .unwrap()
-                        .attributes
-                        .sort_by(|a, b| a.key.cmp(&b.key));
-                }
-                assert_eq!(after, before);
+        if let PublicOplogEntry::Start(parameters) = &before.entry
+            && parameters.function_name == "golem::entity::invoke"
+        {
+            let after = oplog
+                .iter()
+                .find(|entry| entry.oplog_index == before.oplog_index)
+                .expect("reconstruction retains the original entity Start");
+            let PublicOplogEntry::Start(after) = &after.entry else {
+                panic!("reconstruction must preserve the entry kind");
+            };
+            let mut before = parameters.clone();
+            let mut after = after.clone();
+            // The public projection converts an attribute map into an unordered list.
+            for parameters in [&mut before, &mut after] {
+                parameters
+                    .span_started
+                    .as_mut()
+                    .unwrap()
+                    .attributes
+                    .sort_by(|a, b| a.key.cmp(&b.key));
             }
+            assert_eq!(after, before);
         }
     }
 

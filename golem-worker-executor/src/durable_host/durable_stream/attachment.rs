@@ -298,7 +298,6 @@ impl DurableStreamStore {
         let key = match &record {
             StreamSessionRecord::AttachmentPrepared(record) => &record.key,
             StreamSessionRecord::AttachmentActivated(record) => &record.key,
-            StreamSessionRecord::AttachmentRenewed(record) => &record.key,
             StreamSessionRecord::AttachmentFinalized(record) => &record.key,
             _ => unreachable!("attachment persistence received a non-attachment record"),
         };
@@ -412,14 +411,12 @@ impl StreamAttachmentControl for DurableStreamStore {
         key: StreamAttachmentKey,
         now_millis: u64,
     ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
-        let lease_expires_at_millis = attachment_lease_expiry(now_millis)?;
         let outcome = self
             .persist_attachment_record(StreamSessionRecord::AttachmentActivated(
                 StreamAttachmentActivatedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     key: key.clone(),
                     activated_at_millis: now_millis,
-                    lease_expires_at_millis,
                 },
             ))
             .await?;
@@ -427,9 +424,6 @@ impl StreamAttachmentControl for DurableStreamStore {
         crate::metrics::durable_stream::record_attachment_operation(
             "activate",
             if replayed { "replayed" } else { "committed" },
-        );
-        crate::metrics::durable_stream::record_lease_remaining(
-            lease_expires_at_millis.saturating_sub(now_millis),
         );
         Ok(ProducerWriteOutcome {
             value: self.attachment_view(&key).await?,
@@ -446,41 +440,6 @@ impl StreamAttachmentControl for DurableStreamStore {
             return Err(StreamStoreError::InvalidAttachmentState);
         }
         Ok(view)
-    }
-
-    #[tracing::instrument(
-        name = "durable_stream.attachment.renew",
-        skip_all,
-        fields(attachment_id = %key.attachment_id.0, stream_id = %key.stream_id, epoch = key.epoch)
-    )]
-    async fn renew_attachment(
-        &self,
-        key: StreamAttachmentKey,
-        now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError> {
-        let lease_expires_at_millis = attachment_lease_expiry(now_millis)?;
-        let outcome = self
-            .persist_attachment_record(StreamSessionRecord::AttachmentRenewed(
-                StreamAttachmentRenewedRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    key: key.clone(),
-                    renewed_at_millis: now_millis,
-                    lease_expires_at_millis,
-                },
-            ))
-            .await?;
-        let replayed = outcome == AttachmentApplyOutcome::Replayed;
-        crate::metrics::durable_stream::record_attachment_operation(
-            "renew",
-            if replayed { "replayed" } else { "committed" },
-        );
-        crate::metrics::durable_stream::record_lease_remaining(
-            lease_expires_at_millis.saturating_sub(now_millis),
-        );
-        Ok(ProducerWriteOutcome {
-            value: self.attachment_view(&key).await?,
-            replayed,
-        })
     }
 
     #[tracing::instrument(
@@ -522,7 +481,7 @@ impl StreamAttachmentControl for DurableStreamStore {
 }
 
 impl DurableStreamStore {
-    /// Returns whether producer-side attachment state still needs periodic probing or renewal.
+    /// Returns whether producer-side attachments need inspection on load or deletion.
     pub async fn has_reconcilable_attachments(&self) -> bool {
         self.reconcilable_attachment_count.load(Ordering::Acquire) != 0
     }
@@ -930,7 +889,6 @@ impl DurableStreamStore {
     pub async fn reconcile_attachments_configured(
         &self,
         now_millis: u64,
-        renewal_target_millis: u64,
         batch_size: usize,
         probe: &(dyn StreamAttachmentConsumerProbe + Send + Sync),
     ) -> Result<usize, StreamStoreError> {
@@ -996,14 +954,11 @@ impl DurableStreamStore {
                 IndexedStreamAttachmentState::Prepared {
                     lease_expires_at_millis,
                     ..
-                }
-                | IndexedStreamAttachmentState::Active {
-                    lease_expires_at_millis,
-                    ..
                 } => crate::metrics::durable_stream::record_lease_remaining(
                     lease_expires_at_millis.saturating_sub(now_millis),
                 ),
-                IndexedStreamAttachmentState::Finalized { .. } => {}
+                IndexedStreamAttachmentState::Active { .. }
+                | IndexedStreamAttachmentState::Finalized { .. } => {}
             }
             let status = match probe.status(&attachment.key).await {
                 Ok(status) => status,
@@ -1060,17 +1015,6 @@ impl DurableStreamStore {
                         StreamAttachmentFinalizationReason::PrepareAbandoned,
                     ))
                 }
-                (
-                    IndexedStreamAttachmentState::Active {
-                        activated_at_millis,
-                        ..
-                    },
-                    ConsumerAttachmentStatus::Active,
-                ) if now_millis.saturating_sub(activated_at_millis)
-                    >= renewal_target_millis =>
-                {
-                    Some(ReconciliationAction::Renew)
-                }
                 (_, ConsumerAttachmentStatus::Deleting) => {
                     Some(ReconciliationAction::Finalize(
                         StreamAttachmentFinalizationReason::ConsumerDeleted,
@@ -1095,22 +1039,17 @@ impl DurableStreamStore {
                 }
             };
             let action = match (deleting, action) {
-                (true, Some(ReconciliationAction::Activate | ReconciliationAction::Renew)) => None,
+                (true, Some(ReconciliationAction::Activate)) => None,
                 (_, action) => action,
             };
             let action_outcome = match &action {
                 Some(ReconciliationAction::Activate) => "activated",
-                Some(ReconciliationAction::Renew) => "renewed",
                 Some(ReconciliationAction::Finalize(_)) => "finalized",
                 None => "unchanged",
             };
             let replayed = match action {
                 Some(ReconciliationAction::Activate) => self
                     .activate_attachment(attachment.key, now_millis)
-                    .await
-                    .map(|outcome| outcome.replayed),
-                Some(ReconciliationAction::Renew) => self
-                    .renew_attachment(attachment.key, now_millis)
                     .await
                     .map(|outcome| outcome.replayed),
                 Some(ReconciliationAction::Finalize(reason)) => self
@@ -1147,7 +1086,6 @@ impl DurableStreamStore {
 
 enum ReconciliationAction {
     Activate,
-    Renew,
     Finalize(StreamAttachmentFinalizationReason),
 }
 

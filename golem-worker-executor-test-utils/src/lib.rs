@@ -161,6 +161,7 @@ use golem_worker_executor::services::{
 };
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
+pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
     FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
@@ -1400,6 +1401,33 @@ impl TestWorkerExecutor {
     ) -> EntityReconstructionClaimGateHandle {
         self.additional_test_deps
             .gate_next_entity_reconstruction_claim(agent_id.clone())
+    }
+
+    /// Pauses the given agent's next replayed accessor-call admission whose function name ends
+    /// with `function_suffix`, at the given stage, until the returned handle is released.
+    pub fn gate_next_replay_access_admission(
+        &self,
+        agent_id: &AgentId,
+        function_suffix: &str,
+        stage: ReplayAdmissionStage,
+    ) -> ReplayAdmissionGateHandle {
+        self.additional_test_deps.gate_next_replay_access_admission(
+            agent_id.clone(),
+            function_suffix.to_string(),
+            stage,
+        )
+    }
+
+    /// Fires once the given agent's next direct (Store-holding) replay wait — a durable call
+    /// waiting for its recorded terminal, or a positional read of an expected marker entry —
+    /// whose function or expected marker name ends with `name_suffix` is reached.
+    pub fn signal_next_direct_replay_wait(
+        &self,
+        agent_id: &AgentId,
+        name_suffix: &str,
+    ) -> DirectReplayWaitSignalHandle {
+        self.additional_test_deps
+            .signal_next_direct_replay_wait(agent_id.clone(), name_suffix.to_string())
     }
 
     /// Drains a claimed reconstruction's recorded terminal, clamps the owner's replay cursor to
@@ -2665,6 +2693,7 @@ impl WorkerCtx for TestWorkerCtx {
             owner_execution,
             owner_resources,
             entity_reconstruction_claim_hook,
+            extra_deps.replay_admission_hook(worker_agent_id.clone()),
             filesystem_capability,
             executable,
             entity_activation,
@@ -4991,6 +5020,13 @@ pub struct AdditionalTestDeps {
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     entity_reconstruction_claim_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+    /// One-shot gates pausing an agent's next replayed accessor-call admission
+    /// for a matching function at a given stage, and one-shot signals fired when
+    /// a direct (Store-holding) durable call starts waiting for its replayed
+    /// resolution.
+    replay_admission_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
+    direct_replay_wait_signals:
+        Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
     agent_invocation_success_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<AgentInvocationSuccessGate>>>>,
     worker_deletion_hook: Arc<Mutex<Option<Arc<dyn WorkerDeletionHook>>>>,
@@ -5035,6 +5071,8 @@ impl AdditionalTestDeps {
             entity_body_start_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            replay_admission_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            direct_replay_wait_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             worker_deletion_hook: Arc::new(Mutex::new(None)),
             active_agents: Arc::new(std::sync::OnceLock::new()),
@@ -5210,6 +5248,57 @@ impl AdditionalTestDeps {
         })
             as Arc<
                 dyn golem_worker_executor::workerctx::EntityReconstructionClaimHook,
+            >)
+    }
+
+    fn gate_next_replay_access_admission(
+        &self,
+        agent_id: AgentId,
+        function_suffix: String,
+        stage: ReplayAdmissionStage,
+    ) -> ReplayAdmissionGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ReplayAdmissionGate {
+            function_suffix,
+            stage,
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        self.replay_admission_gates
+            .lock()
+            .unwrap()
+            .insert(agent_id, gate.clone());
+        ReplayAdmissionGateHandle { entered_rx, gate }
+    }
+
+    fn signal_next_direct_replay_wait(
+        &self,
+        agent_id: AgentId,
+        name_suffix: String,
+    ) -> DirectReplayWaitSignalHandle {
+        let (fired_tx, fired_rx) = tokio::sync::oneshot::channel();
+        let signal = Arc::new(DirectReplayWaitSignal {
+            name_suffix,
+            fired_tx: std::sync::Mutex::new(Some(fired_tx)),
+        });
+        self.direct_replay_wait_signals
+            .lock()
+            .unwrap()
+            .insert(agent_id, signal);
+        DirectReplayWaitSignalHandle { fired_rx }
+    }
+
+    fn replay_admission_hook(
+        &self,
+        agent_id: AgentId,
+    ) -> Option<Arc<dyn golem_worker_executor::workerctx::ReplayAdmissionHook>> {
+        Some(Arc::new(TestReplayAdmissionHook {
+            agent_id,
+            gates: self.replay_admission_gates.clone(),
+            signals: self.direct_replay_wait_signals.clone(),
+        })
+            as Arc<
+                dyn golem_worker_executor::workerctx::ReplayAdmissionHook,
             >)
     }
 
@@ -5704,6 +5793,114 @@ struct TestEntityInvocationBodyHook {
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     start_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     divergences: Arc<std::sync::Mutex<HashSet<AgentId>>>,
+}
+
+struct ReplayAdmissionGate {
+    function_suffix: String,
+    stage: ReplayAdmissionStage,
+    entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
+
+pub struct ReplayAdmissionGateHandle {
+    entered_rx: tokio::sync::oneshot::Receiver<()>,
+    gate: Arc<ReplayAdmissionGate>,
+}
+
+impl ReplayAdmissionGateHandle {
+    pub async fn entered(&mut self) {
+        (&mut self.entered_rx)
+            .await
+            .expect("the replay admission gate was dropped without firing");
+    }
+
+    pub fn release(&self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+impl Drop for ReplayAdmissionGateHandle {
+    fn drop(&mut self) {
+        self.gate.release.add_permits(1);
+    }
+}
+
+struct DirectReplayWaitSignal {
+    name_suffix: String,
+    fired_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<(String, OplogIndex)>>>,
+}
+
+pub struct DirectReplayWaitSignalHandle {
+    fired_rx: tokio::sync::oneshot::Receiver<(String, OplogIndex)>,
+}
+
+impl DirectReplayWaitSignalHandle {
+    /// Waits until a matching direct replay wait of the armed agent is reached, returning the
+    /// function or expected marker name and, for a durable call, its `Start` index
+    /// (`OplogIndex::NONE` for a positional marker read).
+    pub async fn fired(&mut self) -> (String, OplogIndex) {
+        (&mut self.fired_rx)
+            .await
+            .expect("the direct replay wait signal was dropped without firing")
+    }
+}
+
+struct TestReplayAdmissionHook {
+    agent_id: AgentId,
+    gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
+    signals: Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
+}
+
+#[async_trait]
+impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissionHook {
+    async fn before_replay_access_start(
+        &self,
+        function: &'static str,
+        stage: ReplayAdmissionStage,
+    ) {
+        let gate = {
+            let mut gates = self.gates.lock().unwrap();
+            let matches = gates.get(&self.agent_id).is_some_and(|gate| {
+                gate.stage == stage && function.ends_with(gate.function_suffix.as_str())
+            });
+            matches.then(|| gates.remove(&self.agent_id)).flatten()
+        };
+        if let Some(gate) = gate {
+            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+                let _ = entered_tx.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("replay admission gate was closed")
+                .forget();
+        }
+    }
+
+    fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex) {
+        self.fire_direct_replay_wait(function, start_index);
+    }
+
+    fn before_positional_replay_read(&self, expected: &str) {
+        self.fire_direct_replay_wait(expected, OplogIndex::NONE);
+    }
+}
+
+impl TestReplayAdmissionHook {
+    fn fire_direct_replay_wait(&self, name: &str, start_index: OplogIndex) {
+        let signal = {
+            let mut signals = self.signals.lock().unwrap();
+            let matches = signals
+                .get(&self.agent_id)
+                .is_some_and(|signal| name.ends_with(signal.name_suffix.as_str()));
+            matches.then(|| signals.remove(&self.agent_id)).flatten()
+        };
+        if let Some(signal) = signal
+            && let Some(fired_tx) = signal.fired_tx.lock().unwrap().take()
+        {
+            let _ = fired_tx.send((name.to_string(), start_index));
+        }
+    }
 }
 
 struct TestEntityReconstructionClaimHook {

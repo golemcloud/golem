@@ -173,7 +173,8 @@ where
 
     // Per-invocation HTTP call limit and monthly account-level HTTP call quota,
     // mirroring the P2 `http::outgoing_handler::handle` path. Both checks
-    // no-op during replay. Permission-denied calls are durably recorded below
+    // no-op during replay and for a send that may still adopt its retained
+    // recorded `Start`. Permission-denied calls are durably recorded below
     // without consuming quota.
     if !authorization_denied {
         store.with(|mut access| {
@@ -1691,6 +1692,189 @@ fn settle_send_terminal(
     }
 }
 
+struct SpawnHttpCleanupReplay<Ctx> {
+    replay_rx: oneshot::Receiver<Option<crate::durable_host::concurrent::HttpSpanCleanupReplay>>,
+    _phantom: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, DurableP3<Ctx>>
+    for SpawnHttpCleanupReplay<Ctx>
+{
+    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+        if let Ok(Some(replay)) = self.replay_rx.await {
+            accessor.spawn(replay);
+        }
+        Ok(())
+    }
+}
+
+/// A deterministic digest of a P3 send's serialized request head, used to discriminate the
+/// send's batched-write scope name among concurrent sends. Every field is length-prefixed and
+/// the headers are folded in sorted by name, so the digest does not depend on the `HashMap`
+/// iteration order (which is process-random and therefore differs between the recording run and
+/// a post-restart replay).
+pub(super) fn p3_send_request_discriminator(
+    request: &SerializableP3HttpClientSend,
+) -> Result<String, String> {
+    fn update(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+        hasher.update(&(bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+    let mut hasher = blake3::Hasher::new();
+    update(
+        &mut hasher,
+        &golem_common::serialization::serialize(&request.method)?,
+    );
+    update(
+        &mut hasher,
+        &golem_common::serialization::serialize(&request.scheme)?,
+    );
+    update(
+        &mut hasher,
+        &golem_common::serialization::serialize(&request.authority)?,
+    );
+    update(
+        &mut hasher,
+        &golem_common::serialization::serialize(&request.path_with_query)?,
+    );
+    let mut headers: Vec<(&String, &Vec<Vec<u8>>)> = request.headers.iter().collect();
+    headers.sort_by_key(|(name, _)| name.as_str());
+    for (name, values) in headers {
+        update(&mut hasher, name.as_bytes());
+        update(
+            &mut hasher,
+            &golem_common::serialization::serialize(values)?,
+        );
+    }
+    update(
+        &mut hasher,
+        &golem_common::serialization::serialize(&request.options)?,
+    );
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Finishes the send's derived `outgoing-http-request` span in memory.
+pub(super) async fn finish_p3_send_span<Ctx: WorkerCtx, U: 'static>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    span: &P3HttpSendSpan,
+) -> Result<(), WorkerExecutorError> {
+    store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        finish_span_in_memory(ctx, &span.span_id)
+    })
+}
+
+/// Finishes the send span synchronously at a live deferred-completion site.
+pub(super) fn finish_p3_send_span_in_memory<Ctx: WorkerCtx, U: 'static>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    span: &P3HttpSendSpan,
+) -> Result<(), WorkerExecutorError> {
+    store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        finish_span_in_memory(ctx, &span.span_id)
+    })
+}
+
+/// Everything needed to re-issue a recorded p3 `client::send` after a restart
+/// (the P3 counterpart of P2's `rebuild_request_after_replay`): the request
+/// head + options recorded in the send's `Start` payload (reconstructed
+/// deterministically from the guest-rebuilt request resource during replay)
+/// and the Golem-managed headers (`traceparent`/`tracestate`,
+/// `idempotency-key`) re-derived from recorded state — the replayed span and
+/// the send's own `Start` index — so the re-issued request is byte-identical
+/// to the original in every Golem-controlled aspect.
+///
+/// The request body is reconstructed from its durable frame recording when the request is re-issued.
+pub(super) fn outgoing_http_request_uri(request: &SerializableP3HttpClientSend) -> String {
+    let scheme = match request
+        .scheme
+        .as_ref()
+        .unwrap_or(&SerializableP3HttpScheme::Https)
+    {
+        SerializableP3HttpScheme::Http => "http",
+        SerializableP3HttpScheme::Https | SerializableP3HttpScheme::Other(_) => "https",
+    };
+    format!(
+        "{}://{}{}",
+        scheme,
+        request.authority.as_deref().unwrap_or(""),
+        request.path_with_query.as_deref().unwrap_or("")
+    )
+}
+
+/// Span attributes for the `outgoing-http-request` invocation-context span,
+/// mirroring the P2 `http::outgoing_handler::handle` span shape.
+pub(super) fn outgoing_http_request_span_attributes(
+    request: &SerializableP3HttpClientSend,
+) -> Vec<(String, AttributeValue)> {
+    let uri = outgoing_http_request_uri(request);
+    vec![
+        (
+            "name".to_string(),
+            AttributeValue::String("outgoing-http-request".to_string()),
+        ),
+        ("request.uri".to_string(), AttributeValue::String(uri)),
+        (
+            "request.method".to_string(),
+            AttributeValue::String(request.method.to_string()),
+        ),
+    ]
+}
+
+/// Computes the Golem-managed headers to inject into an outgoing p3 HTTP
+/// request via the shared policy (see `http::policy::golem_managed_http_headers`),
+/// using the send's own host-call `Start` index as the idempotency-key
+/// derivation point — stable across live execution and replay, so a retried
+/// send reuses the same key. `guest_headers` is the serialized request head
+/// used to detect a guest-provided idempotency key.
+pub(super) fn golem_outgoing_http_headers<Ctx: WorkerCtx, U: Send>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    span_id: &SpanId,
+    start_index: OplogIndex,
+    guest_headers: &HashMap<String, Vec<Vec<u8>>>,
+) -> Result<Vec<(String, String)>, WorkerExecutorError> {
+    store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        golem_managed_http_headers(
+            ctx,
+            span_id,
+            start_index,
+            guest_headers.contains_key("idempotency-key"),
+        )
+    })
+}
+
+/// Applies the injected headers to the actual request resource (replacing any
+/// existing values for the same names) so the network request carries them.
+/// The guest constructed the request with immutable headers, so they are
+/// briefly remarked mutable, mirroring the P2 injection.
+pub(super) fn apply_headers_to_request_resource<Ctx: WorkerCtx, U: Send>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    req: &Resource<Request>,
+    headers: &[(String, String)],
+) -> Result<(), WorkerExecutorError> {
+    if headers.is_empty() {
+        return Ok(());
+    }
+    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+    http_store.with(|mut access| {
+        let view = access.get();
+        let field_size_limit = view.ctx.field_size_limit;
+        let request = view
+            .table
+            .get_mut(&Resource::<wasmtime_wasi_http::p3::Request>::new_borrow(
+                req.rep(),
+            ))
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to get outgoing p3 HTTP request from table: {err}"
+                ))
+            })?;
+        apply_managed_http_headers(&mut request.headers, field_size_limit, headers)
+            .map_err(WorkerExecutorError::runtime)
+    })
+}
+
 #[cfg(test)]
 mod terminal_tests {
     use super::*;
@@ -1892,187 +2076,4 @@ mod terminal_tests {
             }
         }
     }
-}
-
-struct SpawnHttpCleanupReplay<Ctx> {
-    replay_rx: oneshot::Receiver<Option<crate::durable_host::concurrent::HttpSpanCleanupReplay>>,
-    _phantom: PhantomData<fn() -> Ctx>,
-}
-
-impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, DurableP3<Ctx>>
-    for SpawnHttpCleanupReplay<Ctx>
-{
-    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
-        if let Ok(Some(replay)) = self.replay_rx.await {
-            accessor.spawn(replay);
-        }
-        Ok(())
-    }
-}
-
-/// A deterministic digest of a P3 send's serialized request head, used to discriminate the
-/// send's batched-write scope name among concurrent sends. Every field is length-prefixed and
-/// the headers are folded in sorted by name, so the digest does not depend on the `HashMap`
-/// iteration order (which is process-random and therefore differs between the recording run and
-/// a post-restart replay).
-pub(super) fn p3_send_request_discriminator(
-    request: &SerializableP3HttpClientSend,
-) -> Result<String, String> {
-    fn update(hasher: &mut blake3::Hasher, bytes: &[u8]) {
-        hasher.update(&(bytes.len() as u64).to_le_bytes());
-        hasher.update(bytes);
-    }
-    let mut hasher = blake3::Hasher::new();
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.method)?,
-    );
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.scheme)?,
-    );
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.authority)?,
-    );
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.path_with_query)?,
-    );
-    let mut headers: Vec<(&String, &Vec<Vec<u8>>)> = request.headers.iter().collect();
-    headers.sort_by_key(|(name, _)| name.as_str());
-    for (name, values) in headers {
-        update(&mut hasher, name.as_bytes());
-        update(
-            &mut hasher,
-            &golem_common::serialization::serialize(values)?,
-        );
-    }
-    update(
-        &mut hasher,
-        &golem_common::serialization::serialize(&request.options)?,
-    );
-    Ok(hasher.finalize().to_hex().to_string())
-}
-
-/// Finishes the send's derived `outgoing-http-request` span in memory.
-pub(super) async fn finish_p3_send_span<Ctx: WorkerCtx, U: 'static>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    span: &P3HttpSendSpan,
-) -> Result<(), WorkerExecutorError> {
-    store.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        finish_span_in_memory(ctx, &span.span_id)
-    })
-}
-
-/// Finishes the send span synchronously at a live deferred-completion site.
-pub(super) fn finish_p3_send_span_in_memory<Ctx: WorkerCtx, U: 'static>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    span: &P3HttpSendSpan,
-) -> Result<(), WorkerExecutorError> {
-    store.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        finish_span_in_memory(ctx, &span.span_id)
-    })
-}
-
-/// Everything needed to re-issue a recorded p3 `client::send` after a restart
-/// (the P3 counterpart of P2's `rebuild_request_after_replay`): the request
-/// head + options recorded in the send's `Start` payload (reconstructed
-/// deterministically from the guest-rebuilt request resource during replay)
-/// and the Golem-managed headers (`traceparent`/`tracestate`,
-/// `idempotency-key`) re-derived from recorded state — the replayed span and
-/// the send's own `Start` index — so the re-issued request is byte-identical
-/// to the original in every Golem-controlled aspect.
-///
-/// The request body is reconstructed from its durable frame recording when the request is re-issued.
-pub(super) fn outgoing_http_request_uri(request: &SerializableP3HttpClientSend) -> String {
-    let scheme = match request
-        .scheme
-        .as_ref()
-        .unwrap_or(&SerializableP3HttpScheme::Https)
-    {
-        SerializableP3HttpScheme::Http => "http",
-        SerializableP3HttpScheme::Https | SerializableP3HttpScheme::Other(_) => "https",
-    };
-    format!(
-        "{}://{}{}",
-        scheme,
-        request.authority.as_deref().unwrap_or(""),
-        request.path_with_query.as_deref().unwrap_or("")
-    )
-}
-
-/// Span attributes for the `outgoing-http-request` invocation-context span,
-/// mirroring the P2 `http::outgoing_handler::handle` span shape.
-pub(super) fn outgoing_http_request_span_attributes(
-    request: &SerializableP3HttpClientSend,
-) -> Vec<(String, AttributeValue)> {
-    let uri = outgoing_http_request_uri(request);
-    vec![
-        (
-            "name".to_string(),
-            AttributeValue::String("outgoing-http-request".to_string()),
-        ),
-        ("request.uri".to_string(), AttributeValue::String(uri)),
-        (
-            "request.method".to_string(),
-            AttributeValue::String(request.method.to_string()),
-        ),
-    ]
-}
-
-/// Computes the Golem-managed headers to inject into an outgoing p3 HTTP
-/// request via the shared policy (see `http::policy::golem_managed_http_headers`),
-/// using the send's own host-call `Start` index as the idempotency-key
-/// derivation point — stable across live execution and replay, so a retried
-/// send reuses the same key. `guest_headers` is the serialized request head
-/// used to detect a guest-provided idempotency key.
-pub(super) fn golem_outgoing_http_headers<Ctx: WorkerCtx, U: Send>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    span_id: &SpanId,
-    start_index: OplogIndex,
-    guest_headers: &HashMap<String, Vec<Vec<u8>>>,
-) -> Result<Vec<(String, String)>, WorkerExecutorError> {
-    store.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        golem_managed_http_headers(
-            ctx,
-            span_id,
-            start_index,
-            guest_headers.contains_key("idempotency-key"),
-        )
-    })
-}
-
-/// Applies the injected headers to the actual request resource (replacing any
-/// existing values for the same names) so the network request carries them.
-/// The guest constructed the request with immutable headers, so they are
-/// briefly remarked mutable, mirroring the P2 injection.
-pub(super) fn apply_headers_to_request_resource<Ctx: WorkerCtx, U: Send>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    req: &Resource<Request>,
-    headers: &[(String, String)],
-) -> Result<(), WorkerExecutorError> {
-    if headers.is_empty() {
-        return Ok(());
-    }
-    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-    http_store.with(|mut access| {
-        let view = access.get();
-        let field_size_limit = view.ctx.field_size_limit;
-        let request = view
-            .table
-            .get_mut(&Resource::<wasmtime_wasi_http::p3::Request>::new_borrow(
-                req.rep(),
-            ))
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to get outgoing p3 HTTP request from table: {err}"
-                ))
-            })?;
-        apply_managed_http_headers(&mut request.headers, field_size_limit, headers)
-            .map_err(WorkerExecutorError::runtime)
-    })
 }

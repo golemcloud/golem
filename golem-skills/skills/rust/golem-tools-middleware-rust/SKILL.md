@@ -1,0 +1,36 @@
+---
+name: golem-tools-middleware-rust
+description: "Defines typed Golem tool middleware in Rust. Use for validation, policy, auditing, or adapting one tool surface to another."
+---
+
+# Tool middleware in Rust
+
+Annotate an implementation of a generated middleware trait with `#[tool_middleware]`. A transparent
+middleware presents and wraps the same tool:
+
+```rust
+use golem_rust::{tool::ToolInvokeError, tool_middleware};
+
+struct EchoPolicy;
+impl EchoPolicy { fn new() -> Self { Self } }
+
+#[tool_middleware(name = "echo-policy", constructor = EchoPolicy::new)]
+impl EchoMiddleware for EchoPolicy {
+    async fn echo(
+        &self,
+        underlying: &EchoUnderlying,
+        value: String,
+    ) -> Result<String, ToolInvokeError<std::convert::Infallible>> {
+        if value.is_empty() {
+            Err(ToolInvokeError::ConstraintViolation("value is empty".into()))
+        } else {
+            underlying.echo(value).await
+        }
+    }
+}
+```
+
+For an adapter, implement `PresentedMiddleware<ExpectedUnderlying>` and translate inputs, outputs,
+and custom errors explicitly. The supplied underlying handle is invocation-scoped: do not store it,
+return it, or use it after the middleware method finishes. Forward affine permission cards and
+streams exactly once.

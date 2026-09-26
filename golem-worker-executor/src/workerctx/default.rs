@@ -1004,6 +1004,7 @@ impl WorkerCtx for Context {
             owner_execution,
             owner_resources,
             None,
+            None,
             filesystem_capability,
             executable,
             entity_activation,

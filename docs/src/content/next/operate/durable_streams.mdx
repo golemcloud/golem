@@ -4,14 +4,17 @@ import { Callout } from "nextra/components"
 
 Streaming agent invocations use the same durability model as other durable agent work. Stream registrations, items, terminals, attachment epochs, consumer journals, and deletion barriers are committed to agent oplogs. Losing a CLI connection, worker process, executor, or service connection does not by itself cancel the invocation.
 
-## Configuration
+For the public URL family and wire contract, start with [Exposing Durable Streams over HTTP](/next/invoke/durable-streams).
+For agent code that reads or writes a Durable Streams service outside the invocation-session protocol, see [External Durable Streams](/next/develop/durable-streams).
+
+## Executor configuration
 
 Worker executors expose the protocol-v1 timing controls under `[durable_stream]`:
 
 ```toml
 [durable_stream]
+external_batch_max_size = "8388608 B"
 lease_ttl = "1m"
-renewal_interval = "20s"
 reconciliation_interval = "30s"
 reconciliation_batch_size = 256
 abandoned_prepare_after = "5m"
@@ -20,9 +23,82 @@ abandoned_prepare_after = "5m"
 live_stream_event_broadcast_capacity = 32
 ```
 
-The lease TTL and abandoned-prepare threshold are fixed in protocol v1. Renewal and reconciliation intervals may be shortened, but must be non-zero; renewal must remain below the TTL. The reconciliation batch size must be non-zero. The per-reader live buffer must be between 1 and 1024 events.
+`external_batch_max_size` is a configurable, non-zero limit for one complete external Durable Streams read or append payload; it defaults to 8 MiB. The prepared-attachment lease TTL and abandoned-prepare threshold are fixed in protocol v1. Active attachments do not expire or require renewal. `reconciliation_interval` is the non-zero delay before retrying unfinished or failed recovery, not a periodic check of healthy attachments. The reconciliation batch size must be non-zero. The per-reader live buffer must be between 1 and 1024 events.
 
 Other protocol-v1 limits are fixed: 16 MiB per logical value item, 1 MiB per packed-byte batch, 1024 streams per session, 256 newly discovered streams per value, recursive traversal depth 128, and 16 live readers per stream. A limit failure terminates or rejects the affected stream operation rather than silently truncating data.
+
+## Gateway configuration
+
+The worker service owns public HTTP request sizing, polling, admission, and fork limits:
+
+```toml
+[durable_streams]
+long_poll_timeout = "30s"
+max_append_body_bytes = 1048576
+
+[durable_streams.load]
+max_concurrent_readers_per_stream = 16
+max_concurrent_readers_per_node = 4096
+max_catch_up_requests_per_second_per_stream = 100
+max_append_requests_per_second_per_stream = 100
+
+[durable_streams.forks]
+max_forks_per_session = 128
+max_forks_per_second = 4
+max_copied_bytes = 67108864
+```
+
+| Setting | Scope and effect |
+| --- | --- |
+| `long_poll_timeout` | Maximum wait for one public long-poll request; an empty timeout returns `204`. |
+| `max_append_body_bytes` | Maximum HTTP append or fork-initialization body. Oversize returns `413`. JSON appends also have a fixed 4096-message limit. |
+| `load.max_concurrent_readers_per_stream` | Live long-poll/SSE readers admitted for one route and stream on one worker-service node. A route may override it from 1 through 16. |
+| `load.max_concurrent_readers_per_node` | Shared live-reader ceiling for the complete worker-service node. A route cannot override it. |
+| `load.max_catch_up_requests_per_second_per_stream` | Catch-up requests admitted per canonical stream on each node, in one-second windows. Routes resolving to the same stream share this budget. |
+| `load.max_append_requests_per_second_per_stream` | Append requests admitted for one route and stream on one node. A route may override it with a positive value. |
+| `forks.max_forks_per_session` | Durable source-session fork count; exhaustion returns `409`. |
+| `forks.max_forks_per_second` | Per-agent durable fork admission rate; exhaustion returns `429`. Zero disables admission with `409`. |
+| `forks.max_copied_bytes` | Maximum copied oplog prefix for one fork; exhaustion returns `413`. |
+
+Route overrides and gateway counters are local admission controls, not cluster-wide quotas. Two deployed routes that resolve to the same canonical stream have separate per-route reader and append accounting, but share the canonical stream's catch-up budget; every route also shares the node-wide reader ceiling. A request rejected by a route or node budget returns `429` with `Retry-After: 1`. Executor routing or shard unavailability returns `503` with `Retry-After`.
+
+Fork count, rate, and copy-byte enforcement is durable and executor-side even though the values are supplied by worker-service configuration. See [Forking Durable Streams](/next/develop/durable-stream-forks) for the protocol behavior.
+
+## Metrics
+
+Worker-service gateway metrics have no `golem_` prefix:
+
+- `durable_stream_load_rejection_total{reason}` counts per-stream reader, per-node reader, catch-up-rate, and append-rate rejections.
+- `durable_stream_append_total{outcome}` counts bounded append outcomes: `accepted`, `duplicate`, `fenced`, and `gap`.
+
+Worker-executor metrics describe durable production, consumption, and cross-agent attachments:
+
+| Metric | Meaning |
+| --- | --- |
+| `golem_durable_stream_lifecycle_total{event}` | Stream registrations and terminal transitions. |
+| `golem_durable_stream_open` | Open streams owned by producers loaded on this executor. |
+| `golem_durable_stream_producer_operation_total{operation,outcome}` | Durable producer commits and replay no-ops. |
+| `golem_durable_stream_catch_up_distance_events` | Events consumed before a durable reader joins the live tail. |
+| `golem_durable_stream_live_join_total{outcome}` | Live-tail join outcomes. |
+| `golem_durable_stream_active_readers` | Active durable live-tail readers on this executor. |
+| `golem_durable_stream_backpressure_total` | Fan-outs that waited for a full reader queue. |
+| `golem_durable_stream_attempt_total{operation,outcome}` | Session start, resume, and takeover outcomes. |
+| `golem_durable_stream_attachment_epoch` | Accepted attachment epochs. |
+| `golem_durable_stream_journal_lag_events` | Source events not yet recorded in the consumer journal. |
+| `golem_durable_stream_attachment_operation_total{operation,outcome}` | Prepare, activate, renew, and finalize attachment operations. |
+| `golem_durable_stream_lease_remaining_seconds` | Lease headroom when inspected or reconciled. |
+| `golem_durable_stream_reconciliation_total{outcome}` | Attachment reconciliation outcomes. |
+| `golem_durable_stream_cascade_total{outcome}` | Durable deletion-cascade outcomes. |
+| `golem_durable_stream_limit_violation_total{limit}` | Rejected executor session operations by fixed limit. |
+| `foreign_stream_fingerprint_mismatch_total` | Foreign-stream accesses rejected because the current agent fingerprint differs; this counter has no labels or `golem_` prefix. |
+
+See [Metrics](/next/operate/metrics) for scrape endpoints and exporter setup. Durable Stream spans include identifiers and bounded outcomes, but not stream values or credentials.
+
+## Retained history and capacity
+
+Manual stream deletion, session cancellation, and expiry are logical lifecycle transitions; they do not rewrite oplogs. Golem has no configurable stream-retention horizon. Items, terminals, consumer journals, fork cuts, producer state, and manual-delete tombstones remain in durable history until the owning agent data is deleted under the normal agent lifecycle.
+
+Plan storage for long-lived, high-volume streams and their forks. Forks share the copied logical prefix but still add target oplog records and independent continuation history. A manual tombstone reserves its stream URL for the life of that session. Session expiry hides the old URL family as `404` and allows a durable agent to bind the same public session ID to a fresh internal invocation; the old immutable history remains retained.
 
 ## Resume and takeover
 
@@ -39,17 +115,21 @@ The CLI does not retry automatically. Keep the checkpoint file private because i
 
 ## Attachments and leases
 
-Cross-agent streams create durable producer-to-consumer attachments. Their states are `Prepared`, `Active`, or `Finalized`. An expired lease is a reconciliation signal, not proof that the consumer disappeared: the reconciler probes the durable consumer journal and consumer incarnation before finalizing an attachment.
+Cross-agent streams create durable producer-to-consumer attachments. Their states are `Prepared`, `Active`, or `Finalized`. Prepared attachments have a deadline; active attachments remain valid without renewal. An expired prepare deadline is not proof that the consumer disappeared: reconciliation checks the durable consumer journal and consumer incarnation before finalizing an attachment.
+
+Recovery runs when a producer loads, after committed session changes or stream terminals, and before deletion. A read authorized by the exact active consumer topology also repairs a producer left prepared by a lost activation RPC. Healthy reads do not mutate attachment state. Once recovery completes, it waits for a lifecycle event; only unfinished or failed work gets a timed retry.
+
+Stale attachment bookkeeping can remain on a resident producer until its next load or deletion. Deletion reconciles dependencies before deciding whether it is safe. Finishing an invocation or forwarding a stream does not itself release history needed by another reader's replay or resume.
 
 Use the worker-executor metrics and traces to inspect attachment activity:
 
-- `golem_durable_stream_attachment_operation_total` shows prepare, activate, renew, and finalize commits or replay no-ops.
-- `golem_durable_stream_lease_remaining_seconds` shows observed lease headroom.
+- `golem_durable_stream_attachment_operation_total` shows prepare, activate, and finalize commits or replay no-ops.
+- `golem_durable_stream_lease_remaining_seconds` shows observed prepared-attachment lease headroom.
 - `golem_durable_stream_reconciliation_total` shows reconciler outcomes.
 - `golem_durable_stream_cascade_total` shows durable deletion-cascade outcomes.
 - `durable_stream.attachment.*` and `durable_stream.resume_attempt` OTLP spans carry attachment, stream, attempt, and epoch identifiers, but no stream values or credentials.
 
-See [Metrics](/next/operate/metrics) and [Logs](/next/operate/logs) for endpoint and exporter setup.
+See [Logs](/next/operate/logs) for tracing setup.
 
 The built-in OTLP exporter also emits `golem.durable_stream.event_count` from durable stream summaries. Its bounded `event` label distinguishes registration, aggregated items, stream end/cancellation, and session result/finish/cancellation/expiry; terminal summaries may use the bounded `outcome` label (`success` or `error`). Item counts are aggregated into the metric value. The exporter does not create one span or label value per streamed item and never exports item payloads through this summary.
 
@@ -105,8 +185,9 @@ These controls are gateway policy and remain compatible with the official Durabl
 - A custom media type changes HTTP negotiation for a direct `stream<u8>` but leaves offsets byte-based and content opaque. It must be a concrete non-text, non-JSON type with no parameters or wildcards. JSON-shaped streams remain `application/json`; native `text/plain` for `stream<string>` is rejected at deployment. SSE remains `text/event-stream` and carries byte data as base64.
 - Disabling `POST` or either `DELETE` operation narrows the protocol operations offered by that route. A disabled operation returns `405` and an exact `Allow` header without mutating stream or invocation state.
 - `max_concurrent_readers_per_stream` must be from 1 through 16 and applies to long-poll and SSE readers. `max_append_requests_per_second_per_stream` must be positive and requires external writes. Both override the worker-service defaults only for that deployed route; ordinary catch-up reads use their separate worker-service rate budget.
+- Fork creation is always present. There is no route-level fork opt-out.
 
-Route live-reader and append accounting is separate for each route and each worker-service node, including when two routes resolve to the same underlying canonical stream. The node-wide live-reader cap remains shared across routes. These controls are therefore admission protection, not cluster-wide quotas. Their exhaustion returns `429` with `Retry-After: 1`; routing, connectivity, or shard unavailability remains `503 Service Unavailable`.
+Route live-reader and append accounting is separate for each route and each worker-service node, including when two routes resolve to the same underlying canonical stream. Catch-up accounting is instead shared by routes that resolve to the same canonical stream. The node-wide live-reader cap remains shared across routes. These controls are therefore admission protection, not cluster-wide quotas. Their exhaustion returns `429` with `Retry-After: 1`; routing, connectivity, or shard unavailability remains `503 Service Unavailable`.
 
 ## Cancelling a session
 
@@ -147,7 +228,7 @@ Every stream deletion is a soft delete. After the successful deletion, authentic
 | `GET`, `HEAD`, `POST`, `DELETE` | `410 Gone`     |
 | `PUT`                        | `409 Conflict` |
 
-The tombstone and oplog history survive recovery; deleting a stream never removes its durable history. Because the URL remains reserved, it cannot be recreated at the same path. Create a new invocation session to obtain new stream URLs.
+The tombstone and oplog history survive recovery; deleting a stream never removes its durable history. The URL remains reserved for the lifetime of the existing session. See [Expiry](/next/invoke/durable-streams#expiry) for when the same public session ID can be reused for a new invocation.
 
 ## Deletion failures
 
@@ -161,6 +242,6 @@ Retry deletion after the consumer has durably journaled the stream terminal or a
 2. Check `golem_durable_stream_producer_operation_total` for replay no-ops. Replays after a lost response are expected and must not create additional logical items.
 3. Check catch-up distance, journal lag, live-reader backpressure, and attachment lease metrics. A growing catch-up distance indicates a recovering reader; sustained backpressure indicates a slow attached reader.
 4. Resume a detached client with its saved checkpoint. Use takeover only when intentionally fencing a still-attached client.
-5. For blocked deletion, let reconciliation run and retry. Investigate `probe_error`, `journal_error`, or `write_error` reconciliation outcomes before taking further action.
+5. For blocked deletion, resolve the reported dependency and retry; deletion itself runs reconciliation. Investigate `probe_error`, `journal_error`, or `write_error` reconciliation outcomes before taking further action. Waiting for a periodic attachment poll will not resolve a dependency.
 
 Never edit stream-related oplog entries. Registration identity and every offset are derived from committed oplog positions; rewriting that history can alias stream identity or lose journal evidence and is rejected by supported fork/revert operations.

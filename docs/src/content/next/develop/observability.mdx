@@ -33,7 +33,7 @@ With `agent-type`, `service.name` is the agent type only. Constructor parameters
 
 ### Custom spans
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Create custom spans using the `golem:api/context` interface:
 
@@ -44,6 +44,18 @@ With `agent-type`, `service.name` is the agent type only. Constructor parameters
         span.setAttribute('env', { tag: 'string', val: 'production' });
         // ... do work ...
         span.finish();
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The Effect SDK installs its Golem-backed tracer automatically. Use normal Effect spans:
+
+        ```typescript
+        import { Effect } from "effect"
+
+        const operation = Effect.gen(function* () {
+          yield* Effect.annotateCurrentSpan("env", "production")
+          // ... do work ...
+        }).pipe(Effect.withSpan("my-operation"))
         ```
     </Tabs.Tab>
     <Tabs.Tab>
@@ -104,6 +116,19 @@ const result = dc.traceSync(
   () => { return 42; },
   { method: 'GET', url: '/api/data' }
 );
+```
+
+For Effect TypeScript agents, prefer Effect's tracing APIs; the SDK wires them to Golem invocation context automatically. For host context details or W3C propagation headers, use `Tracing.currentContext` or `Tracing.traceContextHeaders`:
+
+```typescript
+import { Effect } from "effect"
+import { Tracing } from "@golemcloud/effect-golem"
+
+const context = Effect.gen(function* () {
+  const snapshot = yield* Tracing.currentContext
+  const headers = yield* Tracing.traceContextHeaders
+  return { snapshot, headers }
+})
 ```
 
 ### Logs

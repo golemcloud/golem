@@ -152,7 +152,7 @@ fn raw_log_trace_context_survives_wit_roundtrip() {
     for trace_context in [
         None,
         Some(LogTraceContext {
-            trace_id: TraceId::from_string("00112233445566778899aabbccddeeff".to_string()).unwrap(),
+            trace_id: TraceId::from_string("00112233445566778899aabbccddeeff").unwrap(),
             span_id: SpanId::from_string("0123456789abcdef").unwrap(),
         }),
     ] {

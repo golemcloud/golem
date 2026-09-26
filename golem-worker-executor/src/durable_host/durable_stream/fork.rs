@@ -2027,7 +2027,6 @@ mod tests {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     key: key.clone(),
                     activated_at_millis: 2,
-                    lease_expires_at_millis: 100,
                 }),
                 identity.environment_id,
                 &identity.agent_id,

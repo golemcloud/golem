@@ -215,6 +215,9 @@ impl HttpSpanCleanupRecorder {
                     replay_ended: false,
                 });
             }
+            ReplayStartClaimOutcome::StoreAlreadyLive => {
+                unreachable!("strict claims are never issued on behalf of a live Store")
+            }
         };
         let start_index = handle.start_idx();
         match self.replay.await_resolution_outcome(handle).await? {
@@ -1460,7 +1463,7 @@ pub(super) mod tests {
                 assert!(futures::poll!(cleanup.progress.clone()).is_pending());
                 tokio::task::yield_now().await;
             }
-            let (index, entry) = replay.get_oplog_entry().await.unwrap();
+            let (index, entry) = replay.get_oplog_entry(None).await.unwrap();
             assert_eq!(index, OplogIndex::from_u64(3));
             assert!(matches!(entry, OplogEntry::NoOp { .. }));
             assert!(matches!(

@@ -900,12 +900,12 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
         1,
         "recorded delivery must not be parked"
     );
-    let (index, _) = replay_state.get_oplog_entry().await.unwrap();
+    let (index, _) = replay_state.get_oplog_entry(None).await.unwrap();
     assert_eq!(index, idx(4));
     preparation.await.unwrap();
     assert_eq!(tracker.active_count(), 1);
     assert_eq!(replay_state.last_replayed_index(), idx(5));
-    let mut next = Box::pin(replay_state.get_oplog_entry());
+    let mut next = Box::pin(replay_state.get_oplog_entry(None));
     assert!(
         tokio::time::timeout(Duration::from_millis(20), next.as_mut())
             .await

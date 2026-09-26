@@ -19,7 +19,7 @@ use crate::model::card::{
     InvocationWalletPin, PublicInvocationWalletPin, WalletVersionToken,
 };
 use crate::model::component::PluginPriority;
-use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
+use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::lucene::Query;
 use crate::model::oplog::host_functions::HostFunctionName;
 use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
@@ -40,9 +40,9 @@ use crate::model::oplog::public_oplog_entry::{
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, AttributeMap, DurableFunctionType,
-    JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
-    OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
+    AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, JsonSnapshotData,
+    LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry,
+    OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicLocalSpanData,
@@ -161,7 +161,7 @@ fn log_trace_context_binary_and_raw_protobuf_roundtrip() {
         context: "request".to_string(),
         message: "handled".to_string(),
         trace_context: Some(LogTraceContext {
-            trace_id: TraceId::from_string("00112233445566778899aabbccddeeff".to_string()).unwrap(),
+            trace_id: TraceId::from_string("00112233445566778899aabbccddeeff").unwrap(),
             span_id: SpanId::from_string("0123456789abcdef").unwrap(),
         }),
     };

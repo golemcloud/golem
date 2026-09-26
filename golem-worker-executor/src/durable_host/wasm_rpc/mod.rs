@@ -3506,7 +3506,7 @@ async fn run_invoke<Ctx: WorkerCtx>(
             }
         };
 
-        let result: Result<(), InternalRpcError> = result.map_err(Into::into);
+        let result: Result<(), InternalRpcError> = result;
         let span_finished = rpc_span_finished(span.span_id(), &result);
         handle
             .complete_with_span(
@@ -3693,9 +3693,7 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
             .as_any_mut()
             .downcast_mut::<FutureInvokeResultState>()
             .unwrap();
-        *state = FutureInvokeResultState::Consumed {
-            span_id: Some(span_id.clone()),
-        };
+        *state = FutureInvokeResultState::Consumed;
         Ok::<_, anyhow::Error>(())
     })?;
     accessor.with(|mut access| invoke_and_await_response_to_wire(partial_result, access.get()))
@@ -3719,7 +3717,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
             /// The result is already known — a baked deterministic failure or a prior cancellation.
             Ready {
                 result: anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>>,
-                span_id: Option<SpanId>,
             },
             /// The single durable call is still open; drive it to its `End`. `request`,
             /// `remote_agent_id`, and `env` are carried so a replay that finds an incomplete `Start`
@@ -3753,32 +3750,29 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 .downcast_mut::<FutureInvokeResultState>()
                 .unwrap();
             Ok::<_, anyhow::Error>(match state {
-                FutureInvokeResultState::Consumed { span_id, .. } => GetPlan::Ready {
-                    result: Err(anyhow::Error::new(ClassifiedHostError {
-                        kind: HostFailureKind::Permanent,
-                        message: "future-invoke-result already consumed".to_string(),
-                    })),
-                    span_id: span_id.clone(),
-                },
-                FutureInvokeResultState::Baked { result } => {
-                    let result = future_invoke_task_result_to_get_result(result);
-                    *state = FutureInvokeResultState::Consumed { span_id: None };
+                FutureInvokeResultState::Consumed => {
+                    // The result was already consumed and its span already closed.
                     GetPlan::Ready {
-                        result: future_invoke_get_result_to_wire(result, ctx),
-                        span_id: None,
+                        result: Err(anyhow::Error::new(ClassifiedHostError {
+                            kind: HostFailureKind::Permanent,
+                            message: "future-invoke-result already consumed".to_string(),
+                        })),
                     }
                 }
-                FutureInvokeResultState::Cancelled { span_id } => {
+                FutureInvokeResultState::Baked { result } => {
+                    let result = future_invoke_task_result_to_get_result(result);
+                    *state = FutureInvokeResultState::Consumed;
+                    GetPlan::Ready {
+                        result: future_invoke_get_result_to_wire(result, ctx),
+                    }
+                }
+                FutureInvokeResultState::Cancelled => {
                     let rpc_error = InternalRpcError::ProtocolError {
                         details: "Invocation cancelled".to_string(),
                     };
-                    let span_id = Some(span_id.clone());
-                    *state = FutureInvokeResultState::Consumed {
-                        span_id: span_id.clone(),
-                    };
+                    *state = FutureInvokeResultState::Consumed;
                     GetPlan::Ready {
                         result: Ok(Err(rpc_error.into())),
-                        span_id,
                     }
                 }
                 FutureInvokeResultState::Active {
@@ -4030,9 +4024,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             .as_any_mut()
                             .downcast_mut::<FutureInvokeResultState>()
                             .unwrap();
-                        *state = FutureInvokeResultState::Consumed {
-                            span_id: Some(span_id.clone()),
-                        };
+                        *state = FutureInvokeResultState::Consumed;
                         Ok::<_, anyhow::Error>(())
                     })?;
                     std::future::pending::<()>().await;
@@ -4055,9 +4047,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             .as_any_mut()
                             .downcast_mut::<FutureInvokeResultState>()
                             .unwrap();
-                        *state = FutureInvokeResultState::Consumed {
-                            span_id: Some(span_id.clone()),
-                        };
+                        *state = FutureInvokeResultState::Consumed;
                         invoke_and_await_response_to_wire(response.result, ctx)
                     });
                     match finalize {
@@ -4089,9 +4079,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             .as_any_mut()
                             .downcast_mut::<FutureInvokeResultState>()
                             .unwrap();
-                        *state = FutureInvokeResultState::Consumed {
-                            span_id: Some(span_id.clone()),
-                        };
+                        *state = FutureInvokeResultState::Consumed;
                         Ok::<_, anyhow::Error>(())
                     })?;
                     let wire = accessor.with(|mut access| {
@@ -4153,8 +4141,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     },
                 },
                 FutureInvokeResultState::Baked { .. }
-                | FutureInvokeResultState::Cancelled { .. }
-                | FutureInvokeResultState::Consumed { .. } => DropPlan::Nothing,
+                | FutureInvokeResultState::Cancelled
+                | FutureInvokeResultState::Consumed => DropPlan::Nothing,
             })
         })?;
 
@@ -4240,9 +4228,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         let remote_agent_id = request.remote_agent_id.clone();
                         let idempotency_key = request.idempotency_key.clone();
                         let span_id = span_id.clone();
-                        *state = FutureInvokeResultState::Cancelled {
-                            span_id: span_id.clone(),
-                        };
+                        *state = FutureInvokeResultState::Cancelled;
                         CancelPlan::Cancel {
                             handle,
                             remote_agent_id,
@@ -4260,8 +4246,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     }
                 },
                 FutureInvokeResultState::Baked { .. }
-                | FutureInvokeResultState::Cancelled { .. }
-                | FutureInvokeResultState::Consumed { .. } => CancelPlan::Nothing,
+                | FutureInvokeResultState::Cancelled
+                | FutureInvokeResultState::Consumed => CancelPlan::Nothing,
             }
         };
 
@@ -4949,20 +4935,21 @@ struct DurableStreamingTaskParams {
 async fn await_streaming_rpc_acceptance(
     streams: &StreamSession,
     mut acceptance: tokio::sync::oneshot::Receiver<
-        Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
+        golem_api_grpc::proto::golem::worker::InvocationAccepted,
     >,
     invocation: impl std::future::Future<
         Output = Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>,
     >,
 ) -> Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError> {
     tokio::pin!(invocation);
-    let (mappings, result) = tokio::select! {
+    let (accepted, result) = tokio::select! {
         biased;
         result = &mut invocation => (acceptance.try_recv().ok(), Some(result)),
-        mappings = &mut acceptance => (mappings.ok(), None),
+        accepted = &mut acceptance => (accepted.ok(), None),
     };
-    if let Some(mappings) = mappings {
-        let mappings = mappings
+    if let Some(accepted) = accepted {
+        let mappings = accepted
+            .stream_mappings
             .into_iter()
             .map(durable_stream_mapping_from_proto)
             .collect::<Result<Vec<_>, _>>()
@@ -5448,7 +5435,7 @@ fn embedded_invocation_span_started(
         })
         .into_iter()
         .collect();
-    let started = SpanStarted {
+    SpanStarted {
         span_id: SpanId::generate(),
         trace_id: trace_id.clone(),
         trace_states: trace_states.to_vec(),
@@ -5461,8 +5448,7 @@ fn embedded_invocation_span_started(
         started_at: golem_common::model::Timestamp::now_utc(),
         attributes: AttributeMap(attributes),
         kind: SpanKind::Client,
-    };
-    started
+    }
 }
 
 fn restore_embedded_span<Ctx: WorkerCtx>(
@@ -5550,9 +5536,9 @@ enum FutureInvokeResultState {
     Baked { result: FutureInvokeTaskResult },
     /// The future was cancelled: its host call recorded a `Cancelled` and its span was finished.
     /// `get` returns a cancellation error without touching the oplog.
-    Cancelled { span_id: SpanId },
+    Cancelled,
     /// `get` already produced the result and finished the span; a second `get` traps.
-    Consumed { span_id: Option<SpanId> },
+    Consumed,
 }
 
 impl Debug for FutureInvokeResultState {
@@ -5560,8 +5546,8 @@ impl Debug for FutureInvokeResultState {
         match self {
             Self::Active { .. } => write!(f, "Active"),
             Self::Baked { .. } => write!(f, "Baked"),
-            Self::Cancelled { .. } => write!(f, "Cancelled"),
-            Self::Consumed { .. } => write!(f, "Consumed"),
+            Self::Cancelled => write!(f, "Cancelled"),
+            Self::Consumed => write!(f, "Consumed"),
         }
     }
 }

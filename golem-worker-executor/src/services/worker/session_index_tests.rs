@@ -1489,6 +1489,106 @@ fn completed(first: u64, finished: u64) -> DurableStreamSessionStatus {
 }
 
 #[test]
+async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions() {
+    use crate::durable_host::durable_stream::DurableStreamStore;
+    use golem_common::model::durable_stream::{
+        StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
+        StreamReaderForwardPublication,
+    };
+
+    let (service, kv, oplog_service) = service_with_oplog().await;
+    let owner = owned_agent("forward-reservation", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+    let source = session_key(&owner, &IdempotencyKey::new("source".into()));
+    let destination = session_key(&owner, &IdempotencyKey::new("destination".into()));
+    let prepared = prepared_with_reader(&owner, &source.idempotency_key);
+    let StreamSessionRecord::Prepared(record) = &prepared else {
+        unreachable!()
+    };
+    let mut binding = record.stream_mappings[0].clone();
+    binding.transport_stream_id = 37;
+    let introduction = append_session(oplog.as_ref(), prepared).await;
+    let reader = local_reader(introduction, 0);
+    let intent = StreamReaderForwardIntentRecord {
+        format_version: 1,
+        session_key: local_registration(&source),
+        reader_id: reader,
+        destination: StreamReaderForwardDestination::SessionBinding {
+            session_key: local_registration(&destination),
+            binding,
+            publication: StreamReaderForwardPublication::InvocationInput,
+        },
+    };
+    let index = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::ReaderForwardIntent(intent.clone()),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await;
+    let from_source = service
+        .lookup_durable_stream_control_metadata(
+            &owner,
+            AgentMode::Durable,
+            test_fingerprint(),
+            &source,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        from_source.reader_forward_intent(reader).unwrap(),
+        Some(&(index, intent.clone()))
+    );
+    assert!(from_source.incoming_reader_forwards().is_empty());
+    let producer = DurableStreamStore::load(
+        oplog,
+        owner.environment_id,
+        owner.agent_id.clone(),
+        source.callee_fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut local = SessionControlMetadata::default();
+    producer
+        .refresh_control_metadata(&destination, &mut local)
+        .await
+        .unwrap();
+    let reopened = DefaultWorkerService::new(
+        kv,
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service,
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let persisted = reopened
+        .lookup_durable_stream_control_metadata(
+            &owner,
+            AgentMode::Durable,
+            test_fingerprint(),
+            &destination,
+        )
+        .await
+        .unwrap();
+    assert_eq!(persisted, local);
+    assert_eq!(
+        persisted.incoming_reader_forwards().get(&index),
+        Some(&intent)
+    );
+    assert_eq!(persisted.next_reserved_transport_stream_id().unwrap(), 38);
+    assert!(
+        persisted
+            .recoverable_mappings_after(OplogIndex::NONE)
+            .mappings
+            .is_empty()
+    );
+    assert_eq!(persisted.topology_count(), 0);
+    assert!(
+        persisted.reader_forward_intent(reader).is_err(),
+        "destination must not acquire source reader authority"
+    );
+}
+
+#[test]
 async fn persisted_control_projection_reopens_without_history_and_catches_committed_suffix() {
     use crate::services::oplog::tests::ReadCountingIndexedStorage;
     let storage = Arc::new(ReadCountingIndexedStorage::new());
