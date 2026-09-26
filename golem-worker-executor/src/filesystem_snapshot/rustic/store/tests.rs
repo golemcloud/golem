@@ -19,7 +19,7 @@
 
 use super::super::files::SnapshotFiles;
 use super::super::prune::{
-    CLOCK_SKEW_MARGIN, LEDGERS_PATH, Percent, PruneLedger, count_freed, read_ledger,
+    CLOCK_SKEW_MARGIN, LEDGERS_PATH, Percent, PruneLedger, parse_freed, read_ledger,
 };
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
@@ -169,7 +169,7 @@ async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScop
     .unwrap()
 }
 
-/// Gives the sum of the records of freed bytes of the scope.
+/// Gives the sum of the bytes in the names of the records of freed bytes of the scope.
 async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) -> u64 {
     let listed = storage
         .list_blobs_below(
@@ -180,7 +180,10 @@ async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope
         )
         .await
         .unwrap();
-    count_freed(&listed).bytes
+    listed
+        .iter()
+        .filter_map(|blob| parse_freed(blob.path.file_name()?.to_str()?))
+        .fold(0, u64::saturating_add)
 }
 
 /// Waits until the condition holds, or until the limit ends. Gives whether the condition holds.
@@ -801,7 +804,7 @@ async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_per
     store.delete(&scope, &name("p-deleted")).await.unwrap();
     let after_first = ledger(&storage, &scope).await;
     let after_first_freed = freed(&storage, &scope).await;
-    // The margin for clock skew keeps the next prune back, so the ledger moves back by it.
+    // The margin for clock skew keeps the next prune back, so the ledger moves back.
     age_ledger(&storage, &scope, &after_first).await;
     store.delete(&scope, &name("p-none")).await.unwrap();
     let packs_after = blobs(&*storage, &scope.0, "data/").await;
@@ -856,17 +859,17 @@ async fn set_last_prune<S: BlobStorage + 'static>(
     .await;
 }
 
-/// Makes the ledger one entry with the marked packs of `ledger` and a time before it by the margin
-/// for clock skew.
+/// Makes the ledger one entry with the marked packs of `ledger` and a time before it by two hours,
+/// which is more than the grace period of each test and the margin for clock skew.
 async fn age_ledger<S: BlobStorage + 'static>(
     storage: &Arc<S>,
     scope: &SnapshotScope,
     ledger: &PruneLedger,
 ) {
-    let margin = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap();
+    let back = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap() + 2 * 3_600_000;
     let aged = ledger
         .last_prune
-        .map_or(0, |last| last.to_millis().saturating_sub(margin + 1));
+        .map_or(0, |last| last.to_millis().saturating_sub(back));
     storage
         .delete_dir("test", "test", scope.0.clone(), Path::new(LEDGERS_PATH))
         .await
@@ -1456,6 +1459,193 @@ async fn a_forget_that_fails_after_the_record_write_leaves_the_record() {
             listed_names(&store, &scope).await
         ),
         (true, vec!["p-1".to_string()])
+    );
+}
+
+/// Tells whether the call is the forget of a delete: the delete of a snapshot file.
+fn is_forget(op_label: &str, path: &Path) -> bool {
+    op_label == "delete" && path.starts_with("snapshots")
+}
+
+/// Gives the path of each record of freed bytes of the scope.
+async fn records(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> Vec<String> {
+    blobs(storage, &scope.0, "golem/prune-freed/").await
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_keeps_the_record_of_a_delete_that_has_not_forgotten_its_snapshot() {
+    // The first delete writes its record and waits at its forget. The second delete prunes and
+    // must not count that record. After the forget, the next due prune counts it.
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let plain = store(
+        inner.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&plain, &scope, &["p-1", "p-2"]).await;
+    let held = ScriptedBlobStorage::new(inner.clone(), |op_label, path| {
+        if is_forget(op_label, path) {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let pausing = store(
+        held.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let paused = tokio::spawn({
+        let scope = scope.clone();
+        async move { pausing.delete(&scope, &name("p-1")).await }
+    });
+    let at_forget = eventually(|| {
+        held.calls()
+            .iter()
+            .any(|(op_label, path)| is_forget(op_label, Path::new(path)))
+    })
+    .await;
+    let paused_record = records(&inner, &scope).await;
+
+    plain.delete(&scope, &name("p-2")).await.unwrap();
+    let after_prune = records(&inner, &scope).await;
+    let pruned = ledger(&inner, &scope).await;
+    age_ledger(&inner, &scope, &pruned).await;
+    held.open_gate();
+    let resumed = tokio::time::timeout(LIMIT, paused).await;
+
+    assert!(matches!(resumed, Ok(Ok(Ok(())))), "{resumed:?}");
+    assert_eq!(
+        (
+            at_forget,
+            paused_record.len(),
+            after_prune == paused_record,
+            pruned.last_prune.is_some(),
+            records(&inner, &scope).await,
+            ledger(&inner, &scope).await.last_prune > pruned.last_prune,
+        ),
+        (true, 1, true, true, Vec::<String>::new(), true)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_forget_that_lands_while_a_prune_runs_keeps_its_record_for_the_next_prune() {
+    // The prune of the second delete checks the records before the first delete forgets. The
+    // forget lands while that prune runs, so the record was not settled at the check, and it must
+    // stay for the next prune.
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let plain = store(
+        inner.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&plain, &scope, &["p-1", "p-2", "p-3"]).await;
+    let forgetting = ScriptedBlobStorage::new(inner.clone(), |op_label, path| {
+        if is_forget(op_label, path) {
+            Script::Step { refuse: false }
+        } else {
+            Script::Pass
+        }
+    });
+    let claimed = Arc::new(AtomicBool::new(false));
+    let pruning = ScriptedBlobStorage::new(inner.clone(), {
+        let claimed = claimed.clone();
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "list" && path == Path::new("data") && claimed.load(Ordering::SeqCst) {
+                Script::Step { refuse: false }
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let first = tokio::spawn({
+        let deleting = store(
+            forgetting.clone(),
+            policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+        );
+        let scope = scope.clone();
+        async move { deleting.delete(&scope, &name("p-1")).await }
+    });
+    let first_at_forget = eventually(|| forgetting.waiting_steps() > 0).await;
+    let first_record = records(&inner, &scope).await;
+    let second = tokio::spawn({
+        let deleting = store(
+            pruning.clone(),
+            policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+        );
+        let scope = scope.clone();
+        async move { deleting.delete(&scope, &name("p-2")).await }
+    });
+    let second_at_prune = eventually(|| pruning.waiting_steps() > 0).await;
+
+    forgetting.step();
+    let first = tokio::time::timeout(LIMIT, first).await;
+    pruning.step();
+    let second = tokio::time::timeout(LIMIT, second).await;
+    let after_prune = records(&inner, &scope).await;
+    let pruned = ledger(&inner, &scope).await;
+    age_ledger(&inner, &scope, &pruned).await;
+    plain.delete(&scope, &name("p-3")).await.unwrap();
+
+    assert!(matches!(first, Ok(Ok(Ok(())))), "{first:?}");
+    assert!(matches!(second, Ok(Ok(Ok(())))), "{second:?}");
+    assert_eq!(
+        (
+            first_at_forget,
+            second_at_prune,
+            first_record.len(),
+            after_prune == first_record,
+            pruned.last_prune.is_some(),
+            records(&inner, &scope).await,
+        ),
+        (true, true, 1, true, true, Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_record_whose_snapshot_still_exists_counts_nothing_and_does_not_make_a_prune_due() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        inner.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1"]).await;
+    let snapshot = snapshot_files(inner.clone(), &scope)
+        .await
+        .first()
+        .map(|snapshot| snapshot.id.to_hex().to_string())
+        .unwrap_or_default();
+    inner
+        .put_raw(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new("golem/prune-freed/1000000000-kept"),
+            snapshot.as_bytes(),
+        )
+        .await
+        .unwrap();
+
+    store.delete(&scope, &name("p-unknown")).await.unwrap();
+    store.delete(&scope, &name("p-unknown")).await.unwrap();
+
+    assert_eq!(
+        (
+            snapshot.len(),
+            ledger(&inner, &scope).await.last_prune,
+            records(&inner, &scope).await,
+        ),
+        (
+            64,
+            None,
+            vec!["golem/prune-freed/1000000000-kept".to_string()]
+        )
     );
 }
 
@@ -3179,6 +3369,8 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
                 "delete_ledger",
                 "refresh_claim",
                 "list_claim_directories",
+                "read_freed",
+                "list_snapshots",
             ]
             .contains(&op_label.as_str())
         })

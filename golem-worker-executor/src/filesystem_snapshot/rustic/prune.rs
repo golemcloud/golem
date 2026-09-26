@@ -28,6 +28,7 @@ use super::files::SnapshotFiles;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::warn;
@@ -235,11 +236,63 @@ pub(super) async fn remove_older_ledgers(files: &SnapshotFiles, ended: Timestamp
         .await;
 }
 
-/// The freed bytes of the records that a listing found, and the paths of the records it counted.
+/// The freed bytes of the settled records, and the paths of those records.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct FreedRecords {
     pub(super) bytes: u64,
     pub(super) counted: Box<[Box<Path>]>,
+}
+
+/// A record of freed bytes that a delete wrote: its path, the bytes in its name, and the ids of
+/// the snapshot files of that delete, when its content parses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct FreedRecord {
+    pub(super) path: Box<Path>,
+    pub(super) bytes: u64,
+    pub(super) snapshots: Option<Box<[String]>>,
+}
+
+/// The directory of the snapshot files of a repository.
+const SNAPSHOTS_PATH: &str = "snapshots";
+
+/// Gives the content of a record: the id of each snapshot file of the delete, one on each line.
+pub(super) fn record_content(snapshots: &[String]) -> String {
+    snapshots.join("\n")
+}
+
+/// Reads the snapshot ids from the content of a record. Each line must be an id of 64 hex
+/// characters, and an empty content has no id.
+pub(super) fn parse_record(content: &[u8]) -> Option<Box<[String]>> {
+    let text = std::str::from_utf8(content).ok()?;
+    text.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            (line.len() == 64 && line.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                .then(|| line.to_string())
+        })
+        .collect()
+}
+
+/// Gives the settled records and the sum of their bytes. A record is settled when none of its
+/// snapshot files exists. Any other record counts as zero bytes and stays, and so does a record
+/// whose content does not parse.
+pub(super) fn settle(records: &[FreedRecord], existing: &HashSet<String>) -> FreedRecords {
+    let settled = records
+        .iter()
+        .filter(|record| {
+            record
+                .snapshots
+                .as_ref()
+                .is_some_and(|snapshots| snapshots.iter().all(|id| !existing.contains(id)))
+        })
+        .collect::<Box<[_]>>();
+    FreedRecords {
+        bytes: settled
+            .iter()
+            .map(|record| record.bytes)
+            .fold(0, u64::saturating_add),
+        counted: settled.iter().map(|record| record.path.clone()).collect(),
+    }
 }
 
 /// Reads the freed bytes from the name of a record, `<bytes>-<unique part>`.
@@ -251,38 +304,54 @@ pub(super) fn parse_freed(name: &str) -> Option<u64> {
     bytes.parse().ok()
 }
 
-/// Sums the freed bytes of the listed records. A record whose name does not parse counts as zero
-/// bytes, and it is not counted, so a prune leaves it in place.
-pub(super) fn count_freed(listed: &[ListedBlob]) -> FreedRecords {
-    let parsed = listed
+/// Writes a record of the freed bytes of one delete, with the ids of its snapshot files.
+pub(super) async fn record_freed(
+    files: &SnapshotFiles,
+    bytes: u64,
+    snapshots: &[String],
+) -> anyhow::Result<()> {
+    let path = Path::new(FREED_PATH).join(format!("{bytes}-{}", uuid::Uuid::new_v4()));
+    files
+        .put("write_freed", &path, record_content(snapshots).as_bytes())
+        .await
+}
+
+/// Lists and reads the records of freed bytes, lists the snapshot files one time, and gives the
+/// settled records. A name that does not parse counts as zero bytes and stays, and a record that
+/// a prune deleted after the listing is left out. Without records, no snapshot file is listed.
+pub(super) async fn list_freed(files: &SnapshotFiles) -> anyhow::Result<FreedRecords> {
+    let listed = files
+        .list_below("list_freed", Path::new(FREED_PATH))
+        .await?;
+    let named = listed
         .iter()
         .filter_map(|blob| {
             let bytes = parse_freed(blob.path.file_name()?.to_str()?)?;
-            Some((bytes, blob.path.clone()))
+            Some((bytes, &blob.path))
         })
         .collect::<Box<[_]>>();
-    FreedRecords {
-        bytes: parsed
-            .iter()
-            .map(|(bytes, _)| *bytes)
-            .fold(0, u64::saturating_add),
-        counted: parsed.iter().map(|(_, path)| path.clone()).collect(),
+    if named.is_empty() {
+        return Ok(FreedRecords::default());
     }
-}
-
-/// Writes a record of the freed bytes of one delete.
-pub(super) async fn record_freed(files: &SnapshotFiles, bytes: u64) -> anyhow::Result<()> {
-    let path = Path::new(FREED_PATH).join(format!("{bytes}-{}", uuid::Uuid::new_v4()));
-    files.put("write_freed", &path, &[]).await
-}
-
-/// Lists the records of freed bytes, and sums them.
-pub(super) async fn list_freed(files: &SnapshotFiles) -> anyhow::Result<FreedRecords> {
-    Ok(count_freed(
-        &files
-            .list_below("list_freed", Path::new(FREED_PATH))
-            .await?,
-    ))
+    let records = stream::iter(named.iter())
+        .then(|(bytes, path)| async move {
+            let content = files.get("read_freed", path).await?;
+            Ok::<_, anyhow::Error>(content.map(|content| FreedRecord {
+                path: (*path).clone(),
+                bytes: *bytes,
+                snapshots: parse_record(&content),
+            }))
+        })
+        .try_filter_map(|record| std::future::ready(Ok(record)))
+        .try_collect::<Vec<_>>()
+        .await?;
+    let existing = files
+        .list_below("list_snapshots", Path::new(SNAPSHOTS_PATH))
+        .await?
+        .iter()
+        .filter_map(|blob| Some(blob.path.file_name()?.to_str()?.to_string()))
+        .collect::<HashSet<_>>();
+    Ok(settle(&records, &existing))
 }
 
 /// Deletes the counted records after a prune. A failure gives a warning, because a record that
@@ -496,11 +565,11 @@ fn parse_claim(content: &[u8]) -> Option<Timestamp> {
 mod tests {
     use super::super::files::SnapshotFiles;
     use super::{
-        CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, FREED_PATH, FreedRecords, LEDGERS_PATH,
-        ListedClaim, Percent, PruneLedger, claim_directories_except, claims_directory, count_freed,
-        keep_claim_fresh, list_claims, list_freed, needs_repository_size, newest_ledger,
-        next_claim, older_entries, parse_freed, parse_ledger_entry, prune_due, read_ledger,
-        record_freed, take_claim, write_ledger,
+        CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, FREED_PATH, FreedRecord, FreedRecords,
+        LEDGERS_PATH, ListedClaim, Percent, PruneLedger, claim_directories_except,
+        claims_directory, keep_claim_fresh, list_claims, list_freed, needs_repository_size,
+        newest_ledger, next_claim, older_entries, parse_freed, parse_ledger_entry, parse_record,
+        prune_due, read_ledger, record_content, record_freed, settle, take_claim, write_ledger,
     };
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
@@ -887,28 +956,59 @@ mod tests {
     }
 
     #[test]
-    fn the_records_that_parse_are_summed_and_counted_and_the_others_stay() {
-        let blob = |name: &str| ListedBlob {
+    fn a_record_counts_only_when_each_of_its_snapshot_files_is_gone() {
+        let id = |digit: char| std::iter::repeat_n(digit, 64).collect::<String>();
+        let record = |name: &str, bytes: u64, snapshots: Option<Vec<String>>| FreedRecord {
             path: Path::new(FREED_PATH).join(name).into(),
-            size: 0,
+            bytes,
+            snapshots: snapshots.map(Vec::into_boxed_slice),
         };
+        let existing = [id('b')].into_iter().collect();
 
-        let records = count_freed(&[
-            blob("5-a"),
-            blob("not-a-count"),
-            blob(&format!("{}-b", u64::MAX)),
-            blob("7"),
-        ]);
+        let settled = settle(
+            &[
+                record("5-gone", 5, Some(vec![id('a')])),
+                record("7-kept", 7, Some(vec![id('a'), id('b')])),
+                record("11-empty", 11, Some(Vec::new())),
+                record("13-bad", 13, None),
+                record(&format!("{}-max", u64::MAX), u64::MAX, Some(vec![id('c')])),
+            ],
+            &existing,
+        );
 
         assert_eq!(
-            records,
+            settled,
             FreedRecords {
                 bytes: u64::MAX,
                 counted: Box::new([
-                    Path::new(FREED_PATH).join("5-a").into(),
-                    Path::new(FREED_PATH).join(format!("{}-b", u64::MAX)).into(),
+                    Path::new(FREED_PATH).join("5-gone").into(),
+                    Path::new(FREED_PATH).join("11-empty").into(),
+                    Path::new(FREED_PATH)
+                        .join(format!("{}-max", u64::MAX))
+                        .into(),
                 ]),
             }
+        );
+    }
+
+    #[test]
+    fn the_content_of_a_record_holds_one_snapshot_id_on_each_line() {
+        let id = |digit: char| std::iter::repeat_n(digit, 64).collect::<String>();
+        let ids = [id('a'), id('b')];
+
+        assert_eq!(
+            [
+                parse_record(record_content(&ids).as_bytes()),
+                parse_record(b""),
+                parse_record(b"not an id"),
+                parse_record(&[0xff, 0xfe]),
+            ],
+            [
+                Some(Box::new(ids.clone()) as Box<[String]>),
+                Some(Box::new([]) as Box<[String]>),
+                None,
+                None
+            ]
         );
     }
 
@@ -916,8 +1016,8 @@ mod tests {
     async fn a_record_of_freed_bytes_is_written_and_listed() {
         let files = new_files();
 
-        record_freed(&files, 40).await.unwrap();
-        record_freed(&files, 2).await.unwrap();
+        record_freed(&files, 40, &[]).await.unwrap();
+        record_freed(&files, 2, &[]).await.unwrap();
         let listed = list_freed(&files).await.unwrap();
 
         assert_eq!((listed.bytes, listed.counted.len()), (42, 2));

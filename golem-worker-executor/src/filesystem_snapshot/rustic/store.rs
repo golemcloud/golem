@@ -590,7 +590,13 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         // earlier.
         let files = self.files(scope, &token);
         if freed > 0 {
-            record_freed(&files, freed).await.map_err(storage_failure)?;
+            let snapshots = ids
+                .iter()
+                .map(|id| id.to_hex().to_string())
+                .collect::<Box<[_]>>();
+            record_freed(&files, freed, &snapshots)
+                .await
+                .map_err(storage_failure)?;
         }
         self.blocking(Operation::Repository, move || {
             repository.delete_snapshots(&ids)?;
