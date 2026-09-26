@@ -477,8 +477,29 @@ pub(super) async fn list_claims(
         .collect())
 }
 
-/// Writes a marker of the claim with the number, with the time, and gives its path. The name is
-/// unique, so `AlreadyExists` means that an earlier try of this call wrote it.
+/// Gives a new path of a marker of the claim with the number, with the time. The name is unique.
+pub(super) fn marker_path(directory: &Path, number: u64, time: Timestamp) -> Box<Path> {
+    directory
+        .join(format!(
+            "{number}@{}-{}",
+            time.to_millis(),
+            uuid::Uuid::new_v4()
+        ))
+        .into_boxed_path()
+}
+
+/// Writes the marker at the path. The name is unique, so `AlreadyExists` means that an earlier try
+/// of this call wrote it.
+async fn write_marker_at(
+    files: &SnapshotFiles,
+    op_label: &'static str,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let _: PutIfAbsent = files.put_if_absent(op_label, path, &[]).await?;
+    Ok(())
+}
+
+/// Writes a marker of the claim with the number, with the time, and gives its path.
 pub(super) async fn write_marker(
     files: &SnapshotFiles,
     op_label: &'static str,
@@ -486,13 +507,9 @@ pub(super) async fn write_marker(
     number: u64,
     time: Timestamp,
 ) -> anyhow::Result<Box<Path>> {
-    let path = directory.join(format!(
-        "{number}@{}-{}",
-        time.to_millis(),
-        uuid::Uuid::new_v4()
-    ));
-    let _: PutIfAbsent = files.put_if_absent(op_label, &path, &[]).await?;
-    Ok(path.into_boxed_path())
+    let path = marker_path(directory, number, time);
+    write_marker_at(files, op_label, &path).await?;
+    Ok(path)
 }
 
 /// Writes a marker of the claim with the number, and moves the end of the lease to `span` after
@@ -511,30 +528,34 @@ async fn write_leased_marker(
     Ok(marker)
 }
 
-/// Writes the first marker of the claim with the number, then takes the claim, and gives the path
-/// of that marker when this delete holds the claim. A delete that loses the claim deletes its
-/// marker. The marker write moves the end of the lease.
+/// Writes the first marker of the claim with the number at the path `marker`, then takes the
+/// claim, and tells whether this delete holds the claim. The caller makes the path before the
+/// write, so a guard can delete the marker when the delete stops during the write. A delete that
+/// loses the claim deletes its marker. The marker write moves the end of the lease.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
+    marker: &Path,
     lease: &Lease,
     span: Duration,
-) -> anyhow::Result<Option<Box<Path>>> {
-    let marker = write_leased_marker(files, "write_marker", directory, number, lease, span).await?;
+) -> anyhow::Result<bool> {
+    let started = Instant::now();
+    write_marker_at(files, "write_marker", marker).await?;
+    lease.extend_to(started + span);
     let written = files
         .put_if_absent("write_claim", &directory.join(number.to_string()), &[])
         .await?;
     if written == PutIfAbsent::Written {
-        return Ok(Some(marker));
+        return Ok(true);
     }
-    if let Err(error) = files.delete("delete_marker", &marker).await {
+    if let Err(error) = files.delete("delete_marker", marker).await {
         warn!(
             error = %format!("{error:#}"),
             "Failed to delete the marker of a prune claim that a filesystem snapshot delete lost"
         );
     }
-    Ok(None)
+    Ok(false)
 }
 
 /// Gives the time between two markers of a live claim: a fourth of the grace period, or a fourth
@@ -582,22 +603,27 @@ pub(super) async fn keep_claim_fresh(
         .await;
 }
 
-/// Deletes the claim with the number, and then each of its markers by its path. It tries each
-/// delete also when another one fails, and each failure gives a warning. A claim that stays
-/// without its markers is old, and a marker that stays only delays a prune until its hold passed.
+/// Deletes the claim with the number when this delete took it, and then each of its markers by its
+/// path. It tries each delete also when another one fails, and each failure gives a warning. A
+/// claim that stays without its markers is old, and a marker that stays only delays a prune until
+/// its hold passed.
 pub(super) async fn release_claim(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
+    claimed: bool,
     markers: &[Box<Path>],
 ) {
     let claim = directory.join(number.to_string());
     stream::iter(
-        std::iter::once(("delete_claim", claim.as_path())).chain(
-            markers
-                .iter()
-                .map(|marker| ("delete_marker", marker.as_ref())),
-        ),
+        claimed
+            .then_some(("delete_claim", claim.as_path()))
+            .into_iter()
+            .chain(
+                markers
+                    .iter()
+                    .map(|marker| ("delete_marker", marker.as_ref())),
+            ),
     )
     .for_each(|(op_label, path)| async move {
         if let Err(error) = files.delete(op_label, path).await {
@@ -688,7 +714,7 @@ mod tests {
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
         FreedRecords, LEDGERS_PATH, Lease, Percent, PruneLedger, claim_hold, claims_directory,
-        keep_claim_fresh, lease_span, list_claims, list_freed, needs_repository_size,
+        keep_claim_fresh, lease_span, list_claims, list_freed, marker_path, needs_repository_size,
         newest_ledger, next_claim, old_claim_directories, older_entries, parse_claim_entry,
         parse_freed, parse_ledger_entry, parse_record, prune_due, read_ledger, record_content,
         record_freed, refresh_period, settle, take_claim, write_ledger,
@@ -1087,10 +1113,11 @@ mod tests {
         let started = Instant::now();
 
         let lease = Lease::until(started);
-        let first = take_claim(&files, &directory, 0, &lease, GRACE)
+        let marker = |time| marker_path(&directory, 0, Timestamp::from(time));
+        let first = take_claim(&files, &directory, 0, &marker(1), &lease, GRACE)
             .await
             .unwrap();
-        let again = take_claim(&files, &directory, 0, &lease, GRACE)
+        let again = take_claim(&files, &directory, 0, &marker(2), &lease, GRACE)
             .await
             .unwrap();
         let listed = list_claims(&files, &directory).await.unwrap();
@@ -1098,8 +1125,8 @@ mod tests {
         assert_eq!(
             (
                 directory.display().to_string(),
-                first.is_some(),
-                again.is_some(),
+                first,
+                again,
                 listed.len(),
                 listed.contains(&ClaimEntry::Claim(0)),
                 listed

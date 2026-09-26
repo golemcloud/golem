@@ -28,9 +28,9 @@ use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
     ClaimChoice, Percent, claim_hold, claims_directory, keep_claim_fresh, lease_span, list_claims,
-    list_freed, needs_repository_size, next_claim, prune_due, read_ledger, record_freed,
-    refresh_period, release_claim, remove_freed, remove_old_claims, remove_older_ledgers,
-    repository_bytes, take_claim, write_ledger, write_marker,
+    list_freed, marker_path, needs_repository_size, next_claim, prune_due, read_ledger,
+    record_freed, refresh_period, release_claim, remove_freed, remove_old_claims,
+    remove_older_ledgers, repository_bytes, take_claim, write_ledger, write_marker,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -61,11 +61,13 @@ use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::pin::pin;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::warn;
 
 /// The share of the size of the repository that deleted snapshots must free before a delete prunes
@@ -193,9 +195,145 @@ struct Claim<'a> {
     lease: Arc<Lease>,
     /// The time that a marker write that succeeds adds to the lease.
     span: Duration,
-    /// The markers of the claim that this delete wrote: the first marker, and each new marker
-    /// while the prune runs.
+    /// Releases the claim when the delete stops before its prune starts.
+    guard: ClaimGuard,
+}
+
+/// The claim is written, and its prune did not start.
+const CLAIM_PENDING: u8 = 0;
+/// The rustic prune of the claim started, so the claim stays.
+const CLAIM_STARTED: u8 = 1;
+/// The claim was released, so its prune must not start.
+const CLAIM_RELEASED: u8 = 2;
+
+/// Holds a prune claim from the write of its first marker until the rustic prune starts. When the
+/// delete drops before that, the guard releases the claim in a task, and it moves its token of the
+/// tracker into that task, so `shut_down` waits for the release. The prune and the guard change the
+/// state from pending with one atomic step each, so only one of them wins: a released claim never
+/// starts a prune, and a started prune never loses its claim.
+struct ClaimGuard {
+    /// The blobs of the scope, with a token that nothing cancels, so a release also runs after a
+    /// cancel or a drop.
+    files: SnapshotFiles,
+    directory: Box<Path>,
+    number: u64,
+    /// Whether this delete wrote the claim. A delete that did not delete only its markers.
+    claimed: AtomicBool,
+    /// The markers of the claim that this delete wrote: the first marker, and each new marker while
+    /// the prune runs.
     markers: Mutex<Vec<Box<Path>>>,
+    state: Arc<AtomicU8>,
+    tracked: Mutex<Option<TaskTrackerToken>>,
+}
+
+impl ClaimGuard {
+    /// Gives the guard of the claim with the number and the path of its first marker, before the
+    /// write of that marker.
+    fn new(
+        files: &SnapshotFiles,
+        directory: &Path,
+        number: u64,
+        marker: Box<Path>,
+        tracked: TaskTrackerToken,
+    ) -> Self {
+        Self {
+            files: SnapshotFiles {
+                cancel: CancellationToken::new(),
+                ..files.clone()
+            },
+            directory: directory.into(),
+            number,
+            claimed: AtomicBool::new(false),
+            markers: Mutex::new(vec![marker]),
+            state: Arc::new(AtomicU8::new(CLAIM_PENDING)),
+            tracked: Mutex::new(Some(tracked)),
+        }
+    }
+
+    /// Makes the release task, and moves the token of the tracker into it.
+    fn spawn_release(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let tracked = self
+            .tracked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let files = self.files.clone();
+        let directory = self.directory.clone();
+        let number = self.number;
+        let claimed = self.claimed.load(Ordering::SeqCst);
+        let markers = self
+            .markers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match Handle::try_current() {
+            Ok(runtime) => Some(runtime.spawn(async move {
+                let _tracked = tracked;
+                release_claim(&files, &directory, number, claimed, &markers).await;
+            })),
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "The prune claim of a filesystem snapshot scope stays, because no runtime runs its release"
+                );
+                None
+            }
+        }
+    }
+
+    /// Releases the claim and waits for the release.
+    async fn release(&self) {
+        self.state.store(CLAIM_RELEASED, Ordering::SeqCst);
+        if let Some(releasing) = self.spawn_release()
+            && let Err(error) = releasing.await
+        {
+            warn!(
+                error = %error,
+                "The release of the prune claim of a filesystem snapshot scope did not end"
+            );
+        }
+    }
+
+    /// Ends the guard without a release: another delete took the claim, and this delete already
+    /// deleted its marker.
+    fn disarm(&self) {
+        self.state.store(CLAIM_RELEASED, Ordering::SeqCst);
+        drop(
+            self.tracked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
+    }
+}
+
+impl Drop for ClaimGuard {
+    fn drop(&mut self) {
+        if self
+            .state
+            .compare_exchange(
+                CLAIM_PENDING,
+                CLAIM_RELEASED,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            drop(self.spawn_release());
+        }
+    }
+}
+
+/// Moves the claim of the state from pending to started, and tells whether the prune may start.
+fn start_prune(state: &AtomicU8) -> bool {
+    state
+        .compare_exchange(
+            CLAIM_PENDING,
+            CLAIM_STARTED,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_ok()
 }
 
 /// The number of times that a prune plans again when a snapshot file that it listed is gone at
@@ -389,25 +527,37 @@ impl RusticSnapshotStore {
         };
         let lease = Arc::new(Lease::until(Instant::now()));
         let span = lease_span(grace, deadline);
-        let Some(marker) = take_claim(&files, &claims, number, &lease, span)
+        let marker = marker_path(&claims, number, Timestamp::now_utc());
+        // The guard exists before the marker write, so a drop of the delete from here until the
+        // prune starts releases the claim.
+        let guard = ClaimGuard::new(
+            &files,
+            &claims,
+            number,
+            marker.clone(),
+            self.tracker.token(),
+        );
+        let won = take_claim(&files, &claims, number, &marker, &lease, span)
             .await
-            .map_err(storage_failure)?
-        else {
+            .map_err(storage_failure)?;
+        if !won {
+            guard.disarm();
             return Ok(());
-        };
+        }
+        guard.claimed.store(true, Ordering::SeqCst);
         let claim = Claim {
             directory: &claims,
             number,
             lease,
             span,
-            markers: Mutex::new(vec![marker]),
+            guard,
         };
         // Only an error before the prune starts releases the claim, so a retry of the delete
         // prunes again. A prune that started can have marked packs, so its claim stays.
         let backend = match self.prepare_prune(scope, token, &files, &claim).await {
             Ok(Some(backend)) => backend,
             other => {
-                self.release(&files, &claim).await;
+                claim.guard.release().await;
                 return other.map(|_| ());
             }
         };
@@ -415,7 +565,7 @@ impl RusticSnapshotStore {
         // prune ran, and the claim goes.
         let pruned = match self.run_prune(backend, &files, &claim, grace).await {
             Ok(None) => {
-                self.release(&files, &claim).await;
+                claim.guard.release().await;
                 return Err(snapshots_changed_error());
             }
             other => other.map(|marked| marked.unwrap_or_default()),
@@ -445,31 +595,6 @@ impl RusticSnapshotStore {
         remove_freed(&files, &records).await;
         remove_old_claims(&files, ended).await;
         Ok(())
-    }
-
-    /// Deletes the claim and then its markers in a task that the tracker counts. The task has a
-    /// token of its own, so a drop of the delete, a cancel or a shut down does not stop it.
-    async fn release(&self, files: &SnapshotFiles, claim: &Claim<'_>) {
-        let files = SnapshotFiles {
-            cancel: CancellationToken::new(),
-            ..files.clone()
-        };
-        let directory: Box<Path> = claim.directory.into();
-        let markers = claim
-            .markers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        let number = claim.number;
-        let releasing = self
-            .tracker
-            .spawn(async move { release_claim(&files, &directory, number, &markers).await });
-        if let Err(error) = releasing.await {
-            warn!(
-                error = %error,
-                "The release of the prune claim of a filesystem snapshot scope did not end"
-            );
-        }
     }
 
     /// Checks the ledger again and builds the backend of the prune. It gives `None` when another
@@ -504,11 +629,16 @@ impl RusticSnapshotStore {
         let key = self.key.clone();
         let settings = self.policy.prune;
         let low_priority = self.low_priority;
+        let state = claim.guard.state.clone();
         // The plan of a prune reads each snapshot file before the prune changes the repository.
         // A forget of another delete can remove a listed file before its read, so the prune
         // plans again from a new listing.
         let pruning = self.blocking(Operation::Prune, move || {
             low_priority.run("fs-snap-prune", move || {
+                // A delete that dropped before this point released the claim, so no prune runs.
+                if !start_prune(&state) {
+                    return Ok(None);
+                }
                 Ok(
                     std::iter::repeat_with(|| prune(backend.clone(), &key, &settings))
                         .take(PRUNE_ATTEMPTS)
@@ -528,7 +658,7 @@ impl RusticSnapshotStore {
             claim.directory,
             claim.number,
             refresh_period(grace, self.policy.deadline),
-            &claim.markers,
+            &claim.guard.markers,
             &claim.lease,
             claim.span,
         );
