@@ -28,8 +28,8 @@ use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
     ClaimChoice, Percent, claim_hold, claims_directory, keep_claim_fresh, lease_span, list_claims,
-    list_freed, marker_path, needs_repository_size, next_claim, prune_due, read_ledger,
-    record_freed, refresh_period, release_claim, remove_freed, remove_old_claims,
+    list_freed, marker_path, marker_time, needs_repository_size, next_claim, prune_due,
+    read_ledger, record_freed, refresh_period, release_claim, remove_freed, remove_old_claims,
     remove_older_ledgers, repository_bytes, take_claim, write_ledger, write_marker,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
@@ -527,7 +527,8 @@ impl RusticSnapshotStore {
         };
         let lease = Arc::new(Lease::until(Instant::now()));
         let span = lease_span(grace, deadline);
-        let marker = marker_path(&claims, number, Timestamp::now_utc());
+        let (started, time) = marker_time();
+        let marker = marker_path(&claims, number, time);
         // The guard exists before the marker write, so a drop of the delete from here until the
         // prune starts releases the claim.
         let guard = ClaimGuard::new(
@@ -537,7 +538,7 @@ impl RusticSnapshotStore {
             marker.clone(),
             self.tracker.token(),
         );
-        let won = take_claim(&files, &claims, number, &marker, &lease, span)
+        let won = take_claim(&files, &claims, number, &marker, started, &lease, span)
             .await
             .map_err(storage_failure)?;
         if !won {

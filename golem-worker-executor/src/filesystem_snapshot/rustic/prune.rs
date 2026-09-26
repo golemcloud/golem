@@ -477,6 +477,13 @@ pub(super) async fn list_claims(
         .collect())
 }
 
+/// Gives the time of a new marker: the instant, from which a write of the marker moves the lease,
+/// and the wall time in the name of the marker, both read at one moment. So the lease never ends
+/// later than the hold that other deletes read from the name.
+pub(super) fn marker_time() -> (Instant, Timestamp) {
+    (Instant::now(), Timestamp::now_utc())
+}
+
 /// Gives a new path of a marker of the claim with the number, with the time. The name is unique.
 pub(super) fn marker_path(directory: &Path, number: u64, time: Timestamp) -> Box<Path> {
     directory
@@ -522,8 +529,8 @@ async fn write_leased_marker(
     lease: &Lease,
     span: Duration,
 ) -> anyhow::Result<Box<Path>> {
-    let started = Instant::now();
-    let marker = write_marker(files, op_label, directory, number, Timestamp::now_utc()).await?;
+    let (started, time) = marker_time();
+    let marker = write_marker(files, op_label, directory, number, time).await?;
     lease.extend_to(started + span);
     Ok(marker)
 }
@@ -531,16 +538,17 @@ async fn write_leased_marker(
 /// Writes the first marker of the claim with the number at the path `marker`, then takes the
 /// claim, and tells whether this delete holds the claim. The caller makes the path before the
 /// write, so a guard can delete the marker when the delete stops during the write. A delete that
-/// loses the claim deletes its marker. The marker write moves the end of the lease.
+/// loses the claim deletes its marker. The marker write moves the end of the lease from `started`,
+/// the instant that [`marker_time`] gave with the time in the name of the marker.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
     marker: &Path,
+    started: Instant,
     lease: &Lease,
     span: Duration,
 ) -> anyhow::Result<bool> {
-    let started = Instant::now();
     write_marker_at(files, "write_marker", marker).await?;
     lease.extend_to(started + span);
     let written = files
@@ -714,10 +722,10 @@ mod tests {
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
         FreedRecords, LEDGERS_PATH, Lease, Percent, PruneLedger, claim_hold, claims_directory,
-        keep_claim_fresh, lease_span, list_claims, list_freed, marker_path, needs_repository_size,
-        newest_ledger, next_claim, old_claim_directories, older_entries, parse_claim_entry,
-        parse_freed, parse_ledger_entry, parse_record, prune_due, read_ledger, record_content,
-        record_freed, refresh_period, settle, take_claim, write_ledger,
+        keep_claim_fresh, lease_span, list_claims, list_freed, marker_path, marker_time,
+        needs_repository_size, newest_ledger, next_claim, old_claim_directories, older_entries,
+        parse_claim_entry, parse_freed, parse_ledger_entry, parse_record, prune_due, read_ledger,
+        record_content, record_freed, refresh_period, settle, take_claim, write_ledger,
     };
     use futures::StreamExt;
     use golem_common::model::Timestamp;
@@ -1113,13 +1121,34 @@ mod tests {
         let started = Instant::now();
 
         let lease = Lease::until(started);
-        let marker = |time| marker_path(&directory, 0, Timestamp::from(time));
-        let first = take_claim(&files, &directory, 0, &marker(1), &lease, GRACE)
-            .await
-            .unwrap();
-        let again = take_claim(&files, &directory, 0, &marker(2), &lease, GRACE)
-            .await
-            .unwrap();
+        let marker = || {
+            let (at, time) = marker_time();
+            (marker_path(&directory, 0, time), at)
+        };
+        let (first_marker, first_at) = marker();
+        let (second_marker, second_at) = marker();
+        let first = take_claim(
+            &files,
+            &directory,
+            0,
+            &first_marker,
+            first_at,
+            &lease,
+            GRACE,
+        )
+        .await
+        .unwrap();
+        let again = take_claim(
+            &files,
+            &directory,
+            0,
+            &second_marker,
+            second_at,
+            &lease,
+            GRACE,
+        )
+        .await
+        .unwrap();
         let listed = list_claims(&files, &directory).await.unwrap();
 
         assert_eq!(
