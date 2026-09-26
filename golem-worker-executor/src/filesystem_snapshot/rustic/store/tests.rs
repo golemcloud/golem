@@ -1466,6 +1466,71 @@ async fn a_prune_goes_on_after_one_failed_refresh_when_the_later_refreshes_succe
 
 #[test]
 #[timeout("60s")]
+async fn a_marker_ahead_within_the_margin_after_a_slow_claim_listing_holds_the_claim() {
+    // Another delete wrote a marker whose time is 130 s ahead of the clock at the start of the
+    // delete, beyond the margin of 120 s. The gate holds the claim listing while the clock goes
+    // 20 s on, so after the listing the marker is 110 s ahead, within the margin, and it holds.
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+        if op_label == "list_claims" {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let ahead = golem_common::model::Timestamp::now_utc().to_millis() + 130_000;
+    futures::stream::iter([
+        "golem/prune-claims/none/0".to_string(),
+        format!("golem/prune-claims/none/0@{ahead}-{}", uuid::Uuid::new_v4()),
+    ])
+    .for_each(|path| {
+        let (storage, scope) = (storage.clone(), scope.clone());
+        async move {
+            storage
+                .put_raw("test", "test", scope.0.clone(), Path::new(&path), &[])
+                .await
+                .unwrap();
+        }
+    })
+    .await;
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let held = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, _)| *op_label == "list_claims")
+    })
+    .await;
+
+    store.clock_ahead.store(20_000, Ordering::SeqCst);
+    storage.open_gate();
+    let deleted = tokio::time::timeout(LIMIT, deleting).await;
+    let calls = storage.calls();
+
+    assert!(matches!(deleted, Ok(Ok(Ok(())))), "{deleted:?}");
+    assert_eq!(
+        (
+            held,
+            prunes(&calls),
+            calls
+                .iter()
+                .filter(|(op_label, _)| *op_label == "write_claim")
+                .count(),
+        ),
+        (true, 0, 0)
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn the_lease_of_a_prune_starts_at_its_first_marker_so_a_prune_without_a_refresh_prunes() {
     // A grace period of one hour gives a refresh period of fifteen minutes, so the prune ends
     // before its first refresh, and only the first marker gives the lease.

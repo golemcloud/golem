@@ -179,6 +179,10 @@ pub(crate) struct RusticSnapshotStore {
     /// Makes each backend build fail while a test sets it.
     #[cfg(test)]
     pub(super) refuse_backends: Arc<std::sync::atomic::AtomicBool>,
+    /// The number of milliseconds that the clock of the prune decisions is ahead of the wall
+    /// clock. A test moves it to make time pass.
+    #[cfg(test)]
+    pub(super) clock_ahead: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// A gate that holds an operation at one point, for example a save after its blocking work and
@@ -460,6 +464,8 @@ impl RusticSnapshotStore {
             claim_gate: None,
             #[cfg(test)]
             refuse_backends: Arc::default(),
+            #[cfg(test)]
+            clock_ahead: Arc::default(),
         }
     }
 
@@ -480,6 +486,16 @@ impl RusticSnapshotStore {
     #[cfg(test)]
     pub(super) fn work_in_flight(&self) -> usize {
         self.tracker.len()
+    }
+
+    /// Gives the time now, for a comparison with a time from storage.
+    fn now(&self) -> Timestamp {
+        let now = Timestamp::now_utc();
+        #[cfg(test)]
+        let now = Timestamp::from(
+            now.to_millis() + self.clock_ahead.load(std::sync::atomic::Ordering::SeqCst),
+        );
+        now
     }
 
     /// Starts an operation. The token of the operation is cancelled when the guard drops.
@@ -568,7 +584,10 @@ impl RusticSnapshotStore {
         let files = self.files(scope, token);
         let ledger = read_ledger(&files).await.map_err(storage_failure)?;
         let records = list_freed(&files).await.map_err(storage_failure)?;
-        let now = Timestamp::now_utc();
+        // Each comparison with a time from storage uses a clock reading from after the listing
+        // that gave that time. A listing can take up to one storage call deadline, and a stale
+        // reading can put a marker that another host wrote within the margin beyond the margin.
+        let now = self.now();
         let grace = self.policy.prune.keep_delete;
         let size = if needs_repository_size(&ledger, records.bytes, now, grace) {
             repository_bytes(&files).await.map_err(storage_failure)?
@@ -590,7 +609,8 @@ impl RusticSnapshotStore {
             .await
             .map_err(storage_failure)?;
         let deadline = self.policy.deadline;
-        let ClaimChoice::Claim(number) = next_claim(&listed, now, claim_hold(grace, deadline))
+        let ClaimChoice::Claim(number) =
+            next_claim(&listed, self.now(), claim_hold(grace, deadline))
         else {
             return Ok(());
         };
