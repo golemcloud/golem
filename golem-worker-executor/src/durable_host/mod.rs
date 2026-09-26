@@ -5312,19 +5312,15 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and
-        // a given-up agent's oplog belongs to another executor now. Nothing further is
-        // written for it - not the drain, not an `Error` entry, not a status change - whatever
-        // the trap was: a revoke latches no fence, so the mark is all that says so, and the shard's
+        // a lost shard's oplog belongs to another executor now. Nothing further is written for it
+        // - not the drain, not an `Error` entry, not a status change - whatever the trap was: a
+        // revoke latches no fence, so the recorded retirement is all that says so, and the shard's
         // new owner replays the invocation and records its outcome itself.
         let worker = self.public_state.worker();
-        let given_up = if matches!(trap_type, TrapType::Interrupt(InterruptKind::ShardLost)) {
-            worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted {
-                kind: InterruptKind::ShardLost,
-            })
-        } else {
-            worker.retired_for_lost_shard()
-        };
-        if given_up {
+        if let TrapType::Interrupt(kind) = trap_type {
+            worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind: *kind });
+        }
+        if worker.retired_for_lost_shard() {
             return RetryDecision::None;
         }
 
@@ -5423,7 +5419,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => panic!("oplog write: {error}"),
             }
-            // Refused, like the add above: the agent has been given up.
+            // Refused, like the add above: the shard is lost.
             if self
                 .public_state
                 .worker()
@@ -5468,7 +5464,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )),
         };
 
-        // Refused, the agent has been given up: no failure is published for its invocation, which
+        // Refused, the shard is lost: no failure is published for its invocation, which
         // the shard's new owner runs.
         if let Some(entry) = oplog_entry
             && self
@@ -5806,11 +5802,11 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         target_revision: ComponentRevision,
         details: Option<String>,
     ) -> Result<(), WorkerExecutorError> {
-        // A given-up agent's update is settled by the shard's new owner. A revoke latches no
-        // fence, so the storage would still accept this entry, and it would drop the update there.
+        // A lost shard's update is settled by the new owner. A revoke latches no fence, so the
+        // storage would still accept this entry, and it would drop the update there.
         let worker = self.public_state.worker();
         if worker.retired_for_lost_shard() {
-            return Err(worker.retirement_error());
+            return Err(WorkerExecutorError::ShardingNotReady);
         }
         let entry = OplogEntry::failed_update(target_revision, details.clone());
         worker.add_and_commit_oplog(entry).await?;
@@ -5835,7 +5831,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         let worker = self.public_state.worker();
         // As for a failed update: the outcome is the shard's new owner's to record.
         if worker.retired_for_lost_shard() {
-            return Err(worker.retirement_error());
+            return Err(WorkerExecutorError::ShardingNotReady);
         }
         worker
             .persist_successful_update(
@@ -6371,7 +6367,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             }),
                                             TrapType::Interrupt(kind) => {
                                                 // `on_invocation_failure` is skipped on this path,
-                                                // so a lost shard is given up here: its `None`
+                                                // so a lost shard is recorded here: its `None`
                                                 // decision alone would stop the agent as an
                                                 // ordinary one, left cached to restart in place.
                                                 worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind });
@@ -6393,7 +6389,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             // interrupted by a crash and cannot be retried.
                                             // A fresh interrupt is authoritative even before live
                                             // publication; already-finished sessions stay unchanged.
-                                            // Not for an agent given up here, however the loss
+                                            // Not for a lost shard, however the loss
                                             // reached the trap: the shard's new owner resumes that
                                             // invocation.
                                             let shard_lost = worker.retired_for_lost_shard()

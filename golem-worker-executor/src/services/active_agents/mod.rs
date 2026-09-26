@@ -1126,7 +1126,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     }
 
     /// [`Self::remove_worker`] with an explicit reason for tearing the agent's entity bodies down.
-    /// A given-up agent must not report itself as interrupted through the Golem API: it was
+    /// A lost shard must not report itself as interrupted through the Golem API: it was
     /// not, its shard moved. A deletion owner tears nothing down here, whatever the reason.
     pub(crate) async fn remove_worker_with(
         &self,
@@ -1197,9 +1197,9 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// A removal refused while this generation is still cached is retried, unless a deletion owns
     /// its retirement and removes it itself. The only other refusal is the retirement marker held
     /// by a concurrent attempt - an idle expiry, or another pass of this removal - which ends with
-    /// the generation removed or the marker rolled back. Without the retry, an agent given up
+    /// the generation removed or the marker rolled back. Without the retry, an agent retired
     /// while an idle expiry happened to be checking it would stay cached here, and a later
-    /// re-grant of its shard would find this given-up generation instead of opening the oplog at
+    /// re-grant of its shard would find this retired generation instead of opening the oplog at
     /// the new epoch.
     pub(crate) async fn remove_generation(
         &self,
@@ -1303,7 +1303,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// machine has an arm for each, so none is skipped. An agent still being resolved is not in
     /// it: one that read the assignment before the shard left opens its oplog at the epoch it
     /// was granted, and checks the assignment again once it is published - see
-    /// `Worker::give_up_if_shard_left_during_construction`.
+    /// `Worker::retire_if_shard_left_during_construction`.
     pub(crate) async fn give_up_matching(&self, select: impl Fn(&AgentId) -> bool) {
         let selected: Vec<Arc<Worker<Ctx>>> = self
             .snapshot()

@@ -39,7 +39,7 @@ use crate::services::{
 };
 use crate::worker::{
     ExportStreamControlResult as DomainExportResult, Worker, WorkerUpdateMode,
-    given_up_by_assignment,
+    retired_by_assignment,
 };
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
@@ -1398,7 +1398,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let assignment = this.shard_service().try_get_current_assignment();
         this.active_agents()
             .give_up_matching(|agent_id| {
-                given_up_by_assignment(
+                retired_by_assignment(
                     assignment.as_ref(),
                     agent_id,
                     held_epochs.get(agent_id).copied().flatten(),

@@ -119,12 +119,11 @@ pub struct AgentStatusFlusher {
     /// Set once the worker starts deleting; prevents a concurrent background flush from resurrecting
     /// the blob after `remove_cached_status` has deleted it.
     delete_started: AtomicBool,
-    /// Set once this executor gives the agent up; see [`Self::stop_for_give_up`].
-    given_up: AtomicBool,
+    owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
 }
 
 impl AgentStatusFlusher {
-    pub fn new(
+    pub(super) fn new(
         owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
         is_ephemeral: bool,
@@ -134,6 +133,7 @@ impl AgentStatusFlusher {
         persisted_status: Option<AgentStatusRecord>,
         current_status: Arc<ArcSwap<AgentStatusRecord>>,
         detached: Arc<AtomicBool>,
+        owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
     ) -> Arc<Self> {
         let base_known = persisted_status.is_some();
         let last_flushed = persisted_status.unwrap_or_default();
@@ -154,25 +154,17 @@ impl AgentStatusFlusher {
             }),
             dirty: AtomicBool::new(false),
             delete_started: AtomicBool::new(false),
-            given_up: AtomicBool::new(false),
+            owner_retirement,
         })
     }
 
-    /// Whether nothing more may be written for this worker: it is being deleted, or given up.
+    /// Whether deletion or shard loss prevents this generation from writing status.
     fn writes_stopped(&self) -> bool {
-        self.delete_started.load(Ordering::Acquire) || self.given_up.load(Ordering::Acquire)
-    }
-
-    /// Stops every later write for a generation this executor has given up, the blob and the
-    /// recovery-index row alike: both belong to the shard's new owner now, and a write from here
-    /// could overwrite its status or drop the row its crash recovery relies on.
-    ///
-    /// Synchronous, so `Worker::record_retirement` can call it under the worker lifecycle lock. Unlike
-    /// [`Self::begin_delete`] it does not wait out a flush already past its early-out; that write
-    /// was under way before the give-up, like any other write racing the takeover.
-    pub fn stop_for_give_up(&self) {
-        self.given_up.store(true, Ordering::Release);
-        self.dirty.store(false, Ordering::Release);
+        self.delete_started.load(Ordering::Acquire)
+            || self
+                .owner_retirement
+                .get()
+                .is_some_and(|retirement| retirement.lost_shard.load(Ordering::Acquire))
     }
 
     /// Called from the hot path whenever the in-memory status changed. Updates the recovery index
@@ -184,7 +176,7 @@ impl AgentStatusFlusher {
         previous_status: &AgentStatusRecord,
         new_status: &AgentStatusRecord,
     ) {
-        if self.is_ephemeral || self.given_up.load(Ordering::Acquire) {
+        if self.is_ephemeral || self.writes_stopped() {
             return;
         }
 
@@ -648,6 +640,7 @@ mod tests {
             None,
             current.clone(),
             detached.clone(),
+            Arc::default(),
         );
         (flusher, current, detached)
     }
@@ -730,6 +723,7 @@ mod tests {
             Some(persisted),
             current.clone(),
             detached,
+            Arc::default(),
         );
 
         current.store(Arc::new(status(AgentStatus::Running, 8)));
@@ -852,7 +846,16 @@ mod tests {
         current.store(Arc::new(status(AgentStatus::Running, 1)));
         flusher.mark_dirty();
 
-        flusher.stop_for_give_up();
+        assert!(
+            flusher
+                .owner_retirement
+                .set(super::super::OwnerRetirement {
+                    kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
+                    lost_shard: AtomicBool::new(true),
+                    stop: tokio::sync::OnceCell::new(),
+                })
+                .is_ok()
+        );
         let _ = flusher.flush(FlushReason::Forced).await;
         current.store(Arc::new(status(AgentStatus::Idle, 2)));
         flusher.mark_dirty();
@@ -874,7 +877,16 @@ mod tests {
         let queue = test_queue();
         let (flusher, _current, _) = make_flusher(false, false, ws.clone(), queue.clone());
 
-        flusher.stop_for_give_up();
+        assert!(
+            flusher
+                .owner_retirement
+                .set(super::super::OwnerRetirement {
+                    kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
+                    lost_shard: AtomicBool::new(true),
+                    stop: tokio::sync::OnceCell::new(),
+                })
+                .is_ok()
+        );
         flusher
             .on_status_changed(
                 &status(AgentStatus::Idle, 0),

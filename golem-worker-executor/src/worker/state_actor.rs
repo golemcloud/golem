@@ -305,7 +305,7 @@ impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
     }
 }
 
-/// The error a refused append or commit replies with. The give-up is spawned inside the actor,
+/// The error a refused append or commit replies with. The retirement is spawned inside the actor,
 /// so the caller only needs an error it will not mistake for a delivered entry.
 fn fenced_error(fence: &OplogFence) -> WorkerExecutorError {
     WorkerExecutorError::oplog_fenced(
@@ -408,7 +408,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     // The shard has a new owner: give the agent up and leave no
                                     // further trace in an oplog that is no longer ours.
                                     Err(OplogError::Fenced(fence)) => {
-                                        state.give_up_fenced_agent();
+                                        state.retire_fenced_agent();
                                         Err(fenced_error(&fence))
                                     }
                                     Err(error) => panic!("oplog write: {error}"),
@@ -443,7 +443,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 // retries on `false`, and a fenced oplog refuses every retry.
                                 if let Err(error) = state.oplog.add(*entry).await {
                                     if matches!(error, OplogError::Fenced(_)) {
-                                        state.give_up_fenced_agent();
+                                        state.retire_fenced_agent();
                                     }
                                     return Err(error);
                                 }
@@ -866,11 +866,11 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// retirement alone would not do, because on a background path nothing else is unwinding to
     /// carry the stop out.
     ///
-    /// Only the generation this actor belongs to is given up, identified by the status cell the
+    /// Only the generation this actor belongs to is retired, identified by the status cell the
     /// two share. By the time the task runs that generation may be gone and a newer one cached
     /// under the same id, which is left alone: at a stale epoch its own open latches the fence and
-    /// gives it up, and at a re-granted epoch it is legitimately this executor's.
-    fn give_up_fenced_agent(&self) {
+    /// retires it, and at a re-granted epoch it is legitimately this executor's.
+    fn retire_fenced_agent(&self) {
         let active_agents = self.deps.active_agents();
         let owned_agent_id = self.owned_agent_id.clone();
         let status_cell = self.last_known_status.clone();
@@ -907,7 +907,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 if let Some(committed) = committed {
                     committed.refused(&fence);
                 }
-                self.give_up_fenced_agent();
+                self.retire_fenced_agent();
                 return Err(fence);
             }
             Err(error) => panic!("oplog write: {error}"),
@@ -956,7 +956,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                     match self.oplog.commit(CommitLevel::Always).await {
                         Ok(_) => {}
                         Err(OplogError::Fenced(fence)) => {
-                            self.give_up_fenced_agent();
+                            self.retire_fenced_agent();
                             return Err(fence);
                         }
                         Err(error) => panic!("oplog write: {error}"),

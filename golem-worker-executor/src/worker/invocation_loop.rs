@@ -603,7 +603,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     Some(unloading.cleanup.clone());
                                 let cleanup_failure =
                                     finish_filesystem_limit_unload(suspend, unloading, || async {
-                                        // A refusal marks the agent given up, which the stop
+                                        // A refusal records the lost shard, which the stop
                                         // below acts on; there is nothing else to undo.
                                         let _ = self
                                             .parent
@@ -866,7 +866,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             | InterruptKind::Jump
                                             | InterruptKind::ShardLost => Ok(()),
                                         };
-                                        // Refused, the agent has been given up: nothing restarts
+                                        // Refused, the shard is lost: nothing restarts
                                         // in place.
                                         if recorded.is_err() {
                                             self.stop_startup_retired().await;
@@ -1024,7 +1024,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     .map(|_| ()),
                 InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => Ok(()),
             };
-            // Refused, the agent has been given up: no failure is cached for the invocation the
+            // Refused, the shard is lost: no failure is cached for the invocation the
             // shard's new owner resumes, and nothing restarts in place.
             if recorded.is_err() {
                 self.stop_startup_retired().await;
@@ -1344,12 +1344,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             let _ = worker
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
-            if worker.retired_for_lost_shard() {
-                // Given up, by that commit or by a revoke or reassignment that latched no fence:
-                // its status is not this executor's to persist any more.
-                return;
-            }
-
             // The worker is going idle; persist its cached status synchronously now instead of leaving
             // it for the next background sweep, so reads of an idle worker see an up-to-date blob.
             worker.force_flush_status().await;
@@ -2566,18 +2560,22 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         debug!(
                             "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
                         );
+                        // Retirement waits for this loop; stop awaiting an operation that may
+                        // itself be waiting for retirement's stop to finish.
                         match self
                             .parent
-                            .cancel_invocation_from_loop(idempotency_key.clone())
+                            .owner_retirement_requested
+                            .run_until_cancelled(
+                                self.parent.cancel_invocation(idempotency_key.clone()),
+                            )
                             .await
                         {
-                            Ok(true) => CommandOutcome::Continue,
-                            // A stop is waiting for this loop to exit.
-                            Ok(false) => CommandOutcome::BreakInnerLoop(RetryDecision::None),
-                            Err(error) if self.parent.retire_if_shard_lost(&error) => {
+                            Some(Ok(())) => CommandOutcome::Continue,
+                            None => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                            Some(Err(error)) if self.parent.retire_if_shard_lost(&error) => {
                                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
                             }
-                            Err(error) => {
+                            Some(Err(error)) => {
                                 warn!(
                                     agent_id = %self.owned_agent_id.agent_id,
                                     %error,
@@ -3136,19 +3134,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 {
                     Ok(update_description) => {
-                        // Refused, or the worker is stopping or being deleted: nothing restarts it
-                        // here, and the manual update stays pending for the next generation.
+                        // Enqueue the update, then reactivate the worker; stop processing the
+                        // queue to avoid race conditions. Refused by the fence, nothing restarts
+                        // here: the update stays pending for the shard's new owner.
                         match self
                             .parent
-                            .enqueue_update_from_loop(update_description)
+                            .owner_retirement_requested
+                            .run_until_cancelled(self.parent.enqueue_update(update_description))
                             .await
                         {
-                            // Reactivate the worker; stop processing the queue to avoid race
-                            // conditions
-                            Ok(true) => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
-                            Ok(false) | Err(_) => {
+                            None => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                            Some(Err(error)) if self.parent.retire_if_shard_lost(&error) => {
                                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
                             }
+                            _ => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
                         }
                     }
                     Err(error) => {
@@ -3274,13 +3273,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         target_revision: ComponentRevision,
         error: String,
     ) -> CommandOutcome {
-        // A `FailedUpdate` drops the pending manual update from the status, so written for an
-        // agent given up here it would keep the shard's new owner from ever applying it. Nothing
-        // is written; the update stays pending and runs there.
-        if self.parent.retired_for_lost_shard() {
-            return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-        }
-        // Refused, the agent has been given up: it stops rather than carrying on at a revision
+        // Refused, the shard is lost: it stops rather than carrying on at a revision
         // whose failed update was never recorded.
         match self
             .store

@@ -89,21 +89,21 @@ pub struct StatusCheckpointer {
     /// Set once the owning worker starts deleting. After this, no checkpoint is written, so an
     /// in-flight write cannot resurrect the checkpoint after `remove_cached_status` deletes it.
     delete_started: AtomicBool,
-    /// Set once this executor gives the agent up; see [`Self::stop_for_give_up`].
-    given_up: AtomicBool,
+    owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
 
     /// Serializes checkpoint writes and guards the persisted baseline.
     state: Mutex<CheckpointState>,
 }
 
 impl StatusCheckpointer {
-    pub fn new(
+    pub(super) fn new(
         owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
         is_ephemeral: bool,
         enabled: bool,
         min_oplog_delta: u64,
         worker_service: Arc<dyn WorkerService>,
+        owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
     ) -> Self {
         Self {
             owned_agent_id,
@@ -113,22 +113,18 @@ impl StatusCheckpointer {
             min_oplog_delta,
             worker_service,
             delete_started: AtomicBool::new(false),
-            given_up: AtomicBool::new(false),
+            owner_retirement,
             state: Mutex::new(CheckpointState { last_written: None }),
         }
     }
 
-    /// Whether no checkpoint may be written: the worker is being deleted, or given up.
+    /// Whether deletion or shard loss prevents this generation from writing a checkpoint.
     fn writes_stopped(&self) -> bool {
-        self.delete_started.load(Ordering::Acquire) || self.given_up.load(Ordering::Acquire)
-    }
-
-    /// Stops every later checkpoint write for a generation this executor has given up: the
-    /// checkpoint belongs to the shard's new owner now. Synchronous, like
-    /// [`crate::worker::status_flusher::AgentStatusFlusher::stop_for_give_up`], and for the same
-    /// reason does not wait out a write already in progress.
-    pub fn stop_for_give_up(&self) {
-        self.given_up.store(true, Ordering::Release);
+        self.delete_started.load(Ordering::Acquire)
+            || self
+                .owner_retirement
+                .get()
+                .is_some_and(|retirement| retirement.lost_shard.load(Ordering::Acquire))
     }
 
     /// Prevents any future checkpoint write from resurrecting the checkpoint after it is deleted.
@@ -398,6 +394,7 @@ mod tests {
             true,
             min_delta,
             service,
+            Arc::default(),
         )
     }
 
@@ -566,7 +563,15 @@ mod tests {
         let service = Arc::new(RecordingWorkerService::default());
         let cp = checkpointer(service.clone(), 0);
 
-        cp.stop_for_give_up();
+        assert!(
+            cp.owner_retirement
+                .set(super::super::OwnerRetirement {
+                    kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
+                    lost_shard: AtomicBool::new(true),
+                    stop: tokio::sync::OnceCell::new(),
+                })
+                .is_ok()
+        );
         cp.maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
             .await;
         cp.maybe_checkpoint(&status_at(20), CheckpointReason::Idle)
@@ -591,6 +596,7 @@ mod tests {
             false,
             0,
             service.clone(),
+            Arc::default(),
         );
         disabled
             .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
@@ -603,6 +609,7 @@ mod tests {
             true,
             0,
             service.clone(),
+            Arc::default(),
         );
         ephemeral
             .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)

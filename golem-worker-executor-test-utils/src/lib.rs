@@ -1249,6 +1249,17 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Pauses the invocation loop inside its enqueue of the next manual update, immediately before
+    /// the `PendingUpdate` entry is appended, with the worker lifecycle lock held.
+    pub async fn gate_next_pending_update_enqueue(
+        &self,
+        agent_id: &AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        self.additional_test_deps
+            .gate_next_pending_update_enqueue(agent_id.clone())
+            .await
+    }
+
     /// Arms a one-shot gate immediately before the next discriminated p3 HTTP consume-body scope
     /// `Start` is appended for `agent_id`.
     pub async fn gate_next_consume_body_scope_start(
@@ -4360,15 +4371,6 @@ impl TestOplog {
     }
 
     async fn pause_before_agent_initialization_enqueue(&self, entry: &OplogEntry) {
-        let OplogEntry::PendingAgentInvocation {
-            idempotency_key, ..
-        } = entry
-        else {
-            return;
-        };
-        if !idempotency_key.value.starts_with("init-") {
-            return;
-        }
         let Some(gate) = self
             .additional_test_deps
             .agent_initialization_enqueue_gate(&self.owned_agent_id.agent_id)
@@ -4376,6 +4378,9 @@ impl TestOplog {
         else {
             return;
         };
+        if !(gate.matches)(entry) {
+            return;
+        }
         if !gate.armed.swap(false, Ordering::SeqCst) {
             return;
         }
@@ -5463,9 +5468,36 @@ impl AdditionalTestDeps {
         &self,
         agent_id: AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
+        fn is_initialization_enqueue(entry: &OplogEntry) -> bool {
+            matches!(entry, OplogEntry::PendingAgentInvocation { idempotency_key, .. }
+                if idempotency_key.value.starts_with("init-"))
+        }
+        self.gate_next_append(agent_id, is_initialization_enqueue)
+            .await
+    }
+
+    /// Arms a one-shot gate immediately before the next `PendingUpdate` is appended for
+    /// `agent_id`: the invocation loop's own enqueue of a manual update, taken under the worker
+    /// lifecycle lock.
+    pub async fn gate_next_pending_update_enqueue(
+        &self,
+        agent_id: AgentId,
+    ) -> AgentInitializationEnqueueGateHandle {
+        fn is_pending_update(entry: &OplogEntry) -> bool {
+            matches!(entry, OplogEntry::PendingUpdate { .. })
+        }
+        self.gate_next_append(agent_id, is_pending_update).await
+    }
+
+    async fn gate_next_append(
+        &self,
+        agent_id: AgentId,
+        matches: fn(&OplogEntry) -> bool,
+    ) -> AgentInitializationEnqueueGateHandle {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let gate = Arc::new(AgentInitializationEnqueueGate {
             armed: AtomicBool::new(true),
+            matches,
             entered_tx: std::sync::Mutex::new(Some(entered_tx)),
             release: tokio::sync::Semaphore::new(0),
         });
@@ -5761,6 +5793,8 @@ struct ConsumeBodyChunkEndGate {
 
 struct AgentInitializationEnqueueGate {
     armed: AtomicBool,
+    /// The entry the gate fires on; the initialization enqueue unless a test arms it otherwise.
+    matches: fn(&OplogEntry) -> bool,
     entered_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     release: tokio::sync::Semaphore,
 }

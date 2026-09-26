@@ -1597,11 +1597,10 @@ async fn manual_update_on_idle(
 
 /// A stop arriving while a manual update is in flight must not deadlock either side.
 ///
-/// The update is enqueued from the invocation loop, and a stop taking the same worker down could
-/// wait on the loop that was waiting to enqueue.
-/// The enqueue is non-blocking now (`enqueue_update_from_loop`), so both finish. The test is
-/// written as a race rather than a fixed order - either outcome is legal, a hang is not - and the
-/// timeout is the assertion.
+/// The update is enqueued from the invocation loop, under the worker lifecycle lock, while an
+/// interrupt takes the same worker down. The order is forced: the loop is held inside its
+/// enqueue, the interrupt is issued against it, then the enqueue is released. Either outcome is
+/// legal, a hang is not - and the timeout is the assertion.
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
@@ -1637,8 +1636,9 @@ async fn a_stop_racing_a_manual_update_never_deadlocks(
         .invoke_and_await_agent(&component, &agent_id, "f1", data_value!(0u64))
         .await?;
 
-    // Both are issued without awaiting the first: the update goes through the loop-side enqueue
-    // while the interrupt takes the worker down under it.
+    // The loop is held inside its enqueue of the update, under the worker lifecycle lock, and
+    // the interrupt is issued while it waits there.
+    let mut gate = executor.gate_next_pending_update_enqueue(&worker_id).await;
     let update = {
         let executor = executor.clone();
         let worker_id = worker_id.clone();
@@ -1652,11 +1652,18 @@ async fn a_stop_racing_a_manual_update_never_deadlocks(
             .in_current_span(),
         )
     };
+    tokio::time::timeout(Duration::from_secs(60), gate.entered())
+        .await
+        .map_err(|_| anyhow::anyhow!("the loop never reached the update's enqueue"))?;
     let stop = {
         let executor = executor.clone();
         let worker_id = worker_id.clone();
         spawn(async move { executor.interrupt(&worker_id).await }.in_current_span())
     };
+    // The interrupt has to take the worker down while the loop holds the lock; a short wait
+    // without a hook for "the stop is waiting on the loop", then the enqueue is released.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(gate);
 
     let (update, stop) = tokio::time::timeout(Duration::from_secs(60), async {
         tokio::join!(update, stop)
