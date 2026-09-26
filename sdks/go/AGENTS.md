@@ -104,6 +104,12 @@ function-struct indirections — a struct of `func` fields, never an interface �
 *only* the constructors that touch generated resources in `*_wasm.go` / `*_other.go`.
 See `toolstream*.go`, `agentstream*.go`, `reflection*.go`.
 
+Tests are linked code too: a native test that calls a host-backed function — reading
+config, for instance — fails to link even though the package builds. Test the pure part
+on its own (`checkRouterScope` beside `HTTPRouter.Config`). Streams are the exception
+worth knowing: off wasm, `agentstream_other.go` makes a stream pair an in-memory pipe,
+so code that produces and consumes `AgentStream`s runs in native tests.
+
 Running `go test` natively in every module is what catches a regression here.
 
 ## Go switches are not exhaustive
