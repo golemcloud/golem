@@ -2653,10 +2653,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         )
         .await;
 
-        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
-        // are finished at AgentInvocationFinished.
+        // Invocation-owned spans are closed by AgentInvocationFinished in the
+        // oplog processor; removing their resident context records no transition.
         for span_id in local_span_ids {
             self.store.data_mut().remove_span(&span_id)?;
         }

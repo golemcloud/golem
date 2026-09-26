@@ -115,6 +115,7 @@ impl InternalWorkerEvent {
                 level: oplog::LogLevel::Stdout,
                 context: String::new(),
                 message: String::from_utf8_lossy(bytes).to_string(),
+                trace_context: None,
             }),
             Self::StdErr { timestamp, bytes } => Some(OplogEntry::Log {
                 timestamp: *timestamp,
@@ -122,6 +123,7 @@ impl InternalWorkerEvent {
                 level: oplog::LogLevel::Stderr,
                 context: String::new(),
                 message: String::from_utf8_lossy(bytes).to_string(),
+                trace_context: None,
             }),
             Self::Log {
                 timestamp,
@@ -141,6 +143,7 @@ impl InternalWorkerEvent {
                 },
                 context: context.clone(),
                 message: message.clone(),
+                trace_context: None,
             }),
             Self::InvocationStart { .. } => None,
             Self::InvocationFinished { .. } => None,

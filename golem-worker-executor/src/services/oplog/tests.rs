@@ -2242,6 +2242,67 @@ async fn explicit_commit_reports_threshold_commits_once_and_preserves_add_receip
 }
 
 #[test]
+async fn synchronously_enqueued_pair_is_atomic_ordered_and_independent_of_receipt(
+    _tracing: &Tracing,
+) {
+    let service = PrimaryOplogService::new(
+        Arc::new(InMemoryIndexedStorage::new()),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "synchronous-pair".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = service
+        .create_fresh(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            create_test_entry(
+                agent_id.clone(),
+                AgentMode::Durable,
+                ComponentRevision::new(1).unwrap(),
+                environment_id,
+                account_id,
+                Uuid::new_v4(),
+            )
+            .rounded(),
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+
+    let pair = oplog.enqueue_add_pair(
+        OplogEntry::suspend().rounded(),
+        Box::new(|_| OplogEntry::exited().rounded()),
+    );
+    drop(pair);
+    let later = oplog.enqueue_add(OplogEntry::restart().rounded()).await;
+
+    let entries = oplog
+        .read_exact(OplogIndex::INITIAL.next(), 3)
+        .await
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+        vec![later.previous().previous(), later.previous(), later]
+    );
+    assert!(matches!(entries[0].1, OplogEntry::Suspend { .. }));
+    assert!(matches!(entries[1].1, OplogEntry::Exited { .. }));
+    assert!(matches!(entries[2].1, OplogEntry::Restart { .. }));
+}
+
+#[test]
 async fn archiving_auto_committed_entries_does_not_consume_explicit_commit_report(
     _tracing: &Tracing,
 ) {
@@ -4775,6 +4836,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             observational_owner: None,
             request: Some(request),
             durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
         }
         .rounded();
         oplog.add(entry.clone()).await;
@@ -6587,6 +6649,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             LogLevel::Debug,
                             "test".to_string(),
                             "test".to_string(),
+                            None,
                         ))
                         .await;
                 }
@@ -6606,6 +6669,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             LogLevel::Debug,
                             "test".to_string(),
                             "test".to_string(),
+                            None,
                         ))
                         .await;
                 }
@@ -6621,6 +6685,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                             LogLevel::Debug,
                             "test".to_string(),
                             "test".to_string(),
+                            None,
                         ))
                         .await;
                 }
@@ -7815,6 +7880,7 @@ async fn reserved_large_request_is_durable_via_commit_barrier(_tracing: &Tracing
             observational_owner: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
+            span_started: None,
         })
         .await
         .unwrap();
@@ -7900,6 +7966,7 @@ async fn reserved_small_request_stays_inline(_tracing: &Tracing) {
             observational_owner: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
+            span_started: None,
         })
         .await
         .unwrap();
@@ -7951,6 +8018,7 @@ fn reserved_start_entry_builder(
         observational_owner: None,
         request: Some(request_payload),
         durable_function_type: DurableFunctionType::ReadRemote,
+        span_started: None,
     }
 }
 

@@ -1358,12 +1358,12 @@ impl Oplog for MultiLayerOplog {
             .await
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
-        self.primary.add_pair(start, make_second).await
+    ) -> super::OplogAddPairReceipt {
+        self.primary.enqueue_add_pair(start, make_second)
     }
 
     async fn add_start_with_reserved_raw_payload(

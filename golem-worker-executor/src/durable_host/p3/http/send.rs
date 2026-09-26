@@ -20,8 +20,9 @@ use super::serialization::{
 use super::*;
 use crate::durable_host::authorization::targets::http_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, Cancellable, DeferredCallReplayOutcome, DropPolicy, DurableCallSession,
-    LeaveIncompleteOnDrop, authorize_live_permissions_at_serialized_access, finish_span_in_memory,
+    AccessClaimOptions, CallSpanObserver, Cancellable, DeferredCallReplayOutcome, DropPolicy,
+    DurableCallSession, LeaveIncompleteOnDrop, authorize_live_permissions_at_serialized_access,
+    finish_span_in_memory,
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
@@ -39,15 +40,16 @@ use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
 use futures::future::{Either, select};
-use golem_common::model::invocation_context::{AttributeValue, SpanId};
+use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::P3HttpClientSend;
 use golem_common::model::oplog::payload::types::{
     SerializableHttpMethod, SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpScheme,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostRequestP3HttpClientSend,
-    HostResponseP3HttpClientSendResult, OplogIndex,
+    AttributeMap, DurableFunctionType, HostRequest, HostRequestP3HttpClientSend,
+    HostResponseP3HttpClientSendResult, OplogEntry, OplogIndex, SpanFinished, SpanKind,
+    SpanStarted,
 };
 use golem_common::model::{
     NamedRetryPolicy, OwnedAgentId, PredicateValue, RetryContext, RetryProperties,
@@ -60,12 +62,14 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::AsContextMut;
-use wasmtime::component::{Accessor, Resource};
+use wasmtime::component::{Accessor, AccessorTask, Resource, TerminalConsumption};
 use wasmtime_wasi_http::P3PooledConnection;
 use wasmtime_wasi_http::p3::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::types::{ErrorCode, Request, Response};
@@ -225,37 +229,113 @@ where
         observational_owner: None,
         ..Default::default()
     };
-    let mut handle = DurableCallSession::<P3HttpClientSend, P>::start_access_with_options(
-        store,
-        durable_worker_ctx::<Ctx, U>,
-        function_type.clone(),
-        claim_options,
-        async |_| Ok(host_request),
-    )
-    .await
-    .map_err(HttpError::trap)?;
+    let span_seed = store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        (
+            ctx.state.owned_agent_id.clone(),
+            ctx.state.invocation_context.trace_id.clone(),
+            ctx.state.invocation_context.trace_states.clone(),
+            ctx.state.current_span_id.clone(),
+        )
+    });
+    let span_request = serialized_request.clone();
+    let persisted = store.with(|mut access| {
+        !durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .state
+            .durability_is_suppressed()
+    });
+    let cleanup_recorder = store.with(|mut access| {
+        crate::durable_host::concurrent::HttpSpanCleanupRecorder::new(
+            durable_worker_ctx::<Ctx, U>(access.data_mut()),
+            OplogIndex::INITIAL,
+            None,
+            persisted,
+        )
+    });
+    let lifecycle = Arc::new(P3SendSpanLifecycle::new(cleanup_recorder));
+    let send_terminal =
+        SendTerminalObserver::register(store, lifecycle.clone()).map_err(HttpError::trap)?;
+    let span_started_at = golem_common::model::Timestamp::now_utc();
+    let mut handle =
+        DurableCallSession::<P3HttpClientSend, P>::start_access_with_options_and_indexed_span(
+            store,
+            durable_worker_ctx::<Ctx, U>,
+            function_type.clone(),
+            claim_options,
+            async |_| Ok(host_request),
+            move |start_index| {
+                let (owned_agent_id, trace_id, trace_states, parent_span_id) = span_seed;
+                Ok(SpanStarted {
+                    span_id: derive_p3_send_span_id(&owned_agent_id, start_index),
+                    trace_id,
+                    trace_states,
+                    parent_span_id: Some(parent_span_id),
+                    links: Vec::new(),
+                    started_at: span_started_at,
+                    attributes: AttributeMap(
+                        outgoing_http_request_span_attributes(&span_request)
+                            .into_iter()
+                            .collect(),
+                    ),
+                    kind: SpanKind::Client,
+                })
+            },
+            lifecycle.clone(),
+        )
+        .await
+        .map_err(HttpError::trap)?;
     let send_start_index = handle.start_index();
     let observational_owner = handle.observational_owner();
 
+    let span_started = if handle.is_persisted() {
+        lifecycle.started_span().ok_or_else(|| {
+            HttpError::trap(WorkerExecutorError::runtime(
+                "p3 HTTP send Start has no span_started transition",
+            ))
+        })?
+    } else {
+        let ctx = store.with(|mut access| {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            (
+                ctx.state.owned_agent_id.clone(),
+                ctx.state.invocation_context.trace_id.clone(),
+                ctx.state.invocation_context.trace_states.clone(),
+                ctx.state.current_span_id.clone(),
+            )
+        });
+        SpanStarted {
+            span_id: derive_p3_send_span_id(&ctx.0, send_start_index),
+            trace_id: ctx.1,
+            trace_states: ctx.2,
+            parent_span_id: Some(ctx.3),
+            links: Vec::new(),
+            started_at: span_started_at,
+            attributes: AttributeMap(
+                outgoing_http_request_span_attributes(&serialized_request)
+                    .into_iter()
+                    .collect(),
+            ),
+            kind: SpanKind::Client,
+        }
+    };
+    if !handle.is_persisted() {
+        lifecycle.snapshot_started(send_start_index, observational_owner, span_started.clone());
+    }
     let span = store
         .with(|mut access| {
-            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            let span_id = derive_p3_send_span_id(&ctx.state.owned_agent_id, send_start_index);
-            let parent = ctx.state.current_span_id.clone();
-            let span = ctx
-                .state
-                .invocation_context
-                .start_span(&parent, Some(span_id.clone()))
-                .map_err(WorkerExecutorError::runtime)?;
-            for (name, value) in outgoing_http_request_span_attributes(&serialized_request) {
-                span.set_attribute(name, value);
-            }
+            install_p3_send_span(
+                durable_worker_ctx::<Ctx, U>(access.data_mut()),
+                &span_started,
+            )?;
             Ok::<_, WorkerExecutorError>(P3HttpSendSpan {
-                span_id,
+                span_id: span_started.span_id.clone(),
                 send_start_index,
+                persisted: handle.is_persisted(),
+                closure_claimed: lifecycle.closure_claimed.clone(),
             })
         })
         .map_err(HttpError::trap)?;
+    handle.close_span_on_cancellation(span.span_id.clone());
 
     if !handle.is_live() {
         // The guest may drop this send future at any await point below (e.g.
@@ -334,7 +414,7 @@ where
                             store,
                             &response,
                             OpenP3HttpResponseState {
-                                span,
+                                span: span.clone(),
                                 method: serialized_request.method.to_string(),
                                 uri: outgoing_http_request_uri(&serialized_request),
                                 is_idempotent: effective_method_idempotence::<Ctx, U>(
@@ -368,20 +448,22 @@ where
                             // bookkeeping, recorder spawned); park instead of returning the
                             // response, so the deterministic guest drops this future at the
                             // same point it did live.
+                            send_terminal
+                                .attach(store, delivery)
+                                .await
+                                .map_err(HttpError::trap)?;
                             std::future::pending::<()>().await;
                             unreachable!("std::future::pending never completes")
                         }
-                        delivery
-                            .deliver_at_accessor_terminal(store)
+                        send_terminal
+                            .attach(store, delivery)
                             .await
                             .map_err(HttpError::trap)?;
                         return Ok(response);
                     }
                     Err(error) => {
-                        // A recorded send error closed the span live right
-                        // after the `End`; finish it here at the same point
-                        // (consuming the positional `FinishSpan` for legacy
-                        // spans).
+                        // A recorded send error closed the span at its `End`;
+                        // apply the same in-memory transition on replay.
                         finish_p3_send_span::<Ctx, U>(store, &span)
                             .await
                             .map_err(HttpError::trap)?;
@@ -401,8 +483,9 @@ where
                             std::future::pending::<()>().await;
                             unreachable!("std::future::pending never completes")
                         }
-                        delivery
-                            .deliver_at_accessor_terminal(store)
+                        span.claim_closure();
+                        send_terminal
+                            .attach(store, delivery)
                             .await
                             .map_err(HttpError::trap)?;
                         return Err(error);
@@ -422,11 +505,11 @@ where
         let result =
             SerializableP3HttpClientSendResult::HttpError(serialize_error_code(&error_code));
         let (_, delivery) = handle
-            .complete_access_deferred(
+            .complete_access_deferred_with_span(
                 store,
                 durable_worker_ctx::<Ctx, U>,
                 HostResponseP3HttpClientSendResult { result },
-                None,
+                p3_send_span_finished(&span, golem_common::model::oplog::SpanOutcome::Denied),
             )
             .await
             .map_err(HttpError::trap)?;
@@ -441,8 +524,9 @@ where
                 .map_err(HttpError::trap)?;
         }
         start_transmission_recording::<Ctx, U>(store, pending_transmission, observational_owner);
-        delivery
-            .deliver_at_accessor_terminal(store)
+        span.claim_closure();
+        send_terminal
+            .attach(store, delivery)
             .await
             .map_err(HttpError::trap)?;
         return Err(error_code.into());
@@ -511,11 +595,11 @@ where
             // the terminal through the deferred API so a future torn between the `End` and
             // the return records the discard instead of replay redelivering the error.
             let (_, delivery) = handle
-                .complete_access_deferred(
+                .complete_access_deferred_with_span(
                     store,
                     durable_worker_ctx::<Ctx, U>,
                     HostResponseP3HttpClientSendResult { result },
-                    None,
+                    p3_send_span_finished(&span, golem_common::model::oplog::SpanOutcome::Failed),
                 )
                 .await
                 .map_err(HttpError::trap)?;
@@ -536,8 +620,9 @@ where
                 // The guest-visible error return below still crosses Wasmtime's lowering
                 // and terminal-consumption boundary: hand the token to the terminal
                 // observer instead of consuming it here.
-                delivery
-                    .deliver_at_accessor_terminal(store)
+                span.claim_closure();
+                send_terminal
+                    .attach(store, delivery)
                     .await
                     .map_err(HttpError::trap)?;
             } else {
@@ -820,7 +905,6 @@ where
                     store,
                     durable_worker_ctx::<Ctx, U>,
                     HostResponseP3HttpClientSendResult { result },
-                    None,
                 )
                 .await
                 .map_err(HttpError::trap)?;
@@ -833,7 +917,7 @@ where
                 store,
                 &response,
                 OpenP3HttpResponseState {
-                    span,
+                    span: span.clone(),
                     method: retry_method.clone(),
                     uri: retry_uri.clone(),
                     is_idempotent: effective_method_idempotence::<Ctx, U>(
@@ -864,8 +948,8 @@ where
             // Everything since the `End` was synchronous, so no tear window remains between
             // here and handing the token to Wasmtime's terminal observer, which settles it
             // when the guest actually consumes (or discards) the lowered response.
-            delivery
-                .deliver_at_accessor_terminal(store)
+            send_terminal
+                .attach(store, delivery)
                 .await
                 .map_err(HttpError::trap)?;
             Ok(response)
@@ -924,16 +1008,14 @@ where
 
             let result = SerializableP3HttpClientSendResult::HttpError(serialized_error);
             // The guest-visible error return below is the real delivery boundary: record the
-            // terminal through the deferred API — the span's durable `FinishSpan` (legacy
-            // spans) rides the same owned task as the `End` — so a future torn between the
-            // `End` and the return records the discard instead of replay redelivering the
-            // error.
+            // terminal through the deferred API so a future torn between the `End` and the
+            // return records the discard instead of replay redelivering the error.
             let (_, delivery) = handle
-                .complete_access_deferred(
+                .complete_access_deferred_with_span(
                     store,
                     durable_worker_ctx::<Ctx, U>,
                     HostResponseP3HttpClientSendResult { result },
-                    None,
+                    p3_send_span_finished(&span, golem_common::model::oplog::SpanOutcome::Failed),
                 )
                 .await
                 .map_err(HttpError::trap)?;
@@ -966,8 +1048,9 @@ where
             // The guest-visible error return below still crosses Wasmtime's lowering and
             // terminal-consumption boundary: hand the token to the terminal observer instead
             // of consuming it here.
-            delivery
-                .deliver_at_accessor_terminal(store)
+            span.claim_closure();
+            send_terminal
+                .attach(store, delivery)
                 .await
                 .map_err(HttpError::trap)?;
             Err(error_code.into())
@@ -1326,11 +1409,19 @@ where
 #[derive(Clone)]
 pub(crate) struct P3HttpSendSpan {
     pub(crate) span_id: SpanId,
+    pub(crate) persisted: bool,
     /// The send's own host-call `Start` index. Used to discriminate the durable consume-body
     /// scope of the response body: unlike the span id (which is derived from the owning agent's
     /// id and therefore changes when the oplog is forked to another agent), the `Start` index is
     /// part of the recorded oplog itself and survives fork/revert unchanged.
     pub(crate) send_start_index: OplogIndex,
+    closure_claimed: Arc<AtomicBool>,
+}
+
+impl P3HttpSendSpan {
+    pub(crate) fn claim_closure(&self) -> bool {
+        !self.closure_claimed.swap(true, Ordering::AcqRel)
+    }
 }
 
 /// Deterministically derives the span id of a p3 send's
@@ -1346,6 +1437,477 @@ pub(super) fn derive_p3_send_span_id(
     let (hi, lo) = Uuid::new_v5(&Uuid::NAMESPACE_OID, name.as_bytes()).as_u64_pair();
     let n = NonZeroU64::new(hi ^ lo).unwrap_or(NonZeroU64::new(u64::MAX).unwrap());
     SpanId(n)
+}
+
+fn install_p3_send_span<Ctx: WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    started: &SpanStarted,
+) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
+    let parent = started
+        .parent_span_id
+        .as_ref()
+        .map(|id| ctx.state.invocation_context.get(id))
+        .transpose()
+        .map_err(WorkerExecutorError::runtime)?;
+    let mut builder = InvocationContextSpan::local()
+        .with_span_id(started.span_id.clone())
+        .with_start(started.started_at)
+        .with_attributes(started.attributes.0.clone());
+    if let Some(parent) = parent {
+        builder = builder.with_parent(parent);
+    }
+    let span = builder.build();
+    ctx.state.invocation_context.add_span_with_origin(
+        span.clone(),
+        started.trace_id.clone(),
+        started.trace_states.clone(),
+    );
+    Ok(span)
+}
+
+pub(super) fn p3_send_span_finished(
+    span: &P3HttpSendSpan,
+    outcome: golem_common::model::oplog::SpanOutcome,
+) -> golem_common::model::oplog::SpanFinished {
+    golem_common::model::oplog::SpanFinished {
+        span_id: span.span_id.clone(),
+        finished_at: golem_common::model::Timestamp::now_utc(),
+        outcome,
+    }
+}
+
+struct SendTerminalObserver {
+    state: Arc<Mutex<SendTerminalState>>,
+    registered: bool,
+}
+
+struct P3SendSpanLifecycle {
+    state: Mutex<P3SendSpanLifecycleState>,
+    closure_claimed: Arc<AtomicBool>,
+}
+
+impl std::fmt::Debug for P3SendSpanLifecycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("P3SendSpanLifecycle")
+            .field("closure_claimed", &self.closure_claimed)
+            .finish_non_exhaustive()
+    }
+}
+
+struct P3SendSpanLifecycleState {
+    recorder: crate::durable_host::concurrent::HttpSpanCleanupRecorder,
+    started: Option<SpanStarted>,
+    abandonment: Option<golem_common::model::Timestamp>,
+    cleanup_submitted: bool,
+    replay_tx:
+        Option<oneshot::Sender<Option<crate::durable_host::concurrent::HttpSpanCleanupReplay>>>,
+}
+
+impl P3SendSpanLifecycle {
+    fn new(recorder: crate::durable_host::concurrent::HttpSpanCleanupRecorder) -> Self {
+        Self {
+            state: Mutex::new(P3SendSpanLifecycleState {
+                recorder,
+                started: None,
+                abandonment: None,
+                cleanup_submitted: false,
+                replay_tx: None,
+            }),
+            closure_claimed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn set_replay_sender(
+        &self,
+        replay_tx: oneshot::Sender<Option<crate::durable_host::concurrent::HttpSpanCleanupReplay>>,
+    ) {
+        self.state.lock().unwrap().replay_tx = Some(replay_tx);
+    }
+
+    fn started_span(&self) -> Option<SpanStarted> {
+        self.state.lock().unwrap().started.clone()
+    }
+
+    fn snapshot_started(&self, index: OplogIndex, owner: Option<OplogIndex>, started: SpanStarted) {
+        let mut state = self.state.lock().unwrap();
+        state.recorder = state.recorder.clone().for_start(index, owner, true);
+        state.started = Some(started);
+    }
+
+    fn abandon(&self) {
+        let mut state = self.state.lock().expect("p3 send span lifecycle poisoned");
+        state
+            .abandonment
+            .get_or_insert_with(golem_common::model::Timestamp::now_utc);
+        self.submit_cleanup(&mut state);
+    }
+
+    fn submit_cleanup(&self, state: &mut P3SendSpanLifecycleState) {
+        if state.cleanup_submitted {
+            return;
+        }
+        let (Some(started), Some(finished_at)) = (&state.started, state.abandonment) else {
+            return;
+        };
+        if self.closure_claimed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        state.cleanup_submitted = true;
+        let replay = state.recorder.clone().record(SpanFinished {
+            span_id: started.span_id.clone(),
+            finished_at,
+            outcome: golem_common::model::oplog::SpanOutcome::Abandoned,
+        });
+        if let Some(tx) = state.replay_tx.take() {
+            let _ = tx.send(replay);
+        }
+    }
+}
+
+impl CallSpanObserver for P3SendSpanLifecycle {
+    fn started(self: Arc<Self>, index: OplogIndex, entry: &OplogEntry, replay: bool) {
+        let OplogEntry::Start {
+            observational_owner,
+            span_started: Some(started),
+            ..
+        } = entry
+        else {
+            return;
+        };
+        let mut state = self.state.lock().expect("p3 send span lifecycle poisoned");
+        state.recorder = state
+            .recorder
+            .clone()
+            .for_start(index, *observational_owner, !replay);
+        state.started = Some((**started).clone());
+        self.submit_cleanup(&mut state);
+    }
+
+    fn closed(&self, _finished: &SpanFinished) {
+        self.closure_claimed.store(true, Ordering::Release);
+    }
+}
+
+struct SendTerminalState {
+    consumption: Option<TerminalConsumption>,
+    delivery: Option<crate::durable_host::concurrent::CompletionDelivery>,
+}
+
+impl Drop for SendTerminalState {
+    fn drop(&mut self) {
+        if let Some(delivery) = self.delivery.take() {
+            delivery.suppress();
+        }
+    }
+}
+
+impl SendTerminalObserver {
+    fn register<Ctx: WorkerCtx, U: Send + 'static>(
+        store: &Accessor<U, DurableP3<Ctx>>,
+        lifecycle: Arc<P3SendSpanLifecycle>,
+    ) -> Result<Self, WorkerExecutorError> {
+        let state = Arc::new(Mutex::new(SendTerminalState {
+            consumption: None,
+            delivery: None,
+        }));
+        if !store.has_guest_visible_subtask() {
+            return Ok(Self {
+                state,
+                registered: false,
+            });
+        }
+        let cleared = store
+            .clear_terminal_observer()
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        if cleared {
+            return Err(WorkerExecutorError::runtime(
+                "a completion-delivery observer of an earlier durable call was still armed when p3 HTTP send started on the same host subtask",
+            ));
+        }
+        let observer_state = state.clone();
+        let (replay_tx, replay_rx) = oneshot::channel();
+        lifecycle.set_replay_sender(replay_tx);
+        store.spawn(SpawnHttpCleanupReplay::<Ctx> {
+            replay_rx,
+            _phantom: PhantomData,
+        });
+        store
+            .register_terminal_observer(move |consumption| {
+                if consumption == TerminalConsumption::NotDelivered {
+                    lifecycle.abandon();
+                }
+                let delivery = {
+                    let mut state = observer_state.lock().expect("send terminal lock poisoned");
+                    if let Some(delivery) = state.delivery.take() {
+                        Some(delivery)
+                    } else {
+                        state.consumption = Some(consumption);
+                        None
+                    }
+                };
+                if let Some(delivery) = delivery {
+                    settle_send_terminal(consumption, delivery);
+                }
+            })
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        Ok(Self {
+            state,
+            registered: true,
+        })
+    }
+
+    async fn attach<Ctx: WorkerCtx, U: Send + 'static>(
+        self,
+        store: &Accessor<U, DurableP3<Ctx>>,
+        mut delivery: crate::durable_host::concurrent::CompletionDelivery,
+    ) -> Result<(), WorkerExecutorError> {
+        if !self.registered {
+            return delivery.deliver_at_accessor_terminal(store).await;
+        }
+        delivery.prepare_delivery(None).await?;
+        let consumption = {
+            let mut state = self.state.lock().expect("send terminal lock poisoned");
+            if state.consumption.is_none() {
+                state.delivery = Some(delivery);
+                return Ok(());
+            }
+            state.consumption.take().unwrap()
+        };
+        settle_send_terminal(consumption, delivery);
+        Ok(())
+    }
+}
+
+fn settle_send_terminal(
+    consumption: TerminalConsumption,
+    delivery: crate::durable_host::concurrent::CompletionDelivery,
+) {
+    match consumption {
+        TerminalConsumption::Delivered => delivery.delivered(),
+        TerminalConsumption::NotDelivered => {
+            drop(delivery);
+        }
+        TerminalConsumption::Superseded => delivery.suppress(),
+    }
+}
+
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+    use crate::durable_host::concurrent::{CompletionDelivery, DropEvent, cleanup_recorder};
+    use crate::durable_host::p3::http::test_support::FrameTestOplog;
+    use crate::services::oplog::Oplog;
+    use golem_common::model::Timestamp;
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::{
+        HostPayloadPair, HostRequestNoInput, OplogEntry, OplogPayload,
+    };
+    use test_r::test;
+
+    fn opening() -> OplogEntry {
+        OplogEntry::Start {
+            timestamp: "2025-03-12T13:14:00Z".parse().unwrap(),
+            parent_start_index: None,
+            function_name: P3HttpClientSend::HOST_FUNCTION_NAME,
+            invocation_id: None,
+            observational_owner: Some(OplogIndex::from_u64(7)),
+            request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
+            durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: Some(Box::new(SpanStarted {
+                span_id: SpanId::generate(),
+                trace_id: TraceId::generate(),
+                trace_states: Vec::new(),
+                parent_span_id: None,
+                links: Vec::new(),
+                started_at: "2025-03-12T13:14:00Z".parse().unwrap(),
+                attributes: AttributeMap(HashMap::new()),
+                kind: SpanKind::Client,
+            })),
+        }
+    }
+
+    #[test]
+    async fn send_span_abandonment_waits_for_opening_and_preserves_drop_time() {
+        for abandon_before_start in [true, false] {
+            let oplog = FrameTestOplog::new();
+            oplog
+                .add(OplogEntry::NoOp {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                })
+                .await;
+            let (recorder, mut events) = cleanup_recorder(oplog.clone(), true, true).await;
+            let lifecycle = Arc::new(P3SendSpanLifecycle::new(recorder));
+            let entry = opening();
+            let finished_at: Timestamp = "2025-03-12T13:14:15.123Z".parse().unwrap();
+            if abandon_before_start {
+                lifecycle.state.lock().unwrap().abandonment = Some(finished_at);
+                lifecycle.abandon();
+                assert!(events.try_recv().is_err());
+                assert_eq!(oplog.entry_count(), 1);
+            }
+            let index = oplog.add(entry.clone()).await;
+            lifecycle.clone().started(index, &entry, false);
+            if !abandon_before_start {
+                lifecycle.state.lock().unwrap().abandonment = Some(finished_at);
+                lifecycle.abandon();
+            }
+            lifecycle.abandon();
+            let entries = oplog.entries();
+            assert_eq!(entries.len(), 4);
+            assert!(matches!(&entries[2], OplogEntry::Start {
+                function_name, observational_owner: Some(owner), request: Some(OplogPayload::Inline(request)), ..
+            } if *function_name == golem_common::model::oplog::host_functions::P3HttpSpanCleanup::HOST_FUNCTION_NAME
+                && *owner == OplogIndex::from_u64(7)
+                && matches!(request.as_ref(), HostRequest::P3HttpSpanCleanup(request) if request.send_start_index == index)));
+            assert!(
+                matches!(&entries[3], OplogEntry::End { span_finished: Some(finished), .. }
+                if finished.finished_at == finished_at
+                    && finished.span_id == lifecycle.started_span().unwrap().span_id
+                    && finished.outcome == golem_common::model::oplog::SpanOutcome::Abandoned)
+            );
+            assert!(matches!(
+                events.try_recv(),
+                Ok(DropEvent::FinishP3HttpSpan { .. })
+            ));
+            assert!(events.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    async fn send_span_terminal_owner_prevents_abandonment_cleanup() {
+        for outcome in [
+            golem_common::model::oplog::SpanOutcome::Failed,
+            golem_common::model::oplog::SpanOutcome::Cancelled,
+        ] {
+            let oplog = FrameTestOplog::new();
+            oplog
+                .add(OplogEntry::NoOp {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                })
+                .await;
+            let (recorder, mut events) = cleanup_recorder(oplog.clone(), true, true).await;
+            let lifecycle = Arc::new(P3SendSpanLifecycle::new(recorder));
+            let entry = opening();
+            let index = oplog.add(entry.clone()).await;
+            lifecycle.clone().started(index, &entry, false);
+            lifecycle.closed(&SpanFinished {
+                span_id: lifecycle.started_span().unwrap().span_id,
+                finished_at: Timestamp::now_utc(),
+                outcome,
+            });
+            lifecycle.abandon();
+            assert_eq!(oplog.entries()[1..], [entry]);
+            assert!(events.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    async fn send_span_teardown_and_snapshot_do_not_append_cleanup() {
+        for persisted in [true, false] {
+            let oplog = FrameTestOplog::new();
+            oplog
+                .add(OplogEntry::NoOp {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                })
+                .await;
+            let (recorder, mut events) = cleanup_recorder(oplog.clone(), true, persisted).await;
+            let lifecycle = Arc::new(P3SendSpanLifecycle::new(recorder));
+            let entry = opening();
+            lifecycle
+                .clone()
+                .started(OplogIndex::from_u64(3), &entry, false);
+            if !persisted {
+                lifecycle.abandon();
+                assert!(matches!(
+                    events.try_recv(),
+                    Ok(DropEvent::FinishP3HttpSpan { .. })
+                ));
+            }
+            drop(lifecycle);
+            assert!(events.try_recv().is_err());
+            assert_eq!(oplog.entry_count(), 1);
+        }
+    }
+
+    #[test]
+    async fn send_observer_records_only_positive_guest_consumption() {
+        for consumption in [
+            None,
+            Some(TerminalConsumption::Superseded),
+            Some(TerminalConsumption::Delivered),
+            Some(TerminalConsumption::NotDelivered),
+        ] {
+            let oplog = FrameTestOplog::new();
+            let start_index = oplog
+                .add(OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    function_name: golem_common::model::oplog::host_functions::HostFunctionName::P3HttpClientSend,
+                    invocation_id: None,
+                    observational_owner: None,
+                    request: Some(OplogPayload::Inline(Box::new(
+                        HostRequestNoInput {}.into(),
+                    ))),
+                    durable_function_type: DurableFunctionType::WriteRemote,
+                    span_started: None,
+                })
+                .await;
+            oplog
+                .add(OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index,
+                    response: None,
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                })
+                .await;
+            let delivery = CompletionDelivery::test_live_armed(oplog.clone(), start_index)
+                .await
+                .unwrap();
+            let mut state = SendTerminalState {
+                consumption: None,
+                delivery: Some(delivery),
+            };
+            if let Some(consumption) = consumption {
+                settle_send_terminal(consumption, state.delivery.take().unwrap());
+            }
+            drop(state);
+            let entries = oplog.entries();
+            match consumption {
+                None | Some(TerminalConsumption::Superseded) => assert_eq!(entries.len(), 2),
+                Some(TerminalConsumption::Delivered) => assert!(matches!(
+                    entries.as_slice(),
+                    [_, _, OplogEntry::CompletionDelivered { start_index: recorded, .. }]
+                        if *recorded == start_index
+                )),
+                Some(TerminalConsumption::NotDelivered) => assert!(matches!(
+                    entries.as_slice(),
+                    [_, _, OplogEntry::CompletionDiscarded { start_index: recorded, .. }]
+                        if *recorded == start_index
+                )),
+            }
+        }
+    }
+}
+
+struct SpawnHttpCleanupReplay<Ctx> {
+    replay_rx: oneshot::Receiver<Option<crate::durable_host::concurrent::HttpSpanCleanupReplay>>,
+    _phantom: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, DurableP3<Ctx>>
+    for SpawnHttpCleanupReplay<Ctx>
+{
+    async fn run(self, accessor: &Accessor<U, DurableP3<Ctx>>) -> wasmtime::Result<()> {
+        if let Ok(Some(replay)) = self.replay_rx.await {
+            accessor.spawn(replay);
+        }
+        Ok(())
+    }
 }
 
 /// A deterministic digest of a P3 send's serialized request head, used to discriminate the

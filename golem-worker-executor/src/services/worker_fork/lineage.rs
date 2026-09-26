@@ -714,6 +714,7 @@ pub(crate) mod tests {
                 .add(OplogEntry::StreamSession {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: fixture.oplog.upload_payload(&marker).await.unwrap(),
                 })
                 .await;
@@ -803,11 +804,13 @@ pub(crate) mod tests {
                 5 => OplogEntry::StreamRegistered {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: fixture.oplog.upload_payload(&registration).await.unwrap(),
                 },
                 6 => OplogEntry::StreamSession {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: fixture
                         .oplog
                         .upload_payload(&StreamSessionRecord::Prepared(prepared(&key)))
@@ -820,6 +823,7 @@ pub(crate) mod tests {
                     OplogEntry::StreamRegistered {
                         timestamp: Timestamp::now_utc(),
                         entity_parent_start_index: None,
+                        summary: None,
                         record: fixture.oplog.upload_payload(&discarded).await.unwrap(),
                     }
                 }
@@ -829,6 +833,7 @@ pub(crate) mod tests {
                     OplogEntry::StreamSession {
                         timestamp: Timestamp::now_utc(),
                         entity_parent_start_index: None,
+                        summary: None,
                         record: fixture
                             .oplog
                             .upload_payload(&StreamSessionRecord::Prepared(discarded))
@@ -842,6 +847,7 @@ pub(crate) mod tests {
                     OplogEntry::StreamSession {
                         timestamp: Timestamp::now_utc(),
                         entity_parent_start_index: None,
+                        summary: None,
                         record: fixture
                             .oplog
                             .upload_payload(&StreamSessionRecord::ForkCut(discarded))
@@ -866,6 +872,7 @@ pub(crate) mod tests {
             .add(OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                summary: None,
                 record: fixture
                     .oplog
                     .upload_payload(&StreamSessionRecord::ForkCut(marker))
@@ -916,11 +923,13 @@ pub(crate) mod tests {
                 5 => OplogEntry::StreamRegistered {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: oplog.upload_payload(&registration).await.unwrap(),
                 },
                 6 => OplogEntry::StreamSession {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: oplog
                         .upload_payload(&StreamSessionRecord::Prepared(prepared(&key)))
                         .await
@@ -929,6 +938,7 @@ pub(crate) mod tests {
                 1025 => OplogEntry::StreamSession {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: oplog
                         .upload_payload(&StreamSessionRecord::ForkCut(cut.clone()))
                         .await
@@ -1001,12 +1011,14 @@ pub(crate) mod tests {
                     OplogEntry::StreamRegistered {
                         timestamp: Timestamp::now_utc(),
                         entity_parent_start_index: None,
+                        summary: None,
                         record: oplog.upload_payload(&registration).await.unwrap(),
                     }
                 } else if let Some(session) = session {
                     OplogEntry::StreamSession {
                         timestamp: Timestamp::now_utc(),
                         entity_parent_start_index: None,
+                        summary: None,
                         record: oplog.upload_payload(&session).await.unwrap(),
                     }
                 } else {
@@ -1042,11 +1054,13 @@ pub(crate) mod tests {
                 5 => OplogEntry::StreamRegistered {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: fixture.oplog.upload_payload(&registration).await.unwrap(),
                 },
                 6 => OplogEntry::StreamSession {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: fixture
                         .oplog
                         .upload_payload(&StreamSessionRecord::Prepared(prepared(&key)))
@@ -1056,6 +1070,7 @@ pub(crate) mod tests {
                 1025 => OplogEntry::StreamSession {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: fixture
                         .oplog
                         .upload_payload(&StreamSessionRecord::ForkCut(cut.clone()))
@@ -1136,6 +1151,7 @@ pub(crate) mod tests {
                 .add(OplogEntry::StreamSession {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: None,
+                    summary: None,
                     record: fixture.oplog.upload_payload(&marker).await.unwrap(),
                 })
                 .await,

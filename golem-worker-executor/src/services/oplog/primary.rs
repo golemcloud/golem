@@ -1913,17 +1913,29 @@ impl Oplog for PrimaryOplog {
             .await
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
-        self.run_job(|done| OplogJob::AddPair {
-            start,
-            make_second,
-            done,
+    ) -> super::OplogAddPairReceipt {
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self
+            .jobs
+            .send(OplogJob::AddPair {
+                start,
+                make_second,
+                done,
+            })
+            .is_err()
+        {
+            panic!("Oplog actor for {} terminated unexpectedly", self.key);
+        }
+        let key = self.key.clone();
+        Box::pin(async move {
+            done_rx.await.unwrap_or_else(|_| {
+                panic!("Oplog actor for {key} dropped an add-pair request without replying")
+            })
         })
-        .await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {

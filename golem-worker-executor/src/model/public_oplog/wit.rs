@@ -28,19 +28,233 @@ use golem_common::model::oplog::public_oplog_entry::{
     CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
     CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
     DeactivatePluginParams, DropResourceParams, EndAtomicRegionParams, EndParams, ErrorParams,
-    ExitedParams, FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostStreamFrameParams,
-    InterruptedParams, JumpParams, LogParams, ManualUpdateParameters, NoOpParams,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult, PublicSpanData,
-    RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StringAttributeValue,
-    SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
-    WriteRemoteTransactionParameters,
+    ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams,
+    JumpParams, LogParams, ManualUpdateParameters, NoOpParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicExternalToolResult, PublicSpanAttributes, PublicSpanData, PublicSpanFinished,
+    PublicSpanKind, PublicSpanOutcome, PublicSpanStarted, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotParams, StartParams,
+    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
+    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
+
+fn public_attribute_to_wit(value: PublicAttribute) -> oplog::Attribute {
+    oplog::Attribute {
+        key: value.key,
+        value: value.value.into(),
+    }
+}
+
+fn log_trace_context_to_wit(
+    value: golem_common::model::oplog::LogTraceContext,
+) -> oplog::LogTraceContext {
+    oplog::LogTraceContext {
+        trace_id: value.trace_id.to_string(),
+        span_id: value.span_id.to_string(),
+    }
+}
+
+fn log_trace_context_from_wit(
+    value: oplog::LogTraceContext,
+) -> Result<golem_common::model::oplog::LogTraceContext, String> {
+    Ok(golem_common::model::oplog::LogTraceContext {
+        trace_id: golem_common::model::invocation_context::TraceId::from_string(&value.trace_id)?,
+        span_id: golem_common::model::invocation_context::SpanId::from_string(&value.span_id)?,
+    })
+}
+
+fn durable_stream_summary_to_wit(
+    value: golem_common::model::oplog::DurableStreamEventSummary,
+) -> oplog::DurableStreamEventSummary {
+    use golem_common::model::oplog::DurableStreamEventSummary as S;
+    let outcome = |value| match value {
+        golem_common::model::oplog::DurableStreamOutcome::Success => {
+            oplog::DurableStreamOutcome::Success
+        }
+        golem_common::model::oplog::DurableStreamOutcome::Error => {
+            oplog::DurableStreamOutcome::Error
+        }
+    };
+    match value {
+        S::Registered => oplog::DurableStreamEventSummary::Registered,
+        S::Items { item_count } => oplog::DurableStreamEventSummary::Items(item_count),
+        S::End { outcome: value } => oplog::DurableStreamEventSummary::End(outcome(value)),
+        S::Cancelled => oplog::DurableStreamEventSummary::Cancelled,
+        S::SessionResult => oplog::DurableStreamEventSummary::SessionResult,
+        S::SessionFinished { outcome: value } => {
+            oplog::DurableStreamEventSummary::SessionFinished(outcome(value))
+        }
+        S::SessionCancellation => oplog::DurableStreamEventSummary::SessionCancellation,
+        S::SessionExpired => oplog::DurableStreamEventSummary::SessionExpired,
+    }
+}
+
+fn durable_stream_summary_from_wit(
+    value: oplog::DurableStreamEventSummary,
+) -> golem_common::model::oplog::DurableStreamEventSummary {
+    use golem_common::model::oplog::{DurableStreamEventSummary as S, DurableStreamOutcome as O};
+    let outcome = |value| match value {
+        oplog::DurableStreamOutcome::Success => O::Success,
+        oplog::DurableStreamOutcome::Error => O::Error,
+    };
+    match value {
+        oplog::DurableStreamEventSummary::Registered => S::Registered,
+        oplog::DurableStreamEventSummary::Items(count) => S::Items { item_count: count },
+        oplog::DurableStreamEventSummary::End(value) => S::End {
+            outcome: outcome(value),
+        },
+        oplog::DurableStreamEventSummary::Cancelled => S::Cancelled,
+        oplog::DurableStreamEventSummary::SessionResult => S::SessionResult,
+        oplog::DurableStreamEventSummary::SessionFinished(value) => S::SessionFinished {
+            outcome: outcome(value),
+        },
+        oplog::DurableStreamEventSummary::SessionCancellation => S::SessionCancellation,
+        oplog::DurableStreamEventSummary::SessionExpired => S::SessionExpired,
+    }
+}
+
+fn public_span_started_to_wit(value: PublicSpanStarted) -> oplog::SpanStarted {
+    oplog::SpanStarted {
+        span_id: value.span_id.to_string(),
+        trace_id: value.trace_id.to_string(),
+        trace_states: value.trace_states,
+        parent_span_id: value.parent_span_id.map(|id| id.to_string()),
+        links: value
+            .links
+            .into_iter()
+            .map(|link| oplog::SpanLink {
+                trace_id: link.trace_id.to_string(),
+                span_id: link.span_id.to_string(),
+                trace_states: link.trace_states,
+            })
+            .collect(),
+        started_at: value.started_at.into(),
+        attributes: value
+            .attributes
+            .into_iter()
+            .map(public_attribute_to_wit)
+            .collect(),
+        kind: match value.kind {
+            PublicSpanKind::Internal => oplog::SpanKind::Internal,
+            PublicSpanKind::Client => oplog::SpanKind::Client,
+            PublicSpanKind::Server => oplog::SpanKind::Server,
+        },
+    }
+}
+
+fn public_span_finished_to_wit(value: PublicSpanFinished) -> oplog::SpanFinished {
+    oplog::SpanFinished {
+        span_id: value.span_id.to_string(),
+        finished_at: value.finished_at.into(),
+        outcome: match value.outcome {
+            PublicSpanOutcome::Completed => oplog::SpanOutcome::Completed,
+            PublicSpanOutcome::Failed => oplog::SpanOutcome::Failed,
+            PublicSpanOutcome::Cancelled => oplog::SpanOutcome::Cancelled,
+            PublicSpanOutcome::Abandoned => oplog::SpanOutcome::Abandoned,
+            PublicSpanOutcome::Denied => oplog::SpanOutcome::Denied,
+        },
+    }
+}
+
+fn public_span_attributes_to_wit(value: PublicSpanAttributes) -> oplog::SpanAttributes {
+    oplog::SpanAttributes {
+        span_id: value.span_id.to_string(),
+        attributes: value
+            .attributes
+            .into_iter()
+            .map(public_attribute_to_wit)
+            .collect(),
+    }
+}
+
+fn raw_span_started_to_wit(value: golem_common::model::oplog::SpanStarted) -> oplog::SpanStarted {
+    public_span_started_to_wit(super::public_span_started(value))
+}
+
+fn raw_span_finished_to_wit(
+    value: golem_common::model::oplog::SpanFinished,
+) -> oplog::SpanFinished {
+    public_span_finished_to_wit(super::public_span_finished(value))
+}
+
+fn raw_span_attributes_to_wit(
+    value: golem_common::model::oplog::SpanAttributes,
+) -> oplog::SpanAttributes {
+    public_span_attributes_to_wit(super::public_span_attributes(value))
+}
+
+fn raw_attributes_from_wit(
+    attributes: Vec<oplog::Attribute>,
+) -> golem_common::model::oplog::AttributeMap {
+    golem_common::model::oplog::AttributeMap(
+        attributes
+            .into_iter()
+            .map(|attribute| (attribute.key, attribute.value.into()))
+            .collect(),
+    )
+}
+
+fn raw_span_started_from_wit(
+    value: oplog::SpanStarted,
+) -> Result<golem_common::model::oplog::SpanStarted, String> {
+    use golem_common::model::invocation_context::{SpanId, TraceId};
+    Ok(golem_common::model::oplog::SpanStarted {
+        span_id: SpanId::from_string(&value.span_id)?,
+        trace_id: TraceId::from_string(&value.trace_id)?,
+        trace_states: value.trace_states,
+        parent_span_id: value
+            .parent_span_id
+            .map(|id| SpanId::from_string(&id))
+            .transpose()?,
+        links: value
+            .links
+            .into_iter()
+            .map(|link| {
+                Ok(golem_common::model::oplog::SpanLink {
+                    trace_id: TraceId::from_string(&link.trace_id)?,
+                    span_id: SpanId::from_string(&link.span_id)?,
+                    trace_states: link.trace_states,
+                })
+            })
+            .collect::<Result<_, String>>()?,
+        started_at: timestamp_from_datetime(value.started_at),
+        attributes: raw_attributes_from_wit(value.attributes),
+        kind: match value.kind {
+            oplog::SpanKind::Internal => golem_common::model::oplog::SpanKind::Internal,
+            oplog::SpanKind::Client => golem_common::model::oplog::SpanKind::Client,
+            oplog::SpanKind::Server => golem_common::model::oplog::SpanKind::Server,
+        },
+    })
+}
+
+fn raw_span_finished_from_wit(
+    value: oplog::SpanFinished,
+) -> Result<golem_common::model::oplog::SpanFinished, String> {
+    Ok(golem_common::model::oplog::SpanFinished {
+        span_id: golem_common::model::invocation_context::SpanId::from_string(&value.span_id)?,
+        finished_at: timestamp_from_datetime(value.finished_at),
+        outcome: match value.outcome {
+            oplog::SpanOutcome::Completed => golem_common::model::oplog::SpanOutcome::Completed,
+            oplog::SpanOutcome::Failed => golem_common::model::oplog::SpanOutcome::Failed,
+            oplog::SpanOutcome::Cancelled => golem_common::model::oplog::SpanOutcome::Cancelled,
+            oplog::SpanOutcome::Abandoned => golem_common::model::oplog::SpanOutcome::Abandoned,
+            oplog::SpanOutcome::Denied => golem_common::model::oplog::SpanOutcome::Denied,
+        },
+    })
+}
+
+fn raw_span_attributes_from_wit(
+    value: oplog::SpanAttributes,
+) -> Result<golem_common::model::oplog::SpanAttributes, String> {
+    Ok(golem_common::model::oplog::SpanAttributes {
+        span_id: golem_common::model::invocation_context::SpanId::from_string(&value.span_id)?,
+        attributes: raw_attributes_from_wit(value.attributes),
+    })
+}
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FallibleResultParameters,
@@ -385,6 +599,7 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 observational_owner,
                 request,
                 durable_function_type: wrapped_function_type,
+                span_started,
             }) => Self::Start(oplog::StartParameters {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|c| c.into()),
@@ -393,26 +608,33 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 observational_owner: observational_owner.map(|i| i.into()),
                 request: request.map(encode_public_typed_schema_value).transpose()?,
                 durable_function_type: wrapped_function_type.into(),
+                span_started: span_started.map(public_span_started_to_wit),
             }),
             PublicOplogEntry::End(EndParams {
                 timestamp,
                 start_index,
                 response,
                 forced_commit,
+                span_finished,
+                span_attributes,
             }) => Self::End(oplog::EndParameters {
                 timestamp: timestamp.into(),
                 start_index: start_index.into(),
                 response: response.map(encode_public_typed_schema_value).transpose()?,
                 forced_commit,
+                span_finished: span_finished.map(public_span_finished_to_wit),
+                span_attributes: span_attributes.map(public_span_attributes_to_wit),
             }),
             PublicOplogEntry::Cancelled(CancelledParams {
                 timestamp,
                 start_index,
                 partial,
+                span_finished,
             }) => Self::Cancelled(oplog::CancelledParameters {
                 timestamp: timestamp.into(),
                 start_index: start_index.into(),
                 partial: partial.map(encode_public_typed_schema_value).transpose()?,
+                span_finished: span_finished.map(public_span_finished_to_wit),
             }),
             PublicOplogEntry::CompletionDiscarded(CompletionDiscardedParams {
                 timestamp,
@@ -567,11 +789,13 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 level,
                 context,
                 message,
+                trace_context,
             }) => Self::Log(oplog::LogParameters {
                 timestamp: timestamp.into(),
                 level: level.into(),
                 context,
                 message,
+                trace_context: trace_context.map(log_trace_context_to_wit),
             }),
             PublicOplogEntry::Restart(RestartParams { timestamp }) => {
                 Self::Restart(timestamp.into())
@@ -607,42 +831,6 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             }) => Self::CancelPendingInvocation(oplog::CancelPendingInvocationParameters {
                 timestamp: timestamp.into(),
                 idempotency_key: idempotency_key.to_string(),
-            }),
-            PublicOplogEntry::StartSpan(StartSpanParams {
-                timestamp,
-                span_id,
-                parent_id,
-                linked_context,
-                attributes,
-            }) => Self::StartSpan(oplog::StartSpanParameters {
-                timestamp: timestamp.into(),
-                span_id: span_id.to_string(),
-                parent: parent_id.map(|id| id.to_string()),
-                linked_context_id: linked_context.map(|id| id.to_string()),
-                attributes: attributes
-                    .into_iter()
-                    .map(|attr| oplog::Attribute {
-                        key: attr.key,
-                        value: attr.value.into(),
-                    })
-                    .collect(),
-            }),
-            PublicOplogEntry::FinishSpan(FinishSpanParams { timestamp, span_id }) => {
-                Self::FinishSpan(oplog::FinishSpanParameters {
-                    timestamp: timestamp.into(),
-                    span_id: span_id.to_string(),
-                })
-            }
-            PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
-                timestamp,
-                span_id,
-                key,
-                value,
-            }) => Self::SetSpanAttribute(oplog::SetSpanAttributeParameters {
-                timestamp: timestamp.into(),
-                span_id: span_id.to_string(),
-                key,
-                value: value.into(),
             }),
             PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
                 timestamp,
@@ -1351,17 +1539,21 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .map(golem_common::base_model::OplogIndex::from_u64),
                 request: params.request.map(oplog_payload_from_wit),
                 durable_function_type: params.durable_function_type.into(),
+                span_started: params.span_started.map(|span| raw_span_started_from_wit(span).map(Box::new)).transpose()?,
             }),
             oplog::OplogEntry::End(params) => Ok(Self::End {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
                 response: params.response.map(oplog_payload_from_wit),
                 forced_commit: params.forced_commit,
+                span_finished: params.span_finished.map(raw_span_finished_from_wit).transpose()?,
+                span_attributes: params.span_attributes.map(raw_span_attributes_from_wit).transpose()?,
             }),
             oplog::OplogEntry::Cancelled(params) => Ok(Self::Cancelled {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 start_index: golem_common::base_model::OplogIndex::from_u64(params.start_index),
                 partial: params.partial.map(oplog_payload_from_wit),
+                span_finished: params.span_finished.map(raw_span_finished_from_wit).transpose()?,
             }),
             oplog::OplogEntry::CompletionDiscarded(params) => Ok(Self::CompletionDiscarded {
                 timestamp: timestamp_from_datetime(params.timestamp),
@@ -1523,6 +1715,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 level: params.level.into(),
                 context: params.context,
                 message: params.message,
+                trace_context: params
+                    .trace_context
+                    .map(log_trace_context_from_wit)
+                    .transpose()?,
             }),
             oplog::OplogEntry::Restart(ts) => Ok(Self::Restart {
                 timestamp: timestamp_from_datetime(ts.timestamp),
@@ -1555,55 +1751,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     idempotency_key: golem_common::model::IdempotencyKey::new(
                         params.idempotency_key,
                     ),
-                })
-            }
-            oplog::OplogEntry::StartSpan(params) => {
-                let span_id =
-                    golem_common::model::invocation_context::SpanId::from_string(&params.span_id)?;
-                let parent = params
-                    .parent
-                    .map(|p| golem_common::model::invocation_context::SpanId::from_string(&p))
-                    .transpose()?;
-                let linked_context_id = params
-                    .linked_context_id
-                    .map(|p| golem_common::model::invocation_context::SpanId::from_string(&p))
-                    .transpose()?;
-                let attributes: std::collections::HashMap<
-                    String,
-                    golem_common::model::invocation_context::AttributeValue,
-                > = params
-                    .attributes
-                    .into_iter()
-                    .map(|attr| (attr.key, attr.value.into()))
-                    .collect();
-                Ok(Self::StartSpan {
-                    timestamp: timestamp_from_datetime(params.timestamp),
-                    parent_start_index: None,
-                    span_id,
-                    parent,
-                    linked_context_id,
-                    attributes: golem_common::model::oplog::AttributeMap(attributes),
-                })
-            }
-            oplog::OplogEntry::FinishSpan(params) => {
-                let span_id =
-                    golem_common::model::invocation_context::SpanId::from_string(&params.span_id)?;
-                Ok(Self::FinishSpan {
-                    timestamp: timestamp_from_datetime(params.timestamp),
-                    parent_start_index: None,
-                    span_id,
-                })
-            }
-            oplog::OplogEntry::SetSpanAttribute(params) => {
-                let span_id =
-                    golem_common::model::invocation_context::SpanId::from_string(&params.span_id)?;
-                let value = params.value.into();
-                Ok(Self::SetSpanAttribute {
-                    timestamp: timestamp_from_datetime(params.timestamp),
-                    parent_start_index: None,
-                    span_id,
-                    key: params.key,
-                    value,
                 })
             }
             oplog::OplogEntry::BeginRemoteTransaction(params) => Ok(Self::BeginRemoteTransaction {
@@ -1730,26 +1877,31 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
+                summary: params.summary.map(durable_stream_summary_from_wit),
             }),
             oplog::OplogEntry::StreamItems(params) => Ok(Self::StreamItems {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
+                summary: params.summary.map(durable_stream_summary_from_wit),
             }),
             oplog::OplogEntry::StreamEnd(params) => Ok(Self::StreamEnd {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
+                summary: params.summary.map(durable_stream_summary_from_wit),
             }),
             oplog::OplogEntry::StreamCancel(params) => Ok(Self::StreamCancel {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
+                summary: params.summary.map(durable_stream_summary_from_wit),
             }),
             oplog::OplogEntry::StreamSession(params) => Ok(Self::StreamSession {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
+                summary: params.summary.map(durable_stream_summary_from_wit),
             }),
         }
     }
@@ -2140,6 +2292,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 observational_owner,
                 request,
                 durable_function_type,
+                span_started,
             } => Ok(Self::Start(oplog::RawStartParameters {
                 timestamp: timestamp.into(),
                 parent_start_index: parent_start_index.map(|i| i.into()),
@@ -2148,26 +2301,33 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 observational_owner: observational_owner.map(|i| i.into()),
                 request: request.map(oplog_payload_to_wit).transpose()?,
                 durable_function_type: durable_function_type.into(),
+                span_started: span_started.map(|span| raw_span_started_to_wit(*span)),
             })),
             M::End {
                 timestamp,
                 start_index,
                 response,
                 forced_commit,
+                span_finished,
+                span_attributes,
             } => Ok(Self::End(oplog::RawEndParameters {
                 timestamp: timestamp.into(),
                 start_index: start_index.into(),
                 response: response.map(oplog_payload_to_wit).transpose()?,
                 forced_commit,
+                span_finished: span_finished.map(raw_span_finished_to_wit),
+                span_attributes: span_attributes.map(raw_span_attributes_to_wit),
             })),
             M::Cancelled {
                 timestamp,
                 start_index,
                 partial,
+                span_finished,
             } => Ok(Self::Cancelled(oplog::RawCancelledParameters {
                 timestamp: timestamp.into(),
                 start_index: start_index.into(),
                 partial: partial.map(oplog_payload_to_wit).transpose()?,
+                span_finished: span_finished.map(raw_span_finished_to_wit),
             })),
             M::CompletionDiscarded {
                 timestamp,
@@ -2347,39 +2507,59 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 payload: oplog_payload_to_wit(payload)?,
             })),
             M::StreamRegistered {
-                timestamp, record, ..
+                timestamp,
+                record,
+                summary,
+                ..
             } => Ok(Self::StreamRegistered(
                 oplog::RawDurableStreamRecordParameters {
                     timestamp: timestamp.into(),
                     record: oplog_payload_to_wit(record)?,
+                    summary: summary.map(durable_stream_summary_to_wit),
                 },
             )),
             M::StreamItems {
-                timestamp, record, ..
+                timestamp,
+                record,
+                summary,
+                ..
             } => Ok(Self::StreamItems(oplog::RawDurableStreamRecordParameters {
                 timestamp: timestamp.into(),
                 record: oplog_payload_to_wit(record)?,
+                summary: summary.map(durable_stream_summary_to_wit),
             })),
             M::StreamEnd {
-                timestamp, record, ..
+                timestamp,
+                record,
+                summary,
+                ..
             } => Ok(Self::StreamEnd(oplog::RawDurableStreamRecordParameters {
                 timestamp: timestamp.into(),
                 record: oplog_payload_to_wit(record)?,
+                summary: summary.map(durable_stream_summary_to_wit),
             })),
             M::StreamCancel {
-                timestamp, record, ..
+                timestamp,
+                record,
+                summary,
+                ..
             } => Ok(Self::StreamCancel(
                 oplog::RawDurableStreamRecordParameters {
                     timestamp: timestamp.into(),
                     record: oplog_payload_to_wit(record)?,
+                    summary: summary.map(durable_stream_summary_to_wit),
                 },
             )),
             M::StreamSession {
-                timestamp, record, ..
+                timestamp,
+                record,
+                summary,
+                ..
             } => Ok(Self::StreamSession(
                 oplog::RawDurableStreamRecordParameters {
                     timestamp: timestamp.into(),
                     record: oplog_payload_to_wit(record)?,
+                    summary: summary.map(durable_stream_summary_to_wit),
                 },
             )),
             M::CardEventQueued {
@@ -2453,12 +2633,14 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 level,
                 context,
                 message,
+                trace_context,
                 ..
             } => Ok(Self::Log(oplog::LogParameters {
                 timestamp: timestamp.into(),
                 level: level.into(),
                 context,
                 message,
+                trace_context: trace_context.map(log_trace_context_to_wit),
             })),
             M::Restart { timestamp } => Ok(Self::Restart(timestamp.into())),
             M::Resumed { timestamp } => Ok(Self::Resumed(timestamp.into())),
@@ -2497,45 +2679,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     idempotency_key: idempotency_key.value,
                 },
             )),
-            M::StartSpan {
-                timestamp,
-                span_id,
-                parent,
-                linked_context_id,
-                attributes,
-                ..
-            } => Ok(Self::StartSpan(oplog::StartSpanParameters {
-                timestamp: timestamp.into(),
-                span_id: span_id.to_string(),
-                parent: parent.map(|id| id.to_string()),
-                linked_context_id: linked_context_id.map(|id| id.to_string()),
-                attributes: attributes
-                    .0
-                    .into_iter()
-                    .map(|(key, value)| oplog::Attribute {
-                        key,
-                        value: value.into(),
-                    })
-                    .collect(),
-            })),
-            M::FinishSpan {
-                timestamp, span_id, ..
-            } => Ok(Self::FinishSpan(oplog::FinishSpanParameters {
-                timestamp: timestamp.into(),
-                span_id: span_id.to_string(),
-            })),
-            M::SetSpanAttribute {
-                timestamp,
-                span_id,
-                key,
-                value,
-                ..
-            } => Ok(Self::SetSpanAttribute(oplog::SetSpanAttributeParameters {
-                timestamp: timestamp.into(),
-                span_id: span_id.to_string(),
-                key,
-                value: value.into(),
-            })),
             M::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,
@@ -2637,6 +2780,8 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
 #[cfg(test)]
 mod tests {
     use super::oplog;
+    use std::collections::HashMap;
+
     use golem_common::base_model::oplog::{
         QueuedCardEvent, QueuedCardEventTransfer, QueuedCardEventTransferReceived,
     };
@@ -2645,10 +2790,15 @@ mod tests {
         AccountCardHolder, ApplicationCardHolder, Card, CardHolder, CardId, InvocationWalletPin,
         PublicInvocationWalletPin, WalletVersionToken,
     };
-    use golem_common::model::invocation_context::TraceId;
-    use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
+    use golem_common::model::invocation_context::{AttributeValue, SpanId, TraceId};
+    use golem_common::model::oplog::payload::host_functions::HostFunctionName;
+    use golem_common::model::oplog::public_oplog_entry::{
+        AgentInvocationStartedParams, CancelledParams, EndParams, StartParams,
+    };
     use golem_common::model::oplog::{
-        OplogEntry, OplogPayload, PublicAgentInvocation, PublicOplogEntry,
+        AttributeMap, DurableFunctionType, OplogEntry, OplogPayload, PublicAgentInvocation,
+        PublicOplogEntry, SpanAttributes, SpanFinished, SpanKind, SpanLink, SpanOutcome,
+        SpanStarted,
     };
     use golem_common::model::{AgentInvocationPayload, Empty, IdempotencyKey, Timestamp};
     use golem_common::schema::SchemaValue;
@@ -2668,6 +2818,192 @@ mod tests {
             system_card: false,
             managed_by: None,
         }
+    }
+
+    #[test]
+    fn span_lifecycle_projections_keep_asymmetric_ids_and_timestamps() {
+        let origin_trace_id = TraceId::from_string("11111111111111111111111111111111").unwrap();
+        let linked_trace_id = TraceId::from_string("22222222222222222222222222222222").unwrap();
+        let started_span_id = SpanId::from_string("1111111111111111").unwrap();
+        let linked_span_id = SpanId::from_string("2222222222222222").unwrap();
+        let finished_span_id = SpanId::from_string("3333333333333333").unwrap();
+        let attributes_span_id = SpanId::from_string("4444444444444444").unwrap();
+        let cancelled_span_id = SpanId::from_string("5555555555555555").unwrap();
+        let started_at = Timestamp::from(1_700_000_000_123);
+        let finished_at = Timestamp::from(1_700_000_001_456);
+        let cancelled_at = Timestamp::from(1_700_000_002_789);
+        let attributes = AttributeMap(HashMap::from([(
+            "phase".to_string(),
+            AttributeValue::String("projection".to_string()),
+        )]));
+        let started = SpanStarted {
+            span_id: started_span_id.clone(),
+            trace_id: origin_trace_id.clone(),
+            trace_states: vec!["origin=1".to_string()],
+            parent_span_id: None,
+            links: vec![SpanLink {
+                trace_id: linked_trace_id.clone(),
+                span_id: linked_span_id.clone(),
+                trace_states: vec!["link=1".to_string()],
+            }],
+            started_at,
+            attributes: attributes.clone(),
+            kind: SpanKind::Client,
+        };
+        let finished = SpanFinished {
+            span_id: finished_span_id.clone(),
+            finished_at,
+            outcome: SpanOutcome::Failed,
+        };
+        let terminal_attributes = SpanAttributes {
+            span_id: attributes_span_id.clone(),
+            attributes,
+        };
+        let cancelled = SpanFinished {
+            span_id: cancelled_span_id.clone(),
+            finished_at: cancelled_at,
+            outcome: SpanOutcome::Cancelled,
+        };
+
+        let raw_entries = [
+            OplogEntry::Start {
+                timestamp: started_at,
+                parent_start_index: None,
+                function_name: HostFunctionName::MonotonicClockNow,
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: DurableFunctionType::ReadLocal,
+                span_started: Some(Box::new(started.clone())),
+            },
+            OplogEntry::End {
+                timestamp: finished_at,
+                start_index: golem_common::base_model::OplogIndex::INITIAL,
+                response: None,
+                forced_commit: false,
+                span_finished: Some(finished.clone()),
+                span_attributes: Some(terminal_attributes.clone()),
+            },
+            OplogEntry::Cancelled {
+                timestamp: cancelled_at,
+                start_index: golem_common::base_model::OplogIndex::INITIAL,
+                partial: None,
+                span_finished: Some(cancelled.clone()),
+            },
+        ];
+        for entry in raw_entries {
+            let encoded = oplog::OplogEntry::try_from(entry.clone()).unwrap();
+            assert_eq!(OplogEntry::try_from(encoded).unwrap(), entry);
+        }
+
+        let public_started = super::super::public_span_started(started);
+        assert_eq!(public_started.trace_id, origin_trace_id);
+        assert_eq!(public_started.links[0].trace_id, linked_trace_id);
+        assert_ne!(public_started.trace_id, public_started.links[0].trace_id);
+        assert_eq!(public_started.started_at, started_at);
+        let public_finished = super::super::public_span_finished(finished);
+        let public_attributes = super::super::public_span_attributes(terminal_attributes);
+        let public_cancelled = super::super::public_span_finished(cancelled);
+        assert_ne!(public_finished.span_id, public_attributes.span_id);
+        assert_ne!(public_finished.span_id, public_cancelled.span_id);
+
+        let public_entries = [
+            PublicOplogEntry::Start(StartParams {
+                timestamp: started_at,
+                parent_start_index: None,
+                function_name: HostFunctionName::MonotonicClockNow.to_string(),
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: DurableFunctionType::ReadLocal.into(),
+                span_started: Some(public_started),
+            }),
+            PublicOplogEntry::End(EndParams {
+                timestamp: finished_at,
+                start_index: golem_common::base_model::OplogIndex::INITIAL,
+                response: None,
+                forced_commit: false,
+                span_finished: Some(public_finished),
+                span_attributes: Some(public_attributes),
+            }),
+            PublicOplogEntry::Cancelled(CancelledParams {
+                timestamp: cancelled_at,
+                start_index: golem_common::base_model::OplogIndex::INITIAL,
+                partial: None,
+                span_finished: Some(public_cancelled),
+            }),
+        ];
+        let encoded: Vec<_> = public_entries
+            .into_iter()
+            .map(|entry| oplog::PublicOplogEntry::try_from(entry).unwrap())
+            .collect();
+        let oplog::PublicOplogEntry::Start(start) = &encoded[0] else {
+            panic!("expected start")
+        };
+        let projected_start = start.span_started.as_ref().unwrap();
+        assert_eq!(projected_start.trace_id, origin_trace_id.to_string());
+        assert_eq!(
+            projected_start.links[0].trace_id,
+            linked_trace_id.to_string()
+        );
+        let expected_started_at: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant =
+            started_at.into();
+        assert_eq!(
+            projected_start.started_at.seconds,
+            expected_started_at.seconds
+        );
+        assert_eq!(
+            projected_start.started_at.nanoseconds,
+            expected_started_at.nanoseconds
+        );
+        let oplog::PublicOplogEntry::End(end) = &encoded[1] else {
+            panic!("expected end")
+        };
+        assert_eq!(
+            end.span_finished.as_ref().unwrap().span_id,
+            finished_span_id.to_string()
+        );
+        let expected_finished_at: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant =
+            finished_at.into();
+        assert_eq!(
+            end.span_finished.as_ref().unwrap().finished_at.seconds,
+            expected_finished_at.seconds
+        );
+        assert_eq!(
+            end.span_finished.as_ref().unwrap().finished_at.nanoseconds,
+            expected_finished_at.nanoseconds
+        );
+        assert_eq!(
+            end.span_attributes.as_ref().unwrap().span_id,
+            attributes_span_id.to_string()
+        );
+        let oplog::PublicOplogEntry::Cancelled(cancelled) = &encoded[2] else {
+            panic!("expected cancelled")
+        };
+        assert_eq!(
+            cancelled.span_finished.as_ref().unwrap().span_id,
+            cancelled_span_id.to_string()
+        );
+        let expected_cancelled_at: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant =
+            cancelled_at.into();
+        assert_eq!(
+            cancelled
+                .span_finished
+                .as_ref()
+                .unwrap()
+                .finished_at
+                .seconds,
+            expected_cancelled_at.seconds
+        );
+        assert_eq!(
+            cancelled
+                .span_finished
+                .as_ref()
+                .unwrap()
+                .finished_at
+                .nanoseconds,
+            expected_cancelled_at.nanoseconds
+        );
     }
 
     #[test]

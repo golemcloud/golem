@@ -170,6 +170,7 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
             .add_and_commit_oplog(OplogEntry::StreamRegistered {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                summary: None,
                 record: OplogPayload::Inline(Box::new(StreamRegisteredRecord {
                     format_version: 1,
                     coordinate: StreamRegistrationRecordCoordinate::Root {
@@ -556,6 +557,7 @@ async fn prepare_foreign_topology(
         .add_and_commit_oplog(OplogEntry::StreamSession {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
+            summary: None,
             record: OplogPayload::Inline(Box::new(StreamSessionRecord::TopologyPrepared(
                 StreamTopologyPreparedRecord {
                     format_version: 1,
@@ -667,6 +669,7 @@ async fn prepare_session(
             .add_and_commit_oplog(OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                summary: None,
                 record: OplogPayload::Inline(Box::new(record)),
             })
             .await;

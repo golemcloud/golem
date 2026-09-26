@@ -35,8 +35,8 @@ use golem_common::model::durable_stream::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
-    PayloadId, RawOplogPayload, UpdateDescription,
+    DurableFunctionType, DurableStreamEventSummary, HostRequest, HostResponse, OplogEntry,
+    OplogIndex, OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
@@ -544,24 +544,38 @@ impl DurableStreamOplogRecord {
                 Ok(OplogEntry::stream_registered(
                     entity_parent_start_index,
                     raw.into_payload_with_cache(Arc::from(record))?,
+                    Some(DurableStreamEventSummary::Registered),
                 ))
             }
-            Self::Items(entity_parent_start_index, record) => Ok(OplogEntry::stream_items(
-                entity_parent_start_index,
-                raw.into_payload_with_cache(Arc::new(record))?,
-            )),
-            Self::End(entity_parent_start_index, record) => Ok(OplogEntry::stream_end(
-                entity_parent_start_index,
-                raw.into_payload_with_cache(Arc::new(record))?,
-            )),
+            Self::Items(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::items(&record);
+                Ok(OplogEntry::stream_items(
+                    entity_parent_start_index,
+                    raw.into_payload_with_cache(Arc::new(record))?,
+                    Some(summary),
+                ))
+            }
+            Self::End(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::end(&record);
+                Ok(OplogEntry::stream_end(
+                    entity_parent_start_index,
+                    raw.into_payload_with_cache(Arc::new(record))?,
+                    Some(summary),
+                ))
+            }
             Self::Cancel(entity_parent_start_index, record) => Ok(OplogEntry::stream_cancel(
                 entity_parent_start_index,
                 raw.into_payload_with_cache(Arc::new(record))?,
+                Some(DurableStreamEventSummary::Cancelled),
             )),
-            Self::Session(entity_parent_start_index, record) => Ok(OplogEntry::stream_session(
-                entity_parent_start_index,
-                raw.into_payload_with_cache(Arc::from(record))?,
-            )),
+            Self::Session(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::session(&record);
+                Ok(OplogEntry::stream_session(
+                    entity_parent_start_index,
+                    raw.into_payload_with_cache(Arc::from(record))?,
+                    summary,
+                ))
+            }
             Self::InlineEntry(entry) => Ok(entry),
         }
     }
@@ -571,21 +585,36 @@ impl DurableStreamOplogRecord {
             Self::Registered(entity_parent_start_index, record) => OplogEntry::stream_registered(
                 entity_parent_start_index,
                 OplogPayload::Inline(record),
+                Some(DurableStreamEventSummary::Registered),
             ),
-            Self::Items(entity_parent_start_index, record) => OplogEntry::stream_items(
-                entity_parent_start_index,
-                OplogPayload::Inline(Box::new(record)),
-            ),
-            Self::End(entity_parent_start_index, record) => OplogEntry::stream_end(
-                entity_parent_start_index,
-                OplogPayload::Inline(Box::new(record)),
-            ),
+            Self::Items(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::items(&record);
+                OplogEntry::stream_items(
+                    entity_parent_start_index,
+                    OplogPayload::Inline(Box::new(record)),
+                    Some(summary),
+                )
+            }
+            Self::End(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::end(&record);
+                OplogEntry::stream_end(
+                    entity_parent_start_index,
+                    OplogPayload::Inline(Box::new(record)),
+                    Some(summary),
+                )
+            }
             Self::Cancel(entity_parent_start_index, record) => OplogEntry::stream_cancel(
                 entity_parent_start_index,
                 OplogPayload::Inline(Box::new(record)),
+                Some(DurableStreamEventSummary::Cancelled),
             ),
             Self::Session(entity_parent_start_index, record) => {
-                OplogEntry::stream_session(entity_parent_start_index, OplogPayload::Inline(record))
+                let summary = DurableStreamEventSummary::session(&record);
+                OplogEntry::stream_session(
+                    entity_parent_start_index,
+                    OplogPayload::Inline(record),
+                    summary,
+                )
             }
             Self::InlineEntry(entry) => entry,
         }
@@ -605,6 +634,7 @@ pub type IndexedReservedStartBuilder =
 /// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
 /// index after the append finishes.
 pub type OplogAddReceipt = BoxFuture<'static, OplogIndex>;
+pub type OplogAddPairReceipt = BoxFuture<'static, (OplogIndex, OplogIndex)>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawDurableStreamSessionStatus {
@@ -831,8 +861,9 @@ pub trait Oplog: Any + Debug + Send + Sync {
         build_request: IndexedReservedStartBuilder,
     ) -> Result<OrderedOplogStart, String>;
 
-    /// Atomically appends a `Start` entry and a second entry (its `End` or
-    /// `Cancelled`) that references the `Start`'s `OplogIndex`.
+    /// Synchronously enqueues an atomic `Start` and second entry (its `End` or
+    /// `Cancelled`) that references the `Start`'s `OplogIndex`, returning their asynchronous
+    /// completion receipt.
     ///
     /// `make_second` builds the second entry from the freshly assigned `Start`
     /// index (a durable call is identified by the `OplogIndex` of its `Start`).
@@ -840,17 +871,27 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// [`OplogOps::add_completed_host_call`]) to write a matched host-call
     /// `Start`/`End` pair atomically.
     ///
-    /// Implementations must ensure no other writer can interleave between the
-    /// two appends and that no commit threshold check fires between them, so
+    /// Implementations must reserve one writer job before returning, in the same ordering domain
+    /// as [`Self::enqueue_add`]. Dropping the receipt must not cancel that job. No other writer may
+    /// interleave between the two appends and no commit threshold check may fire between them, so
     /// the pair is never split across a commit/crash boundary. This is a
     /// required method (no default) deliberately: a default `add`-twice
     /// composition would silently violate that atomicity for any implementor
     /// that forgot to override it.
+    fn enqueue_add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> OplogAddPairReceipt;
+
+    /// Async convenience for [`Self::enqueue_add_pair`].
     async fn add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex);
+    ) -> (OplogIndex, OplogIndex) {
+        self.enqueue_add_pair(start, make_second).await
+    }
 
     /// Like [`add_pair`](Self::add_pair) but for two already-built entries, returning a
     /// `Result` so test wrappers can inject a write failure on either entry. The default
@@ -1051,6 +1092,7 @@ pub trait OplogOps: Oplog {
             observational_owner: None,
             request: Some(request_payload),
             durable_function_type: function_type,
+            span_started: None,
         };
         let (start_idx, end_idx) = self
             .add_pair(
@@ -1060,6 +1102,8 @@ pub trait OplogOps: Oplog {
                     start_index,
                     response: Some(response_payload),
                     forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
                 }),
             )
             .await;

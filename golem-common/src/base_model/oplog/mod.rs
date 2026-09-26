@@ -24,7 +24,6 @@ use crate::base_model::durable_stream::{
     StreamSessionRecord,
 };
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::invocation_context::SpanId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
 use crate::model::account::AccountId;
@@ -43,9 +42,9 @@ use uuid::Uuid;
 mod raw_imports {
     pub use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     pub use crate::base_model::invocation_context::TraceId;
-    pub use crate::model::invocation_context::AttributeValue;
+
     pub use crate::model::oplog::payload;
-    pub use crate::model::oplog::raw_types::AttributeMap;
+
     pub use crate::model::oplog::raw_types::*;
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
     pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
@@ -121,6 +120,7 @@ oplog_entry! {
             observational_owner: Option<OplogIndex>,
             request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
+            span_started: Option<Box<SpanStarted>>,
         }
         public {
             parent_start_index: Option<OplogIndex>,
@@ -129,6 +129,7 @@ oplog_entry! {
             observational_owner: Option<OplogIndex>,
             request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
+            span_started: Option<PublicSpanStarted>,
         }
     },
     /// Marks the successful completion of a durable host call (or scope) started by the
@@ -146,11 +147,15 @@ oplog_entry! {
             start_index: OplogIndex,
             response: Option<payload::OplogPayload<payload::HostResponse>>,
             forced_commit: bool,
+            span_finished: Option<SpanFinished>,
+            span_attributes: Option<SpanAttributes>,
         }
         public {
             start_index: OplogIndex,
             response: Option<TypedSchemaValue>,
             forced_commit: bool,
+            span_finished: Option<PublicSpanFinished>,
+            span_attributes: Option<PublicSpanAttributes>,
         }
     },
     /// Marks that a durable host call started by the `Start` at `start_index` was
@@ -165,10 +170,12 @@ oplog_entry! {
         raw {
             start_index: OplogIndex,
             partial: Option<payload::OplogPayload<payload::HostResponse>>,
+            span_finished: Option<SpanFinished>,
         }
         public {
             start_index: OplogIndex,
             partial: Option<TypedSchemaValue>,
+            span_finished: Option<PublicSpanFinished>,
         }
     },
     /// The agent has been invoked
@@ -440,11 +447,13 @@ oplog_entry! {
             level: LogLevel,
             context: String,
             message: String,
+            trace_context: Option<LogTraceContext>,
         }
         public {
             level: LogLevel,
             context: String,
             message: String,
+            trace_context: Option<LogTraceContext>,
         }
     },
     /// Marks the point where the worker was restarted from clean initial state
@@ -509,55 +518,6 @@ oplog_entry! {
         }
         public {
             idempotency_key: IdempotencyKey,
-        }
-    },
-    /// Starts a new span in the invocation context
-    StartSpan {
-        hint: false
-        wit_raw_type: "start-span-parameters"
-        wit_public_type: "start-span-parameters"
-        raw {
-            parent_start_index: Option<OplogIndex>,
-            span_id: SpanId,
-            parent: Option<SpanId>,
-            linked_context_id: Option<SpanId>,
-            attributes: AttributeMap,
-        }
-        public {
-            span_id: SpanId,
-            parent_id: Option<SpanId>,
-            linked_context: Option<SpanId>,
-            attributes: Vec<PublicAttribute>,
-        }
-    },
-    /// Finishes an open span in the invocation context
-    FinishSpan {
-        hint: false
-        wit_raw_type: "finish-span-parameters"
-        wit_public_type: "finish-span-parameters"
-        raw {
-            parent_start_index: Option<OplogIndex>,
-            span_id: SpanId,
-        }
-        public {
-            span_id: SpanId,
-        }
-    },
-    /// Set an attribute on an open span in the invocation contex
-    SetSpanAttribute {
-        hint: false
-        wit_raw_type: "set-span-attribute-parameters"
-        wit_public_type: "set-span-attribute-parameters"
-        raw {
-            parent_start_index: Option<OplogIndex>,
-            span_id: SpanId,
-            key: String,
-            value: AttributeValue,
-        }
-        public {
-            span_id: SpanId,
-            key: String,
-            value: PublicAttributeValue,
         }
     },
     /// Marks the beginning of a remote transaction
@@ -923,6 +883,7 @@ oplog_entry! {
         raw {
             entity_parent_start_index: Option<OplogIndex>,
             record: payload::OplogPayload<StreamRegisteredRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,
@@ -936,6 +897,7 @@ oplog_entry! {
         raw {
             entity_parent_start_index: Option<OplogIndex>,
             record: payload::OplogPayload<StreamItemsRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,
@@ -949,6 +911,7 @@ oplog_entry! {
         raw {
             entity_parent_start_index: Option<OplogIndex>,
             record: payload::OplogPayload<StreamEndRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,
@@ -962,6 +925,7 @@ oplog_entry! {
         raw {
             entity_parent_start_index: Option<OplogIndex>,
             record: payload::OplogPayload<StreamCancelRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,
@@ -976,6 +940,7 @@ oplog_entry! {
         raw {
             entity_parent_start_index: Option<OplogIndex>,
             record: payload::OplogPayload<StreamSessionRecord>,
+            summary: Option<DurableStreamEventSummary>,
         }
         public {
             record: TypedSchemaValue,

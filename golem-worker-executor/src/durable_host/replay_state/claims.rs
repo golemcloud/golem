@@ -469,17 +469,31 @@ impl ReplayState {
         &self,
         claim: StartClaim,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        self.claim_start_or_replay_end_observed(claim, |_, _| {})
+            .await
+    }
+
+    /// Notifies the caller of an accepted claim inside the existing owned cursor operation.
+    /// Dropping the waiting future cannot lose this notification, and a blocked attempt does
+    /// not notify or acquire ownership of a later call.
+    pub(crate) async fn claim_start_or_replay_end_observed(
+        &self,
+        claim: StartClaim,
+        on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
+    ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
         loop {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
 
             let owned_claim = claim.clone();
+            let on_claim = on_claim.clone();
             let (claimed, blocked_on_completion_delivery, replay_ended, deleted_region) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
                             Ok(StartClaimAttempt::Claimed(handle, entry)) => {
+                                on_claim(handle.start_idx(), &entry);
                                 Ok((Some((handle, entry)), false, false, false))
                             }
                             Ok(StartClaimAttempt::Blocked) => {

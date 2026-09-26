@@ -154,6 +154,7 @@ async fn append_worker(
                 LogLevel::Debug,
                 "test".to_string(),
                 "test".to_string(),
+                None,
             ),
         )])
         .await;

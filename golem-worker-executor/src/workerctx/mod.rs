@@ -53,9 +53,7 @@ use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
-};
+use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
     AgentError, HostResponseEntityInvocation, TimestampedUpdateDescription,
 };
@@ -604,30 +602,8 @@ pub trait FileSystemReading {
 /// Functions to manipulate and query the current invocation context
 #[async_trait]
 pub trait InvocationContextManagement {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
-
     /// Removes an inherited span without finishing it
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
-
-    /// Removes and finishes a local span
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError>;
 
     /// Clones every element of the stack belonging to the given current span id, and sets
     /// the inherited flag to true on them, without changing the spans in this invocation context.

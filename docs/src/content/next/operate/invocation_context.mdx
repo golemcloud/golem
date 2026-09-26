@@ -6,6 +6,10 @@ The invocation context can be queried and manipulated (by adding custom spans wi
 
 By default, the invocation context's spans are not used by Golem for anything; they are just information propagated among agents to be used by either the agents or **oplog processor plugins** installed to them. It is possible to reconstruct all information about invocation context from the oplog, so oplog processor plugins can be used, for example, to provide live traces of agents through OpenTelemetry.
 
+Span lifecycle metadata is embedded in durable operation `Start`, `End`, and `Cancelled` records. This includes the opening context and timestamp, applied attribute updates, and the completed or cancelled terminal. A logical span can outlive the invocation that opened it and keeps that origin trace context when a later invocation uses or closes it. A failed, interrupted, or retrying attempt is not by itself a terminal for the logical span.
+
+The OTLP exporter restores this recorded context for spans and logs. Cross-trace relationships are links rather than invalid cross-trace parents. Deleting an agent provides no terminal record to the exporter, so deletion does not manufacture a successful completion. Fork and revert adjust pending span state to retained history, but cannot retract telemetry already accepted by a collector.
+
 ## Automatic invocation context spans
 
 ### Incoming HTTP requests
@@ -47,5 +51,7 @@ Within this span, a new span is created for each remote invocation, with the fol
 - `name`: span's name (`rpc-invocation`)
 - `function_name`: the invoked function's fully qualified name
 - `idempotency_key`: the unique identifier of the invocation
+
+The connection span can remain open and retain its original trace across multiple agent invocations. An RPC retry does not complete the logical operation until a recorded completion or cancellation occurs.
 
 Note: some attribute names such as `worker_id` and `target_worker_id` use legacy "worker" terminology for backwards compatibility.

@@ -139,6 +139,7 @@ pub(all) struct CancelledParameters {
   timestamp : @system-clock.Instant
   start_index : UInt64
   partial : @types.TypedSchemaValue?
+  span_finished : SpanFinished?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CardEventQueuedParameters {
@@ -234,6 +235,24 @@ pub(all) struct DropResourceParameters {
   owner : String
 } derive(Eq, @debug.Debug)
 
+pub(all) enum DurableStreamEventSummary {
+  Registered
+  Items(UInt64)
+  End(DurableStreamOutcome)
+  Cancelled
+  SessionResult
+  SessionFinished(DurableStreamOutcome)
+  SessionCancellation
+  SessionExpired
+} derive(Eq, @debug.Debug)
+
+pub(all) enum DurableStreamOutcome {
+  SUCCESS
+  ERROR
+} derive(Eq, @debug.Debug)
+pub fn DurableStreamOutcome::from(Int) -> Self
+pub fn DurableStreamOutcome::ordinal(Self) -> Int
+
 pub(all) struct DurableStreamRecordParameters {
   timestamp : @system-clock.Instant
   record : @types.TypedSchemaValue
@@ -249,6 +268,8 @@ pub(all) struct EndParameters {
   start_index : UInt64
   response : @types.TypedSchemaValue?
   forced_commit : Bool
+  span_finished : SpanFinished?
+  span_attributes : SpanAttributes?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct EnvironmentPluginGrantId {
@@ -303,11 +324,6 @@ pub(all) struct FailedUpdateParameters {
 
 pub(all) struct FallibleResultParameters {
   error : String?
-} derive(Eq, @debug.Debug)
-
-pub(all) struct FinishSpanParameters {
-  timestamp : @system-clock.Instant
-  span_id : String
 } derive(Eq, @debug.Debug)
 
 pub(all) struct GetOplog(Int) derive(Eq, @debug.Debug)
@@ -374,6 +390,12 @@ pub(all) struct LogParameters {
   level : LogLevel
   context : String
   message : String
+  trace_context : LogTraceContext?
+} derive(Eq, @debug.Debug)
+
+pub(all) struct LogTraceContext {
+  trace_id : String
+  span_id : String
 } derive(Eq, @debug.Debug)
 
 pub(all) struct ManualUpdateParameters {
@@ -410,9 +432,6 @@ pub(all) enum OplogEntry {
   DeactivatePlugin(RawDeactivatePluginParameters)
   Revert(RevertParameters)
   CancelPendingInvocation(CancelPendingInvocationParameters)
-  StartSpan(StartSpanParameters)
-  FinishSpan(FinishSpanParameters)
-  SetSpanAttribute(SetSpanAttributeParameters)
   BeginRemoteTransaction(RawBeginRemoteTransactionParameters)
   PreCommitRemoteTransaction(RemoteTransactionParameters)
   PreRollbackRemoteTransaction(RemoteTransactionParameters)
@@ -531,9 +550,6 @@ pub(all) enum PublicOplogEntry {
   DeactivatePlugin(DeactivatePluginParameters)
   Revert(RevertParameters)
   CancelPendingInvocation(CancelPendingInvocationParameters)
-  StartSpan(StartSpanParameters)
-  FinishSpan(FinishSpanParameters)
-  SetSpanAttribute(SetSpanAttributeParameters)
   BeginRemoteTransaction(BeginRemoteTransactionParameters)
   PreCommitRemoteTransaction(RemoteTransactionParameters)
   PreRollbackRemoteTransaction(RemoteTransactionParameters)
@@ -604,6 +620,7 @@ pub(all) struct RawCancelledParameters {
   timestamp : @system-clock.Instant
   start_index : UInt64
   partial : OplogPayload?
+  span_finished : SpanFinished?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawCardInstalledParameters {
@@ -661,6 +678,7 @@ pub(all) struct RawDropResourceParameters {
 pub(all) struct RawDurableStreamRecordParameters {
   timestamp : @system-clock.Instant
   record : OplogPayload
+  summary : DurableStreamEventSummary?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawEndParameters {
@@ -668,6 +686,8 @@ pub(all) struct RawEndParameters {
   start_index : UInt64
   response : OplogPayload?
   forced_commit : Bool
+  span_finished : SpanFinished?
+  span_attributes : SpanAttributes?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawErrorParameters {
@@ -742,6 +762,7 @@ pub(all) struct RawStartParameters {
   observational_owner : UInt64?
   request : OplogPayload?
   durable_function_type : WrappedFunctionType
+  span_started : SpanStarted?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawSuccessfulUpdateParameters {
@@ -799,13 +820,6 @@ pub(all) struct SetRetryPolicyParameters {
   policy : @retry.NamedRetryPolicy
 } derive(Eq, @debug.Debug)
 
-pub(all) struct SetSpanAttributeParameters {
-  timestamp : @system-clock.Instant
-  span_id : String
-  key : String
-  value : @context.AttributeValue
-} derive(Eq, @debug.Debug)
-
 pub(all) struct SnapshotData {
   data : FixedArray[Byte]
   mime_type : String
@@ -816,9 +830,55 @@ pub(all) struct SnapshotParameters {
   data : SnapshotData
 } derive(Eq, @debug.Debug)
 
+pub(all) struct SpanAttributes {
+  span_id : String
+  attributes : Array[@context.Attribute]
+} derive(Eq, @debug.Debug)
+
 pub(all) enum SpanData {
   LocalSpan(LocalSpanData)
   ExternalSpan(ExternalSpanData)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct SpanFinished {
+  span_id : String
+  finished_at : @system-clock.Instant
+  outcome : SpanOutcome
+} derive(Eq, @debug.Debug)
+
+pub(all) enum SpanKind {
+  INTERNAL
+  CLIENT
+  SERVER
+} derive(Eq, @debug.Debug)
+pub fn SpanKind::from(Int) -> Self
+pub fn SpanKind::ordinal(Self) -> Int
+
+pub(all) struct SpanLink {
+  trace_id : String
+  span_id : String
+  trace_states : Array[String]
+} derive(Eq, @debug.Debug)
+
+pub(all) enum SpanOutcome {
+  COMPLETED
+  FAILED
+  CANCELLED
+  ABANDONED
+  DENIED
+} derive(Eq, @debug.Debug)
+pub fn SpanOutcome::from(Int) -> Self
+pub fn SpanOutcome::ordinal(Self) -> Int
+
+pub(all) struct SpanStarted {
+  span_id : String
+  trace_id : String
+  trace_states : Array[String]
+  parent_span_id : String?
+  links : Array[SpanLink]
+  started_at : @system-clock.Instant
+  attributes : Array[@context.Attribute]
+  kind : SpanKind
 } derive(Eq, @debug.Debug)
 
 pub(all) struct StartParameters {
@@ -829,14 +889,7 @@ pub(all) struct StartParameters {
   observational_owner : UInt64?
   request : @types.TypedSchemaValue?
   durable_function_type : WrappedFunctionType
-} derive(Eq, @debug.Debug)
-
-pub(all) struct StartSpanParameters {
-  timestamp : @system-clock.Instant
-  span_id : String
-  parent : String?
-  linked_context_id : String?
-  attributes : Array[@context.Attribute]
+  span_started : SpanStarted?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum StateNode {

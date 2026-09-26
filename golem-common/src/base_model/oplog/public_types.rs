@@ -28,6 +28,19 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct LogTraceContext {
+    pub trace_id: TraceId,
+    pub span_id: SpanId,
+}
+
 /// Public-oplog-local counterpart of `TypedAgentConfigEntry`. Both now carry a
 /// schema-native `TypedSchemaValue`; this type exists as the public-oplog DTO
 /// (poem/serde shape) and is produced at the public-oplog render edge.
@@ -434,6 +447,90 @@ pub struct PublicLocalSpanData {
 pub struct PublicAttribute {
     pub key: String,
     pub value: PublicAttributeValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum PublicSpanKind {
+    Internal,
+    Client,
+    Server,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum PublicSpanOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+    Abandoned,
+    Denied,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanLink {
+    pub trace_id: TraceId,
+    pub span_id: SpanId,
+    pub trace_states: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanStarted {
+    pub span_id: SpanId,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub parent_span_id: Option<SpanId>,
+    pub links: Vec<PublicSpanLink>,
+    pub started_at: Timestamp,
+    pub attributes: Vec<PublicAttribute>,
+    pub kind: PublicSpanKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanFinished {
+    pub span_id: SpanId,
+    pub finished_at: Timestamp,
+    pub outcome: PublicSpanOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct PublicSpanAttributes {
+    pub span_id: SpanId,
+    pub attributes: Vec<PublicAttribute>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]

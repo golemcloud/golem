@@ -51,6 +51,12 @@ Use the worker-executor metrics and traces to inspect attachment activity:
 
 See [Metrics](/next/operate/metrics) and [Logs](/next/operate/logs) for endpoint and exporter setup.
 
+The built-in OTLP exporter also emits `golem.durable_stream.event_count` from durable stream summaries. Its bounded `event` label distinguishes registration, aggregated items, stream end/cancellation, and session result/finish/cancellation/expiry; terminal summaries may use the bounded `outcome` label (`success` or `error`). Item counts are aggregated into the metric value. The exporter does not create one span or label value per streamed item and never exports item payloads through this summary.
+
+`session-cancellation` counts cancellation-related journal records (request, consumer intent, and application), not unique logical cancellations. One cancellation can produce several such records.
+
+A session result and the eventual stream or session terminal are separate durable events, so an early invocation result is not stream completion. Collector delivery is best effort even though source lifecycle state advances when a batch is accepted.
+
 ## Writing input streams over HTTP
 
 Input slots accept Durable Streams `POST` requests by default. Output slots and `$result` are read-only (`405` with `Allow`). For a `stream<string>` input named `input`, append two messages with:

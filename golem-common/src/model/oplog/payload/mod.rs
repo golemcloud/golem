@@ -175,6 +175,8 @@ oplog_payload! {
             method_name: String,
             input: SchemaValue,
             #[schema(skip)]
+            local_denial: Option<String>,
+            #[schema(skip)]
             logical_streaming_origin: Option<StreamInvocationId>,
             #[schema(skip)]
             #[transient(None::<AgentTypeName>)]
@@ -288,6 +290,22 @@ oplog_payload! {
         GolemRpcCreate {
             remote_agent_id: AgentId
         },
+        GolemRpcResource {
+            creation_index: OplogIndex
+        },
+        GolemRpcAsyncInvokeRejection {
+            remote_agent_id: AgentId,
+            idempotency_key: IdempotencyKey,
+            method_name: String,
+            error: SerializableRpcError
+        },
+        GolemContextSpanResource {
+            creation_index: Option<OplogIndex>
+        },
+        GolemContextSpanAttributes {
+            creation_index: Option<OplogIndex>,
+            attributes: Vec<(String, crate::model::invocation_context::AttributeValue)>
+        },
         KVCacheKey {
             key: String
         },
@@ -309,6 +327,9 @@ oplog_payload! {
         },
         P3HttpClientSend {
             request: SerializableP3HttpClientSend
+        },
+        P3HttpSpanCleanup {
+            send_start_index: OplogIndex
         },
         /// Payload of a `HostStreamFrame` hint oplog entry recording one frame of a
         /// P3 HTTP outgoing request body. Not a host-call request: these frames are
@@ -917,6 +938,12 @@ pub mod host_functions {
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcDrop => "golem::rpc::wasm-rpc", "drop", GolemRpcResource, GolemRpcUnit),
+        (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),
+        (GolemContextStartSpan => "golem::api::context", "start-span", NoInput, GolemApiUnit),
+        (GolemContextSpanFinish => "golem::api::context::span", "finish", GolemContextSpanResource, GolemApiUnit),
+        (GolemContextSpanDrop => "golem::api::context::span", "drop", GolemContextSpanResource, GolemApiUnit),
+        (GolemContextSpanSetAttributes => "golem::api::context::span", "set-attributes", GolemContextSpanAttributes, GolemApiUnit),
         (P3KeyvalueCacheGet => "keyvalue::cache", "get", KVCacheKey, KVGet),
         (P3KeyvalueCacheExists => "keyvalue::cache", "exists", KVCacheKey, KVDelete),
         (P3KeyvalueCacheSet => "keyvalue::cache", "set", KVCacheKeyValueAndTtl, KVUnit),
@@ -946,6 +973,7 @@ pub mod host_functions {
         (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend),
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
         (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult),
+        (P3HttpSpanCleanup => "http::client", "span-cleanup", P3HttpSpanCleanup, GolemApiUnit),
         (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
         (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk),
         (P3HttpClientRequestBodyTransmission => "http::types::request", "body-transmission", NoInput, P3HttpClientRequestBodyTransmission),

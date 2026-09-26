@@ -154,9 +154,6 @@ impl OplogEntry {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
             | OplogEntry::BeginRemoteTransaction { .. }
             | OplogEntry::PreCommitRemoteTransaction { .. }
             | OplogEntry::PreRollbackRemoteTransaction { .. }
@@ -297,9 +294,6 @@ impl OplogEntry {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
             | OplogEntry::BeginRemoteTransaction { .. }
             | OplogEntry::PreCommitRemoteTransaction { .. }
             | OplogEntry::PreRollbackRemoteTransaction { .. }
@@ -384,9 +378,6 @@ impl OplogEntry {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan { .. }
-            | OplogEntry::FinishSpan { .. }
-            | OplogEntry::SetSpanAttribute { .. }
             | OplogEntry::BeginRemoteTransaction { .. }
             | OplogEntry::PreCommitRemoteTransaction { .. }
             | OplogEntry::PreRollbackRemoteTransaction { .. }
@@ -481,18 +472,6 @@ impl OplogScopeProjection {
             | OplogEntry::Log {
                 parent_start_index: Some(parent_start_index),
                 ..
-            }
-            | OplogEntry::StartSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: Some(parent_start_index),
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
-                parent_start_index: Some(parent_start_index),
-                ..
             } => self.starts.contains(parent_start_index),
             OplogEntry::Error { .. }
             | OplogEntry::NoOp { .. }
@@ -561,18 +540,6 @@ impl OplogScopeProjection {
             | OplogEntry::DeactivatePlugin { .. }
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
-            | OplogEntry::StartSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::FinishSpan {
-                parent_start_index: None,
-                ..
-            }
-            | OplogEntry::SetSpanAttribute {
-                parent_start_index: None,
-                ..
-            }
             | OplogEntry::Snapshot { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. } => false,
         };

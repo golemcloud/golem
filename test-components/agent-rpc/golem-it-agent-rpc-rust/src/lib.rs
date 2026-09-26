@@ -1330,6 +1330,14 @@ pub trait RpcAuthTester {
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome;
 
     fn try_ephemeral_call(&self) -> RpcCallOutcome;
+
+    async fn try_ephemeral_call_async(&self) -> RpcCallOutcome;
+
+    async fn denied_streaming_metadata(&self) -> String;
+
+    fn invalid_async_call_without_get(&self) -> String;
+
+    fn denied_durable_async_without_get(&self) -> String;
 }
 
 struct RpcAuthTesterImpl {
@@ -1347,6 +1355,11 @@ pub trait CancelTester {
 
     /// Starts an async RPC call, awaits its completion, then cancels (should be no-op)
     async fn test_cancel_completed(&self, counter_name: String) -> u64;
+
+    /// Polls an async RPC get until it is pending, then drops the get and RPC resources.
+    async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId);
+
+    fn name(&self) -> String;
 
     fn grow_memory_before_rpc_activation(&self, counter_name: String);
 
@@ -1388,6 +1401,69 @@ impl RpcAuthTester for RpcAuthTesterImpl {
             Ok(_) => RpcCallOutcome::Ok,
             Err(error) => RpcCallOutcome::from(error),
         }
+    }
+
+    async fn try_ephemeral_call_async(&self) -> RpcCallOutcome {
+        let rpc = WasmRpc::new(
+            "EphemeralStreamingRpcTarget",
+            encode_single_parameter("denied-target".to_string()),
+            None,
+            Vec::new(),
+        );
+        let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
+        let result = rpc.async_invoke_and_await("spin", input, None);
+        match result.future.get().await {
+            Ok(_) => RpcCallOutcome::Ok,
+            Err(error) => RpcCallOutcome::from(error),
+        }
+    }
+
+    async fn denied_streaming_metadata(&self) -> String {
+        let rpc = WasmRpc::new(
+            "EphemeralStreamingRpcTarget",
+            encode_single_parameter("denied-streaming-target".to_string()),
+            None,
+            Vec::new(),
+        );
+        let _idempotence = golem_rust::use_idempotence_mode(false);
+        let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
+        let result = rpc.async_invoke_and_await("produce_siblings", input, None);
+        assert!(matches!(
+            result.future.get().await,
+            Err(RpcError::Denied(_))
+        ));
+        result.metadata.idempotency_key
+    }
+
+    fn invalid_async_call_without_get(&self) -> String {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter("invalid-async-target".to_string()),
+            None,
+            Vec::new(),
+        );
+        let result = rpc.async_invoke_and_await(
+            "method-that-does-not-exist",
+            encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap(),
+            None,
+        );
+        result.metadata.idempotency_key
+    }
+
+    fn denied_durable_async_without_get(&self) -> String {
+        let rpc = WasmRpc::new(
+            "RpcCounter",
+            encode_single_parameter("denied-durable-target".to_string()),
+            None,
+            Vec::new(),
+        );
+        let _atomic = mark_atomic_operation();
+        let first = rpc.async_invoke_and_await("inc_by", encode_single_parameter(1u64), None);
+        let second = rpc.async_invoke_and_await("inc_by", encode_single_parameter(2u64), None);
+        format!(
+            "{}:{}",
+            first.metadata.idempotency_key, second.metadata.idempotency_key
+        )
     }
 
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome {
@@ -1571,6 +1647,33 @@ impl CancelTester for CancelTesterImpl {
         future.cancel();
         // Don't call get() - that would trigger retry logic
         // The test verifies from outside that the counter was NOT incremented
+    }
+
+    async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId) {
+        let rpc = WasmRpc::new(
+            "RpcBlockingCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let result = rpc
+            .async_invoke_and_await(
+                "inc_after_promise",
+                encode_single_parameter(promise_id),
+                None,
+            )
+            .future;
+        let mut get = Box::pin(result.get());
+
+        std::future::poll_fn(|cx| match get.as_mut().poll(cx) {
+            std::task::Poll::Pending => std::task::Poll::Ready(()),
+            std::task::Poll::Ready(_) => panic!("promise-blocked RPC completed unexpectedly"),
+        })
+        .await;
+    }
+
+    fn name(&self) -> String {
+        self._name.clone()
     }
 
     async fn test_cancel_completed(&self, counter_name: String) -> u64 {

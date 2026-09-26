@@ -181,6 +181,27 @@ declare module 'golem:api/oplog@1.5.0' {
     originalPhantomId?: Uuid;
     instanceId: Uuid;
   };
+  export type SpanKind = "internal" | "client" | "server";
+  export type SpanOutcome = "completed" | "failed" | "cancelled" | "abandoned" | "denied";
+  export type SpanLink = {
+    traceId: TraceId;
+    spanId: SpanId;
+    traceStates: string[];
+  };
+  /**
+   * The span name remains in the `name` attribute. An embedded opening must
+   * be explicitly closed; invocation boundaries do not close it automatically.
+   */
+  export type SpanStarted = {
+    spanId: SpanId;
+    traceId: TraceId;
+    traceStates: string[];
+    parentSpanId?: SpanId;
+    links: SpanLink[];
+    startedAt: Datetime;
+    attributes: Attribute[];
+    kind: SpanKind;
+  };
   /**
    * Parameters of an enriched durable host-call `start` entry.
    * The recorded `request` payload of every durable host call — including
@@ -197,6 +218,34 @@ declare module 'golem:api/oplog@1.5.0' {
     observationalOwner?: OplogIndex;
     request?: TypedSchemaValue;
     durableFunctionType: WrappedFunctionType;
+    spanStarted?: SpanStarted;
+  };
+  /**
+   * A compact close records the outcome but no error-message payload. Consumers
+   * must not decode the opaque host request to manufacture one.
+   */
+  export type SpanFinished = {
+    spanId: SpanId;
+    finishedAt: Datetime;
+    outcome: SpanOutcome;
+  };
+  /**
+   * Parameters of an enriched durable host-call `cancelled` entry. Like the
+   * `start` `request`, the optional recorded `partial` result surfaces as a
+   * generic `typed-schema-value` tree (no per-interface named WIT variants).
+   */
+  export type CancelledParameters = {
+    timestamp: Datetime;
+    startIndex: OplogIndex;
+    partial?: TypedSchemaValue;
+    spanFinished?: SpanFinished;
+  };
+  /**
+   * Attributes applied by `end` before the span is closed.
+   */
+  export type SpanAttributes = {
+    spanId: SpanId;
+    attributes: Attribute[];
   };
   /**
    * Parameters of an enriched durable host-call `end` entry. Like the
@@ -208,16 +257,8 @@ declare module 'golem:api/oplog@1.5.0' {
     startIndex: OplogIndex;
     response?: TypedSchemaValue;
     forcedCommit: boolean;
-  };
-  /**
-   * Parameters of an enriched durable host-call `cancelled` entry. Like the
-   * `start` `request`, the optional recorded `partial` result surfaces as a
-   * generic `typed-schema-value` tree (no per-interface named WIT variants).
-   */
-  export type CancelledParameters = {
-    timestamp: Datetime;
-    startIndex: OplogIndex;
-    partial?: TypedSchemaValue;
+    spanFinished?: SpanFinished;
+    spanAttributes?: SpanAttributes;
   };
   /**
    * Parameters of a `completion-discarded` entry: the durable host call started at
@@ -485,11 +526,16 @@ declare module 'golem:api/oplog@1.5.0' {
     owner: string;
   };
   export type LogLevel = "stdout" | "stderr" | "trace" | "debug" | "info" | "warn" | "error" | "critical";
+  export type LogTraceContext = {
+    traceId: TraceId;
+    spanId: SpanId;
+  };
   export type LogParameters = {
     timestamp: Datetime;
     level: LogLevel;
     context: string;
     message: string;
+    traceContext?: LogTraceContext;
   };
   export type ActivatePluginParameters = {
     timestamp: Datetime;
@@ -506,23 +552,6 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CancelPendingInvocationParameters = {
     timestamp: Datetime;
     idempotencyKey: string;
-  };
-  export type StartSpanParameters = {
-    timestamp: Datetime;
-    spanId: SpanId;
-    parent?: SpanId;
-    linkedContextId?: SpanId;
-    attributes: Attribute[];
-  };
-  export type FinishSpanParameters = {
-    timestamp: Datetime;
-    spanId: SpanId;
-  };
-  export type SetSpanAttributeParameters = {
-    timestamp: Datetime;
-    spanId: SpanId;
-    key: string;
-    value: AttributeValue;
   };
   export type BeginRemoteTransactionParameters = {
     timestamp: Datetime;
@@ -754,17 +783,21 @@ declare module 'golem:api/oplog@1.5.0' {
     observationalOwner?: OplogIndex;
     request?: OplogPayload;
     durableFunctionType: WrappedFunctionType;
+    spanStarted?: SpanStarted;
   };
   export type RawEndParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
     response?: OplogPayload;
     forcedCommit: boolean;
+    spanFinished?: SpanFinished;
+    spanAttributes?: SpanAttributes;
   };
   export type RawCancelledParameters = {
     timestamp: Datetime;
     startIndex: OplogIndex;
     partial?: OplogPayload;
+    spanFinished?: SpanFinished;
   };
   export type RawCompletionDiscardedParameters = {
     timestamp: Datetime;
@@ -784,12 +817,42 @@ declare module 'golem:api/oplog@1.5.0' {
     kind: HostStreamKind;
     payload: OplogPayload;
   };
+  export type DurableStreamOutcome = "success" | "error";
+  export type DurableStreamEventSummary =
+  {
+    tag: 'registered'
+  } |
+  {
+    tag: 'items'
+    val: bigint
+  } |
+  {
+    tag: 'end'
+    val: DurableStreamOutcome
+  } |
+  {
+    tag: 'cancelled'
+  } |
+  {
+    tag: 'session-result'
+  } |
+  {
+    tag: 'session-finished'
+    val: DurableStreamOutcome
+  } |
+  {
+    tag: 'session-cancellation'
+  } |
+  {
+    tag: 'session-expired'
+  };
   /**
    * A raw durable-stream producer record, stored inline or in external payload storage.
    */
   export type RawDurableStreamRecordParameters = {
     timestamp: Datetime;
     record: OplogPayload;
+    summary?: DurableStreamEventSummary;
   };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
@@ -1061,21 +1124,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'cancel-pending-invocation'
     val: CancelPendingInvocationParameters
-  } |
-  /** Start a new span in the invocation context */
-  {
-    tag: 'start-span'
-    val: StartSpanParameters
-  } |
-  /** Finish an open span in the invocation context */
-  {
-    tag: 'finish-span'
-    val: FinishSpanParameters
-  } |
-  /** Set an attribute on an open span in the invocation context */
-  {
-    tag: 'set-span-attribute'
-    val: SetSpanAttributeParameters
   } |
   /** Begins a transaction operation */
   {
@@ -1363,21 +1411,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'cancel-pending-invocation'
     val: CancelPendingInvocationParameters
-  } |
-  /** Start a new span in the invocation context */
-  {
-    tag: 'start-span'
-    val: StartSpanParameters
-  } |
-  /** Finish an open span in the invocation context */
-  {
-    tag: 'finish-span'
-    val: FinishSpanParameters
-  } |
-  /** Set an attribute on an open span in the invocation context */
-  {
-    tag: 'set-span-attribute'
-    val: SetSpanAttributeParameters
   } |
   /** Begins a transaction operation */
   {

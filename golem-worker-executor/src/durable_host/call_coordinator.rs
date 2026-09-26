@@ -85,6 +85,21 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         Ok(DurableCallBoundary::from_begin_index(begin_index))
     }
 
+    pub(crate) async fn admit_with_span(
+        self,
+        admission: DurableCallAdmission<'_>,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(DurableCallBoundary, golem_common::model::oplog::SpanStarted), WorkerExecutorError>
+    {
+        self.check_allowed(admission)?;
+        self.ctx.synchronize_agent_wallet_at_boundary().await?;
+        let (begin_index, recorded) = self
+            .ctx
+            .begin_function_with_span(admission.function_type, span_started)
+            .await?;
+        Ok((DurableCallBoundary::from_begin_index(begin_index), recorded))
+    }
+
     pub(crate) async fn admit_with_agent_authority(
         self,
         admission: DurableCallAdmission<'_>,
@@ -125,9 +140,10 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         function_type: &DurableFunctionType,
         boundary: DurableCallBoundary,
         forced_commit: bool,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
         self.ctx
-            .end_function(function_type, boundary.begin_index())
+            .end_function_impl(function_type, boundary.begin_index(), span_finished)
             .await?;
         if !self.ctx.state.snapshotting_mode
             && (function_type == &DurableFunctionType::WriteRemote

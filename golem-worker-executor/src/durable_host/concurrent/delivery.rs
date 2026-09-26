@@ -56,17 +56,12 @@ pub(super) enum CompletionMarkerKind {
 }
 
 pub(super) enum OrderedAppend {
-    Receipt(crate::services::oplog::OplogAddReceipt),
     Task(tokio::task::JoinHandle<Result<(), WorkerExecutorError>>),
 }
 
 impl OrderedAppend {
     async fn wait(self) -> Result<(), WorkerExecutorError> {
         match self {
-            Self::Receipt(receipt) => {
-                receipt.await;
-                Ok(())
-            }
             Self::Task(task) => task.await.map_err(|err| {
                 WorkerExecutorError::runtime(format!("ordered oplog append task failed: {err}"))
             })?,
@@ -239,7 +234,7 @@ pub(super) fn task_for_marker_receipt(
 ///   receiving end of the delivery channel); appends exactly one `CompletionDiscarded` marker
 ///   inline and returns once it is durable.
 /// - `Drop` while armed — the delivering future itself was torn; spawns exactly one owned marker
-///   append (ordered after any pending [`Self::append_ordered`] entry) and hands its join plus
+///   append (ordered after the pending terminal) and hands its join plus
 ///   the in-flight [`LiveCallPermit`] to the drain queue via [`DropEvent::AwaitCompletionMarker`],
 ///   so invocation settlement cannot overtake the append.
 ///
@@ -340,9 +335,7 @@ pub(super) struct LiveDelivery {
     /// [`DropEvent::AwaitCompletionMarker`] — before writing their final oplog state.
     pub(super) live_call_permit: Option<LiveCallPermit>,
     pub(super) cleanup_sink: Option<UnboundedSender<DropEvent>>,
-    /// An oplog append (e.g. a durable `FinishSpan`) synchronously reserved before any marker,
-    /// preserving the recorded `End → FinishSpan → CompletionDiscarded` order replay consumes
-    /// positionally. See [`CompletionDelivery::append_ordered`].
+    /// The terminal append reserved before any completion marker.
     pub(super) pending_append: Option<OrderedAppend>,
 }
 
@@ -412,9 +405,7 @@ impl CompletionDelivery {
         )
     }
 
-    /// Whether the token is live and armed (a torn delivery would record a marker). Callers use
-    /// this to route ordered post-`End` appends through [`Self::append_ordered`] instead of a
-    /// direct oplog append that would race the torn-drop marker.
+    /// Whether the token is live and armed (a torn delivery would record a marker).
     pub fn is_live_armed(&self) -> bool {
         matches!(self.state, CompletionDeliveryState::Live(_))
     }
@@ -466,30 +457,6 @@ impl CompletionDelivery {
                 }
             }
             _ => {}
-        }
-        Ok(())
-    }
-
-    /// Hands an oplog entry append (e.g. a durable `FinishSpan`) to an owned task ordered
-    /// *before* any later marker append by this token. Must be called with no `await` between
-    /// the token's creation (or previous [`Self::wait_appends`]) and this call when the entry is
-    /// mandatory — a tear cannot happen between synchronous statements, so the obligation is
-    /// transferred atomically. No-op unless live and armed.
-    pub fn append_ordered(&mut self, entry: OplogEntry) {
-        if let CompletionDeliveryState::Live(live) = &mut self.state {
-            live.pending_append = Some(OrderedAppend::Receipt(
-                live.marker.recorder.oplog.enqueue_add(entry),
-            ));
-        }
-    }
-
-    /// Joins the pending ordered append(s). Cancellation-safe: a tear mid-join leaves the join
-    /// handle owned by the token, so the torn-drop marker append still chains after it.
-    pub async fn wait_appends(&mut self) -> Result<(), WorkerExecutorError> {
-        if let CompletionDeliveryState::Live(live) = &mut self.state
-            && let Some(append) = live.pending_append.take()
-        {
-            append.wait().await?;
         }
         Ok(())
     }
@@ -572,8 +539,21 @@ impl CompletionDelivery {
     /// recorded later durable calls in the tail, so gating would stall their claims — it
     /// delivers immediately instead, mirroring live.
     pub async fn deliver_at_accessor_terminal<T, D>(
+        self,
+        store: &Accessor<T, D>,
+    ) -> Result<(), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+    {
+        self.deliver_at_accessor_terminal_with_not_delivered(store, || {})
+            .await
+    }
+
+    pub(crate) async fn deliver_at_accessor_terminal_with_not_delivered<T, D>(
         mut self,
         store: &Accessor<T, D>,
+        on_not_delivered: impl FnOnce() + Send + 'static,
     ) -> Result<(), WorkerExecutorError>
     where
         T: 'static,
@@ -598,6 +578,7 @@ impl CompletionDelivery {
         }
         let guard = AccessorDeliveryGuard {
             delivery: Some(self),
+            on_not_delivered: Some(Box::new(on_not_delivered)),
         };
         if let Err(error) =
             store.register_terminal_observer(move |consumption| guard.consume(consumption))
@@ -642,7 +623,7 @@ impl CompletionDelivery {
 
     /// The caller detected a silent discard of the persisted completion (e.g. the guest dropped
     /// the receiving end of the delivery channel): appends exactly one `CompletionDiscarded`
-    /// marker — ordered after any pending [`Self::append_ordered`] entry — and returns once it
+    /// marker — ordered after the pending terminal — and returns once it
     /// is durable. Cancellation-safe: marker persistence moves to an owned task *before* the
     /// first await, and a tear mid-wait hands the join plus the in-flight permit to the drain
     /// queue exactly like a torn armed drop, so the marker still lands and settlement still
@@ -783,8 +764,7 @@ impl Drop for CompletionDelivery {
             CompletionDeliveryState::Live(live) => {
                 // The delivering future was torn while the token was still armed: the guest
                 // silently discarded a persisted successful completion. Chain the owned marker
-                // append after any pending ordered append (preserving the recorded
-                // `End → FinishSpan → CompletionDiscarded` order) and hand the join plus the
+                // append after the pending terminal and hand the join plus the
                 // in-flight permit to the drain queue so invocation settlement waits for it. The
                 // marker command is queued synchronously — marker recording must not depend on
                 // the event surviving the drain.
@@ -816,6 +796,7 @@ impl Drop for CompletionDelivery {
 /// touches Golem-owned channels and owned tasks.
 struct AccessorDeliveryGuard {
     delivery: Option<CompletionDelivery>,
+    on_not_delivered: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl AccessorDeliveryGuard {
@@ -833,6 +814,9 @@ impl AccessorDeliveryGuard {
             // Dropping the armed token spawns the owned cancellation-safe marker append and
             // hands its join to the drain queue, so invocation settlement waits for it.
             TerminalConsumption::NotDelivered => {
+                if let Some(callback) = self.on_not_delivered.take() {
+                    callback();
+                }
                 if matches!(&delivery.state, CompletionDeliveryState::ReplayDelivered(_)) {
                     delivery.suppress();
                 } else {

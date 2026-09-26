@@ -174,6 +174,54 @@ fn assert_one_terminal_before_finished(
         "entity {start} must settle exactly once before Finished"
     );
     assert!(terminals[0].oplog_index < finished);
+    let opening = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(parameters) if entry.oplog_index == start => {
+                parameters.span_started.as_ref()
+            }
+            _ => None,
+        })
+        .expect("entity Start carries its span opening");
+    let (closing, expected_outcome) = match &terminals[0].entry {
+        PublicOplogEntry::End(end) => (
+            end.span_finished.as_ref(),
+            golem_common::model::oplog::PublicSpanOutcome::Completed,
+        ),
+        PublicOplogEntry::Cancelled(cancelled) => (
+            cancelled.span_finished.as_ref(),
+            golem_common::model::oplog::PublicSpanOutcome::Cancelled,
+        ),
+        _ => unreachable!(),
+    };
+    let closing = closing.expect("entity terminal carries its span close");
+    assert_eq!(closing.span_id, opening.span_id);
+    assert_eq!(closing.outcome, expected_outcome);
+    assert!(closing.finished_at >= opening.started_at);
+
+    let entry = oplog
+        .iter()
+        .find(|entry| entry.oplog_index == start)
+        .unwrap();
+    let PublicOplogEntryAttribution::Entity(entity) = &entry.attribution else {
+        panic!("entity Start must have entity attribution");
+    };
+    if let Some(parent) = entity.ancestors.last() {
+        let parent_opening = oplog
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(parameters) if entry.oplog_index == parent.start_index => {
+                    parameters.span_started.as_ref()
+                }
+                _ => None,
+            })
+            .expect("parent entity Start carries its span opening");
+        assert_eq!(opening.trace_id, parent_opening.trace_id);
+        assert_eq!(
+            opening.parent_span_id.as_ref(),
+            Some(&parent_opening.span_id)
+        );
+    }
 }
 
 #[test]
@@ -1241,6 +1289,32 @@ async fn partial_fanout_restart_replays_completed_child_repairs_pending_and_keep
         .oplog_index;
     for start in middleware_starts.into_iter().chain(leaf_starts) {
         assert_one_terminal_before_finished(&oplog, start.oplog_index, finished);
+    }
+
+    for before in &before_crash {
+        if let PublicOplogEntry::Start(parameters) = &before.entry {
+            if parameters.function_name == "golem::entity::invoke" {
+                let after = oplog
+                    .iter()
+                    .find(|entry| entry.oplog_index == before.oplog_index)
+                    .expect("reconstruction retains the original entity Start");
+                let PublicOplogEntry::Start(after) = &after.entry else {
+                    panic!("reconstruction must preserve the entry kind");
+                };
+                let mut before = parameters.clone();
+                let mut after = after.clone();
+                // The public projection converts an attribute map into an unordered list.
+                for parameters in [&mut before, &mut after] {
+                    parameters
+                        .span_started
+                        .as_mut()
+                        .unwrap()
+                        .attributes
+                        .sort_by(|a, b| a.key.cmp(&b.key));
+                }
+                assert_eq!(after, before);
+            }
+        }
     }
 
     let fresh: String = executor
