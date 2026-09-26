@@ -1155,20 +1155,24 @@ async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_
         STORAGE_CALL_DEADLINE,
     ));
     run_blocking(move || {
-        open_or_create(backend.clone(), &key(), &settings)?;
-        open_or_create(backend, &key(), &RepositorySettings::DEFAULT)?;
+        open_or_create(backend, &key(), &settings)?;
         Ok(())
     })
     .await
     .unwrap();
-    repository(&storage, &saved_scope)
-        .save(&name("first"), fixture_tree().path())
-        .await
-        .unwrap();
-    let config = |scope: SnapshotScope| {
-        let storage = storage.clone();
-        async move {
-            with_existing_repository(storage, &scope, STORAGE_CALL_DEADLINE, |repository| {
+    // 4 chunks of 64 KiB and one of 1 byte, each with other bytes. Rabin keeps a file below its
+    // smallest chunk of 512 KiB in one chunk.
+    let tree = Scratch::new();
+    let content = (0..4 * 65_536 + 1)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    std::fs::write(tree.path().join("data"), &content).unwrap();
+    let config = async |scope: &SnapshotScope| {
+        with_existing_repository(
+            storage.clone(),
+            scope,
+            STORAGE_CALL_DEADLINE,
+            |repository| {
                 let config = repository.config();
                 Ok((
                     config.chunker(),
@@ -1176,28 +1180,53 @@ async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_
                     config.compression,
                     config.extra_verify(),
                 ))
-            })
-            .await
-        }
+            },
+        )
+        .await
+        .unwrap()
     };
 
-    let created = config(created_scope).await.unwrap();
-    let saved = config(saved_scope).await.unwrap();
+    let fixed_save = repository(&storage, &created_scope)
+        .save(&name("first"), tree.path())
+        .await
+        .unwrap();
+    let default_save = repository(&storage, &saved_scope)
+        .save(&name("first"), tree.path())
+        .await
+        .unwrap();
+    let (fixed_chunker, fixed_chunk_size, fixed_compression, fixed_extra_verify) =
+        config(&created_scope).await;
+    let (default_chunker, _, default_compression, default_extra_verify) =
+        config(&saved_scope).await;
 
     assert_eq!(
-        (created, (saved.0, saved.2, saved.3)),
         (
             (
+                fixed_save.data_blobs,
+                fixed_save.data_added_packed >= fixed_save.data_added,
+                fixed_chunker,
+                fixed_chunk_size,
+                fixed_compression,
+                fixed_extra_verify,
+            ),
+            (
+                default_save.data_blobs,
+                default_save.data_added_packed < default_save.data_added,
+                default_chunker,
+                default_compression,
+                default_extra_verify,
+            ),
+        ),
+        (
+            (
+                5,
+                true,
                 rustic_core::repofile::Chunker::FixedSize,
                 65_536,
                 Some(0),
-                false
+                false,
             ),
-            (
-                rustic_core::repofile::Chunker::Rabin,
-                None,
-                RepositorySettings::DEFAULT.extra_verify
-            ),
+            (1, true, rustic_core::repofile::Chunker::Rabin, None, true),
         )
     );
 }
