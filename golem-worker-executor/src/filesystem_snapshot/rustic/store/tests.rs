@@ -2088,6 +2088,96 @@ async fn shut_down_waits_for_the_step_of_a_prune_and_its_refresh_that_is_not_pol
 
 #[test]
 #[timeout("60s")]
+async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
+    // The gate holds the read of the listed index file, and the test deletes that file meanwhile,
+    // as a prune does.
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let storage = ScriptedBlobStorage::new(inner.clone(), |op_label, path| {
+        if op_label == "copy_read" && path.starts_with("index") {
+            Script::WaitForGate
+        } else {
+            Script::Pass
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let (from, to) = (new_scope(), new_scope());
+    save_each(&store, &from, &["p-1"]).await;
+    let copying = tokio::spawn({
+        let store = store.clone();
+        let (from, to) = (from.clone(), to.clone());
+        async move { store.copy_scope(&from, &to).await }
+    });
+    let held = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, path)| *op_label == "copy_read" && path.starts_with("index"))
+    })
+    .await;
+    let index_files = blobs(&*inner, &from.0, "index/").await;
+
+    futures::stream::iter(&index_files)
+        .for_each(|path| {
+            let (inner, from) = (&inner, &from);
+            async move {
+                inner
+                    .delete("test", "test", from.0.clone(), Path::new(path))
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
+    storage.open_gate();
+    let copied = tokio::time::timeout(LIMIT, copying).await;
+
+    assert!(
+        matches!(&copied, Ok(Ok(Err(error))) if is_storage(error, true)),
+        "{copied:?}"
+    );
+    assert_eq!(
+        (
+            held,
+            index_files.is_empty(),
+            blobs(&*inner, &to.0, "config").await
+        ),
+        (true, false, Vec::<String>::new())
+    );
+}
+
+#[test]
+async fn a_copy_leaves_out_a_snapshot_file_that_a_delete_removed_after_the_listing() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "copy_read" && path.starts_with("snapshots") {
+                Script::Vanish
+            } else {
+                Script::Pass
+            }
+        });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let (from, to) = (new_scope(), new_scope());
+    save_each(&store, &from, &["p-1"]).await;
+
+    let copied = store.copy_scope(&from, &to).await;
+
+    assert!(copied.is_ok(), "{copied:?}");
+    assert_eq!(
+        (
+            blobs(&*storage, &to.0, "config").await.len(),
+            blobs(&*storage, &to.0, "snapshots/").await
+        ),
+        (1, Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_call() {
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
         if op_label == "copy_list" {
