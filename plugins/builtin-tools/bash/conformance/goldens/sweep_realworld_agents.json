@@ -1,0 +1,1648 @@
+{
+ "cases": {
+  "real traj: a missing tool": {
+   "script": "8d7a96caaf84e286",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 12: mypy: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "real traj: a missing tool with a fallback": {
+   "script": "aefafa873194e35a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "pytest unavailable\n"
+   }
+  },
+  "real traj: a pipeline into a missing tool": {
+   "script": "fb1190cf97e1ff6d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 12: python3: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "real traj: an environment prefix": {
+   "script": "27e9e7d35fe67351",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "PYTHONPATH=/testbed/src\n"
+   }
+  },
+  "real traj: append with echo": {
+   "script": "108f9593ac0265e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "setup(name=\"pkg\")\nextra = True\n"
+   }
+  },
+  "real traj: background job then kill": {
+   "script": "9b408b895fc7cc93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real traj: background job then kill by pid": {
+   "script": "1082bd77810371c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=143\n"
+   }
+  },
+  "real traj: cat -n": {
+   "script": "691bcacfa4c53245",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tdef slugify(s):\n     2\t    return s.lower().replace(\" \", \"-\")\n     3\t\n     4\t\n     5\tdef forward_port(port):\n     6\t    listen_sock = None\n     7\t    return port\n"
+   }
+  },
+  "real traj: cat a dotfile": {
+   "script": "38003a7d3530032f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "KEY=value\n"
+   }
+  },
+  "real traj: cat a file": {
+   "script": "504ccb96bac21a28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from setuptools import setup\nsetup(name=\"pkg\")\n"
+   }
+  },
+  "real traj: cat a missing file": {
+   "script": "536ffa05252f1a07",
+   "status": 0,
+   "stderr": {
+    "text": "cat: /testbed/reproduce_output.log: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: cat heredoc into a file": {
+   "script": "c6a466ecb4ea10c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from pkg.core import Widget\nprint(Widget(1).decompress(None))\n"
+   }
+  },
+  "real traj: cat heredoc with expansion": {
+   "script": "8dc0467fb3c7e5c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from pkg.core import Widget\nprint(\"$HOME\")\n"
+   }
+  },
+  "real traj: cat piped to grep -A": {
+   "script": "609913b4a11f8c57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    def __init__(self, value):\n        self._value = value\n\n"
+   }
+  },
+  "real traj: cat two files": {
+   "script": "3b2da8ab546758e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from setuptools import setup\nsetup(name=\"pkg\")\n# Docs\n\nUse Widget.decompress.\n"
+   }
+  },
+  "real traj: cd into a missing directory then a command": {
+   "script": "4967a203ee39c90f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 12: cd: /testbed/nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: cd then grep": {
+   "script": "d74ab17b6cb1524b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1:from setuptools import setup\n"
+   }
+  },
+  "real traj: command or echo": {
+   "script": "e01cb4e7ca51655f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "not found\n"
+   }
+  },
+  "real traj: cp a backup": {
+   "script": "d01f88a0063202fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "__init__.py\n__pycache__\ncore.py\ncore.py.bak\nsub\nutils.py\n"
+   }
+  },
+  "real traj: cp a new file over the original": {
+   "script": "ff370741cfd1c17f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X = 2\n"
+   }
+  },
+  "real traj: echo -e into a file": {
+   "script": "887de49746e5bd9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "import os\n\nprint(os.sep)\n"
+   }
+  },
+  "real traj: echo a multi-line single-quoted string": {
+   "script": "53f7a2a6b5d884ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$\nimport sys$\n$\ndef main():$\n    print(\"hi\")$\n$\n"
+   }
+  },
+  "real traj: echo a script with a main guard": {
+   "script": "f6b159df6e9c199a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "if __name__ == \"__main__\":\n    main()\n"
+   }
+  },
+  "real traj: echo with backslash-n into a file": {
+   "script": "f1f158ca0b1bac04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "import os\\n\\nprint(os.sep)\n"
+   }
+  },
+  "real traj: find all files": {
+   "script": "542d527ac2a882ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/README.md\n/testbed/docs/index.md\n/testbed/setup.py\n/testbed/src/pkg/__init__.py\n/testbed/src/pkg/__pycache__/core.cpython-311.pyc\n/testbed/src/pkg/core.py\n/testbed/src/pkg/sub/consts.py\n/testbed/src/pkg/utils.py\n/testbed/tests/test_core.py\n/testbed/tests/test_utils.py\n"
+   }
+  },
+  "real traj: find all files sorted in a subdirectory": {
+   "script": "65c769eb6974af21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/__init__.py\n/testbed/src/pkg/core.py\n/testbed/src/pkg/sub/consts.py\n/testbed/src/pkg/utils.py\n"
+   }
+  },
+  "real traj: find by name": {
+   "script": "700e7b423ae6675b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py\n"
+   }
+  },
+  "real traj: find by name grep -E": {
+   "script": "eac5c662f828132f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py\n/testbed/src/pkg/utils.py\n"
+   }
+  },
+  "real traj: find by name with a missing root": {
+   "script": "03fb22e530fd4e22",
+   "status": 0,
+   "stderr": {
+    "text": "find: ‘/testbed/nope’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: find by name with no match": {
+   "script": "96a94bcc03ff841b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: find directories by name": {
+   "script": "07b183d714ff5647",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg\n"
+   }
+  },
+  "real traj: find directories with -o": {
+   "script": "4d5e2eae3d917069",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/docs\n/testbed/tests\n"
+   }
+  },
+  "real traj: find directory type first": {
+   "script": "150c53f0cb8c887d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/tests\n"
+   }
+  },
+  "real traj: find exec file": {
+   "script": "72752a8022dd584a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/__init__.py: Python script, ASCII text executable\n/testbed/src/pkg/core.py: Python script, ASCII text executable\n/testbed/src/pkg/sub/consts.py: ASCII text\n/testbed/src/pkg/utils.py: Python script, ASCII text executable\n"
+   }
+  },
+  "real traj: find exec grep -Hn": {
+   "script": "e8bb538ed4bda00d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/tests/test_core.py:4:def test_decompress():\n/testbed/tests/test_utils.py:4:def test_slugify():\n"
+   }
+  },
+  "real traj: find exec grep -l": {
+   "script": "d7594d31089ba280",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/docs/index.md\n/testbed/src/pkg/__init__.py\n/testbed/src/pkg/__pycache__/core.cpython-311.pyc\n/testbed/src/pkg/core.py\n/testbed/tests/test_core.py\n"
+   }
+  },
+  "real traj: find exec grep -l on python files": {
+   "script": "17e5da2275211b47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/utils.py\n/testbed/tests/test_utils.py\n"
+   }
+  },
+  "real traj: find exec grep -l relative": {
+   "script": "83d8a7abd178bb51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./README.md\n./src/pkg/core.py\n"
+   }
+  },
+  "real traj: find exec grep -l with no match": {
+   "script": "b79e887bd0d9ebbe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real traj: find exec grep -n": {
+   "script": "62a74972d4b04fe3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10:            return [None, None]\n11:        return [value.amount, value.currency]\n15:        return data\n19:    return x * 2\n2:    return s.lower().replace(\" \", \"-\")\n7:    return port\n"
+   }
+  },
+  "real traj: find exec grep with context": {
+   "script": "b92148ea68e95719",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "def forward_port(port):\n    listen_sock = None\n    return port\n"
+   }
+  },
+  "real traj: find files grep -i": {
+   "script": "d9084020d6cc27f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py\n/testbed/tests/test_core.py\n"
+   }
+  },
+  "real traj: find files grep -i then grep -v": {
+   "script": "82f347bc2278522e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/setup.py\n/testbed/src/pkg/__init__.py\n/testbed/src/pkg/core.py\n/testbed/src/pkg/sub/consts.py\n/testbed/tests/test_core.py\n"
+   }
+  },
+  "real traj: find files grep -i with alternation": {
+   "script": "34038c89a4610a18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py\n/testbed/src/pkg/utils.py\n/testbed/tests/test_core.py\n/testbed/tests/test_utils.py\n"
+   }
+  },
+  "real traj: find files grep -i with no match or true": {
+   "script": "98e6e012756d9e8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real traj: find files minus pycache and tests sorted": {
+   "script": "554f5a5006148029",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/setup.py\n/testbed/src/pkg/__init__.py\n/testbed/src/pkg/core.py\n/testbed/src/pkg/sub/consts.py\n/testbed/src/pkg/utils.py\n"
+   }
+  },
+  "real traj: find files minus pycache and tests with head": {
+   "script": "536911e61a8edf51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/setup.py\n/testbed/src/pkg/__init__.py\n"
+   }
+  },
+  "real traj: find files minus pycache sorted": {
+   "script": "b20806246912c1ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/setup.py\n/testbed/src/pkg/__init__.py\n/testbed/src/pkg/core.py\n/testbed/src/pkg/sub/consts.py\n/testbed/src/pkg/utils.py\n/testbed/tests/test_core.py\n/testbed/tests/test_utils.py\n"
+   }
+  },
+  "real traj: find files minus test_ prefix": {
+   "script": "9d57128c98c6de7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/setup.py\n/testbed/src/pkg/__init__.py\n/testbed/src/pkg/core.py\n/testbed/src/pkg/sub/consts.py\n/testbed/src/pkg/utils.py\n"
+   }
+  },
+  "real traj: find files minus tests": {
+   "script": "9a4a081113b508ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real traj: find for loop over find exec": {
+   "script": "f70f678e5869dc81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "=== src/pkg/core.py ===\n            return [None, None]\n        return [value.amount, value.currency]\n\n--\n        return data\n\n--\n    return x * 2\n=== src/pkg/utils.py ===\n    return s.lower().replace(\" \", \"-\")\n\n--\n    return port\n"
+   }
+  },
+  "real traj: find minus pycache xargs grep -l sorted": {
+   "script": "235afd0973b9fbc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/setup.py\n/testbed/src/pkg/__init__.py\n/testbed/src/pkg/core.py\n/testbed/tests/test_core.py\n/testbed/tests/test_utils.py\n"
+   }
+  },
+  "real traj: find path pattern and name": {
+   "script": "674ef95e8db81098",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/sub/consts.py\n"
+   }
+  },
+  "real traj: find path pattern directories": {
+   "script": "ce166e9b18f38fe8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg\n/testbed/src/pkg/__pycache__\n/testbed/src/pkg/sub\n"
+   }
+  },
+  "real traj: find path xargs grep -l": {
+   "script": "6252a22935ced348",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py\n/testbed/src/pkg/utils.py\n"
+   }
+  },
+  "real traj: find relative find": {
+   "script": "f8739982f0b01fbe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./README.md\n./docs/index.md\n"
+   }
+  },
+  "real traj: find relative find by type": {
+   "script": "230124cf1524537d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src/pkg/__init__.py\n"
+   }
+  },
+  "real traj: find xargs cat": {
+   "script": "c51ee902568f0618",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "CONSTANT = 1\n"
+   }
+  },
+  "real traj: find xargs cat grep -A": {
+   "script": "1edaea2af8118594",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "def helper(x):\n    return x * 2\n"
+   }
+  },
+  "real traj: find xargs grep -l": {
+   "script": "612fb1089119040e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/__init__.py\n/testbed/src/pkg/core.py\n/testbed/tests/test_core.py\n"
+   }
+  },
+  "real traj: find xargs grep -l on a class": {
+   "script": "67d08dd7904dce1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py\n"
+   }
+  },
+  "real traj: find xargs grep -l with a regex": {
+   "script": "0dfe2078380b4011",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py\n/testbed/src/pkg/utils.py\n"
+   }
+  },
+  "real traj: find xargs grep -l with head": {
+   "script": "d500ac82c4ee94f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py\n/testbed/src/pkg/utils.py\n/testbed/tests/test_core.py\n/testbed/tests/test_utils.py\n"
+   }
+  },
+  "real traj: find xargs grep -l with no match": {
+   "script": "431e9d6dc60e3def",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=123\n"
+   }
+  },
+  "real traj: find xargs grep -l with no match or true": {
+   "script": "b62687bcdf992668",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real traj: find xargs ls": {
+   "script": "df77a60d4dc0505e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/utils.py\n"
+   }
+  },
+  "real traj: find xargs with no input": {
+   "script": "1ae0c973df320adf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=123\n"
+   }
+  },
+  "real traj: grep --include": {
+   "script": "047873225a4be5a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/pkg/__init__.py:from .core import Widget\n./src/pkg/core.py:class Widget:\n./tests/test_core.py:    assert Widget(1).decompress(None) == [None, None]\n./tests/test_core.py:from pkg.core import Widget\n"
+   }
+  },
+  "real traj: grep --include and grep -i and head": {
+   "script": "6d8deb1eaceaaa60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/utils.py:def forward_port(port):\n/testbed/src/pkg/utils.py:def slugify(s):\n/testbed/tests/test_utils.py:def test_slugify():\n"
+   }
+  },
+  "real traj: grep --include then grep -v": {
+   "script": "d421683ee7e96906",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/__init__.py:from .core import Widget\n/testbed/src/pkg/core.py:class Widget:\n"
+   }
+  },
+  "real traj: grep --include then two grep -v": {
+   "script": "4f1425a19f08cc02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real traj: grep --include with a path": {
+   "script": "304b5c1cb38e85d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/README.md:A small package. TODO: docs\n"
+   }
+  },
+  "real traj: grep --include with context": {
+   "script": "07bf45ba1868d081",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/pkg/utils.py:def slugify(s):\n./src/pkg/utils.py-    return s.lower().replace(\" \", \"-\")\n"
+   }
+  },
+  "real traj: grep -En with alternation": {
+   "script": "89fcfcc6c170af4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4:class Widget:\n18:def helper(x):\n"
+   }
+  },
+  "real traj: grep -Ern with alternation": {
+   "script": "ba03310a40f5c278",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py:18:def helper(x):\n/testbed/src/pkg/utils.py:1:def slugify(s):\n"
+   }
+  },
+  "real traj: grep -Rn": {
+   "script": "77f9a4186b64c68b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/utils.py:6:    listen_sock = None\n"
+   }
+  },
+  "real traj: grep -n -r after the path": {
+   "script": "bd9a089d9de1612e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/__init__.py:2:from .core import Widget\n/testbed/src/pkg/core.py:1:import os\n/testbed/src/pkg/utils.py:5:def forward_port(port):\n/testbed/src/pkg/utils.py:7:    return port\n"
+   }
+  },
+  "real traj: grep -n piped to grep -E and head": {
+   "script": "e6086948e34cc933",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "13:    def parse_form(self, data):\n18:def helper(x):\n"
+   }
+  },
+  "real traj: grep -n piped to grep -i": {
+   "script": "4d55f89c0a8b8b74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5:def forward_port(port):\n"
+   }
+  },
+  "real traj: grep -n piped to grep -i with no match": {
+   "script": "5f4d975379230c0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: grep -n piped to head": {
+   "script": "f2b5da43ec847fe0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5:    def __init__(self, value):\n6:        self._value = value\n"
+   }
+  },
+  "real traj: grep -n piped to head -n": {
+   "script": "bd230118d92775a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10:            return [None, None]\n"
+   }
+  },
+  "real traj: grep -n with a binary file": {
+   "script": "8a3b3b2c84494c8e",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /testbed/src/pkg/__pycache__/core.cpython-311.pyc: binary file matches\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real traj: grep -n with a bracket expression": {
+   "script": "ab224dcb83ec79b7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real traj: grep -n with a class": {
+   "script": "49aafe666ef64f67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4:class Widget:\n"
+   }
+  },
+  "real traj: grep -n with a directory": {
+   "script": "21282d5c3add9d53",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /testbed/src/pkg: Is a directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real traj: grep -n with a glob of files": {
+   "script": "af50f9cb425c262d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/__init__.py:2:from .core import Widget\n/testbed/src/pkg/core.py:1:import os\n"
+   }
+  },
+  "real traj: grep -n with a missing file": {
+   "script": "6e1ff56d1e2dff0c",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /testbed/src/pkg/nope.py: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real traj: grep -n with a relative path": {
+   "script": "edbcc0d388161900",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5:    def __init__(self, value):\n8:    def decompress(self, value):\n13:    def parse_form(self, data):\n18:def helper(x):\n"
+   }
+  },
+  "real traj: grep -n with a single-quoted apostrophe": {
+   "script": "6688271c4c2935f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: grep -n with an alternation": {
+   "script": "adb225a38a1fb78a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8:    def decompress(self, value):\n13:    def parse_form(self, data):\n"
+   }
+  },
+  "real traj: grep -n with an escaped dot": {
+   "script": "b4c3dfa1a5163392",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6:        self._value = value\n"
+   }
+  },
+  "real traj: grep -n with no match": {
+   "script": "3239e72b11cda7db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: grep -n with quotes and a star": {
+   "script": "1b79646c5e33a003",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "14:        # TODO: validate \"\" * 2\n"
+   }
+  },
+  "real traj: grep -nR": {
+   "script": "950ef7e1b74c9f29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/sub/consts.py:1:CONSTANT = 1\n"
+   }
+  },
+  "real traj: grep -nr": {
+   "script": "dd9b832c2e3fceb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/__init__.py:2:from .core import Widget\n/testbed/src/pkg/core.py:1:import os\n"
+   }
+  },
+  "real traj: grep -r -n": {
+   "script": "73548dca83a2d178",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/README.md:3:A small package. TODO: docs\n/testbed/src/pkg/core.py:14:        # TODO: validate \"\" * 2\n"
+   }
+  },
+  "real traj: grep -r in a missing directory": {
+   "script": "5cba4a1169067d9b",
+   "status": 0,
+   "stderr": {
+    "text": "grep: /testbed/nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real traj: grep -r in the repo": {
+   "script": "9995667b18fff6a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py:def helper(x):\n"
+   }
+  },
+  "real traj: grep -r over the current directory": {
+   "script": "df91f94c9a841de8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./test_core.py:    assert Widget(1).decompress(None) == [None, None]\n./test_utils.py:    assert slugify(\"A B\") == \"a-b\"\n"
+   }
+  },
+  "real traj: grep -r with a trailing slash": {
+   "script": "c3b4755c88a7053f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/tests/test_core.py:    assert Widget(1).decompress(None) == [None, None]\n/testbed/tests/test_core.py:from pkg.core import Widget\n"
+   }
+  },
+  "real traj: grep -r with piped head": {
+   "script": "33fcb152316d7f73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py:            return [None, None]\n/testbed/src/pkg/core.py:        return [value.amount, value.currency]\n/testbed/src/pkg/core.py:        return data\n"
+   }
+  },
+  "real traj: grep -rl": {
+   "script": "14bea9709c1fb5da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/__init__.py\n/testbed/src/pkg/__pycache__/core.cpython-311.pyc\n/testbed/src/pkg/core.py\n"
+   }
+  },
+  "real traj: grep -rn in a subdirectory": {
+   "script": "eac8ba1957bb2ead",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/tests/test_utils.py:1:from pkg.utils import slugify\n/testbed/tests/test_utils.py:4:def test_slugify():\n/testbed/tests/test_utils.py:5:    assert slugify(\"A B\") == \"a-b\"\n"
+   }
+  },
+  "real traj: grep -rn in the repo": {
+   "script": "85fd18c7e5decdea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/docs/index.md:3:Use Widget.decompress.\n/testbed/src/pkg/core.py:8:    def decompress(self, value):\n/testbed/tests/test_core.py:4:def test_decompress():\n/testbed/tests/test_core.py:5:    assert Widget(1).decompress(None) == [None, None]\n"
+   }
+  },
+  "real traj: grep -rn with no match": {
+   "script": "22fa9f5b458363f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: grep -rnw matching only whole words": {
+   "script": "1867a5b7aed44348",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: grep -rnw with -e": {
+   "script": "76549dbd9209a0c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src/pkg/core.py:18:def helper(x):\n"
+   }
+  },
+  "real traj: grep context -A": {
+   "script": "890e3bc3166373fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "class Widget:\n    def __init__(self, value):\n        self._value = value\n"
+   }
+  },
+  "real traj: grep context -A -B": {
+   "script": "91d1fe5b3c3a9e0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    def __init__(self, value):\n        self._value = value\n\n"
+   }
+  },
+  "real traj: grep context -A -n": {
+   "script": "cde46bd3197c28dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1:def slugify(s):\n2-    return s.lower().replace(\" \", \"-\")\n--\n5:def forward_port(port):\n6-    listen_sock = None\n"
+   }
+  },
+  "real traj: grep context -A10 attached": {
+   "script": "858bde48c777c9d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "def forward_port(port):\n    listen_sock = None\n    return port\n"
+   }
+  },
+  "real traj: grep context -B": {
+   "script": "285956e21c18327b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    def parse_form(self, data):\n        # TODO: validate \"\" * 2\n        return data\n"
+   }
+  },
+  "real traj: grep context -B -A": {
+   "script": "46a578c216e6f5bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "def helper(x):\n    return x * 2\n"
+   }
+  },
+  "real traj: grep context -n -A": {
+   "script": "1ba57fe01a32a969",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8:    def decompress(self, value):\n9-        if value is None:\n10-            return [None, None]\n11-        return [value.amount, value.currency]\n"
+   }
+  },
+  "real traj: grep context -n -A -B": {
+   "script": "a9ce5ff75d6b20b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7-\n8-    def decompress(self, value):\n9:        if value is None:\n10-            return [None, None]\n11-        return [value.amount, value.currency]\n"
+   }
+  },
+  "real traj: grep context -n -B": {
+   "script": "9e323924acb50baa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "17-\n18:def helper(x):\n"
+   }
+  },
+  "real traj: grep context -n with -A after the pattern": {
+   "script": "04b3599d491624e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "13:    def parse_form(self, data):\n14-        # TODO: validate \"\" * 2\n15-        return data\n"
+   }
+  },
+  "real traj: grep context -n with -B and -A after the pattern": {
+   "script": "0ff0df2f422290b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9-        if value is None:\n10:            return [None, None]\n11:        return [value.amount, value.currency]\n12-\n--\n14-        # TODO: validate \"\" * 2\n15:        return data\n16-\n--\n18-def helper(x):\n19:    return x * 2\n"
+   }
+  },
+  "real traj: grep context context of a missing pattern": {
+   "script": "3352608064cc0492",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real traj: grep context context piped to context and head": {
+   "script": "f829c1e2e7645638",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    def decompress(self, value):\n        if value is None:\n            return [None, None]\n        return [value.amount, value.currency]\n"
+   }
+  },
+  "real traj: grep context context piped to grep -A": {
+   "script": "798e7b33e9c3a53f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8-    def decompress(self, value):\n9-        if value is None:\n10-            return [None, None]\n"
+   }
+  },
+  "real traj: grep context context piped to grep -n": {
+   "script": "05432e96925b5eae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2:5-    def __init__(self, value):\n5:8-    def decompress(self, value):\n10:13-    def parse_form(self, data):\n15:18-def helper(x):\n"
+   }
+  },
+  "real traj: grep context context piped to head": {
+   "script": "0d1aabffead077f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "class Widget:\n    def __init__(self, value):\n        self._value = value\n\n    def decompress(self, value):\n"
+   }
+  },
+  "real traj: grep context context with overlapping groups": {
+   "script": "e193a9545e44bd20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5:    def __init__(self, value):\n6-        self._value = value\n--\n8:    def decompress(self, value):\n9-        if value is None:\n--\n13:    def parse_form(self, data):\n14-        # TODO: validate \"\" * 2\n--\n18:def helper(x):\n19-    return x * 2\n"
+   }
+  },
+  "real traj: grep context large context piped to head": {
+   "script": "ec124cb93241e898",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4:class Widget:\n5-    def __init__(self, value):\n6-        self._value = value\n7-\n8-    def decompress(self, value):\n9-        if value is None:\n10-            return [None, None]\n11-        return [value.amount, value.currency]\n"
+   }
+  },
+  "real traj: head -n": {
+   "script": "7c18f98fcc584bb6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "import os\n\n\nclass Widget:\n    def __init__(self, value):\n"
+   }
+  },
+  "real traj: head -n of a short file": {
+   "script": "f70669ae7cd10bdd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "CONSTANT = 1\n"
+   }
+  },
+  "real traj: ls -R of a missing path": {
+   "script": "f1d94bd6e016b3b8",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access '/testbed/nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real traj: ls -R of a subdirectory": {
+   "script": "57879b1cbde604f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src:\npkg\n\n/testbed/src/pkg:\n__init__.py\n__pycache__\ncore.py\nsub\nutils.py\n\n/testbed/src/pkg/__pycache__:\ncore.cpython-311.pyc\n\n/testbed/src/pkg/sub:\nconsts.py\n"
+   }
+  },
+  "real traj: ls -R of the repo": {
+   "script": "88b2774b9ca80e2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed:\nREADME.md\ndocs\nsetup.py\nsrc\ntests\n\n/testbed/docs:\nindex.md\n\n/testbed/src:\npkg\n\n/testbed/src/pkg:\n__init__.py\n__pycache__\ncore.py\nsub\nutils.py\n\n/testbed/src/pkg/__pycache__:\ncore.cpython-311.pyc\n\n/testbed/src/pkg/sub:\nconsts.py\n\n/testbed/tests:\ntest_core.py\ntest_utils.py\n"
+   }
+  },
+  "real traj: ls -R relative": {
+   "script": "feb3f6794551d938",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "docs/:\nindex.md\n"
+   }
+  },
+  "real traj: ls -a": {
+   "script": "69aa1ec52dc73a92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\nREADME.md\ndocs\nsetup.py\nsrc\ntests\n"
+   }
+  },
+  "real traj: ls and head": {
+   "script": "5da0ffb46046cb59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "README.md\n# pkg\n"
+   }
+  },
+  "real traj: ls glob of files": {
+   "script": "b34a81ebf23caffd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test_core.py\ntest_utils.py\n"
+   }
+  },
+  "real traj: ls glob with no match": {
+   "script": "db5d402d5786f434",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access 'qr_*.png': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real traj: ls of a directory": {
+   "script": "7c3c9a0021f9e0af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "README.md\ndocs\nsetup.py\nsrc\ntests\n"
+   }
+  },
+  "real traj: ls of a missing directory with a fallback": {
+   "script": "f70a1e92f980b387",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Directory not found\n"
+   }
+  },
+  "real traj: ls of a missing file": {
+   "script": "06203e4b12ca4fb4",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access 'missing.png': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "setup.py\nstatus=2\n"
+   }
+  },
+  "real traj: ls of a subdirectory": {
+   "script": "3869e4f798e5fcb9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test_core.py\ntest_utils.py\n"
+   }
+  },
+  "real traj: ls of files that exist": {
+   "script": "c9082f32ccb820e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "README.md\nsetup.py\n"
+   }
+  },
+  "real traj: ls of the current directory": {
+   "script": "7cc1c478ce801ad6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "__init__.py\n__pycache__\ncore.py\nsub\nutils.py\n"
+   }
+  },
+  "real traj: mkdir -p a nested directory": {
+   "script": "2fcf9184e73761dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/reproduce_bug\n/testbed/reproduce_bug/conf\n/testbed/reproduce_bug/conf/platform\n"
+   }
+  },
+  "real traj: mkdir and cd": {
+   "script": "faafb04dae0233c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/test_repo\n"
+   }
+  },
+  "real traj: mv a file into place": {
+   "script": "aa66c67505d08d78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X = 3\n"
+   }
+  },
+  "real traj: printf into a file": {
+   "script": "e33e5ea0493c9880",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "line one\nline two\n"
+   }
+  },
+  "real traj: pwd": {
+   "script": "e5522139e66bfc70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/testbed/src\n"
+   }
+  },
+  "real traj: rebuild a file from two parts": {
+   "script": "939b5ff4e620486a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\ndef helper(x):\n    return x * 2\n"
+   }
+  },
+  "real traj: rewrite a file with grep -v": {
+   "script": "c4166bbe09cdba22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n    return x * 2\n 19 core.bak\n 18 core.new\n 37 total\n"
+   }
+  },
+  "real traj: rm -f several": {
+   "script": "ca6f42e177cad251",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "README.md\ndocs\nsetup.py\nsrc\ntests\n"
+   }
+  },
+  "real traj: rm -f with a glob": {
+   "script": "c9da3724fd382a83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "README.md\ndocs\nsetup.py\nsrc\ntest_edge_cases.py\ntests\n"
+   }
+  },
+  "real traj: rm -rf a directory": {
+   "script": "32243dfbce7261d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\n__init__.py\ncore.py\nsub\nutils.py\n"
+   }
+  },
+  "real traj: rm -rf several": {
+   "script": "805e7b21e01f7f8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "README.md\ndocs\nsetup.py\nsrc\ntest_edge_cases.py\ntests\n"
+   }
+  },
+  "real traj: rm a file that is gone": {
+   "script": "161ef705338287da",
+   "status": 0,
+   "stderr": {
+    "text": "rm: cannot remove '/testbed/reproduce_issue.py': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\nREADME.md\ndocs\nsetup.py\nsrc\ntest_edge_cases.py\ntests\n"
+   }
+  },
+  "real traj: rm one file": {
+   "script": "ee5b9c5405af6365",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "README.md\ndocs\nsetup.py\nsrc\ntest_edge_cases.py\ntests\n"
+   }
+  },
+  "real traj: rm two files": {
+   "script": "f434ff607567a8f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "README.md\ndocs\nsetup.py\nsrc\ntests\n"
+   }
+  },
+  "real traj: sed -n a range": {
+   "script": "239b37973edaa030",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "class Widget:\n    def __init__(self, value):\n        self._value = value\n\n    def decompress(self, value):\n"
+   }
+  },
+  "real traj: sleep then a command": {
+   "script": "71347c0a5ec86a77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from setuptools import setup\n"
+   }
+  },
+  "real traj: tail -n": {
+   "script": "0ac811ea61040be7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\ndef helper(x):\n    return x * 2\n"
+   }
+  },
+  "real traj: tail -n of a log": {
+   "script": "4c840fe9d75d4c1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "log line 11\nlog line 12\n"
+   }
+  },
+  "real traj: tail piped to grep and head": {
+   "script": "d854b384400720e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    def __init__(self, value):\n        self._value = value\n\n    def decompress(self, value):\n        if value is None:\n"
+   }
+  },
+  "real traj: tee into a file": {
+   "script": "b431f1271d421e50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X=1\nX=1\n"
+   }
+  },
+  "real traj: wc -l": {
+   "script": "61682b0aed2e02d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "19 /testbed/src/pkg/core.py\n"
+   }
+  },
+  "real traj: wc -l of several": {
+   "script": "d1082257457ef798",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  2 src/pkg/__init__.py\n 19 src/pkg/core.py\n  7 src/pkg/utils.py\n 28 total\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

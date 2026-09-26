@@ -1,0 +1,4 @@
+package golem:bash-execution;
+world shell-services {
+    import wasi:clocks/monotonic-clock@0.3.0;
+}

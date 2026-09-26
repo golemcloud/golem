@@ -1,0 +1,4438 @@
+{
+ "cases": {
+  "opt b2sum: binary mode marker": {
+   "script": "dd65bad5b93ce53e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f60ce482e5cc1229f39d71313171a8d9f4ca3a87d066bf4b205effb528192a75f14f3271e2c1a90e1de53f275b4d4793eef2f5e31ea90d2ce29d2e481c36435f */tmp/a\n"
+   }
+  },
+  "opt b2sum: check from stdin": {
+   "script": "bc92230f60a57c38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt b2sum: check ignore missing": {
+   "script": "1c29968eb5004b4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\n"
+   }
+  },
+  "opt b2sum: check malformed lines warn": {
+   "script": "d8fe22a000bd6201",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\nb2sum: /tmp/sums: 2: improperly formatted BLAKE2b checksum line\nb2sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt b2sum: check missing file": {
+   "script": "82ea5947b65e8775",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: FAILED open or read\nstatus=1\nb2sum: /tmp/b: No such file or directory\nb2sum: WARNING: 1 listed file could not be read\n"
+   }
+  },
+  "opt b2sum: check no valid lines": {
+   "script": "0e93c83028d54c48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nb2sum: /tmp/sums: no properly formatted checksum lines found\n"
+   }
+  },
+  "opt b2sum: check ok": {
+   "script": "456d32da469151de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: OK\n"
+   }
+  },
+  "opt b2sum: check quiet": {
+   "script": "c194348791298112",
+   "status": 0,
+   "stderr": {
+    "text": "b2sum: WARNING: 1 computed checksum did NOT match\n"
+   },
+   "stdout": {
+    "text": "/tmp/b: FAILED\nstatus=1\n"
+   }
+  },
+  "opt b2sum: check status only": {
+   "script": "28b8dd61711c680b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "opt b2sum: check strict": {
+   "script": "13ae911e0302d8ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=1\nb2sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt b2sum: check tagged format": {
+   "script": "23c82a6cf17b3d31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt b2sum: check with length": {
+   "script": "82589703e998ecde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt b2sum: dash operand": {
+   "script": "e0fe2aa467a8150b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923  -\n"
+   }
+  },
+  "opt b2sum: directory operand": {
+   "script": "07087f5e38908a44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nb2sum: /tmp/d: Is a directory\n"
+   }
+  },
+  "opt b2sum: escaped file name": {
+   "script": "23a4d92e23d4e811",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\0909377ad35110cafb2909e185672b7f2728d1f5094f8ad68d6fac6274bf1f499485a80ea364c04ed006d29459ea3cb7c600280e2f83e032529906f88ae30d0a  /tmp/a\\\\b\n"
+   }
+  },
+  "opt b2sum: length 256": {
+   "script": "6d34369fcd8cb25d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319  -\n"
+   }
+  },
+  "opt b2sum: length 8": {
+   "script": "d298bcdbed698ed8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6b  -\n"
+   }
+  },
+  "opt b2sum: length not multiple of 8": {
+   "script": "9f51dc9e41ab2b8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nb2sum: invalid length: '12'\nb2sum: length is not a multiple of 8\n"
+   }
+  },
+  "opt b2sum: length tagged": {
+   "script": "48f5fa687832cb55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "BLAKE2b-128 (-) = cf4ab791c62b8d2b2109c90275287816\n"
+   }
+  },
+  "opt b2sum: length too big": {
+   "script": "97c0e9a4b1c49c6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nb2sum: invalid length: '1024'\nb2sum: maximum digest length for 'BLAKE2b' is 512 bits\n"
+   }
+  },
+  "opt b2sum: missing file": {
+   "script": "0fa712c9b00f3c13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nb2sum: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt b2sum: newline in file name": {
+   "script": "23e8a6fd80c68ccb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\0909377ad35110cafb2909e185672b7f2728d1f5094f8ad68d6fac6274bf1f499485a80ea364c04ed006d29459ea3cb7c600280e2f83e032529906f88ae30d0a  /tmp/a\\nb\n"
+   }
+  },
+  "opt b2sum: status with no check": {
+   "script": "b38950a79a114260",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nb2sum: the --status option is meaningful only when verifying checksums\nTry 'b2sum --help' for more information.\n"
+   }
+  },
+  "opt b2sum: stdin": {
+   "script": "b2a7ed3048a514cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923  -\n"
+   }
+  },
+  "opt b2sum: tag": {
+   "script": "b8ce2a8a5c52a96d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "BLAKE2b (/tmp/a) = f60ce482e5cc1229f39d71313171a8d9f4ca3a87d066bf4b205effb528192a75f14f3271e2c1a90e1de53f275b4d4793eef2f5e31ea90d2ce29d2e481c36435f\n"
+   }
+  },
+  "opt b2sum: tag with text mode rejected": {
+   "script": "71b5cf97e7509989",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nb2sum: --tag does not support --text mode\nTry 'b2sum --help' for more information.\n"
+   }
+  },
+  "opt b2sum: text mode": {
+   "script": "d573c8b56cee6ab5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f60ce482e5cc1229f39d71313171a8d9f4ca3a87d066bf4b205effb528192a75f14f3271e2c1a90e1de53f275b4d4793eef2f5e31ea90d2ce29d2e481c36435f  /tmp/a\n"
+   }
+  },
+  "opt b2sum: two files": {
+   "script": "1bd8d36638b68bb6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f60ce482e5cc1229f39d71313171a8d9f4ca3a87d066bf4b205effb528192a75f14f3271e2c1a90e1de53f275b4d4793eef2f5e31ea90d2ce29d2e481c36435f  /tmp/a\n786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce  /tmp/b\n"
+   }
+  },
+  "opt b2sum: unknown option": {
+   "script": "9fb0d1a3c24a4762",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nb2sum: unrecognized option '--bogus'\nTry 'b2sum --help' for more information.\n"
+   }
+  },
+  "opt b2sum: zero terminated": {
+   "script": "6fb5ccda9556df0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   e   2   9   d   2   e   4   8   1   c   3   6   4   3   5   f\n           /   t   m   p   /   a  \\0\n"
+   }
+  },
+  "opt base32: binary bytes": {
+   "script": "c3949de704c0c0e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "74AIA===\n"
+   }
+  },
+  "opt base32: dash operand": {
+   "script": "e1bd7dcda3305b50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MFRGG===\n"
+   }
+  },
+  "opt base32: decode": {
+   "script": "bddfc15b7dd5f454",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello"
+   }
+  },
+  "opt base32: decode alias D": {
+   "script": "019b564f3ef278c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase32: invalid option -- 'D'\nTry 'base32 --help' for more information.\n"
+   }
+  },
+  "opt base32: decode garbage": {
+   "script": "6fa15fc785117b0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase32: invalid input\n"
+   }
+  },
+  "opt base32: decode ignore garbage": {
+   "script": "5b680f19e2c79b6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello"
+   }
+  },
+  "opt base32: decode long option": {
+   "script": "03460d1e3767e9b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi there"
+   }
+  },
+  "opt base32: decode lowercase": {
+   "script": "95a3c767e9386a72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase32: invalid input\n"
+   }
+  },
+  "opt base32: decode truncated input": {
+   "script": "a7da19fc2c272a77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase32: invalid input\n"
+   }
+  },
+  "opt base32: decode with newlines": {
+   "script": "39b06b092f80d21c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello world, longer text"
+   }
+  },
+  "opt base32: default wrap 76": {
+   "script": "a3fd4508279a9ace",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "GAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYD\nAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQ\nGAYDAMBQ\n"
+   }
+  },
+  "opt base32: empty input": {
+   "script": "80f33d3c86138a25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt base32: encode file": {
+   "script": "bf5adb2652dbc0e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "NBSWY3DP\n"
+   }
+  },
+  "opt base32: encode stdin": {
+   "script": "1f09be36fb61416f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "NBSWY3DPEB3W64TMMQ======\n"
+   }
+  },
+  "opt base32: extra operand": {
+   "script": "1f6c76498e0c2db9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase32: extra operand '/tmp/a'\nTry 'base32 --help' for more information.\n"
+   }
+  },
+  "opt base32: invalid wrap": {
+   "script": "504a94bb1f24dd75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase32: invalid wrap size: 'x'\n"
+   }
+  },
+  "opt base32: missing file": {
+   "script": "10d1e7c53f8cb9de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase32: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt base32: negative wrap": {
+   "script": "0d5b9356030e01e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase32: invalid wrap size: '-1'\n"
+   }
+  },
+  "opt base32: wrap 0": {
+   "script": "bbe975512e448690",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "GAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQ\n"
+   }
+  },
+  "opt base32: wrap 4": {
+   "script": "bec97c19a516397a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "NBSW\nY3DP\nEB3W\n64TM\nMQ==\n====\n"
+   }
+  },
+  "opt base64: binary bytes": {
+   "script": "45ef0dcdb0dce7cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/wCA\n"
+   }
+  },
+  "opt base64: dash operand": {
+   "script": "fe6f035cb6caa4d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YWJj\n"
+   }
+  },
+  "opt base64: decode": {
+   "script": "96ed0b8b1c49fde1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello"
+   }
+  },
+  "opt base64: decode alias D": {
+   "script": "1aef95cc75d895ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase64: invalid option -- 'D'\nTry 'base64 --help' for more information.\n"
+   }
+  },
+  "opt base64: decode garbage": {
+   "script": "50b0e9d44586e102",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase64: invalid input\n"
+   }
+  },
+  "opt base64: decode ignore garbage": {
+   "script": "fe04766e9b97b8e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello"
+   }
+  },
+  "opt base64: decode long option": {
+   "script": "45a76a1004594e20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi there"
+   }
+  },
+  "opt base64: decode truncated input": {
+   "script": "7352736a8d7c7ba3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hellostatus=0\n"
+   }
+  },
+  "opt base64: decode url alphabet rejected": {
+   "script": "67dfdc65537023da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase64: invalid input\n"
+   }
+  },
+  "opt base64: decode with newlines": {
+   "script": "46002085a1570340",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello world, longer text"
+   }
+  },
+  "opt base64: decode without padding": {
+   "script": "f4cc435a18a3359e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "histatus=0\n"
+   }
+  },
+  "opt base64: default wrap 76": {
+   "script": "e7a7a18fce50d62c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\nMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMA==\n"
+   }
+  },
+  "opt base64: empty input": {
+   "script": "a1c2fec664eed7cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt base64: encode file": {
+   "script": "0083b9b5b50a92a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aGVsbG8=\n"
+   }
+  },
+  "opt base64: encode stdin": {
+   "script": "072504dc86392ba8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aGVsbG8gd29ybGQ=\n"
+   }
+  },
+  "opt base64: extra operand": {
+   "script": "d1e6e8218aedab24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase64: extra operand '/tmp/a'\nTry 'base64 --help' for more information.\n"
+   }
+  },
+  "opt base64: invalid wrap": {
+   "script": "b13d24ee0c01b9d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase64: invalid wrap size: 'x'\n"
+   }
+  },
+  "opt base64: missing file": {
+   "script": "a327ca940d14dd41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase64: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt base64: negative wrap": {
+   "script": "993c66b10144b1a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbase64: invalid wrap size: '-1'\n"
+   }
+  },
+  "opt base64: wrap 0": {
+   "script": "b6533ee30bd8618a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMA==\n"
+   }
+  },
+  "opt base64: wrap 4": {
+   "script": "3c02125ee87700b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aGVs\nbG8g\nd29y\nbGQ=\n"
+   }
+  },
+  "opt basename: dash-leading name": {
+   "script": "e22380b44d8b6874",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\n"
+   }
+  },
+  "opt basename: empty string": {
+   "script": "bd9d7fe7c53a183d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "opt basename: extra operand": {
+   "script": "fa38718a13bd48fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbasename: extra operand 'c'\nTry 'basename --help' for more information.\n"
+   }
+  },
+  "opt basename: missing operand": {
+   "script": "9f42deea313c1c98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbasename: missing operand\nTry 'basename --help' for more information.\n"
+   }
+  },
+  "opt basename: multiple": {
+   "script": "b97b47b91a668dbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nd\ne\n"
+   }
+  },
+  "opt basename: multiple long option": {
+   "script": "d6c03dc99bf719b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nd\n"
+   }
+  },
+  "opt basename: root": {
+   "script": "c2ecf11fda3a94dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n/\n/\n"
+   }
+  },
+  "opt basename: suffix long option": {
+   "script": "4c78caf0c3d00855",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt basename: suffix not matched": {
+   "script": "ce2e78170d352f26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\n"
+   }
+  },
+  "opt basename: suffix operand equals name": {
+   "script": "2f7af538fe0372cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".txt\n"
+   }
+  },
+  "opt basename: suffix option": {
+   "script": "70d96c4452342ab6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc.h\n"
+   }
+  },
+  "opt basename: trailing slashes": {
+   "script": "9a9a633556eef1d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lib\n"
+   }
+  },
+  "opt basename: unknown option": {
+   "script": "0a0f7154e43873f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbasename: invalid option -- 'q'\nTry 'basename --help' for more information.\n"
+   }
+  },
+  "opt basename: zero terminated": {
+   "script": "7851060051a9f7c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\0\n"
+   }
+  },
+  "opt basenc: base16 decode lowercase": {
+   "script": "a0bc531f9b72e315",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "histatus=0\n"
+   }
+  },
+  "opt basenc: base16 encode": {
+   "script": "212f17806558801e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "68693F3E\n"
+   }
+  },
+  "opt basenc: base16 round trip": {
+   "script": "bf5a9f03849a7b36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi?>"
+   }
+  },
+  "opt basenc: base16 wrap": {
+   "script": "b851805b9b1db0ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6865\n6C6C\n6F\n"
+   }
+  },
+  "opt basenc: base2lsbf encode": {
+   "script": "0efd3936b7b7d141",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "00010110100101101111110001111100\n"
+   }
+  },
+  "opt basenc: base2lsbf round trip": {
+   "script": "601bc45c8a6649c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi?>"
+   }
+  },
+  "opt basenc: base2msbf decode bad digit": {
+   "script": "ff4672cdfdc7c423",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbasenc: invalid input\n"
+   }
+  },
+  "opt basenc: base2msbf encode": {
+   "script": "31ab4ca5e3eee712",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "01101000011010010011111100111110\n"
+   }
+  },
+  "opt basenc: base2msbf round trip": {
+   "script": "7a5bea7c1c3feec7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi?>"
+   }
+  },
+  "opt basenc: base32 encode": {
+   "script": "77f360d885f74813",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "NBUT6PQ=\n"
+   }
+  },
+  "opt basenc: base32 round trip": {
+   "script": "71b84ca17c9a3c8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi?>"
+   }
+  },
+  "opt basenc: base32hex decode": {
+   "script": "8759e552511d3001",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi"
+   }
+  },
+  "opt basenc: base32hex encode": {
+   "script": "4119d3f19d0e5667",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "D1KJUFG=\n"
+   }
+  },
+  "opt basenc: base32hex round trip": {
+   "script": "1773c586a9e9eeef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi?>"
+   }
+  },
+  "opt basenc: base58 encode": {
+   "script": "3647b62125311ed8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3fo4gm\n"
+   }
+  },
+  "opt basenc: base58 round trip": {
+   "script": "5827c609bfcba5c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi?>"
+   }
+  },
+  "opt basenc: base64 encode": {
+   "script": "942739936db8d37b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aGk/Pg==\n"
+   }
+  },
+  "opt basenc: base64 round trip": {
+   "script": "34fbda2d18912998",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi?>"
+   }
+  },
+  "opt basenc: base64url decode": {
+   "script": "ebd33246ec0e3ec4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff ff\n"
+   }
+  },
+  "opt basenc: base64url encode": {
+   "script": "644236f9b10bfbcc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aGk_Pg==\n"
+   }
+  },
+  "opt basenc: base64url round trip": {
+   "script": "6d49404bf50fe93e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi?>"
+   }
+  },
+  "opt basenc: ignore garbage": {
+   "script": "d355810b51a37ccf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi"
+   }
+  },
+  "opt basenc: no encoding": {
+   "script": "8ac342f991df5816",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbasenc: missing encoding type\nTry 'basenc --help' for more information.\n"
+   }
+  },
+  "opt basenc: two encodings last wins": {
+   "script": "43eb44d3f320fa83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6869\n"
+   }
+  },
+  "opt basenc: z85 bad length": {
+   "script": "7cbbb4b178b6e360",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbasenc: invalid input (length must be multiple of 4 characters)\n"
+   }
+  },
+  "opt basenc: z85 encode": {
+   "script": "732ae584f31e0ac8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "vpA.S\n"
+   }
+  },
+  "opt basenc: z85 round trip": {
+   "script": "3a1cb06554c47949",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcd"
+   }
+  },
+  "opt cat: --number option": {
+   "script": "9aa80771d95ad9f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "ICAgICAxCWEJYgogICAgIDIJCiAgICAgMwkKICAgICA0CQogICAgIDUJYwFkfwogICAgIDYJgP94DQo="
+   }
+  },
+  "opt cat: --number-nonblank option": {
+   "script": "9ab492460ef8a752",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "ICAgICAxCWEJYgoKCgogICAgIDIJYwFkfwogICAgIDMJgP94DQo="
+   }
+  },
+  "opt cat: --show-all option": {
+   "script": "69f1d1435bdaa4bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^Ib$\n$\n$\n$\nc^Ad^?$\nM-^@M-^?x^M$\n"
+   }
+  },
+  "opt cat: --show-ends option": {
+   "script": "55145b2d1d17d5c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "YQliJAokCiQKJApjAWR/JAqA/3heTSQK"
+   }
+  },
+  "opt cat: --show-nonprinting option": {
+   "script": "ce3b277fbae11bdb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\n\n\n\nc^Ad^?\nM-^@M-^?x^M\n"
+   }
+  },
+  "opt cat: --show-tabs option": {
+   "script": "3dbea863460fd6ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "YV5JYgoKCgpjAWR/CoD/eA0K"
+   }
+  },
+  "opt cat: --squeeze-blank option": {
+   "script": "083ec8f2659748b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "YQliCgpjAWR/CoD/eA0K"
+   }
+  },
+  "opt cat: -A option": {
+   "script": "36954d8133dc88a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^Ib$\n$\n$\n$\nc^Ad^?$\nM-^@M-^?x^M$\n"
+   }
+  },
+  "opt cat: -An combination": {
+   "script": "02c0521d60d5661f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta^Ib$\n     2\t$\n     3\t$\n     4\t$\n     5\tc^Ad^?$\n     6\tM-^@M-^?x^M$\n"
+   }
+  },
+  "opt cat: -E option": {
+   "script": "216b3ceadd41176c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "YQliJAokCiQKJApjAWR/JAqA/3heTSQK"
+   }
+  },
+  "opt cat: -T option": {
+   "script": "bc5c4bf9ed0de162",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "YV5JYgoKCgpjAWR/CoD/eA0K"
+   }
+  },
+  "opt cat: -b option": {
+   "script": "c82e8e3e6c9eadf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "ICAgICAxCWEJYgoKCgogICAgIDIJYwFkfwogICAgIDMJgP94DQo="
+   }
+  },
+  "opt cat: -bn combination": {
+   "script": "7fbf593ef70f8c20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "ICAgICAxCWEJYgoKCgogICAgIDIJYwFkfwogICAgIDMJgP94DQo="
+   }
+  },
+  "opt cat: -bs combination": {
+   "script": "2b674b62052b2dfd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "ICAgICAxCWEJYgoKICAgICAyCWMBZH8KICAgICAzCYD/eA0K"
+   }
+  },
+  "opt cat: -e option": {
+   "script": "d5cbcb9eea6a9e52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb$\n$\n$\n$\nc^Ad^?$\nM-^@M-^?x^M$\n"
+   }
+  },
+  "opt cat: -et combination": {
+   "script": "e438bbfd4715c7bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^Ib$\n$\n$\n$\nc^Ad^?$\nM-^@M-^?x^M$\n"
+   }
+  },
+  "opt cat: -n option": {
+   "script": "71a52d30d9a34afe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "ICAgICAxCWEJYgogICAgIDIJCiAgICAgMwkKICAgICA0CQogICAgIDUJYwFkfwogICAgIDYJgP94DQo="
+   }
+  },
+  "opt cat: -nT combination": {
+   "script": "03a3452e0f7a4130",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "ICAgICAxCWFeSWIKICAgICAyCQogICAgIDMJCiAgICAgNAkKICAgICA1CWMBZH8KICAgICA2CYD/eA0K"
+   }
+  },
+  "opt cat: -ns combination": {
+   "script": "06c83058ffc157ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "ICAgICAxCWEJYgogICAgIDIJCiAgICAgMwljAWR/CiAgICAgNAmA/3gNCg=="
+   }
+  },
+  "opt cat: -s option": {
+   "script": "f7e76598a2768f2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "YQliCgpjAWR/CoD/eA0K"
+   }
+  },
+  "opt cat: -sE combination": {
+   "script": "2c39279848a4caf0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "YQliJAokCmMBZH8kCoD/eF5NJAo="
+   }
+  },
+  "opt cat: -sb combination": {
+   "script": "a89e136485f61684",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "ICAgICAxCWEJYgoKICAgICAyCWMBZH8KICAgICAzCYD/eA0K"
+   }
+  },
+  "opt cat: -t option": {
+   "script": "8120bd5842958a4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^Ib\n\n\n\nc^Ad^?\nM-^@M-^?x^M\n"
+   }
+  },
+  "opt cat: -u option": {
+   "script": "d4eee212d3b1cc70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "YQliCgoKCmMBZH8KgP94DQo="
+   }
+  },
+  "opt cat: -v option": {
+   "script": "fdf5f4cb91121b1a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\n\n\n\nc^Ad^?\nM-^@M-^?x^M\n"
+   }
+  },
+  "opt cat: -vE combination": {
+   "script": "268efcc24f8ca9f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb$\n$\n$\n$\nc^Ad^?$\nM-^@M-^?x^M$\n"
+   }
+  },
+  "opt cat: crlf with show ends": {
+   "script": "eabbeda767f2f534",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a^M$\nb^M$\n"
+   }
+  },
+  "opt cat: directory operand": {
+   "script": "5fed1b51762c0284",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncat: /tmp/d: Is a directory\n"
+   }
+  },
+  "opt cat: double dash": {
+   "script": "74834b94def76b8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "opt cat: empty file": {
+   "script": "66a1494610f1cb50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt cat: missing file continues": {
+   "script": "847e05c67772f1f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nx\nstatus=1\ncat: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt cat: number across files": {
+   "script": "2bace21efe42f734",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n     2\tb\n     3\tc\n"
+   }
+  },
+  "opt cat: number nonblank with only blanks": {
+   "script": "0a43d8c47a6d7794",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n"
+   }
+  },
+  "opt cat: number without trailing newline": {
+   "script": "aea9074afaf39992",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n     2\tba\n     3\tb"
+   }
+  },
+  "opt cat: show ends without trailing newline": {
+   "script": "6a372233428cc22b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a$\nb"
+   }
+  },
+  "opt cat: show nonprinting high bytes": {
+   "script": "b81c9775bd3ba459",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "M-^AM-^[M- M-~\n"
+   }
+  },
+  "opt cat: squeeze at start": {
+   "script": "c78f9462a85cf657",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\na\n"
+   }
+  },
+  "opt cat: stdin between files": {
+   "script": "fb5b3c44763d6132",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nin\nx\n"
+   }
+  },
+  "opt cat: unknown long option": {
+   "script": "6a9fa0c9e9664136",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncat: unrecognized option '--number-all'\nTry 'cat --help' for more information.\n"
+   }
+  },
+  "opt cat: unknown short option": {
+   "script": "12f085a157ef9d9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncat: invalid option -- 'z'\nTry 'cat --help' for more information.\n"
+   }
+  },
+  "opt cksum: algorithm blake2b": {
+   "script": "199b706d14bcd52f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "BLAKE2b (/tmp/a) = 426526ad3aa99ac6bbb98555c6c30b5a55189d0d7537d9214053b886f365a84bd7e68c91b544a8f485fa842c0ea9fbc4fb92277290264e685eed9e67b7621fc9\n"
+   }
+  },
+  "opt cksum: algorithm bsd": {
+   "script": "06e87bfc1eeadc22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "08288     1 /tmp/a\n"
+   }
+  },
+  "opt cksum: algorithm crc": {
+   "script": "eff9f696f9238fb4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1112837078 4 /tmp/a\n"
+   }
+  },
+  "opt cksum: algorithm crc32b": {
+   "script": "4c543a5967ad8000",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1200128334 4 /tmp/a\n"
+   }
+  },
+  "opt cksum: algorithm md5": {
+   "script": "937c6dfa930e122e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MD5 (/tmp/a) = 0bee89b07a248e27c83fc3d5951213c1\n"
+   }
+  },
+  "opt cksum: algorithm sha1": {
+   "script": "f3f93ea9ec49892b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA1 (/tmp/a) = 03cfd743661f07975fa2f1220c5194cbaff48451\n"
+   }
+  },
+  "opt cksum: algorithm sha224": {
+   "script": "867359de35048200",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA224 (/tmp/a) = f5c93b6f06f7c56d7ea720c121e3b1fb6730e5cf5f18d776bf0f2d88\n"
+   }
+  },
+  "opt cksum: algorithm sha256": {
+   "script": "564f63732b8a6644",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA256 (/tmp/a) = edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb\n"
+   }
+  },
+  "opt cksum: algorithm sha384": {
+   "script": "a7eb0dd92741c24b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA384 (/tmp/a) = e8d1420b4ff41c3f12186d894a99e1c4aa681da79c47007e9dadecd9ecb0482ee1e224510e7484078c0289f34396b9c3\n"
+   }
+  },
+  "opt cksum: algorithm sha512": {
+   "script": "41770a515d6a81b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA512 (/tmp/a) = 4f285d0c0cc77286d8731798b7aae2639e28270d4166f40d769cbbdca5230714d848483d364e2f39fe6cb9083c15229b39a33615ebc6d57605f7c43f6906739d\n"
+   }
+  },
+  "opt cksum: algorithm sm3": {
+   "script": "7b833bac8a8190af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SM3 (/tmp/a) = 12d4e804e1fcfdc181ed383aa07ba76cc69d8aedcbb7742d6e28ff4fb7776c34\n"
+   }
+  },
+  "opt cksum: algorithm sysv": {
+   "script": "f4fee3d067a8f76b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "304 1 /tmp/a\n"
+   }
+  },
+  "opt cksum: base64 digest": {
+   "script": "5f97a79f3faf8299",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MD5 (/tmp/a) = C+6JsHokjifIP8PVlRITwQ==\n"
+   }
+  },
+  "opt cksum: blake2b length": {
+   "script": "9ae0ee96fa670de8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "BLAKE2b-64 (/tmp/a) = f82a8208702cda5b\n"
+   }
+  },
+  "opt cksum: bsd on stdin": {
+   "script": "e0d4c6d1e442281d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "08288     1\n"
+   }
+  },
+  "opt cksum: check crc rejected": {
+   "script": "1befb9213cee9963",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncksum: /tmp/s: no properly formatted checksum lines found\n"
+   }
+  },
+  "opt cksum: check mismatch": {
+   "script": "0197c743ae066c78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: FAILED\nstatus=1\ncksum: WARNING: 1 computed checksum did NOT match\n"
+   }
+  },
+  "opt cksum: check quiet and status": {
+   "script": "cec2cc4a9aaf7d96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q=0\ns=0\n"
+   }
+  },
+  "opt cksum: check tagged": {
+   "script": "55a9b3d0ba11796e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt cksum: check untagged needs algorithm": {
+   "script": "bb5d547984aeac41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt cksum: default crc on stdin": {
+   "script": "443f693a2cd7a46c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1112837078 4\n"
+   }
+  },
+  "opt cksum: empty input": {
+   "script": "00be8c9c47175f34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4294967295 0\n"
+   }
+  },
+  "opt cksum: invalid algorithm": {
+   "script": "fba66e5fdf953601",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncksum: invalid argument 'nope' for '--algorithm'\nValid arguments are:\n  - 'bsd'\n  - 'sysv'\n  - 'crc'\n  - 'crc32b'\n  - 'md5'\n  - 'sha1'\n  - 'sha224'\n  - 'sha256'\n  - 'sha384'\n  - 'sha512'\n  - 'sha2'\n  - 'sha3'\n  - 'blake2b'\n  - 'sm3'\nTry 'cksum --help' for more information.\n"
+   }
+  },
+  "opt cksum: length with md5": {
+   "script": "60f3fd77b35eaf63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncksum: --length is only supported with --algorithm blake2b, sha2, or sha3\n"
+   }
+  },
+  "opt cksum: missing file": {
+   "script": "ac49aa0e1661c3bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncksum: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt cksum: raw crc": {
+   "script": "118e5fdb0a611d8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 42 54 8b d6\n"
+   }
+  },
+  "opt cksum: raw digest": {
+   "script": "b218782c69cc96b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 0b ee 89 b0 7a 24 8e 27 c8 3f c3 d5 95 12 13 c1\n"
+   }
+  },
+  "opt cksum: sha2 with length": {
+   "script": "f226820d12676a02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA256 (/tmp/a) = edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb\n"
+   }
+  },
+  "opt cksum: sha2 without length": {
+   "script": "0a132f8b6a7d7437",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncksum: --algorithm=sha2 requires specifying --length 224, 256, 384, or 512\n"
+   }
+  },
+  "opt cksum: sha3 with length": {
+   "script": "1ed0bb6da7cbc64e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA3-256 (/tmp/a) = 855e77bb9d8fc068ca812a39d07bad50dc012d7f07c346d7e56a4f25075e4070\n"
+   }
+  },
+  "opt cksum: sysv two files": {
+   "script": "d31d44b3858e3025",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "304 1 /tmp/a\n363 1 /tmp/b\n"
+   }
+  },
+  "opt cksum: two files": {
+   "script": "1eb69bbff208854d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1112837078 4 /tmp/a\n4294967295 0 /tmp/b\n"
+   }
+  },
+  "opt cksum: untagged": {
+   "script": "dd12ea1dc0648417",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb  /tmp/a\n"
+   }
+  },
+  "opt cksum: zero terminated": {
+   "script": "6f1588b1763695a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   8   3   f   c   3   d   5   9   5   1   2   1   3   c   1  \\0\n"
+   }
+  },
+  "opt comm: check order fails": {
+   "script": "da742bd21b2a7a40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=1\ncomm: file 1 is not in sorted order\n"
+   }
+  },
+  "opt comm: columns -1": {
+   "script": "82163ef22af04f1a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\tb\nc\n\td\ne\n"
+   }
+  },
+  "opt comm: columns -12": {
+   "script": "d9bcb4017aae98c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nd\n"
+   }
+  },
+  "opt comm: columns -123": {
+   "script": "52f695c5ea071581",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt comm: columns -13": {
+   "script": "6fc3d9b51a6c4f88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\ne\n"
+   }
+  },
+  "opt comm: columns -2": {
+   "script": "66d38a8b37743897",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\tb\n\td\n"
+   }
+  },
+  "opt comm: columns -23": {
+   "script": "d59210cd9f83091b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt comm: columns -3": {
+   "script": "8b3120504874d057",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\tc\n\te\n"
+   }
+  },
+  "opt comm: columns all": {
+   "script": "4f82cea8169c2b1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\t\tb\n\tc\n\t\td\n\te\n"
+   }
+  },
+  "opt comm: empty files": {
+   "script": "045dbfd65ed08c66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\tx\n"
+   }
+  },
+  "opt comm: empty output delimiter": {
+   "script": "be052b60026c4f30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n  \\0  \\0   b  \\n  \\0   c  \\n  \\0  \\0   d  \\n  \\0   e  \\n\n"
+   }
+  },
+  "opt comm: missing final newline": {
+   "script": "7093d933882f2460",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\t\tb\n\tc\n"
+   }
+  },
+  "opt comm: missing second file": {
+   "script": "17ac9557cb9d9145",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncomm: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt comm: nocheck order": {
+   "script": "e225102241a3b114",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\ta\n\t\tb\na\nstatus=0\n"
+   }
+  },
+  "opt comm: one operand": {
+   "script": "13ae5dd63397516a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncomm: missing operand after '/tmp/1'\nTry 'comm --help' for more information.\n"
+   }
+  },
+  "opt comm: output delimiter": {
+   "script": "5bb49b5690bcfdea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n::b\n:c\n::d\n:e\n"
+   }
+  },
+  "opt comm: output delimiter multi-char": {
+   "script": "c4ebc680eda06435",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n<>c\n<>e\n"
+   }
+  },
+  "opt comm: stdin as first": {
+   "script": "2ba038a96e116b8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\t\tb\n\tc\n\t\td\n\te\n"
+   }
+  },
+  "opt comm: three operands": {
+   "script": "d2cd862c3b090aa4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncomm: extra operand '/tmp/2'\nTry 'comm --help' for more information.\n"
+   }
+  },
+  "opt comm: total": {
+   "script": "7e6e698ec6505a16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\t\tb\n\tc\n\t\td\n\te\n1\t2\t2\ttotal\n"
+   }
+  },
+  "opt comm: total with suppression": {
+   "script": "9c0a1d99fa97bd16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nd\n1\t2\t2\ttotal\n"
+   }
+  },
+  "opt comm: unsorted input warns": {
+   "script": "635b1bd417c3fcf4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\ta\n\t\tb\na\nstatus=1\ncomm: file 1 is not in sorted order\ncomm: input is not in sorted order\n"
+   }
+  },
+  "opt comm: zero terminated": {
+   "script": "594515a8055eff26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\0  \\t  \\t   b  \\0  \\t   c  \\0\n"
+   }
+  },
+  "opt cp: archive": {
+   "script": "b856058066830a60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\nt/a\nt/sub\nt/sub/b\n"
+   }
+  },
+  "opt cp: attributes only": {
+   "script": "41fd8df2c1c746ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "old\n"
+   }
+  },
+  "opt cp: backup existing": {
+   "script": "3d4f6f4baef076fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nc~\n"
+   }
+  },
+  "opt cp: backup invalid control": {
+   "script": "64a4db6083c6e77b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: invalid argument 'bogus' for 'backup type'\nValid arguments are:\n  - 'none', 'off'\n  - 'simple', 'never'\n  - 'existing', 'nil'\n  - 'numbered', 't'\nTry 'cp --help' for more information.\n"
+   }
+  },
+  "opt cp: backup none": {
+   "script": "f99d389cda8cd060",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\n"
+   }
+  },
+  "opt cp: backup numbered": {
+   "script": "196d7f363139dfa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nc.~1~\nc.~2~\n"
+   }
+  },
+  "opt cp: backup simple": {
+   "script": "7276e0aaaebc3cc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "oneold"
+   }
+  },
+  "opt cp: backup suffix": {
+   "script": "66fac11966f5929b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nc.bak\nold"
+   }
+  },
+  "opt cp: copy directory over file": {
+   "script": "7d15c8937c32a367",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: cannot overwrite non-directory 't' with directory 's'\n"
+   }
+  },
+  "opt cp: copy file over directory": {
+   "script": "50e1f9abc0441f1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt cp: dash-d keeps links": {
+   "script": "a311de67b2563ad2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt cp: dereference symlink": {
+   "script": "ceebbfeb58a4b53b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x"
+   }
+  },
+  "opt cp: directory into itself": {
+   "script": "39e26e65bf29ff3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: cannot copy a directory, 's', into itself, 's/sub/s'\n"
+   }
+  },
+  "opt cp: directory without recursive": {
+   "script": "715c536ff0972ab4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: -r not specified; omitting directory 's'\n"
+   }
+  },
+  "opt cp: dot slash names": {
+   "script": "410a5adc84f4a4c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one"
+   }
+  },
+  "opt cp: empty file": {
+   "script": "ad91e09c93eb6026",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 f\n"
+   }
+  },
+  "opt cp: file into directory": {
+   "script": "87f3d7cd16b927c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one"
+   }
+  },
+  "opt cp: file to file": {
+   "script": "f76f92cc7d690171",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one"
+   }
+  },
+  "opt cp: force": {
+   "script": "b2e873a2306bd6d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one"
+   }
+  },
+  "opt cp: hard link": {
+   "script": "04706bc8c73149c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "onemore"
+   }
+  },
+  "opt cp: interactive no": {
+   "script": "374b2afd3da7fc1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: overwrite 'c'? "
+   }
+  },
+  "opt cp: interactive yes": {
+   "script": "e742a1535d89cdda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one"
+   }
+  },
+  "opt cp: missing destination": {
+   "script": "dd0de6d61a0bc28a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: missing destination file operand after 's/a'\nTry 'cp --help' for more information.\n"
+   }
+  },
+  "opt cp: missing operand": {
+   "script": "b0501a40b710ff86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: missing file operand\nTry 'cp --help' for more information.\n"
+   }
+  },
+  "opt cp: missing source": {
+   "script": "0f984cc44b9260d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: cannot stat 'nosuch': No such file or directory\n"
+   }
+  },
+  "opt cp: no clobber": {
+   "script": "96d9801f022a000a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nkeep"
+   }
+  },
+  "opt cp: no dereference symlink": {
+   "script": "9c658bffa9b2efa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt cp: no preserve by default": {
+   "script": "ed75b24386bec412",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fresh\n"
+   }
+  },
+  "opt cp: no target directory": {
+   "script": "561045056a196db0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: cannot overwrite directory 'd' with non-directory 's/a'\n"
+   }
+  },
+  "opt cp: no target directory file": {
+   "script": "d58335e6ee3300f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one"
+   }
+  },
+  "opt cp: parents": {
+   "script": "684c9ba108c435bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nd/s\nd/s/sub\nd/s/sub/b\n"
+   }
+  },
+  "opt cp: preserve timestamps": {
+   "script": "edf3ff932e76a32c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2001-02-03\n"
+   }
+  },
+  "opt cp: preserve timestamps long": {
+   "script": "3f45858d1783e5f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2001-02-03\n"
+   }
+  },
+  "opt cp: recursive": {
+   "script": "1f25149f8b6dcc4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\nt/a\nt/sub\nt/sub/b\n"
+   }
+  },
+  "opt cp: recursive capital": {
+   "script": "ab8296ee2c190a5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two"
+   }
+  },
+  "opt cp: recursive copies symlink as link": {
+   "script": "0f2ce780ab742000",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "opt cp: recursive into existing directory": {
+   "script": "fecebeaac571d8a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\nt/s\nt/s/a\nt/s/sub\nt/s/sub/b\n"
+   }
+  },
+  "opt cp: remove destination": {
+   "script": "350eb590d859df53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one"
+   }
+  },
+  "opt cp: same file": {
+   "script": "ea7639de91b7c3d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: 's/a' and 's/a' are the same file\n"
+   }
+  },
+  "opt cp: several into directory": {
+   "script": "5c7757e6f528302a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt cp: strip trailing slashes": {
+   "script": "ea091ab2305eff24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nsub\n"
+   }
+  },
+  "opt cp: symbolic link relative": {
+   "script": "1ae43a061faa28bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nx"
+   }
+  },
+  "opt cp: target directory option": {
+   "script": "88a761153ae23bb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "opt cp: target not a directory": {
+   "script": "d5a97ee029b6882e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: target 'c': No such file or directory\n"
+   }
+  },
+  "opt cp: unknown option": {
+   "script": "3eeebc010c0037ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: unrecognized option '--bogus'\nTry 'cp --help' for more information.\n"
+   }
+  },
+  "opt cp: update all": {
+   "script": "48d61d5b89eac7a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one"
+   }
+  },
+  "opt cp: update none": {
+   "script": "57fcaef0853847df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "new"
+   }
+  },
+  "opt cp: update none-fail": {
+   "script": "bb7c27177a39c42c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncp: not replacing 'c'\n"
+   }
+  },
+  "opt cp: update older": {
+   "script": "636751aea34b1448",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "new"
+   }
+  },
+  "opt cp: verbose": {
+   "script": "bb82f698327c2002",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'s/a' -> 'c'\nstatus=0\n"
+   }
+  },
+  "opt cp: verbose recursive": {
+   "script": "bdca56bcc1188461",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'s' -> 't'\n's/a' -> 't/a'\n's/sub' -> 't/sub'\n's/sub/b' -> 't/sub/b'\nstatus=0\n"
+   }
+  },
+  "opt csplit: bad repeat": {
+   "script": "872603cf350fc8fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncsplit: '{x'}: integer required between '{' and '}'\n"
+   }
+  },
+  "opt csplit: bad suffix format": {
+   "script": "5148a3436f4ffdb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncsplit: invalid conversion specifier in suffix: s\n"
+   }
+  },
+  "opt csplit: decreasing lines": {
+   "script": "7d98bd488bdd0078",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncsplit: line number '4' is smaller than preceding line number, 8\n"
+   }
+  },
+  "opt csplit: digits": {
+   "script": "76582ac1d180d213",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n17\nxx0000\nxx0001\n"
+   }
+  },
+  "opt csplit: elide empty": {
+   "script": "3c61e923af5c8c91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18\n3\n3\n3\nxx00\nxx01\nxx02\nxx03\n"
+   }
+  },
+  "opt csplit: keep files on error": {
+   "script": "62793502b33d0913",
+   "status": 0,
+   "stderr": {
+    "text": "csplit: ‘20’: line number out of range\n"
+   },
+   "stdout": {
+    "text": "8\n19\nstatus=1\nxx00\nxx01\n"
+   }
+  },
+  "opt csplit: line number": {
+   "script": "be6eb3bad8972fc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n19\n== xx00\n1\n2\n3\n4\n== xx01\n5\n6\n7\n8\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: line out of range": {
+   "script": "b6530719476c19d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "27\nend\nstatus=0\ncsplit: '20': line number out of range\n"
+   }
+  },
+  "opt csplit: line zero": {
+   "script": "9f51d0aecce0ab64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncsplit: 0: line number must be greater than zero\n"
+   }
+  },
+  "opt csplit: missing file": {
+   "script": "5e924fc983df088e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncsplit: cannot open '/tmp/nosuch' for reading: No such file or directory\n"
+   }
+  },
+  "opt csplit: missing pattern": {
+   "script": "f4a2a455add846be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncsplit: missing operand after 'n'\nTry 'csplit --help' for more information.\n"
+   }
+  },
+  "opt csplit: prefix": {
+   "script": "da0fc5f75421ec1a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n17\npart00\npart01\n"
+   }
+  },
+  "opt csplit: quiet": {
+   "script": "b36d51d96469745d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xx00\nxx01\n"
+   }
+  },
+  "opt csplit: regex": {
+   "script": "0d808c3c6b04971b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n15\n== xx00\n1\n2\n3\n4\n5\n6\n== xx01\n7\n8\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: regex first line": {
+   "script": "a36ee443fdd061fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n27\n== xx00\n== xx01\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: regex negative offset": {
+   "script": "d774969b928e13a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n19\n== xx00\n1\n2\n3\n4\n== xx01\n5\n6\n7\n8\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: regex no match": {
+   "script": "7ae7a01bbf823ddf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "27\nstatus=1\ncsplit: '/abc/': match not found\n"
+   }
+  },
+  "opt csplit: regex with offset": {
+   "script": "85a173d0e366fcb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "14\n13\n== xx00\n1\n2\n3\n4\n5\n6\n7\n== xx01\n8\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: repeat count": {
+   "script": "d76ad08d234b3569",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n2\n2\n23\n== xx00\n== xx01\n1\n== xx02\n2\n== xx03\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: repeat exceeds input": {
+   "script": "ab286cc23ef496bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n10\n9\nstatus=1\ncsplit: '5': line number out of range on repetition 2\n"
+   }
+  },
+  "opt csplit: repeat forever": {
+   "script": "c9ae44e8624034ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n18\n3\n3\n3\n== xx00\n== xx01\n1\n2\n3\n4\n5\n6\n7\n8\n9\n== xx02\n10\n== xx03\n11\n== xx04\n12\n"
+   }
+  },
+  "opt csplit: repeat line pattern": {
+   "script": "74377e23faf1bf8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n6\n6\n11\n== xx00\n1\n2\n== xx01\n3\n4\n5\n== xx02\n6\n7\n8\n== xx03\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: silent long": {
+   "script": "f15beb2778f83ebc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xx00\nxx01\n"
+   }
+  },
+  "opt csplit: skip to regex": {
+   "script": "e232058763e98fcd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n11\n== xx00\n5\n6\n7\n8\n== xx01\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: stdin input": {
+   "script": "5bdc055ace5ee7b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n6\n== xx00\n1\n2\n== xx01\n3\n4\n5\n"
+   }
+  },
+  "opt csplit: suffix format": {
+   "script": "9db0695e9908512f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n17\nxx000.txt\nxx001.txt\n"
+   }
+  },
+  "opt csplit: suppress matched": {
+   "script": "dd2d1ffb14b6cf63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n15\n== xx00\n1\n2\n3\n4\n5\n== xx01\n7\n8\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: two line numbers": {
+   "script": "69b4869853df35f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n8\n13\n== xx00\n1\n2\n3\n== xx01\n4\n5\n6\n7\n== xx02\n8\n9\n10\n11\n12\n"
+   }
+  },
+  "opt csplit: unterminated regex": {
+   "script": "0dd313da67976507",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncsplit: /abc: closing delimiter '/' missing\n"
+   }
+  },
+  "opt cut: bytes -3": {
+   "script": "f09829fe5251ef3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc\nxy\n"
+   }
+  },
+  "opt cut: bytes 1": {
+   "script": "4b6a3c606f86788f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nx\n"
+   }
+  },
+  "opt cut: bytes 1,3,5": {
+   "script": "b970ebd4f456bcd0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ace\nx\n"
+   }
+  },
+  "opt cut: bytes 10": {
+   "script": "dab2a5781e7a8b95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n"
+   }
+  },
+  "opt cut: bytes 2,2": {
+   "script": "4abc6ad588d9574e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\ny\n"
+   }
+  },
+  "opt cut: bytes 2-4": {
+   "script": "f9b1d53334b4a761",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bcd\ny\n"
+   }
+  },
+  "opt cut: bytes 3-": {
+   "script": "06d7c6e86681a13d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cdef\n\n"
+   }
+  },
+  "opt cut: bytes and fields": {
+   "script": "3263149ef134b2b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: only one list may be specified\nTry 'cut --help' for more information.\n"
+   }
+  },
+  "opt cut: bytes multibyte no partial": {
+   "script": "ca9151a6e2f9dc96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\n\n"
+   }
+  },
+  "opt cut: capital F": {
+   "script": "e5186bdc8c612f9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b c\n"
+   }
+  },
+  "opt cut: capital O": {
+   "script": "675c562d8bc11470",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a+b\nno delim\n1+2\n+\n"
+   }
+  },
+  "opt cut: characters": {
+   "script": "a6bb74ddbb9ea8fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bcd\n"
+   }
+  },
+  "opt cut: characters multibyte": {
+   "script": "6cf4a48cb3b93973",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "té\n"
+   }
+  },
+  "opt cut: complement bytes": {
+   "script": "609ab388a158cc7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "adef\n"
+   }
+  },
+  "opt cut: complement fields": {
+   "script": "aeb106625e28710a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:c:d\nno delim\n1\n:\n"
+   }
+  },
+  "opt cut: decreasing range": {
+   "script": "5c9425840a4d5346",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: invalid decreasing range\nTry 'cut --help' for more information.\n"
+   }
+  },
+  "opt cut: default tab delimiter": {
+   "script": "ebe869a0f682bb9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nx\n"
+   }
+  },
+  "opt cut: delimiter without fields": {
+   "script": "2da92958486b6c6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: an input delimiter makes sense\n\tonly when operating on fields\nTry 'cut --help' for more information.\n"
+   }
+  },
+  "opt cut: empty delimiter": {
+   "script": "7e83a64c7cbc92a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\n\n"
+   }
+  },
+  "opt cut: empty list range": {
+   "script": "baeade3a02b29c65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: invalid range with no endpoint: -\nTry 'cut --help' for more information.\n"
+   }
+  },
+  "opt cut: field zero": {
+   "script": "ff26bcb62e37ff40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: fields are numbered from 1\nTry 'cut --help' for more information.\n"
+   }
+  },
+  "opt cut: fields -2": {
+   "script": "6c5f719df7dada54",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:b\nno delim\n1:2\n:\n"
+   }
+  },
+  "opt cut: fields 1": {
+   "script": "f69c89d49ce99ad5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nno delim\n1\n\n"
+   }
+  },
+  "opt cut: fields 1,3": {
+   "script": "46509c75345c7983",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:c\nno delim\n1\n:\n"
+   }
+  },
+  "opt cut: fields 1-1": {
+   "script": "e3d702f17db0a06d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nno delim\n1\n\n"
+   }
+  },
+  "opt cut: fields 1-2,4": {
+   "script": "aadeb6e3a4b7372e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:b:d\nno delim\n1:2\n:\n"
+   }
+  },
+  "opt cut: fields 2": {
+   "script": "b8b656df1fc2d31d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nno delim\n2\n\n"
+   }
+  },
+  "opt cut: fields 2-": {
+   "script": "7117c9e75d6c4b81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b:c:d\nno delim\n2\n:\n"
+   }
+  },
+  "opt cut: fields 2-3": {
+   "script": "baba199a75a19576",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b:c\nno delim\n2\n:\n"
+   }
+  },
+  "opt cut: fields 3,1": {
+   "script": "671b290f2056075c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:c\nno delim\n1\n:\n"
+   }
+  },
+  "opt cut: fields 4-": {
+   "script": "0e69aa44da07e180",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nno delim\n\n\n"
+   }
+  },
+  "opt cut: fields 5": {
+   "script": "a475383b87ba6a56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nno delim\n\n\n"
+   }
+  },
+  "opt cut: invalid list": {
+   "script": "083a728c62199c89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: invalid field value 'a'\nTry 'cut --help' for more information.\n"
+   }
+  },
+  "opt cut: long options": {
+   "script": "08c8d412367b08bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n2\n\n"
+   }
+  },
+  "opt cut: missing file": {
+   "script": "1f864b362aa56d53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt cut: multi-char delimiter": {
+   "script": "cf72e93b08d0d1a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: the delimiter must be a single character\nTry 'cut --help' for more information.\n"
+   }
+  },
+  "opt cut: no list": {
+   "script": "445bbe0c96131114",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: you must specify a list of bytes, characters, or fields\nTry 'cut --help' for more information.\n"
+   }
+  },
+  "opt cut: no trailing newline": {
+   "script": "0b5d8485009d145c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "opt cut: only delimited": {
+   "script": "a43738b06f69222f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n2\n\n"
+   }
+  },
+  "opt cut: only delimited with bytes": {
+   "script": "8131967092e64fa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncut: suppressing non-delimited lines makes sense\n\tonly when operating on fields\nTry 'cut --help' for more information.\n"
+   }
+  },
+  "opt cut: open ranges overlap": {
+   "script": "890e02a9633bd0a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcdefgh\n"
+   }
+  },
+  "opt cut: output delimiter": {
+   "script": "b7e7d8171abf10ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a | c\nno delim\n1\n | \n"
+   }
+  },
+  "opt cut: output delimiter with bytes": {
+   "script": "0c7fe1be31b3c3dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab-de\n"
+   }
+  },
+  "opt cut: space delimiter": {
+   "script": "e3b55b2c0fdeda66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "opt cut: stdin dash with file": {
+   "script": "3a6146a511bd04dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\nb\nno delim\n2\n\n"
+   }
+  },
+  "opt cut: whitespace delimited": {
+   "script": "a2ebf0e36d0632ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "opt cut: whitespace trimmed": {
+   "script": "5c4c27a46edb592b",
+   "status": 1,
+   "stderr": {
+    "text": "cut: invalid option -- '='\nTry 'cut --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "opt cut: zero terminated": {
+   "script": "562936b9a3d30026",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b  \\0   d  \\0\n"
+   }
+  },
+  "opt dirname: dot components": {
+   "script": "0c643d774a2f6ea9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\n.\n"
+   }
+  },
+  "opt dirname: double slashes inside": {
+   "script": "a657b009d065a10f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a//b\n"
+   }
+  },
+  "opt dirname: empty string": {
+   "script": "df570622485591e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n"
+   }
+  },
+  "opt dirname: missing operand": {
+   "script": "06bc659f2dc0b166",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndirname: missing operand\nTry 'dirname --help' for more information.\n"
+   }
+  },
+  "opt dirname: multiple": {
+   "script": "caa4b6b1c222d5d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/a\nc\n.\n"
+   }
+  },
+  "opt dirname: no slash": {
+   "script": "3ede810a8465c663",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n"
+   }
+  },
+  "opt dirname: root forms": {
+   "script": "619e0786389353b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n/\n/\n"
+   }
+  },
+  "opt dirname: trailing slash": {
+   "script": "faeabccb50a6e2cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/a\n"
+   }
+  },
+  "opt dirname: unknown option": {
+   "script": "241b26db6556603c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ndirname: unrecognized option '--bogus'\nTry 'dirname --help' for more information.\n"
+   }
+  },
+  "opt dirname: zero terminated": {
+   "script": "7ab5f0ab1d897926",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   /   a  \\0   c  \\0\n"
+   }
+  },
+  "opt md5sum: binary mode marker": {
+   "script": "9279eec7a7c6a764",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b1946ac92492d2347c6235b4d2611184 */tmp/a\n"
+   }
+  },
+  "opt md5sum: check from stdin": {
+   "script": "6e2a2f462470577d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt md5sum: check ignore missing": {
+   "script": "9ade2cf9851f4f07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\n"
+   }
+  },
+  "opt md5sum: check malformed lines warn": {
+   "script": "8fd6ccb7f3bac17f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\nmd5sum: /tmp/sums: 2: improperly formatted MD5 checksum line\nmd5sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt md5sum: check missing file": {
+   "script": "494dcd9606c6ddba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: FAILED open or read\nstatus=1\nmd5sum: /tmp/b: No such file or directory\nmd5sum: WARNING: 1 listed file could not be read\n"
+   }
+  },
+  "opt md5sum: check no valid lines": {
+   "script": "724e121d447a3dee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmd5sum: /tmp/sums: no properly formatted checksum lines found\n"
+   }
+  },
+  "opt md5sum: check ok": {
+   "script": "93e2598b014f2d7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: OK\n"
+   }
+  },
+  "opt md5sum: check quiet": {
+   "script": "4fa2ea5cac5366ef",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: WARNING: 1 computed checksum did NOT match\n"
+   },
+   "stdout": {
+    "text": "/tmp/b: FAILED\nstatus=1\n"
+   }
+  },
+  "opt md5sum: check status only": {
+   "script": "4cda8bd0096f186b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "opt md5sum: check strict": {
+   "script": "9873a053c23745cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=1\nmd5sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt md5sum: check tagged format": {
+   "script": "b4ee1b6d26c74e86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt md5sum: dash operand": {
+   "script": "5621469646c5baa5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "900150983cd24fb0d6963f7d28e17f72  -\n"
+   }
+  },
+  "opt md5sum: directory operand": {
+   "script": "ade5221e86a65d3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmd5sum: /tmp/d: Is a directory\n"
+   }
+  },
+  "opt md5sum: escaped file name": {
+   "script": "5994d50160cdb12f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\9dd4e461268c8034f5c8564e155c67a6  /tmp/a\\\\b\n"
+   }
+  },
+  "opt md5sum: missing file": {
+   "script": "cf2e5dae87025f52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmd5sum: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt md5sum: newline in file name": {
+   "script": "ba61710597f0f3d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\9dd4e461268c8034f5c8564e155c67a6  /tmp/a\\nb\n"
+   }
+  },
+  "opt md5sum: status with no check": {
+   "script": "ee66c9b379e69fc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmd5sum: the --status option is meaningful only when verifying checksums\nTry 'md5sum --help' for more information.\n"
+   }
+  },
+  "opt md5sum: stdin": {
+   "script": "d571fc8cb9c720ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "900150983cd24fb0d6963f7d28e17f72  -\n"
+   }
+  },
+  "opt md5sum: tag": {
+   "script": "b340e5c432d2a2d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MD5 (/tmp/a) = b1946ac92492d2347c6235b4d2611184\n"
+   }
+  },
+  "opt md5sum: tag with text mode rejected": {
+   "script": "ab70559fb387f3b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmd5sum: --text mode is only supported with --untagged\nTry 'md5sum --help' for more information.\n"
+   }
+  },
+  "opt md5sum: text mode": {
+   "script": "1ce962c22950366c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b1946ac92492d2347c6235b4d2611184  /tmp/a\n"
+   }
+  },
+  "opt md5sum: two files": {
+   "script": "29dd89ebff27c825",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b1946ac92492d2347c6235b4d2611184  /tmp/a\nd41d8cd98f00b204e9800998ecf8427e  /tmp/b\n"
+   }
+  },
+  "opt md5sum: unknown option": {
+   "script": "1e3022c3ec20cd4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nmd5sum: unrecognized option '--bogus'\nTry 'md5sum --help' for more information.\n"
+   }
+  },
+  "opt md5sum: zero terminated": {
+   "script": "765c93dc0d72db86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   7   c   6   2   3   5   b   4   d   2   6   1   1   1   8   4\n           /   t   m   p   /   a  \\0\n"
+   }
+  },
+  "opt sha1sum: binary mode marker": {
+   "script": "bdc66fc220c6f0a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f572d396fae9206628714fb2ce00f72e94f2258f */tmp/a\n"
+   }
+  },
+  "opt sha1sum: check from stdin": {
+   "script": "4c56be7fe96bf5df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt sha1sum: check ignore missing": {
+   "script": "ea6bac76397bd147",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\n"
+   }
+  },
+  "opt sha1sum: check malformed lines warn": {
+   "script": "f1c5645fdb320670",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\nsha1sum: /tmp/sums: 2: improperly formatted SHA1 checksum line\nsha1sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt sha1sum: check missing file": {
+   "script": "b05938a7a46cd4c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: FAILED open or read\nstatus=1\nsha1sum: /tmp/b: No such file or directory\nsha1sum: WARNING: 1 listed file could not be read\n"
+   }
+  },
+  "opt sha1sum: check no valid lines": {
+   "script": "a17fe34acc3b1951",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha1sum: /tmp/sums: no properly formatted checksum lines found\n"
+   }
+  },
+  "opt sha1sum: check ok": {
+   "script": "153990c581272ca6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: OK\n"
+   }
+  },
+  "opt sha1sum: check quiet": {
+   "script": "f82c7597704b3047",
+   "status": 0,
+   "stderr": {
+    "text": "sha1sum: WARNING: 1 computed checksum did NOT match\n"
+   },
+   "stdout": {
+    "text": "/tmp/b: FAILED\nstatus=1\n"
+   }
+  },
+  "opt sha1sum: check status only": {
+   "script": "db0843c3e40abd6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "opt sha1sum: check strict": {
+   "script": "83062a8ddfeefe82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=1\nsha1sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt sha1sum: check tagged format": {
+   "script": "258f532491662af9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt sha1sum: dash operand": {
+   "script": "2e2fc8b206ef1c4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a9993e364706816aba3e25717850c26c9cd0d89d  -\n"
+   }
+  },
+  "opt sha1sum: directory operand": {
+   "script": "d8cd749f51b231a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha1sum: /tmp/d: Is a directory\n"
+   }
+  },
+  "opt sha1sum: escaped file name": {
+   "script": "51e7e4d9c3f43f80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\11f6ad8ec52a2984abaafd7c3b516503785c2072  /tmp/a\\\\b\n"
+   }
+  },
+  "opt sha1sum: missing file": {
+   "script": "e6eba0a130031fb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha1sum: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt sha1sum: newline in file name": {
+   "script": "53025b30229dbe94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\11f6ad8ec52a2984abaafd7c3b516503785c2072  /tmp/a\\nb\n"
+   }
+  },
+  "opt sha1sum: status with no check": {
+   "script": "a877a1883cba827b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha1sum: the --status option is meaningful only when verifying checksums\nTry 'sha1sum --help' for more information.\n"
+   }
+  },
+  "opt sha1sum: stdin": {
+   "script": "4d2a17f309a69684",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a9993e364706816aba3e25717850c26c9cd0d89d  -\n"
+   }
+  },
+  "opt sha1sum: tag": {
+   "script": "3bfdcf0c1daacd6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA1 (/tmp/a) = f572d396fae9206628714fb2ce00f72e94f2258f\n"
+   }
+  },
+  "opt sha1sum: tag with text mode rejected": {
+   "script": "8f35fc3980ae2e82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha1sum: --text mode is only supported with --untagged\nTry 'sha1sum --help' for more information.\n"
+   }
+  },
+  "opt sha1sum: text mode": {
+   "script": "708537ca46b63e0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f572d396fae9206628714fb2ce00f72e94f2258f  /tmp/a\n"
+   }
+  },
+  "opt sha1sum: two files": {
+   "script": "28d133c5bf7a5b99",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f572d396fae9206628714fb2ce00f72e94f2258f  /tmp/a\nda39a3ee5e6b4b0d3255bfef95601890afd80709  /tmp/b\n"
+   }
+  },
+  "opt sha1sum: unknown option": {
+   "script": "4f279274ca5bbf28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha1sum: unrecognized option '--bogus'\nTry 'sha1sum --help' for more information.\n"
+   }
+  },
+  "opt sha1sum: zero terminated": {
+   "script": "28f25b48eb283f19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   9   4   f   2   2   5   8   f           /   t   m   p   /   a\n  \\0\n"
+   }
+  },
+  "opt sha256sum: binary mode marker": {
+   "script": "a38e2b10f171af54",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03 */tmp/a\n"
+   }
+  },
+  "opt sha256sum: check from stdin": {
+   "script": "a516bceb0ebb572c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt sha256sum: check ignore missing": {
+   "script": "3ab2773cccb83fe1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\n"
+   }
+  },
+  "opt sha256sum: check malformed lines warn": {
+   "script": "09df602686343397",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\nsha256sum: /tmp/sums: 2: improperly formatted SHA256 checksum line\nsha256sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt sha256sum: check missing file": {
+   "script": "76502b0e278a5f02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: FAILED open or read\nstatus=1\nsha256sum: /tmp/b: No such file or directory\nsha256sum: WARNING: 1 listed file could not be read\n"
+   }
+  },
+  "opt sha256sum: check no valid lines": {
+   "script": "026115c3fd775cf2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha256sum: /tmp/sums: no properly formatted checksum lines found\n"
+   }
+  },
+  "opt sha256sum: check ok": {
+   "script": "f3b0f48c04d349c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: OK\n"
+   }
+  },
+  "opt sha256sum: check quiet": {
+   "script": "3e164ceb1c918edf",
+   "status": 0,
+   "stderr": {
+    "text": "sha256sum: WARNING: 1 computed checksum did NOT match\n"
+   },
+   "stdout": {
+    "text": "/tmp/b: FAILED\nstatus=1\n"
+   }
+  },
+  "opt sha256sum: check status only": {
+   "script": "a74caee5f2524e8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "opt sha256sum: check strict": {
+   "script": "171642f31118814a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=1\nsha256sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt sha256sum: check tagged format": {
+   "script": "d81fc2fec41920a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt sha256sum: dash operand": {
+   "script": "0911ab3a13cf321c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  -\n"
+   }
+  },
+  "opt sha256sum: directory operand": {
+   "script": "2098824ea5192da2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha256sum: /tmp/d: Is a directory\n"
+   }
+  },
+  "opt sha256sum: escaped file name": {
+   "script": "bb853f16b59c8b01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881  /tmp/a\\\\b\n"
+   }
+  },
+  "opt sha256sum: missing file": {
+   "script": "3d696d984bad9093",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha256sum: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt sha256sum: newline in file name": {
+   "script": "c988d26aff4be62c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881  /tmp/a\\nb\n"
+   }
+  },
+  "opt sha256sum: status with no check": {
+   "script": "5079a72f1c3a465e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha256sum: the --status option is meaningful only when verifying checksums\nTry 'sha256sum --help' for more information.\n"
+   }
+  },
+  "opt sha256sum: stdin": {
+   "script": "aaaa6ef08b093993",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  -\n"
+   }
+  },
+  "opt sha256sum: tag": {
+   "script": "53e006ad59ddd1e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA256 (/tmp/a) = 5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03\n"
+   }
+  },
+  "opt sha256sum: tag with text mode rejected": {
+   "script": "98e99ba2f14fe49b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha256sum: --text mode is only supported with --untagged\nTry 'sha256sum --help' for more information.\n"
+   }
+  },
+  "opt sha256sum: text mode": {
+   "script": "2b8ed90f2dfb344c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03  /tmp/a\n"
+   }
+  },
+  "opt sha256sum: two files": {
+   "script": "5b27c7e6390033a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03  /tmp/a\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  /tmp/b\n"
+   }
+  },
+  "opt sha256sum: unknown option": {
+   "script": "684f9e1ecc270157",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha256sum: unrecognized option '--bogus'\nTry 'sha256sum --help' for more information.\n"
+   }
+  },
+  "opt sha256sum: zero terminated": {
+   "script": "06ac2c97c67a7d0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   8   2   8   6   a   2   e   8   4   6   f   6   b   e   0   3\n           /   t   m   p   /   a  \\0\n"
+   }
+  },
+  "opt sha512sum: binary mode marker": {
+   "script": "88788b8fa2d97e67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e7c22b994c59d9cf2b48e549b1e24666636045930d3da7c1acb299d1c3b7f931f94aae41edda2c2b207a36e10f8bcb8d45223e54878f5b316e7ce3b6bc019629 */tmp/a\n"
+   }
+  },
+  "opt sha512sum: check from stdin": {
+   "script": "6223898d84762eff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt sha512sum: check ignore missing": {
+   "script": "ec77d173072b0c98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\n"
+   }
+  },
+  "opt sha512sum: check malformed lines warn": {
+   "script": "81ff62c1cba519d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=0\nsha512sum: /tmp/sums: 2: improperly formatted SHA512 checksum line\nsha512sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt sha512sum: check missing file": {
+   "script": "b7e3e9c2765a7dcf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: FAILED open or read\nstatus=1\nsha512sum: /tmp/b: No such file or directory\nsha512sum: WARNING: 1 listed file could not be read\n"
+   }
+  },
+  "opt sha512sum: check no valid lines": {
+   "script": "8411691180c8d5e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha512sum: /tmp/sums: no properly formatted checksum lines found\n"
+   }
+  },
+  "opt sha512sum: check ok": {
+   "script": "6309387cdf4699e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n/tmp/b: OK\n"
+   }
+  },
+  "opt sha512sum: check quiet": {
+   "script": "13c5ed6def91f16b",
+   "status": 0,
+   "stderr": {
+    "text": "sha512sum: WARNING: 1 computed checksum did NOT match\n"
+   },
+   "stdout": {
+    "text": "/tmp/b: FAILED\nstatus=1\n"
+   }
+  },
+  "opt sha512sum: check status only": {
+   "script": "373ddc0a11878fe7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "opt sha512sum: check strict": {
+   "script": "16b9abc96d2701e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nstatus=1\nsha512sum: WARNING: 1 line is improperly formatted\n"
+   }
+  },
+  "opt sha512sum: check tagged format": {
+   "script": "78732da263bd9ca8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\n"
+   }
+  },
+  "opt sha512sum: dash operand": {
+   "script": "edfb5d93c79decd4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f  -\n"
+   }
+  },
+  "opt sha512sum: directory operand": {
+   "script": "d43119c3fd62435b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha512sum: /tmp/d: Is a directory\n"
+   }
+  },
+  "opt sha512sum: escaped file name": {
+   "script": "22fa38cc431db174",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\a4abd4448c49562d828115d13a1fccea927f52b4d5459297f8b43e42da89238bc13626e43dcb38ddb082488927ec904fb42057443983e88585179d50551afe62  /tmp/a\\\\b\n"
+   }
+  },
+  "opt sha512sum: missing file": {
+   "script": "06a71a2ad20d0c57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha512sum: /tmp/nosuch: No such file or directory\n"
+   }
+  },
+  "opt sha512sum: newline in file name": {
+   "script": "70ee16a0150f9730",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\a4abd4448c49562d828115d13a1fccea927f52b4d5459297f8b43e42da89238bc13626e43dcb38ddb082488927ec904fb42057443983e88585179d50551afe62  /tmp/a\\nb\n"
+   }
+  },
+  "opt sha512sum: status with no check": {
+   "script": "c603cddb9f399f8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha512sum: the --status option is meaningful only when verifying checksums\nTry 'sha512sum --help' for more information.\n"
+   }
+  },
+  "opt sha512sum: stdin": {
+   "script": "a174cafaff4a73b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f  -\n"
+   }
+  },
+  "opt sha512sum: tag": {
+   "script": "0af9b2df318d7a75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "SHA512 (/tmp/a) = e7c22b994c59d9cf2b48e549b1e24666636045930d3da7c1acb299d1c3b7f931f94aae41edda2c2b207a36e10f8bcb8d45223e54878f5b316e7ce3b6bc019629\n"
+   }
+  },
+  "opt sha512sum: tag with text mode rejected": {
+   "script": "f2154edc6218e01c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha512sum: --tag does not support --text mode\nTry 'sha512sum --help' for more information.\n"
+   }
+  },
+  "opt sha512sum: text mode": {
+   "script": "110ffaa91240590f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e7c22b994c59d9cf2b48e549b1e24666636045930d3da7c1acb299d1c3b7f931f94aae41edda2c2b207a36e10f8bcb8d45223e54878f5b316e7ce3b6bc019629  /tmp/a\n"
+   }
+  },
+  "opt sha512sum: two files": {
+   "script": "af143745dc8ac148",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e7c22b994c59d9cf2b48e549b1e24666636045930d3da7c1acb299d1c3b7f931f94aae41edda2c2b207a36e10f8bcb8d45223e54878f5b316e7ce3b6bc019629  /tmp/a\ncf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e  /tmp/b\n"
+   }
+  },
+  "opt sha512sum: unknown option": {
+   "script": "0a2fd410a412fa48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsha512sum: unrecognized option '--bogus'\nTry 'sha512sum --help' for more information.\n"
+   }
+  },
+  "opt sha512sum: zero terminated": {
+   "script": "462ac68b02674ae1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   6   e   7   c   e   3   b   6   b   c   0   1   9   6   2   9\n           /   t   m   p   /   a  \\0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

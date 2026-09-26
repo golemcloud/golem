@@ -1,0 +1,6548 @@
+{
+ "cases": {
+  "gram words ansi-c adjacent to other quotes": {
+   "script": "dc9f1f1c9b84fdbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abcde\n"
+   }
+  },
+  "gram words ansi-c alert": {
+   "script": "a14ced5e4dccf867",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\a>'\n"
+   }
+  },
+  "gram words ansi-c as a case pattern": {
+   "script": "a1d1ab4a363c310c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "tab-match\n"
+   }
+  },
+  "gram words ansi-c as a redirect target": {
+   "script": "37cfb921195922e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "gram words ansi-c as an IFS": {
+   "script": "3ead83fe342e8c0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram words ansi-c as an assignment name": {
+   "script": "be9050086749f25e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bash: line 1: x=1: command not found\nstatus=127\n"
+   }
+  },
+  "gram words ansi-c backquote": {
+   "script": "153376685d4d9a0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<\\`\\>\n"
+   }
+  },
+  "gram words ansi-c backslash": {
+   "script": "64cd6e1ffab943d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<\\\\\\>\n"
+   }
+  },
+  "gram words ansi-c backspace": {
+   "script": "26e8aec6282be76f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\b>'\n"
+   }
+  },
+  "gram words ansi-c control A": {
+   "script": "adaccb575cd54f26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\001>'\n"
+   }
+  },
+  "gram words ansi-c control at": {
+   "script": "66546a4273fc95b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n\\<\n"
+   }
+  },
+  "gram words ansi-c control backslash": {
+   "script": "355ed4e23104e8c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\034>'\n"
+   }
+  },
+  "gram words ansi-c control bracket": {
+   "script": "1d63fc476f1c239a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\E>'\n"
+   }
+  },
+  "gram words ansi-c control lower": {
+   "script": "e76a7edd41d72fe5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\001>'\n"
+   }
+  },
+  "gram words ansi-c control question": {
+   "script": "0867c08dcf9dfd37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\177>'\n"
+   }
+  },
+  "gram words ansi-c dollar": {
+   "script": "14b4b84f7e484e72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n\\<\\\\\\$\\>\n"
+   }
+  },
+  "gram words ansi-c double quote": {
+   "script": "4b8009b7c27c700c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<\\\"\\>\n"
+   }
+  },
+  "gram words ansi-c empty": {
+   "script": "7966f7526ae272c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\n"
+   }
+  },
+  "gram words ansi-c escape E": {
+   "script": "70e7e47307ded32c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\E>'\n"
+   }
+  },
+  "gram words ansi-c escape e": {
+   "script": "d217e7d418671829",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\E>'\n"
+   }
+  },
+  "gram words ansi-c form feed": {
+   "script": "ca0785daeffc0b28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\f>'\n"
+   }
+  },
+  "gram words ansi-c hex none": {
+   "script": "5ee199485db78543",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n\\<\\\\xZ\\>\n"
+   }
+  },
+  "gram words ansi-c hex nul": {
+   "script": "f5877f9b264e5f84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n\\<a\n"
+   }
+  },
+  "gram words ansi-c hex one": {
+   "script": "b96bf9ba410a9270",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\004>'\n"
+   }
+  },
+  "gram words ansi-c hex then letter": {
+   "script": "c32bb8b851b28045",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n\\<Ag\\>\n"
+   }
+  },
+  "gram words ansi-c hex three": {
+   "script": "9e58c5a679cbd8d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n\\<A4\\>\n"
+   }
+  },
+  "gram words ansi-c hex two": {
+   "script": "0cd515cc5c34df9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<A\\>\n"
+   }
+  },
+  "gram words ansi-c in a [[ pattern": {
+   "script": "26ea354763ce8367",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "q-match\n"
+   }
+  },
+  "gram words ansi-c in a default word": {
+   "script": "25dc8b6e5f4cf8ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram words ansi-c in a double quoted default word": {
+   "script": "bfffb93607db64f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\n"
+   }
+  },
+  "gram words ansi-c in a function name call": {
+   "script": "d1b0f6b51129877d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "called\n"
+   }
+  },
+  "gram words ansi-c in a here-document is literal": {
+   "script": "84235e6985f8beca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\tb'\n"
+   }
+  },
+  "gram words ansi-c in an array": {
+   "script": "17a2491c9fdf8135",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 2\n"
+   }
+  },
+  "gram words ansi-c in arithmetic": {
+   "script": "56da68e33f0ec7ea",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: '1' + 2 : arithmetic syntax error: operand expected (error token is \"'1' + 2 \")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram words ansi-c inside double quotes is literal": {
+   "script": "0a4cadae8415d477",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$'a\\tb'\n"
+   }
+  },
+  "gram words ansi-c literal dollar brace": {
+   "script": "3425a3a28ff51975",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n\\<\\$\\{x\\}\\>\n"
+   }
+  },
+  "gram words ansi-c locale string": {
+   "script": "e09fa1c16902430d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "plain with \n"
+   }
+  },
+  "gram words ansi-c newline": {
+   "script": "c0ee9e0b3a9882d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\n>'\n"
+   }
+  },
+  "gram words ansi-c nul": {
+   "script": "bdb63d9a4066634e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n\\<a\n"
+   }
+  },
+  "gram words ansi-c octal four digits": {
+   "script": "da81856d43c83aac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n\\<A1\\>\n"
+   }
+  },
+  "gram words ansi-c octal one digit": {
+   "script": "95136d786fcc65ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\a>'\n"
+   }
+  },
+  "gram words ansi-c octal overflow": {
+   "script": "9d24f927725366ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\377>'\n"
+   }
+  },
+  "gram words ansi-c octal three digits": {
+   "script": "aa3b35dc752bd914",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<A\\>\n"
+   }
+  },
+  "gram words ansi-c question": {
+   "script": "f421a908165ba6ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<\\?\\>\n"
+   }
+  },
+  "gram words ansi-c return": {
+   "script": "d0d67820500fdbd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\r>'\n"
+   }
+  },
+  "gram words ansi-c single quote": {
+   "script": "ed80a2cb732ed213",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<\\'\\>\n"
+   }
+  },
+  "gram words ansi-c tab": {
+   "script": "e032067d81b034c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\t>'\n"
+   }
+  },
+  "gram words ansi-c trailing backslash": {
+   "script": "75f66189b6f53dba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n\\<x\\\\\\>\n"
+   }
+  },
+  "gram words ansi-c unicode eight": {
+   "script": "5b11e7f7db580ee6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<😀\\>\n"
+   }
+  },
+  "gram words ansi-c unicode four": {
+   "script": "761fb465035d7876",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<é\\>\n"
+   }
+  },
+  "gram words ansi-c unicode short": {
+   "script": "320c2026c9ce3b6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<A\\>\n"
+   }
+  },
+  "gram words ansi-c unicode smiley": {
+   "script": "37379556b8323ed3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n\\<☺\\>\n"
+   }
+  },
+  "gram words ansi-c unicode surrogate": {
+   "script": "31dbec8dcf13b32c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n$'<\\355\\240\\200>'\n"
+   }
+  },
+  "gram words ansi-c unknown escape": {
+   "script": "b0a746290e86196f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n\\<\\\\z\\>\n"
+   }
+  },
+  "gram words ansi-c vertical tab": {
+   "script": "67885466dfdc8f49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n$'<\\v>'\n"
+   }
+  },
+  "gram words backslash backslash ampersand": {
+   "script": "f1fc67161d1a30c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a&b>\n"
+   }
+  },
+  "gram words backslash backslash before brace": {
+   "script": "6d5084ba486db604",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{a,b}>\n"
+   }
+  },
+  "gram words backslash backslash equals": {
+   "script": "75075e7ddb6b9274",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x=y>\n"
+   }
+  },
+  "gram words backslash backslash hash": {
+   "script": "b078cbec6922a16c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <#x>\n"
+   }
+  },
+  "gram words backslash backslash less": {
+   "script": "3b6cbf32015155d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <<x>\n"
+   }
+  },
+  "gram words backslash backslash parenthesis": {
+   "script": "10662b27169d9439",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <(x)>\n"
+   }
+  },
+  "gram words backslash backslash pipe": {
+   "script": "48638ee00b05d120",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a|b>\n"
+   }
+  },
+  "gram words backslash backslash semicolon": {
+   "script": "c77f6794edb560c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a;b>\n"
+   }
+  },
+  "gram words backslash backslash tilde": {
+   "script": "8cd3baebd5e89ced",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <~>\n"
+   }
+  },
+  "gram words backslash double quoted backquote": {
+   "script": "eb8b303547c9618e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <`>\n"
+   }
+  },
+  "gram words backslash double quoted backslash": {
+   "script": "b6826fc2b28e552f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\>\n"
+   }
+  },
+  "gram words backslash double quoted dollar": {
+   "script": "ca8ba601ff9c1315",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <$x>\n"
+   }
+  },
+  "gram words backslash double quoted exclamation": {
+   "script": "71bb705ba801bbc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a!b>\n"
+   }
+  },
+  "gram words backslash double quoted history like": {
+   "script": "592ebe573e2e2678",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <!!>\n"
+   }
+  },
+  "gram words backslash double quoted letters": {
+   "script": "9114c0794b0b6a00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\a\\b>\n"
+   }
+  },
+  "gram words backslash double quoted newline": {
+   "script": "2a9f19a16a603a25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <ab>\n"
+   }
+  },
+  "gram words backslash double quoted quote": {
+   "script": "18a1528aa81e4488",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\">\n"
+   }
+  },
+  "gram words backslash double quoted single quote": {
+   "script": "9239d4e5faf05bc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\'>\n"
+   }
+  },
+  "gram words backslash in assignment backslash ampersand": {
+   "script": "9b5e7f12e18afeaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a&b>\n"
+   }
+  },
+  "gram words backslash in assignment backslash before brace": {
+   "script": "9d46f62b851f493f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{a,b}>\n"
+   }
+  },
+  "gram words backslash in assignment backslash equals": {
+   "script": "581ee48a977a54b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x=y>\n"
+   }
+  },
+  "gram words backslash in assignment backslash hash": {
+   "script": "8b37b7156676e5a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <#x>\n"
+   }
+  },
+  "gram words backslash in assignment backslash less": {
+   "script": "797378ca0e8e38e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <<x>\n"
+   }
+  },
+  "gram words backslash in assignment backslash parenthesis": {
+   "script": "27e7b12d4eeba63b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <(x)>\n"
+   }
+  },
+  "gram words backslash in assignment backslash pipe": {
+   "script": "6860444684bee302",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a|b>\n"
+   }
+  },
+  "gram words backslash in assignment backslash semicolon": {
+   "script": "01abfd3cf59fe288",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a;b>\n"
+   }
+  },
+  "gram words backslash in assignment backslash tilde": {
+   "script": "4fde1c74c2b823ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <~>\n"
+   }
+  },
+  "gram words backslash in assignment double quoted backquote": {
+   "script": "bbfed48bca5fa99a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <`>\n"
+   }
+  },
+  "gram words backslash in assignment double quoted backslash": {
+   "script": "4394743c8a4eb35d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\>\n"
+   }
+  },
+  "gram words backslash in assignment double quoted dollar": {
+   "script": "4bbb2ff4d6217380",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <$x>\n"
+   }
+  },
+  "gram words backslash in assignment double quoted exclamation": {
+   "script": "226ec874488e7639",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a!b>\n"
+   }
+  },
+  "gram words backslash in assignment double quoted history like": {
+   "script": "043b20546992a971",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <!!>\n"
+   }
+  },
+  "gram words backslash in assignment double quoted letters": {
+   "script": "bfbed3ea4b2b7213",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\a\\b>\n"
+   }
+  },
+  "gram words backslash in assignment double quoted newline": {
+   "script": "02dbe322560e24de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <ab>\n"
+   }
+  },
+  "gram words backslash in assignment double quoted quote": {
+   "script": "aafa0bbfda482e54",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\">\n"
+   }
+  },
+  "gram words backslash in assignment double quoted single quote": {
+   "script": "e8d5fb23ef55ad77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\'>\n"
+   }
+  },
+  "gram words backslash in assignment mixed": {
+   "script": "1f0a6213c5106c3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a'bc\"de\\f>\n"
+   }
+  },
+  "gram words backslash in assignment single quoted backslash": {
+   "script": "6d3c8683adc32097",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\\\>\n"
+   }
+  },
+  "gram words backslash in assignment single quoted backslash n": {
+   "script": "ff3829a4efabf900",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\\nb>\n"
+   }
+  },
+  "gram words backslash in assignment unquoted backslash": {
+   "script": "0ce4f9d80aefae63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\>\n"
+   }
+  },
+  "gram words backslash in assignment unquoted dollar": {
+   "script": "8423b2c402c194b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <$x>\n"
+   }
+  },
+  "gram words backslash in assignment unquoted double quote": {
+   "script": "4284bdb8994d3b25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\">\n"
+   }
+  },
+  "gram words backslash in assignment unquoted glob": {
+   "script": "56cbe04b56034611",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*>\n"
+   }
+  },
+  "gram words backslash in assignment unquoted letters": {
+   "script": "70a6960a6e853d3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <ab>\n"
+   }
+  },
+  "gram words backslash in assignment unquoted newline": {
+   "script": "534062fd2ef7e22f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <ab>\n"
+   }
+  },
+  "gram words backslash in assignment unquoted single quote": {
+   "script": "eb9fd588333910df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <'>\n"
+   }
+  },
+  "gram words backslash in assignment unquoted space": {
+   "script": "60d7ac000a3f0037",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b>\n"
+   }
+  },
+  "gram words backslash in assignment unquoted tab": {
+   "script": "661f7496bb6e6ad2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\tb>\n"
+   }
+  },
+  "gram words backslash mixed": {
+   "script": "906ced7fca847d9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a'bc\"de\\f>\n"
+   }
+  },
+  "gram words backslash single quoted backslash": {
+   "script": "aba58f5585a8642b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\\\>\n"
+   }
+  },
+  "gram words backslash single quoted backslash n": {
+   "script": "f90db626befdc514",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\\nb>\n"
+   }
+  },
+  "gram words backslash unquoted backslash": {
+   "script": "3270b6c6a3b29aca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\\>\n"
+   }
+  },
+  "gram words backslash unquoted dollar": {
+   "script": "0480e3599d1c3243",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <$x>\n"
+   }
+  },
+  "gram words backslash unquoted double quote": {
+   "script": "753ae32bfdcf3a93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\">\n"
+   }
+  },
+  "gram words backslash unquoted glob": {
+   "script": "71b9a600830b6280",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <*>\n"
+   }
+  },
+  "gram words backslash unquoted letters": {
+   "script": "24a19e0424bd9fa0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <ab>\n"
+   }
+  },
+  "gram words backslash unquoted newline": {
+   "script": "d7b66f8ca128860b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <ab>\n"
+   }
+  },
+  "gram words backslash unquoted single quote": {
+   "script": "576739fb2d153948",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <'>\n"
+   }
+  },
+  "gram words backslash unquoted space": {
+   "script": "1ba554d636f784ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b>\n"
+   }
+  },
+  "gram words backslash unquoted tab": {
+   "script": "8ae501a88a671d7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\tb>\n"
+   }
+  },
+  "gram words brace \"{a,b}\"": {
+   "script": "73ab4afe42095f77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{a,b}>\n"
+   }
+  },
+  "gram words brace $v{a,b}": {
+   "script": "8b887e558c06ceb1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words brace ${v}{a,b}": {
+   "script": "78da6d1e8edfbc15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <Va> <Vb>\n"
+   }
+  },
+  "gram words brace \\{a,b}": {
+   "script": "cb599915014f76ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{a,b}>\n"
+   }
+  },
+  "gram words brace after a dollar": {
+   "script": "8c3a5c0b2a44241b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n$a $b\n${a,b}\n"
+   }
+  },
+  "gram words brace a{,}b": {
+   "script": "1cddc983138d4118",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <ab> <ab>\n"
+   }
+  },
+  "gram words brace a{b..d}e": {
+   "script": "f4c080311b98a0f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <abe> <ace> <ade>\n"
+   }
+  },
+  "gram words brace braceexpand off": {
+   "script": "1e6beeb767a5f47c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{a,b} {1..2}\na b\n"
+   }
+  },
+  "gram words brace eval makes it work": {
+   "script": "43e6754ff1621b30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2 3\n"
+   }
+  },
+  "gram words brace generated words then globbing": {
+   "script": "cedbe707c9078a0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b1 b2 c*\n"
+   }
+  },
+  "gram words brace in a for loop": {
+   "script": "cf6577f06ce0f09d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1x 1y 2x 2y 3x 3y \n"
+   }
+  },
+  "gram words brace in a here-document is literal": {
+   "script": "be95c145351ac519",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{a,b}\n"
+   }
+  },
+  "gram words brace in a redirect target is ambiguous": {
+   "script": "3598e661841432d3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: {a,b}.txt: ambiguous redirect\n"
+   },
+   "stdout": {
+    "text": "status=1\n*\n"
+   }
+  },
+  "gram words brace in an array assignment": {
+   "script": "6080b077a6321a6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 b2\n"
+   }
+  },
+  "gram words brace in case words": {
+   "script": "04446933bc8d1a8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "literal\n"
+   }
+  },
+  "gram words brace in double quotes in a word": {
+   "script": "0f8b9dc2b7fe00c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x{a,b}y aq bq\n"
+   }
+  },
+  "gram words brace in function arguments": {
+   "script": "f577b3eab2fb4803",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram words brace large sequence count": {
+   "script": "6d0ae0cb4cf30024",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1000 1000\n"
+   }
+  },
+  "gram words brace nested sequence": {
+   "script": "d3fd6596290b7b4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a 1 2 3 b\n"
+   }
+  },
+  "gram words brace not in [[": {
+   "script": "3ccd538c30f1655c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram words brace not in a scalar assignment": {
+   "script": "c17daa9f0512887b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{a,b}\n"
+   }
+  },
+  "gram words brace sequence from variables is literal": {
+   "script": "e66cafe9e1696648",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{1..3}\n"
+   }
+  },
+  "gram words brace with command substitution": {
+   "script": "271bfc5e6f6aec8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "gram words brace with parameter expansion inside": {
+   "script": "0c4f7cad7d067385",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n"
+   }
+  },
+  "gram words brace with quoted comma": {
+   "script": "240804d2b781358f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a,b c\n"
+   }
+  },
+  "gram words brace with tilde": {
+   "script": "34e20dbe4cf5558b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/h /h/x\n"
+   }
+  },
+  "gram words brace x{a,b}y": {
+   "script": "5219cb143957733d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <xay> <xby>\n"
+   }
+  },
+  "gram words brace { a,b }": {
+   "script": "550e7994c6d45808",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <{> <a,b> <}>\n"
+   }
+  },
+  "gram words brace {\"x y\",z}": {
+   "script": "cb491ce84fd8ed3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x y> <z>\n"
+   }
+  },
+  "gram words brace {$v,x}": {
+   "script": "77e2abe61ca156d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <V> <x>\n"
+   }
+  },
+  "gram words brace {'a,b',c}": {
+   "script": "bb48ca7e13de3c97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a,b> <c>\n"
+   }
+  },
+  "gram words brace {*,?}": {
+   "script": "aaa6eb4bfb918196",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <*> <?>\n"
+   }
+  },
+  "gram words brace {+1..3}": {
+   "script": "61a83a0439af21a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <1> <2> <3>\n"
+   }
+  },
+  "gram words brace {,a}": {
+   "script": "9080821758b035cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\n"
+   }
+  },
+  "gram words brace {,}": {
+   "script": "b5e60106a3fdf960",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words brace {-00..2}": {
+   "script": "df5617f2ae8e6ae8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <000> <001> <002>\n"
+   }
+  },
+  "gram words brace {-03..3}": {
+   "script": "6b799ecb6afbdd55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 <-03> <-02> <-01> <000> <001> <002> <003>\n"
+   }
+  },
+  "gram words brace {-1..-5..2}": {
+   "script": "f0a5fed9aec14a9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <-1> <-3> <-5>\n"
+   }
+  },
+  "gram words brace {-3..3}": {
+   "script": "d9be77a1e3561239",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 <-3> <-2> <-1> <0> <1> <2> <3>\n"
+   }
+  },
+  "gram words brace {..1}": {
+   "script": "3d28d2bcfd90c905",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{..1}>\n"
+   }
+  },
+  "gram words brace {0..2}{0..1}": {
+   "script": "b4c9a81bf74e6255",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 <00> <01> <10> <11> <20> <21>\n"
+   }
+  },
+  "gram words brace {00..3}": {
+   "script": "f15c986057e0bc12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <00> <01> <02> <03>\n"
+   }
+  },
+  "gram words brace {01..10}": {
+   "script": "667ca783bac2d1c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10 <01> <02> <03> <04> <05> <06> <07> <08> <09> <10>\n"
+   }
+  },
+  "gram words brace {0x1..0x3}": {
+   "script": "86f8a9190338e6f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{0x1..0x3}>\n"
+   }
+  },
+  "gram words brace {1..+3}": {
+   "script": "d2090824ac4cb1fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <1> <2> <3>\n"
+   }
+  },
+  "gram words brace {1..010}": {
+   "script": "4110b5ffe4f303e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10 <001> <002> <003> <004> <005> <006> <007> <008> <009> <010>\n"
+   }
+  },
+  "gram words brace {1..10..-3}": {
+   "script": "75819baa4141d218",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <1> <4> <7> <10>\n"
+   }
+  },
+  "gram words brace {1..10..3}": {
+   "script": "c13f11f9a43bdfdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <1> <4> <7> <10>\n"
+   }
+  },
+  "gram words brace {1..1}": {
+   "script": "81a5c1522bc4e956",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <1>\n"
+   }
+  },
+  "gram words brace {1..3..0}": {
+   "script": "2d5cb32ed943e903",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <1> <2> <3>\n"
+   }
+  },
+  "gram words brace {1..3}\\ x": {
+   "script": "0d71aa61e08d9196",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <1 x> <2 x> <3 x>\n"
+   }
+  },
+  "gram words brace {1..3}{a..b}": {
+   "script": "c0ba320fafc91d18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 <1a> <1b> <2a> <2b> <3a> <3b>\n"
+   }
+  },
+  "gram words brace {1..5}": {
+   "script": "26f617be3dbbde45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <1> <2> <3> <4> <5>\n"
+   }
+  },
+  "gram words brace {1..a}": {
+   "script": "895ecd417e31eb1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{1..a}>\n"
+   }
+  },
+  "gram words brace {1..}": {
+   "script": "f2149a2488c7bfc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{1..}>\n"
+   }
+  },
+  "gram words brace {1.5..3}": {
+   "script": "4eccc2f64b68be57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{1.5..3}>\n"
+   }
+  },
+  "gram words brace {10..1..-3}": {
+   "script": "3c02e7e0d10d0677",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <10> <7> <4> <1>\n"
+   }
+  },
+  "gram words brace {10..1..3}": {
+   "script": "eb562e2152bb27e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <10> <7> <4> <1>\n"
+   }
+  },
+  "gram words brace {3..-3..2}": {
+   "script": "715ac8158c38cd9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <3> <1> <-1> <-3>\n"
+   }
+  },
+  "gram words brace {5..1}": {
+   "script": "b4193b416841de58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <5> <4> <3> <2> <1>\n"
+   }
+  },
+  "gram words brace {9..11}": {
+   "script": "275d000cf0df89ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <9> <10> <11>\n"
+   }
+  },
+  "gram words brace {9223372036854775806..9223372036854775807}": {
+   "script": "2b1cc903fdaef486",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <9223372036854775806> <9223372036854775807>\n"
+   }
+  },
+  "gram words brace {@,#}": {
+   "script": "e32e30c9dee2b4d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <@> <#>\n"
+   }
+  },
+  "gram words brace {A..c}": {
+   "script": "59efc7eb53674be7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "35 <A> <B> <C> <D> <E> <F> <G> <H> <I> <J> <K> <L> <M> <N> <O> <P> <Q> <R> <S> <T> <U> <V> <W> <X> <Y> <Z> <[> <> <]> <^> <_> <`> <a> <b> <c>\n"
+   }
+  },
+  "gram words brace {Z..a}": {
+   "script": "31817c102202f442",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8 <Z> <[> <> <]> <^> <_> <`> <a>\n"
+   }
+  },
+  "gram words brace {a, b}": {
+   "script": "680003316f901cd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <{a,> <b}>\n"
+   }
+  },
+  "gram words brace {a,,b}": {
+   "script": "05338787f4225d13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\n"
+   }
+  },
+  "gram words brace {a,b}": {
+   "script": "b120dd9a4458ec16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\n"
+   }
+  },
+  "gram words brace {a,b}$v": {
+   "script": "437a20925aaa2bea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <aV> <bV>\n"
+   }
+  },
+  "gram words brace {a,b}.{1..2}": {
+   "script": "99794fb7b757bf75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <a.1> <a.2> <b.1> <b.2>\n"
+   }
+  },
+  "gram words brace {a,b}[0-9]": {
+   "script": "1e9a184b6b4e597d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a[0-9]> <b[0-9]>\n"
+   }
+  },
+  "gram words brace {a,b}{c,d}": {
+   "script": "866b72c1fdc7c3c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <ac> <ad> <bc> <bd>\n"
+   }
+  },
+  "gram words brace {a,b}{}": {
+   "script": "7281c40469fc82c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a{}> <b{}>\n"
+   }
+  },
+  "gram words brace {a,b}}": {
+   "script": "d1142db045c8c838",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a}> <b}>\n"
+   }
+  },
+  "gram words brace {a,{b,c}}": {
+   "script": "b6b3aa161c60b2dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram words brace {a,}": {
+   "script": "a3433416f453e96f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\n"
+   }
+  },
+  "gram words brace {a..b..c}": {
+   "script": "de6dabe830718f93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{a..b..c}>\n"
+   }
+  },
+  "gram words brace {a..c}{1,2}": {
+   "script": "fb1ec47b0597515a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 <a1> <a2> <b1> <b2> <c1> <c2>\n"
+   }
+  },
+  "gram words brace {a..e..-2}": {
+   "script": "18b2265e058c0b8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <c> <e>\n"
+   }
+  },
+  "gram words brace {a..e..0}": {
+   "script": "b39279f5d54fe782",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <b> <c> <d> <e>\n"
+   }
+  },
+  "gram words brace {a..e}": {
+   "script": "b693db63128f1f9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <b> <c> <d> <e>\n"
+   }
+  },
+  "gram words brace {a..z..5}": {
+   "script": "06aaaba0b8f176c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 <a> <f> <k> <p> <u> <z>\n"
+   }
+  },
+  "gram words brace {a\\,b,c}": {
+   "script": "ba808bd9aadb11b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a,b> <c>\n"
+   }
+  },
+  "gram words brace {aa..cc}": {
+   "script": "230b93304aee5e74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{aa..cc}>\n"
+   }
+  },
+  "gram words brace {a}": {
+   "script": "0916ca912f4a07dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{a}>\n"
+   }
+  },
+  "gram words brace {e..a}": {
+   "script": "4fcb08a8062923b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <e> <d> <c> <b> <a>\n"
+   }
+  },
+  "gram words brace {x..x}": {
+   "script": "f641cb7c7c7a86fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x>\n"
+   }
+  },
+  "gram words brace {{a,b}": {
+   "script": "b61ea79725e30fdf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <{a> <{b>\n"
+   }
+  },
+  "gram words brace {{a,b},c}": {
+   "script": "6241051a4f7032d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram words brace {}": {
+   "script": "75afbd217790b4de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <{}>\n"
+   }
+  },
+  "gram words brace {~,x}": {
+   "script": "386009415fc18f85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 </> <x>\n"
+   }
+  },
+  "gram words command substitution BASH_SUBSHELL": {
+   "script": "8dbedbd550741a39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 1 2\n"
+   }
+  },
+  "gram words command substitution arithmetic lookalike": {
+   "script": "0642780eb9316316",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "gram words command substitution backquote backslash dollar": {
+   "script": "895f76e62626fea9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "V V\n"
+   }
+  },
+  "gram words command substitution backquote double backslash": {
+   "script": "f7e7502d3f0c2dfd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\b\n"
+   }
+  },
+  "gram words command substitution backquote in double quotes": {
+   "script": "048a556798a46556",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x  y\n"
+   }
+  },
+  "gram words command substitution backquote with dollar parenthesis": {
+   "script": "54b7a81f30cdac3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "mix\n"
+   }
+  },
+  "gram words command substitution backquotes nested": {
+   "script": "0ff251224c51de14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in\n"
+   }
+  },
+  "gram words command substitution carriage return kept": {
+   "script": "289d127a12684b1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram words command substitution case inside substitution": {
+   "script": "a5d6d5ff3ee9b765",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram words command substitution case with paren inside substitution": {
+   "script": "c841193444b5a729",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "p\n"
+   }
+  },
+  "gram words command substitution comment inside substitution": {
+   "script": "715d8d4dd98d7ad8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "gram words command substitution dollar parenthesis with backquote": {
+   "script": "d574c79ee11e8e0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "mix2\n"
+   }
+  },
+  "gram words command substitution empty substitution": {
+   "script": "85ac83554cdecf9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] []\n"
+   }
+  },
+  "gram words command substitution exit inside substitution": {
+   "script": "79bc78dd9dff64ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a 2\n"
+   }
+  },
+  "gram words command substitution file read shorthand": {
+   "script": "12ab4e7b33328797",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\n"
+   }
+  },
+  "gram words command substitution file read shorthand missing": {
+   "script": "4114da4b334398ad",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/missing: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "gram words command substitution file read shorthand with spaces": {
+   "script": "05a2d928df8b07f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "z\n"
+   }
+  },
+  "gram words command substitution function defined inside does not escape": {
+   "script": "0971eb28b7d490a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in\nno-f\n"
+   }
+  },
+  "gram words command substitution funsub": {
+   "script": "83d2151e015a30f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[in-current]\n"
+   }
+  },
+  "gram words command substitution funsub shares variables": {
+   "script": "844d646950e5b054",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "z 2\n"
+   }
+  },
+  "gram words command substitution here-document inside substitution": {
+   "script": "970dc118b9903f7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hd 2\n"
+   }
+  },
+  "gram words command substitution in a here-document": {
+   "script": "f54a655a84795e5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub $(echo no)\n"
+   }
+  },
+  "gram words command substitution in arithmetic": {
+   "script": "41063c7ba55a369d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "gram words command substitution inner newlines kept": {
+   "script": "90ed7551e3258f66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a\n\nb]\n"
+   }
+  },
+  "gram words command substitution large output": {
+   "script": "11be2f10e3dc8c8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "16892\n"
+   }
+  },
+  "gram words command substitution nested quotes": {
+   "script": "0fd70621bb1a36d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a  b\n"
+   }
+  },
+  "gram words command substitution nested three deep": {
+   "script": "724e3b7b7082e3d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "deep\n"
+   }
+  },
+  "gram words command substitution nul byte dropped with a warning": {
+   "script": "7ae2acccd49b5cd5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: command substitution: ignored null byte in input\n"
+   },
+   "stdout": {
+    "text": "[ab] 2\n"
+   }
+  },
+  "gram words command substitution only newlines": {
+   "script": "ef687708754f1e00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\n"
+   }
+  },
+  "gram words command substitution pipeline inside": {
+   "script": "4766704798d0ae04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ba\n"
+   }
+  },
+  "gram words command substitution quoted substitution as a for list": {
+   "script": "4ddc7a626bfd38ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<x y>\n"
+   }
+  },
+  "gram words command substitution set -e inherited only with inherit_errexit": {
+   "script": "20f624627b701194",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[after]\n"
+   }
+  },
+  "gram words command substitution status of a command with substitution": {
+   "script": "257b50316bc24b8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n0\n"
+   }
+  },
+  "gram words command substitution status of assignment": {
+   "script": "c8ec05d4c442115c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram words command substitution status of assignment with two substitutions": {
+   "script": "88c40f9761425b15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n"
+   }
+  },
+  "gram words command substitution status of declare assignment": {
+   "script": "9ace00a0638598eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram words command substitution status of empty command": {
+   "script": "34c430c47f523f7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "gram words command substitution status of export assignment": {
+   "script": "aefdcc0920aa2c1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram words command substitution status of local assignment": {
+   "script": "adc705575932e38e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram words command substitution status of readonly assignment": {
+   "script": "7059e76ca6b25d18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram words command substitution stderr captured with redirect": {
+   "script": "ba19be249daf0904",
+   "status": 0,
+   "stderr": {
+    "text": "err\n"
+   },
+   "stdout": {
+    "text": "[]\n[e]\n"
+   }
+  },
+  "gram words command substitution stderr is not captured": {
+   "script": "9dd4d1bb65d25ae5",
+   "status": 0,
+   "stderr": {
+    "text": "err\n"
+   },
+   "stdout": {
+    "text": "[out]\n"
+   }
+  },
+  "gram words command substitution subshell inside substitution": {
+   "script": "7cd0542265506de1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub\n"
+   }
+  },
+  "gram words command substitution substitution as a for list": {
+   "script": "91895d720e4286da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<x>\n<y>\n"
+   }
+  },
+  "gram words command substitution substitution in a case pattern": {
+   "script": "aabb2cebc3a3facb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "pat\n"
+   }
+  },
+  "gram words command substitution substitution output as command": {
+   "script": "487af43227996ddc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\n"
+   }
+  },
+  "gram words command substitution substitution runs in a subshell": {
+   "script": "baad94daf83ce392",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n/\n"
+   }
+  },
+  "gram words command substitution substitution with only a comment": {
+   "script": "05c48435f05f8c1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "gram words command substitution trailing newlines removed": {
+   "script": "8447c638007d3a60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\n"
+   }
+  },
+  "gram words command substitution trap reset inside": {
+   "script": "92d3158f26f8e33d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[trap -- 'echo trapped' EXIT]\n"
+   }
+  },
+  "gram words command substitution unbalanced parenthesis escaped": {
+   "script": "8bbade7427c95360",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ")\n"
+   }
+  },
+  "gram words command substitution unbalanced parenthesis in quotes": {
+   "script": "23566e4fb75e0888",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ")\n"
+   }
+  },
+  "gram words command substitution valsub": {
+   "script": "1adf96f36172b92e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[val]\n"
+   }
+  },
+  "gram words ifs IFS and dollar at unquoted": {
+   "script": "38a10a54aa8c72c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n2\n2\n"
+   }
+  },
+  "gram words ifs IFS applies to array star": {
+   "script": "3b728998785c8208",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a/b/c b/c 0/1/2\n"
+   }
+  },
+  "gram words ifs IFS applies to dollar star": {
+   "script": "6006600174f61628",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc\na-b-c\na b c\n"
+   }
+  },
+  "gram words ifs IFS first character joins": {
+   "script": "b051d2ca77282fe4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\na:b\n"
+   }
+  },
+  "gram words ifs IFS in a subshell": {
+   "script": "60452c25deb13c47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n1\n"
+   }
+  },
+  "gram words ifs IFS leading delimiter": {
+   "script": "17768eb503d151b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n<><a>\n"
+   }
+  },
+  "gram words ifs IFS multibyte first character joins": {
+   "script": "f1de07a81466d4c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aéb\n"
+   }
+  },
+  "gram words ifs IFS non-whitespace keeps empties": {
+   "script": "ac88c145ad6435e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n<a><><b>\n"
+   }
+  },
+  "gram words ifs IFS read with backslash": {
+   "script": "05a51e053f29da47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:b|c\na\\|b:c\n"
+   }
+  },
+  "gram words ifs IFS trailing whitespace and delimiter": {
+   "script": "6bb41a8d40b02737",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n<a><b>\n"
+   }
+  },
+  "gram words ifs IFS whitespace collapse": {
+   "script": "4380fea9829ad61b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram words ifs IFS with glob characters": {
+   "script": "c8aea58fd576fd3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 a b\n"
+   }
+  },
+  "gram words ifs empty IFS joins dollar star": {
+   "script": "b3a0739c892236a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a b]\n[c]\n"
+   }
+  },
+  "gram words ifs empty IFS joins quoted dollar star": {
+   "script": "dc8c8ead0d7d7170",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a bc]\n"
+   }
+  },
+  "gram words ifs empty IFS keeps dollar at separate": {
+   "script": "2a626b0d9756aa9e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a b]\n[c]\n"
+   }
+  },
+  "gram words ifs here-string does not split": {
+   "script": "6def4d78e83ca707",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a  b\n"
+   }
+  },
+  "gram words ifs local IFS": {
+   "script": "6ea70101ffe8ca59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n1\n"
+   }
+  },
+  "gram words ifs no splitting in [[": {
+   "script": "abbf68900dceb0b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kept\n"
+   }
+  },
+  "gram words ifs no splitting in assignments": {
+   "script": "f298b5c30a5fd3b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\na b\nc  d\n"
+   }
+  },
+  "gram words ifs no splitting in case word": {
+   "script": "8ccfebb730487333",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kept\n"
+   }
+  },
+  "gram words ifs noglob stops globbing after splitting": {
+   "script": "5255d018973fad68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 s*\n"
+   }
+  },
+  "gram words ifs redirect word does not split": {
+   "script": "c0ddc1f8fb694a47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "gram words ifs splitting in declare arguments": {
+   "script": "cd9b6179e78a5197",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n"
+   }
+  },
+  "gram words ifs splitting in export arguments": {
+   "script": "0dac5caba768a6ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 unset\n"
+   }
+  },
+  "gram words ifs splitting in local arguments": {
+   "script": "a395c95ec1ae06e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n"
+   }
+  },
+  "gram words ifs splitting of arithmetic result": {
+   "script": "4245163bfa5744e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n<><2>\n"
+   }
+  },
+  "gram words ifs splitting of tilde result": {
+   "script": "48097e689490761b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram words ifs splitting result is globbed": {
+   "script": "1428e5809412370f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram words ifs temporary IFS on a function": {
+   "script": "915902446797ef5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n1\n"
+   }
+  },
+  "gram words ifs temporary IFS on read": {
+   "script": "85d8711dbcce72f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a|b\n1\n"
+   }
+  },
+  "gram words ifs unset IFS inside a function": {
+   "script": "cf502d833d20ce50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n2\n"
+   }
+  },
+  "gram words ifs unset IFS joins with space": {
+   "script": "03ac6d9399c2c10d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nx y\n"
+   }
+  },
+  "gram words mapfile callback": {
+   "script": "6ad51fcd7160c3d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cb 1 b\ncb 3 d\n4\n"
+   }
+  },
+  "gram words mapfile callback quantum one": {
+   "script": "6fcdb78a3fa5e558",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "at 0: x\nat 1: y\n"
+   }
+  },
+  "gram words mapfile count zero: blank lines": {
+   "script": "bcf5b8f521870b86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=3\ndeclare -a arr=([0]=\"\" [1]=\"\" [2]=\"x\")\n"
+   }
+  },
+  "gram words mapfile count zero: commas": {
+   "script": "d0d44be7bca07e38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=\"a,b,,c\")\n"
+   }
+  },
+  "gram words mapfile count zero: lines": {
+   "script": "29c1a4ca9a445145",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=3\ndeclare -a arr=([0]=\"a\" [1]=\"b\" [2]=\"c\")\n"
+   }
+  },
+  "gram words mapfile count: blank lines": {
+   "script": "3c8fcfc45c7d126d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=2\ndeclare -a arr=([0]=$'\\n' [1]=$'\\n')\n"
+   }
+  },
+  "gram words mapfile count: empty": {
+   "script": "abf90368ca24f5b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=0\ndeclare -a arr=()\n"
+   }
+  },
+  "gram words mapfile count: no trailing newline": {
+   "script": "076c8a772268d4af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=2\ndeclare -a arr=([0]=$'a\\n' [1]=\"b\")\n"
+   }
+  },
+  "gram words mapfile default MAPFILE": {
+   "script": "b6947e3eaf21cee1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 q\n\n"
+   }
+  },
+  "gram words mapfile delimiter longer than one character": {
+   "script": "65fa93c0402a0a26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a arr=([0]=\"x\" [1]=\"ybz\" [2]=$'c\\n')\n"
+   }
+  },
+  "gram words mapfile delimiter: commas": {
+   "script": "713ae4a2d4c288d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=4\ndeclare -a arr=([0]=\"a,\" [1]=\"b,\" [2]=\",\" [3]=\"c\")\n"
+   }
+  },
+  "gram words mapfile delimiter: lines": {
+   "script": "2f9baaca4f6e40df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=$'a\\nb\\nc\\n')\n"
+   }
+  },
+  "gram words mapfile delimiter: no trailing newline": {
+   "script": "c9be0ca8d72e2b64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=$'a\\nb')\n"
+   }
+  },
+  "gram words mapfile from a file descriptor": {
+   "script": "79b29035bdbfaaa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "u v\n"
+   }
+  },
+  "gram words mapfile into an associative array": {
+   "script": "f17bf272e39eb221",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: mapfile: m: not an indexed array\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram words mapfile invalid array name": {
+   "script": "27b168162213fef1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: mapfile: `1bad': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram words mapfile keeps existing elements beyond": {
+   "script": "adab03e0a4dbfca7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a arr=([0]=\"a\" [1]=\"X\" [2]=\"c\" [3]=\"d\")\n"
+   }
+  },
+  "gram words mapfile negative count": {
+   "script": "aa6b88b4b39cc1eb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: mapfile: -1: invalid line count\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram words mapfile nul delimiter: blank lines": {
+   "script": "9f2177ddf2271197",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=$'\\n\\nx\\n')\n"
+   }
+  },
+  "gram words mapfile nul delimiter: empty": {
+   "script": "529827c8ec844362",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=0\ndeclare -a arr=()\n"
+   }
+  },
+  "gram words mapfile nul delimiter: lines": {
+   "script": "4bbca436ada39c75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=$'a\\nb\\nc\\n')\n"
+   }
+  },
+  "gram words mapfile origin: blank lines": {
+   "script": "8451fdf541cce030",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=5\ndeclare -a arr=([0]=\"keep0\" [1]=\"keep1\" [5]=$'\\n' [6]=$'\\n' [7]=$'x\\n')\n"
+   }
+  },
+  "gram words mapfile origin: commas": {
+   "script": "e21c3d23a689d830",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=3\ndeclare -a arr=([0]=\"keep0\" [1]=\"keep1\" [5]=\"a,b,,c\")\n"
+   }
+  },
+  "gram words mapfile origin: lines": {
+   "script": "c614c495d1a07087",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=5\ndeclare -a arr=([0]=\"keep0\" [1]=\"keep1\" [5]=$'a\\n' [6]=$'b\\n' [7]=$'c\\n')\n"
+   }
+  },
+  "gram words mapfile plain: commas": {
+   "script": "a7b11433b225789b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=\"a,b,,c\")\n"
+   }
+  },
+  "gram words mapfile plain: lines": {
+   "script": "95fe20e3dc1e82be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=3\ndeclare -a arr=([0]=$'a\\n' [1]=$'b\\n' [2]=$'c\\n')\n"
+   }
+  },
+  "gram words mapfile plain: no trailing newline": {
+   "script": "4ee79774405f9f24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=2\ndeclare -a arr=([0]=$'a\\n' [1]=\"b\")\n"
+   }
+  },
+  "gram words mapfile process substitution": {
+   "script": "5d79c1559b1e304d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "gram words mapfile skip and count: blank lines": {
+   "script": "43279f9d8b8fe7a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=\"\")\n"
+   }
+  },
+  "gram words mapfile skip and count: empty": {
+   "script": "395a7673977d3dac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=0\ndeclare -a arr=()\n"
+   }
+  },
+  "gram words mapfile skip and count: no trailing newline": {
+   "script": "166f3ca1d44b7dac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=\"b\")\n"
+   }
+  },
+  "gram words mapfile skip: blank lines": {
+   "script": "ca16ae9927b1edd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=2\ndeclare -a arr=([0]=$'\\n' [1]=$'x\\n')\n"
+   }
+  },
+  "gram words mapfile skip: empty": {
+   "script": "63f4a4a69ef05d0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=0\ndeclare -a arr=()\n"
+   }
+  },
+  "gram words mapfile skip: lines": {
+   "script": "8c11787bc6336c28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=2\ndeclare -a arr=([0]=$'b\\n' [1]=$'c\\n')\n"
+   }
+  },
+  "gram words mapfile trim delimiter: commas": {
+   "script": "4e951ac5821d2313",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=4\ndeclare -a arr=([0]=\"a\" [1]=\"b\" [2]=\"\" [3]=\"c\")\n"
+   }
+  },
+  "gram words mapfile trim delimiter: empty": {
+   "script": "c06acf4d5a05d6f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=0\ndeclare -a arr=()\n"
+   }
+  },
+  "gram words mapfile trim delimiter: no trailing newline": {
+   "script": "4a35c64ed26e7bab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=$'a\\nb')\n"
+   }
+  },
+  "gram words mapfile trim: commas": {
+   "script": "026bc6c8001715ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=\"a,b,,c\")\n"
+   }
+  },
+  "gram words mapfile trim: empty": {
+   "script": "5051e416a40d29ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=0\ndeclare -a arr=()\n"
+   }
+  },
+  "gram words mapfile trim: no trailing newline": {
+   "script": "8efeb71a36005770",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=2\ndeclare -a arr=([0]=\"a\" [1]=\"b\")\n"
+   }
+  },
+  "gram words quote removal adjacent quote kinds empty": {
+   "script": "c9e9a8019dcc3a39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <abcde>\n"
+   }
+  },
+  "gram words quote removal adjacent quote kinds filled": {
+   "script": "b00c1a1abc94ea71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <abcde>\n"
+   }
+  },
+  "gram words quote removal array at in the middle of a word empty": {
+   "script": "fae1f1fa46544bdf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xy>\n"
+   }
+  },
+  "gram words quote removal array at in the middle of a word filled": {
+   "script": "cc7fb5a5561de182",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <xa b> <> <cy>\n"
+   }
+  },
+  "gram words quote removal array at unquoted in a word empty": {
+   "script": "b69eb2df8285455b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xy>\n"
+   }
+  },
+  "gram words quote removal array at unquoted in a word filled": {
+   "script": "4c75eb92019370f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <xa> <b> <cy>\n"
+   }
+  },
+  "gram words quote removal braces with quotes inside empty": {
+   "script": "8cfdae26ae1ad00c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <'x'> <x>\n"
+   }
+  },
+  "gram words quote removal braces with quotes inside filled": {
+   "script": "0893b19c92e92620",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <x  y> <x> <y>\n"
+   }
+  },
+  "gram words quote removal dollar at end of a quoted word empty": {
+   "script": "b995ca3dd25397d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a$>\n"
+   }
+  },
+  "gram words quote removal dollar at end of a quoted word filled": {
+   "script": "3c44d92a976de701",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a$>\n"
+   }
+  },
+  "gram words quote removal dollar at in the middle of a word empty": {
+   "script": "a7390aacd4fff286",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xy>\n"
+   }
+  },
+  "gram words quote removal dollar at in the middle of a word filled": {
+   "script": "12f76879ecfdd176",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <xone two> <y>\n"
+   }
+  },
+  "gram words quote removal dollar before quotes empty": {
+   "script": "967b2a947395aa07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <$$> <$>\n"
+   }
+  },
+  "gram words quote removal dollar before quotes filled": {
+   "script": "62e911fdb8365333",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <$$> <$>\n"
+   }
+  },
+  "gram words quote removal dollar star in the middle of a word empty": {
+   "script": "ae2ee081976a85ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xy>\n"
+   }
+  },
+  "gram words quote removal dollar star in the middle of a word filled": {
+   "script": "25a0cf0c9d39b68a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xone two y>\n"
+   }
+  },
+  "gram words quote removal double quotes inside single quotes empty": {
+   "script": "1d542feeaea90e41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\"$v\">\n"
+   }
+  },
+  "gram words quote removal double quotes inside single quotes filled": {
+   "script": "f7f84bbc38539642",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <\"$v\">\n"
+   }
+  },
+  "gram words quote removal empty quotes are words empty": {
+   "script": "da33ab9d6c52156d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <> <> <> <ab>\n"
+   }
+  },
+  "gram words quote removal empty quotes are words filled": {
+   "script": "16d6988c4ec35522",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <> <> <> <ab>\n"
+   }
+  },
+  "gram words quote removal quoted and unquoted halves empty": {
+   "script": "5b92dac1f23a5832",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram words quote removal quoted and unquoted halves filled": {
+   "script": "9cc73b0f5f862985",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x  yx> <y>\n"
+   }
+  },
+  "gram words quote removal quoted at with empty elements empty": {
+   "script": "5ef468c33f3d85a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words quote removal quoted at with empty elements filled": {
+   "script": "1ab47c5cc25d7b7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a b> <> <c>\n"
+   }
+  },
+  "gram words quote removal quoted empty variable empty": {
+   "script": "2d21aecdf1376ed2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <> <x>\n"
+   }
+  },
+  "gram words quote removal quoted empty variable filled": {
+   "script": "4f5e7e2d8aa1c949",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <> <x>\n"
+   }
+  },
+  "gram words quote removal quoted pattern chars empty": {
+   "script": "52385245bc2e2efc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <*> <?> <[a]>\n"
+   }
+  },
+  "gram words quote removal quoted pattern chars filled": {
+   "script": "6191186accd886e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <*> <?> <[a]>\n"
+   }
+  },
+  "gram words quote removal quoted star with custom IFS empty": {
+   "script": "26eb136717b70236",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram words quote removal quoted star with custom IFS filled": {
+   "script": "2e38be15e35d71c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b  c>\n"
+   }
+  },
+  "gram words quote removal single quotes inside double quotes empty": {
+   "script": "f2260e72a963a5f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <''>\n"
+   }
+  },
+  "gram words quote removal single quotes inside double quotes filled": {
+   "script": "295adc2c0cf075b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <'x  y'>\n"
+   }
+  },
+  "gram words quote removal unquoted empty at empty": {
+   "script": "f7571b62f988a6aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words quote removal unquoted empty at filled": {
+   "script": "485b9f59ab6b7a57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <one> <two>\n"
+   }
+  },
+  "gram words read N ignores delimiter": {
+   "script": "a199b9c53834c765",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[abcd]\n"
+   }
+  },
+  "gram words read array: backslash": {
+   "script": "3ec211b56c167d66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a\\> <b> <c>\nstatus=0\n"
+   }
+  },
+  "gram words read array: empty": {
+   "script": "806e3a7d873ae333",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\nstatus=0\n"
+   }
+  },
+  "gram words read array: extra fields": {
+   "script": "2d3a0c462908b6c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <a> <b> <c> <d> <e>\nstatus=0\n"
+   }
+  },
+  "gram words read array: plain": {
+   "script": "aaef1f3ff74ff203",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\nstatus=0\n"
+   }
+  },
+  "gram words read array: trailing spaces": {
+   "script": "51aeacb18f35ff49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\nstatus=0\n"
+   }
+  },
+  "gram words read assoc target refused": {
+   "script": "f7e4977debf35188",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: m: not an indexed array\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram words read colon IFS: backslash": {
+   "script": "ca31ced1cafc983e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a\\\\ b c> <>\nstatus=0\n"
+   }
+  },
+  "gram words read colon IFS: colons": {
+   "script": "bfbef3272c28e158",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b:c>\nstatus=0\n"
+   }
+  },
+  "gram words read colon IFS: empty": {
+   "script": "c2bd547b11674054",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <> <>\nstatus=0\n"
+   }
+  },
+  "gram words read colon IFS: extra fields": {
+   "script": "9e3127d9da4b6ac0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a b c d e> <>\nstatus=0\n"
+   }
+  },
+  "gram words read colon IFS: trailing spaces": {
+   "script": "4226ee26c11cd668",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a b   > <>\nstatus=0\n"
+   }
+  },
+  "gram words read count two: backslash": {
+   "script": "71bc5891b57b6afd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\\>\nstatus=0\n"
+   }
+  },
+  "gram words read count two: colons": {
+   "script": "8ebabd17ae007006",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:>\nstatus=0\n"
+   }
+  },
+  "gram words read count two: fewer fields": {
+   "script": "5a19b0fa307c5b88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\nstatus=0\n"
+   }
+  },
+  "gram words read count two: line continuation": {
+   "script": "604503d8997d6ca6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\nstatus=0\n"
+   }
+  },
+  "gram words read count two: no newline": {
+   "script": "a7699bb43995d5c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\nstatus=0\n"
+   }
+  },
+  "gram words read count with vars: fewer fields": {
+   "script": "e50c3ba3b66996f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <>\nstatus=0\n"
+   }
+  },
+  "gram words read count with vars: leading spaces": {
+   "script": "04637b10ac8638e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <>\nstatus=0\n"
+   }
+  },
+  "gram words read count with vars: line continuation": {
+   "script": "d8c33fde469f1f30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <\\>\nstatus=0\n"
+   }
+  },
+  "gram words read count with vars: no newline": {
+   "script": "72a0608ea2be5173",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\nstatus=0\n"
+   }
+  },
+  "gram words read count with vars: tabs": {
+   "script": "bc4f24ec9e2518d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\nstatus=0\n"
+   }
+  },
+  "gram words read delimiter empty reads to nul": {
+   "script": "311f4bef4641d96d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a|b\n"
+   }
+  },
+  "gram words read delimiter space: backslash": {
+   "script": "65ce6f7290c81f59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\\\\>\nstatus=0\n"
+   }
+  },
+  "gram words read delimiter space: colons": {
+   "script": "3bef2959081d2d0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b:c>\nstatus=0\n"
+   }
+  },
+  "gram words read delimiter space: extra fields": {
+   "script": "1d2e7af6f800896e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\nstatus=0\n"
+   }
+  },
+  "gram words read delimiter space: fewer fields": {
+   "script": "9fdd837cf9630b7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\nstatus=0\n"
+   }
+  },
+  "gram words read delimiter space: line continuation": {
+   "script": "22bf611800484bcb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\nstatus=0\n"
+   }
+  },
+  "gram words read empty IFS: backslash": {
+   "script": "00a23890265f376b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\\\\ b c>\nstatus=0\n"
+   }
+  },
+  "gram words read empty IFS: colons": {
+   "script": "3b59dd8c68351193",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b:c>\nstatus=0\n"
+   }
+  },
+  "gram words read empty IFS: empty": {
+   "script": "9f8c15df6d7c456f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\nstatus=0\n"
+   }
+  },
+  "gram words read empty IFS: extra fields": {
+   "script": "cbe621e3ec284afa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b c d e>\nstatus=0\n"
+   }
+  },
+  "gram words read empty IFS: fewer fields": {
+   "script": "923446d397c94388",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\nstatus=0\n"
+   }
+  },
+  "gram words read exact count: colons": {
+   "script": "468125efff4c17ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b>\nstatus=0\n"
+   }
+  },
+  "gram words read exact count: fewer fields": {
+   "script": "45e5fbf1c8de8ef9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\n>\nstatus=0\n"
+   }
+  },
+  "gram words read exact count: leading spaces": {
+   "script": "23d6b8bdf0388956",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <   >\nstatus=0\n"
+   }
+  },
+  "gram words read exact count: line continuation": {
+   "script": "4b618b8b648ba7f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a \\>\nstatus=0\n"
+   }
+  },
+  "gram words read exact count: no newline": {
+   "script": "5736c65cb8c537e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b>\nstatus=0\n"
+   }
+  },
+  "gram words read from a file descriptor": {
+   "script": "24a4884d37a70ea3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fd line\n"
+   }
+  },
+  "gram words read into array element": {
+   "script": "c6dc7285433aa80d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "elem\n"
+   }
+  },
+  "gram words read into readonly variable": {
+   "script": "e365591a4bf12ff1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1 r=1\n"
+   }
+  },
+  "gram words read invalid option": {
+   "script": "c2b8a4fb8f7b5036",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: -Z: invalid option\nread: usage: read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram words read invalid variable name": {
+   "script": "bd8e50772a608b95",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram words read missing option argument": {
+   "script": "af3c4f08107afc14",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: -d: option requires an argument\nread: usage: read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram words read multiple lines one read": {
+   "script": "3c5b9c81d57d5605",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n"
+   }
+  },
+  "gram words read n with backslash": {
+   "script": "99334ebb091a5984",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[abc]\n"
+   }
+  },
+  "gram words read n zero": {
+   "script": "a67b491b06ac0d89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 []\n"
+   }
+  },
+  "gram words read partial last line": {
+   "script": "329be377985d9186",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\nlast=[b]\n"
+   }
+  },
+  "gram words read partial last line idiom": {
+   "script": "502df7de1aedd471",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\n[b]\n"
+   }
+  },
+  "gram words read prompt without a terminal": {
+   "script": "2b7f1a993334319b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[in]\n"
+   }
+  },
+  "gram words read raw reply: empty": {
+   "script": "d475b112bbda9bad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\nstatus=0\n"
+   }
+  },
+  "gram words read raw reply: extra fields": {
+   "script": "31872b462fa1704d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b c d e>\nstatus=0\n"
+   }
+  },
+  "gram words read raw reply: plain": {
+   "script": "e389ee3bf0c20881",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b c>\nstatus=0\n"
+   }
+  },
+  "gram words read raw reply: tabs": {
+   "script": "b834db4a3466d812",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\tb\tc>\nstatus=0\n"
+   }
+  },
+  "gram words read raw reply: trailing spaces": {
+   "script": "6d1b4cc213daf31f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b   >\nstatus=0\n"
+   }
+  },
+  "gram words read raw two vars: leading spaces": {
+   "script": "aa800766b0c78f77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\nstatus=0\n"
+   }
+  },
+  "gram words read raw two vars: no newline": {
+   "script": "772aaf8252a0fa56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\nstatus=0\n"
+   }
+  },
+  "gram words read raw two vars: plain": {
+   "script": "0d373e94c870d95a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b c>\nstatus=0\n"
+   }
+  },
+  "gram words read raw two vars: tabs": {
+   "script": "c173151dd6c13958",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b\tc>\nstatus=0\n"
+   }
+  },
+  "gram words read raw two vars: trailing spaces": {
+   "script": "a49c91fb983884e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\nstatus=0\n"
+   }
+  },
+  "gram words read read -a with IFS comma": {
+   "script": "06df57c1a4f05547",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n<a><><b>\n"
+   }
+  },
+  "gram words read read in a pipeline does not persist": {
+   "script": "0a895d7a1f5c4292",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram words read read with lastpipe persists": {
+   "script": "5b59e311d8da1ab7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[piped]\n"
+   }
+  },
+  "gram words read reply: empty": {
+   "script": "c2457405995e92c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\nstatus=0\n"
+   }
+  },
+  "gram words read reply: leading spaces": {
+   "script": "1d7ddfcbc8057d69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <   a b>\nstatus=0\n"
+   }
+  },
+  "gram words read reply: plain": {
+   "script": "43f68a3796188db3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b c>\nstatus=0\n"
+   }
+  },
+  "gram words read reply: tabs": {
+   "script": "eb1698f0532c27d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\tb\tc>\nstatus=0\n"
+   }
+  },
+  "gram words read reply: trailing spaces": {
+   "script": "9e9e046c7c68e47f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b   >\nstatus=0\n"
+   }
+  },
+  "gram words read returns false at end of input": {
+   "script": "71030b757feb2288",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 []\n"
+   }
+  },
+  "gram words read silent flag without a terminal": {
+   "script": "b86d7100fb1c6be0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[secret]\n"
+   }
+  },
+  "gram words read two vars: leading spaces": {
+   "script": "5db50cb51a1be01c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\nstatus=0\n"
+   }
+  },
+  "gram words read two vars: line continuation": {
+   "script": "e9e0c0cf1036ea59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b c>\nstatus=0\n"
+   }
+  },
+  "gram words read two vars: no newline": {
+   "script": "70c4e8cba40e3472",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\nstatus=0\n"
+   }
+  },
+  "gram words read two vars: plain": {
+   "script": "3b3587b39360ec7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b c>\nstatus=0\n"
+   }
+  },
+  "gram words read two vars: tabs": {
+   "script": "6d5204689b177cf9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b\tc>\nstatus=0\n"
+   }
+  },
+  "gram words read unicode count": {
+   "script": "598ecc05a7144d10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[éè]\n"
+   }
+  },
+  "gram words readarray count zero: commas": {
+   "script": "5614f6bdd1d60239",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=\"a,b,,c\")\n"
+   }
+  },
+  "gram words readarray count: blank lines": {
+   "script": "34cff1f2d79b6b42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=2\ndeclare -a arr=([0]=$'\\n' [1]=$'\\n')\n"
+   }
+  },
+  "gram words readarray count: no trailing newline": {
+   "script": "8dcd764013b8810a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=2\ndeclare -a arr=([0]=$'a\\n' [1]=\"b\")\n"
+   }
+  },
+  "gram words readarray delimiter: no trailing newline": {
+   "script": "c3d350cb6aaeb151",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=$'a\\nb')\n"
+   }
+  },
+  "gram words readarray nul delimiter: blank lines": {
+   "script": "93788d41c95aad18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=1\ndeclare -a arr=([0]=$'\\n\\nx\\n')\n"
+   }
+  },
+  "gram words readarray origin: commas": {
+   "script": "6b511a0c4e67cc7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=3\ndeclare -a arr=([0]=\"keep0\" [1]=\"keep1\" [5]=\"a,b,,c\")\n"
+   }
+  },
+  "gram words readarray plain: no trailing newline": {
+   "script": "65ea77bd35aee512",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=2\ndeclare -a arr=([0]=$'a\\n' [1]=\"b\")\n"
+   }
+  },
+  "gram words readarray trim delimiter: commas": {
+   "script": "1c08a2a9a5d3bffa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 n=4\ndeclare -a arr=([0]=\"a\" [1]=\"b\" [2]=\"\" [3]=\"c\")\n"
+   }
+  },
+  "gram words split array: IFS colon comma, letters": {
+   "script": "41911f71638f41b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xaybz>\n"
+   }
+  },
+  "gram words split array: IFS colon comma, newlines": {
+   "script": "cb4acc79ee392f92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\nb c\n>\n"
+   }
+  },
+  "gram words split array: IFS colon, colon list": {
+   "script": "0ff5f5b79f39bae6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram words split array: IFS default, colon list": {
+   "script": "e15b0c5047de9c5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b:c>\n"
+   }
+  },
+  "gram words split array: IFS empty, multibyte": {
+   "script": "d5b9ba3ee8585b0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <aébéc>\n"
+   }
+  },
+  "gram words split array: IFS empty, star": {
+   "script": "83751a56aa99d4e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*b>\n"
+   }
+  },
+  "gram words split array: IFS letters, only delimiters": {
+   "script": "25fbcd8844a250b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:::>\n"
+   }
+  },
+  "gram words split array: IFS letters, space colon mix": {
+   "script": "66816e336b2a70fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 < : > < : > < : >\n"
+   }
+  },
+  "gram words split array: IFS multibyte, empty": {
+   "script": "17372c84f9d72c2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split array: IFS multibyte, letters": {
+   "script": "a65f7d2ffd36b48f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xaybz>\n"
+   }
+  },
+  "gram words split array: IFS multibyte, only delimiters": {
+   "script": "8c9d9d125ddd27cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:::>\n"
+   }
+  },
+  "gram words split array: IFS newline, colon list": {
+   "script": "71d1d05efeb1dcc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b:c>\n"
+   }
+  },
+  "gram words split array: IFS newline, star": {
+   "script": "5354d2b7814e88d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*b>\n"
+   }
+  },
+  "gram words split array: IFS space colon, empty": {
+   "script": "467739d6b580e5e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split array: IFS space colon, star": {
+   "script": "c1f55ac0915869c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*b>\n"
+   }
+  },
+  "gram words split array: IFS space, colon list": {
+   "script": "58f9d4105b6fb5f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b:c>\n"
+   }
+  },
+  "gram words split array: IFS space, letters": {
+   "script": "2286f8d4e343c189",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xaybz>\n"
+   }
+  },
+  "gram words split array: IFS space, multibyte": {
+   "script": "b83aaf5b6a513545",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <aébéc>\n"
+   }
+  },
+  "gram words split array: IFS star, colon edges": {
+   "script": "04d58a0860a5cb27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:a::b:>\n"
+   }
+  },
+  "gram words split array: IFS star, only delimiters": {
+   "script": "1682f3d67b814146",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:::>\n"
+   }
+  },
+  "gram words split array: IFS star, spaces": {
+   "script": "2b2e4df93f4d63e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <  a  b  >\n"
+   }
+  },
+  "gram words split array: IFS unset, newlines": {
+   "script": "b014bcadc97caa20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram words split array: IFS unset, only delimiters": {
+   "script": "3d19903191061464",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:::>\n"
+   }
+  },
+  "gram words split array: IFS unset, space colon mix": {
+   "script": "347e57bb38b16848",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <:> <a> <:> <b> <:>\n"
+   }
+  },
+  "gram words split for: IFS colon comma, colon list": {
+   "script": "1257ee995b0340f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a><b><c>\n"
+   }
+  },
+  "gram words split for: IFS colon comma, multibyte": {
+   "script": "99c315d5efbba8c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<aébéc>\n"
+   }
+  },
+  "gram words split for: IFS colon, only delimiters": {
+   "script": "7c691c1e72125134",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<><><>\n"
+   }
+  },
+  "gram words split for: IFS default, space colon mix": {
+   "script": "7c079defc8badf2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<:><a><:><b><:>\n"
+   }
+  },
+  "gram words split for: IFS default, star": {
+   "script": "5889050b1ddd289a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a*b>\n"
+   }
+  },
+  "gram words split for: IFS empty, letters": {
+   "script": "501e6d974f4bcbab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<xaybz>\n"
+   }
+  },
+  "gram words split for: IFS empty, newlines": {
+   "script": "ef3c75868f7bea9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a\nb c\n>\n"
+   }
+  },
+  "gram words split for: IFS letters, colon edges": {
+   "script": "bc8b88ead81876ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<:><::><:>\n"
+   }
+  },
+  "gram words split for: IFS multibyte, colon list": {
+   "script": "34a674ab2189b2d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a:b:c>\n"
+   }
+  },
+  "gram words split for: IFS multibyte, newlines": {
+   "script": "d10fcade7bda20de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a\nb c\n>\n"
+   }
+  },
+  "gram words split for: IFS newline, letters": {
+   "script": "1c142f8ce0b64bab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<xaybz>\n"
+   }
+  },
+  "gram words split for: IFS newline, multibyte": {
+   "script": "8c72e8912b22c213",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<aébéc>\n"
+   }
+  },
+  "gram words split for: IFS newline, spaces": {
+   "script": "8987c9d46274aa22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<  a  b  >\n"
+   }
+  },
+  "gram words split for: IFS space colon, colon edges": {
+   "script": "fc5f15977527c8f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<><a><><b>\n"
+   }
+  },
+  "gram words split for: IFS space colon, letters": {
+   "script": "69849bf16422d04f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<xaybz>\n"
+   }
+  },
+  "gram words split for: IFS space colon, multibyte": {
+   "script": "6ce879c827f08094",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<aébéc>\n"
+   }
+  },
+  "gram words split for: IFS space colon, space colon mix": {
+   "script": "78c1fa6ceb3e7259",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<><a><b>\n"
+   }
+  },
+  "gram words split for: IFS space, only delimiters": {
+   "script": "00c68078c4022799",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<:::>\n"
+   }
+  },
+  "gram words split for: IFS space, spaces": {
+   "script": "28a4f11809f5e023",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a><b>\n"
+   }
+  },
+  "gram words split for: IFS star, colon list": {
+   "script": "1e7dae880f1e5dd0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a:b:c>\n"
+   }
+  },
+  "gram words split for: IFS star, empty": {
+   "script": "ed46a21d6da06a58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "gram words split for: IFS star, space colon mix": {
+   "script": "1fdc00a6be5d8251",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "< : a : b : >\n"
+   }
+  },
+  "gram words split for: IFS star, star": {
+   "script": "08641543d6ef5908",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a><b>\n"
+   }
+  },
+  "gram words split for: IFS unset, colon edges": {
+   "script": "f9264d22048d2e40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<:a::b:>\n"
+   }
+  },
+  "gram words split for: IFS unset, letters": {
+   "script": "1a59254e80aed6bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<xaybz>\n"
+   }
+  },
+  "gram words split for: IFS unset, multibyte": {
+   "script": "db5d5b3b69a8fa52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<aébéc>\n"
+   }
+  },
+  "gram words split for: IFS unset, spaces": {
+   "script": "8f7e5883a498afa4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a><b>\n"
+   }
+  },
+  "gram words split read array: IFS colon comma, colon list": {
+   "script": "5170fa4685900358",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram words split read array: IFS colon comma, only delimiters": {
+   "script": "fc4216e3e3e364dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <> <>\n"
+   }
+  },
+  "gram words split read array: IFS colon, empty": {
+   "script": "b44b5b9813f614bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split read array: IFS colon, space colon mix": {
+   "script": "0bb99fde6e8337e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 < > < a > < b > < >\n"
+   }
+  },
+  "gram words split read array: IFS default, empty": {
+   "script": "b442d4fd8f00251f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split read array: IFS default, letters": {
+   "script": "7c45233782aae32c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xaybz>\n"
+   }
+  },
+  "gram words split read array: IFS default, only delimiters": {
+   "script": "eaac2d16d2a6dbaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:::>\n"
+   }
+  },
+  "gram words split read array: IFS default, spaces": {
+   "script": "c7860150e8a628f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b>\n"
+   }
+  },
+  "gram words split read array: IFS empty, letters": {
+   "script": "49b198499b9c0f49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xaybz>\n"
+   }
+  },
+  "gram words split read array: IFS letters, colon edges": {
+   "script": "c0d14a990491c90a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <:> <::> <:>\n"
+   }
+  },
+  "gram words split read array: IFS letters, spaces": {
+   "script": "4a60d09ed935fc8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <  > <  > <  >\n"
+   }
+  },
+  "gram words split read array: IFS multibyte, colon edges": {
+   "script": "ef20b455a22bdb21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:a::b:>\n"
+   }
+  },
+  "gram words split read array: IFS multibyte, empty": {
+   "script": "6c71abb0cea62e4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split read array: IFS newline, colon list": {
+   "script": "7ffa6b61c1aa3010",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b:c>\n"
+   }
+  },
+  "gram words split read array: IFS newline, empty": {
+   "script": "b87978c6cbaa8658",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split read array: IFS space colon, colon list": {
+   "script": "0c87480ff16e1740",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram words split read array: IFS space, star": {
+   "script": "1ad45f3efd710e54",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*b>\n"
+   }
+  },
+  "gram words split read array: IFS star, multibyte": {
+   "script": "06426e61ba6905ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <aébéc>\n"
+   }
+  },
+  "gram words split read array: IFS unset, newlines": {
+   "script": "618a83e1c38da311",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a>\n"
+   }
+  },
+  "gram words split read three: IFS colon comma, colon edges": {
+   "script": "c1290da04e5932df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <a> <:b:>\n"
+   }
+  },
+  "gram words split read three: IFS colon, colon list": {
+   "script": "48363827287b8e89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram words split read three: IFS colon, empty": {
+   "script": "d5a1e156722ce256",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS colon, letters": {
+   "script": "e849affec949c33b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <xaybz> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS colon, multibyte": {
+   "script": "cf34c781c410bcbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <aébéc> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS default, colon edges": {
+   "script": "ad033cbba25561eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <:a::b:> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS default, letters": {
+   "script": "5ce5bcd3fdc95616",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <xaybz> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS empty, colon list": {
+   "script": "ed9120d9f8b5bb8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a:b:c> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS empty, newlines": {
+   "script": "eca6efa420501896",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS letters, colon list": {
+   "script": "a59b799fe5617f49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <:> <:c>\n"
+   }
+  },
+  "gram words split read three: IFS letters, letters": {
+   "script": "f88a5792effb2601",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <x> <y> <z>\n"
+   }
+  },
+  "gram words split read three: IFS letters, star": {
+   "script": "3e115fea89923fa4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <*> <>\n"
+   }
+  },
+  "gram words split read three: IFS multibyte, newlines": {
+   "script": "41ec7070366fa69f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS newline, colon edges": {
+   "script": "f3f0904e49c3d811",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <:a::b:> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS newline, newlines": {
+   "script": "57222506ce4ed95e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS newline, space colon mix": {
+   "script": "dcf29fd31603b7ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 < : a : b : > <> <>\n"
+   }
+  },
+  "gram words split read three: IFS space colon, only delimiters": {
+   "script": "caee953a797ed7b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS space colon, space colon mix": {
+   "script": "7be2f1afc50eeb24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <a> <b>\n"
+   }
+  },
+  "gram words split read three: IFS space colon, spaces": {
+   "script": "d325466c7bcea825",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <>\n"
+   }
+  },
+  "gram words split read three: IFS space, multibyte": {
+   "script": "88bd182a2d693720",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <aébéc> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS star, colon edges": {
+   "script": "392888f19880d95d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <:a::b:> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS star, newlines": {
+   "script": "4d78fa827a4da20c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <> <>\n"
+   }
+  },
+  "gram words split read three: IFS unset, empty": {
+   "script": "779634399e7ace05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <> <>\n"
+   }
+  },
+  "gram words split set: IFS colon comma, star": {
+   "script": "3e1e04573b041b90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*b>\n"
+   }
+  },
+  "gram words split set: IFS colon, colon edges": {
+   "script": "4ef2cf2c681c3bf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <> <a> <> <b>\n"
+   }
+  },
+  "gram words split set: IFS colon, empty": {
+   "script": "6576304aa4285ae1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split set: IFS default, letters": {
+   "script": "03cc836f6405b194",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xaybz>\n"
+   }
+  },
+  "gram words split set: IFS empty, colon edges": {
+   "script": "e9a3092e61a04455",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:a::b:>\n"
+   }
+  },
+  "gram words split set: IFS empty, empty": {
+   "script": "fc72517d35743095",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split set: IFS empty, only delimiters": {
+   "script": "819045fdff44a14b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:::>\n"
+   }
+  },
+  "gram words split set: IFS empty, space colon mix": {
+   "script": "0c28f6838fa00799",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 < : a : b : >\n"
+   }
+  },
+  "gram words split set: IFS letters, multibyte": {
+   "script": "8c7eedbe4c60e57d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <é> <éc>\n"
+   }
+  },
+  "gram words split set: IFS letters, newlines": {
+   "script": "0264b11cc602d6d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <\n> < c\n>\n"
+   }
+  },
+  "gram words split set: IFS multibyte, newlines": {
+   "script": "6f4c99ef9229b3a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\nb c\n>\n"
+   }
+  },
+  "gram words split set: IFS multibyte, space colon mix": {
+   "script": "b42a11c5a03938aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 < : a : b : >\n"
+   }
+  },
+  "gram words split set: IFS multibyte, spaces": {
+   "script": "292d9b5957a68357",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <  a  b  >\n"
+   }
+  },
+  "gram words split set: IFS newline, colon list": {
+   "script": "9f3d637f602d4ab4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b:c>\n"
+   }
+  },
+  "gram words split set: IFS space colon, colon list": {
+   "script": "1623b5e0200a6d52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram words split set: IFS space colon, newlines": {
+   "script": "babced5f2efa8326",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a\nb> <c\n>\n"
+   }
+  },
+  "gram words split set: IFS space, multibyte": {
+   "script": "95749f83ad7a9793",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <aébéc>\n"
+   }
+  },
+  "gram words split set: IFS space, space colon mix": {
+   "script": "41b5eab2a20b3955",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <:> <a> <:> <b> <:>\n"
+   }
+  },
+  "gram words split set: IFS star, colon edges": {
+   "script": "6c5c12e8d01d1841",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:a::b:>\n"
+   }
+  },
+  "gram words split set: IFS star, letters": {
+   "script": "59d9d7e98544f160",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xaybz>\n"
+   }
+  },
+  "gram words split set: IFS unset, star": {
+   "script": "eb82e072565d31e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*b>\n"
+   }
+  },
+  "gram words split star join: IFS colon comma, empty": {
+   "script": "1878482fb0f1695d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram words split star join: IFS colon comma, space colon mix": {
+   "script": "672d27daed737a3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 < : a : b : >\n"
+   }
+  },
+  "gram words split star join: IFS colon comma, spaces": {
+   "script": "813947681b94f766",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <  a  b  >\n"
+   }
+  },
+  "gram words split star join: IFS colon comma, star": {
+   "script": "895b71264efe09c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*b>\n"
+   }
+  },
+  "gram words split star join: IFS colon, colon list": {
+   "script": "59780f7544c461bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b:c>\n"
+   }
+  },
+  "gram words split star join: IFS colon, newlines": {
+   "script": "e4ab571138e14354",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\nb c\n>\n"
+   }
+  },
+  "gram words split star join: IFS colon, spaces": {
+   "script": "18b9bbfdd6ebbc73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <  a  b  >\n"
+   }
+  },
+  "gram words split star join: IFS colon, star": {
+   "script": "66f693993f4f3fe2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*b>\n"
+   }
+  },
+  "gram words split star join: IFS default, multibyte": {
+   "script": "3d302ecea6c66b22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <aébéc>\n"
+   }
+  },
+  "gram words split star join: IFS default, newlines": {
+   "script": "f33ffb1321cd695a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b c>\n"
+   }
+  },
+  "gram words split star join: IFS empty, only delimiters": {
+   "script": "6f16db56438a1a5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:::>\n"
+   }
+  },
+  "gram words split star join: IFS empty, spaces": {
+   "script": "c10da0492568a57e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <  a  b  >\n"
+   }
+  },
+  "gram words split star join: IFS letters, empty": {
+   "script": "9a0f3862b15298db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram words split star join: IFS letters, letters": {
+   "script": "e7c385d1fc207269",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xayaz>\n"
+   }
+  },
+  "gram words split star join: IFS multibyte, multibyte": {
+   "script": "afbfe916ae792585",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <aébéc>\n"
+   }
+  },
+  "gram words split star join: IFS multibyte, star": {
+   "script": "e28ac0045c9f84c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a*b>\n"
+   }
+  },
+  "gram words split star join: IFS newline, letters": {
+   "script": "7bf649bbb80404bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <xaybz>\n"
+   }
+  },
+  "gram words split star join: IFS newline, only delimiters": {
+   "script": "674de89ab5ae039c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:::>\n"
+   }
+  },
+  "gram words split star join: IFS space colon, newlines": {
+   "script": "8d72d4d734ac9aa4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\nb c\n>\n"
+   }
+  },
+  "gram words split star join: IFS space, colon edges": {
+   "script": "cf52108e6b473bdf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:a::b:>\n"
+   }
+  },
+  "gram words split star join: IFS space, empty": {
+   "script": "f10fc2573393464b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram words split star join: IFS space, newlines": {
+   "script": "beb1e46aa5b6eb3e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\nb c\n>\n"
+   }
+  },
+  "gram words split star join: IFS star, empty": {
+   "script": "d744c71bee99234b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram words split star join: IFS unset, colon list": {
+   "script": "a8f9d1c5923b685a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:b:c>\n"
+   }
+  },
+  "gram words split star join: IFS unset, newlines": {
+   "script": "9799eba2fdfb90f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a b c>\n"
+   }
+  },
+  "gram words split table: IFS colon, colon edges": {
+   "script": "c680906b13e38174",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 <> <a> <> <b>\n"
+   }
+  },
+  "gram words split table: IFS colon, empty": {
+   "script": "3ef4c88ac4225326",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split table: IFS colon, newlines": {
+   "script": "4fb77e4a68b5434a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a\nb c\n>\n"
+   }
+  },
+  "gram words split table: IFS newline, colon edges": {
+   "script": "ac3d63dd1965fb85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:a::b:>\n"
+   }
+  },
+  "gram words split table: IFS newline, empty": {
+   "script": "7d91438a86c762c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split table: IFS newline, newlines": {
+   "script": "299d9e5b0f0949a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <b c>\n"
+   }
+  },
+  "gram words split table: IFS space, colon edges": {
+   "script": "c159ad0bae57a10f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:a::b:>\n"
+   }
+  },
+  "gram words split table: IFS space, empty": {
+   "script": "a146f2745aeb7bb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split table: IFS space, newlines": {
+   "script": "278a7ed85925f68b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a\nb> <c\n>\n"
+   }
+  },
+  "gram words split table: IFS unset, colon edges": {
+   "script": "cf305714114b1eab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:a::b:>\n"
+   }
+  },
+  "gram words split table: IFS unset, empty": {
+   "script": "94548cde4a8bb1f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram words split table: IFS unset, newlines": {
+   "script": "06450db15d3ceae7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <a> <b> <c>\n"
+   }
+  },
+  "gram words tilde \"~\": HOME unset": {
+   "script": "42d8a907b2b516bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <~>\n"
+   }
+  },
+  "gram words tilde '~': HOME unset": {
+   "script": "90eb237881c65bba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <~>\n"
+   }
+  },
+  "gram words tilde --opt=~: HOME empty": {
+   "script": "6f2d30efddd65692",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <--opt=~>\n"
+   }
+  },
+  "gram words tilde --opt=~: HOME set": {
+   "script": "7dee7c87579cbe45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <--opt=~>\n"
+   }
+  },
+  "gram words tilde --opt=~: HOME slash": {
+   "script": "c7eb769a654d1a82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <--opt=~>\n"
+   }
+  },
+  "gram words tilde --opt=~: HOME unset": {
+   "script": "3a4a847a69745e64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <--opt=~>\n"
+   }
+  },
+  "gram words tilde HOME changes mid script": {
+   "script": "af51d2b363c12e4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/one /two\n"
+   }
+  },
+  "gram words tilde HOME with trailing slash": {
+   "script": "6e5295f079c42677",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/h//x /h/\n"
+   }
+  },
+  "gram words tilde \\~: HOME unset": {
+   "script": "c247a8d84843aeef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <~>\n"
+   }
+  },
+  "gram words tilde a:~/b: HOME empty": {
+   "script": "c9869d01657f11a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:~/b>\n"
+   }
+  },
+  "gram words tilde a:~/b: HOME set": {
+   "script": "9f2743618f7574c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:~/b>\n"
+   }
+  },
+  "gram words tilde a:~/b: HOME slash": {
+   "script": "2cd80d7dd3861c36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:~/b>\n"
+   }
+  },
+  "gram words tilde a:~/b: HOME unset": {
+   "script": "85ff1284659f40b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <a:~/b>\n"
+   }
+  },
+  "gram words tilde after cd": {
+   "script": "7444fce0fb5ed6e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp /\n"
+   }
+  },
+  "gram words tilde directory stack": {
+   "script": "0fbdaf8544ea76fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp /tmp / /\n"
+   }
+  },
+  "gram words tilde in [[": {
+   "script": "740ba1f2f01eef31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "equal\n"
+   }
+  },
+  "gram words tilde in a case pattern": {
+   "script": "fd74b14d2b3fb0ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram words tilde in a default word": {
+   "script": "a69720ce350a0e20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/h ~\n"
+   }
+  },
+  "gram words tilde in a for list": {
+   "script": "1f5c363c4cc5d45c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/h\n/h/a\n"
+   }
+  },
+  "gram words tilde in a here-document is literal": {
+   "script": "34ae37a2d73b3466",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "~\n"
+   }
+  },
+  "gram words tilde in a here-string": {
+   "script": "2f84242c344518d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/h\n"
+   }
+  },
+  "gram words tilde in a redirect target": {
+   "script": "9fe2a16ad781c887",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram words tilde in an array element": {
+   "script": "c4a8eecf1212d923",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/h x~ /h/z\n"
+   }
+  },
+  "gram words tilde in an assignment after a colon": {
+   "script": "3c353abf30e5033f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:/h/b:/h\n"
+   }
+  },
+  "gram words tilde in an assignment argument": {
+   "script": "181c59dc910ea6f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/h/y\na:/h\n"
+   }
+  },
+  "gram words tilde tilde in a function argument": {
+   "script": "2ffb3a7141db96ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/h/p\n"
+   }
+  },
+  "gram words tilde x~: HOME unset": {
+   "script": "2effda813a7264c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x~>\n"
+   }
+  },
+  "gram words tilde ~+/x: HOME unset": {
+   "script": "7abf1b3824314eec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </tmp/x>\n"
+   }
+  },
+  "gram words tilde ~+0: HOME unset": {
+   "script": "99686b6740ac01e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </tmp>\n"
+   }
+  },
+  "gram words tilde ~+: HOME unset": {
+   "script": "0d580723d55712c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </tmp>\n"
+   }
+  },
+  "gram words tilde ~-/x: HOME unset": {
+   "script": "77952912d3607e55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </old/x>\n"
+   }
+  },
+  "gram words tilde ~-: HOME unset": {
+   "script": "fa529a33bf251a9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </old>\n"
+   }
+  },
+  "gram words tilde ~//x: HOME empty": {
+   "script": "80e7af6773e097c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <//x>\n"
+   }
+  },
+  "gram words tilde ~//x: HOME set": {
+   "script": "f602c1350d234b50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </h/me//x>\n"
+   }
+  },
+  "gram words tilde ~//x: HOME slash": {
+   "script": "18470efc98793942",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <///x>\n"
+   }
+  },
+  "gram words tilde ~//x: HOME unset": {
+   "script": "656a7a90827709ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <///x>\n"
+   }
+  },
+  "gram words tilde ~/: HOME empty": {
+   "script": "e9eefe0a49e3f873",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </>\n"
+   }
+  },
+  "gram words tilde ~/: HOME set": {
+   "script": "27fa2c074c8159cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </h/me/>\n"
+   }
+  },
+  "gram words tilde ~/: HOME slash": {
+   "script": "f68d9300b109aaa5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <//>\n"
+   }
+  },
+  "gram words tilde ~/: HOME unset": {
+   "script": "33ba83971147d7a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <//>\n"
+   }
+  },
+  "gram words tilde ~/x: HOME empty": {
+   "script": "2038a052ea6acab9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </x>\n"
+   }
+  },
+  "gram words tilde ~/x: HOME set": {
+   "script": "4ce863159f0110e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </h/me/x>\n"
+   }
+  },
+  "gram words tilde ~/x: HOME slash": {
+   "script": "1668299589f00be5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <//x>\n"
+   }
+  },
+  "gram words tilde ~/x: HOME unset": {
+   "script": "eb9c00fde96656e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <//x>\n"
+   }
+  },
+  "gram words tilde ~1: HOME unset": {
+   "script": "28b15e97c0999aca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <~1>\n"
+   }
+  },
+  "gram words tilde ~: HOME empty": {
+   "script": "8150a579af5f2d3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram words tilde ~: HOME set": {
+   "script": "80dae00944569add",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </h/me>\n"
+   }
+  },
+  "gram words tilde ~: HOME slash": {
+   "script": "c7c1bde586cecaa5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </>\n"
+   }
+  },
+  "gram words tilde ~: HOME unset": {
+   "script": "a6d3d4b2ed560045",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </>\n"
+   }
+  },
+  "gram words tilde ~:~: HOME empty": {
+   "script": "8bf7ff496d0aaafa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <:~>\n"
+   }
+  },
+  "gram words tilde ~:~: HOME set": {
+   "script": "c0267f3001fe08e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </h/me:~>\n"
+   }
+  },
+  "gram words tilde ~:~: HOME slash": {
+   "script": "d535ddffec8361cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </:~>\n"
+   }
+  },
+  "gram words tilde ~:~: HOME unset": {
+   "script": "169e43e38ef88488",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 </:~>\n"
+   }
+  },
+  "gram words tilde ~nonexistentuser: HOME unset": {
+   "script": "c81fe94720a1bb90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <~nonexistentuser>\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

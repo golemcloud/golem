@@ -1,0 +1,120 @@
+[workspace]
+resolver = "2"
+members = ["shell", "component", "utilities/wcurl", "utilities/waget", "utilities/whttp"]
+default-members = ["shell", "component"]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/golemcloud/golem"
+publish = false
+
+[workspace.dependencies]
+async-trait = "0.1"
+futures = "0.3"
+golem-rust = { path = "../../../sdks/rust/golem-rust" }
+golem-schema = { path = "../../../golem-schema", default-features = false }
+http = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasi-fetch = "=0.2.0"
+wasip3 = "0.7"
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0", default-features = false, features = ["async", "macros"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+
+# bash.wasm is built with this profile (build-bash-wasm.sh). Every setting that changes its bytes
+# is written out, defaults included, so the artifact does not depend on cargo's defaults.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 16
+debug = false
+debug-assertions = false
+overflow-checks = false
+incremental = false
+strip = "debuginfo"
+
+[patch.crates-io]
+brush-core = { git = "https://github.com/Aditya1404Sal/brush", rev = "0389708b2784a6419bfe2c8c0270347721890894" }
+brush-builtins = { git = "https://github.com/Aditya1404Sal/brush", rev = "0389708b2784a6419bfe2c8c0270347721890894" }
+brush-parser = { git = "https://github.com/Aditya1404Sal/brush", rev = "0389708b2784a6419bfe2c8c0270347721890894" }
+uucore = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_cat = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_ls = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_wc = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_head = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_sort = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_mkdir = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_rm = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_mv = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_cp = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_env = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_cut = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_tr = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_uniq = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_tail = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_tee = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_touch = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_sleep = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_printf = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+# jq-compatible number printing and null/array updates (jaq-json); jaq-core and jaq-std come from
+# the same revision so the workspace has one copy of each.
+jaq-json = { git = "https://github.com/Aditya1404Sal/jaq", rev = "2390f41628d28361f885d1dbd0395f9f073d4e87" }
+jaq-core = { git = "https://github.com/Aditya1404Sal/jaq", rev = "2390f41628d28361f885d1dbd0395f9f073d4e87" }
+jaq-std = { git = "https://github.com/Aditya1404Sal/jaq", rev = "2390f41628d28361f885d1dbd0395f9f073d4e87" }
+# uutils sed with a line-at-a-time engine for the cooperative shell.
+sed = { git = "https://github.com/Aditya1404Sal/sed", rev = "2fd9104845a881d13e164ce90b0d0f7949f3588a" }
+# Further coreutils utilities, same fork and revision.
+uu_basename = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_dirname = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_realpath = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_readlink = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_ln = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_link = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_unlink = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_rmdir = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_mktemp = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_truncate = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_nl = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_paste = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_join = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_comm = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_fold = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_fmt = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_expand = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_unexpand = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+# uu_tac dropped: it unconditionally mmaps stdin (memmap2::Mmap::map(&stdin())), and memmap2 has
+# no wasm32-wasip2 backend for that — a hard compile error, not a runtime issue. `tac` is instead
+# a small hand-written command; see shell/src/tools/texttools.rs (run_tac).
+uu_tsort = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_split = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_csplit = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_base64 = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_base32 = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_basenc = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_checksum_common = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_md5sum = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_sha1sum = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_sha256sum = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_sha512sum = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_b2sum = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_cksum = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_od = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_date = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_expr = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_factor = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_numfmt = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_shuf = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_nproc = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_uname = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_dd = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+uu_du = { git = "https://github.com/Aditya1404Sal/coreutils", rev = "bdb9c7e906bfa0867eef9e5e6e5fd75608981035" }
+# diffutils 0.5.0 on crates.io fails to build for wasm32-wasip2: `cmp.rs` gates
+# `std::os::unix::fs::MetadataExt`/`Metadata::size()` behind `cfg(not(target_os = "windows"))`,
+# which wrongly includes wasi. Pinned past upstream's `cfg(unix)` fix.
+diffutils = { git = "https://github.com/uutils/diffutils", rev = "3f7a9a6ff3ee584d1cedbe013ebdebb437ad33b8" }

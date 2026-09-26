@@ -971,6 +971,9 @@ impl From<ToolReleaseError> for ApiError {
             ToolReleaseError::ProtectedToolRelease => {
                 Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
             }
+            ToolReleaseError::SupersededSystemRelease(_) => {
+                Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
+            }
             ToolReleaseError::Unauthorized(inner) => inner.into(),
             ToolReleaseError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
@@ -993,6 +996,9 @@ impl From<EnvironmentToolGrantError> for ApiError {
             }
             EnvironmentToolGrantError::ReferencedToolReleaseNotFound => {
                 Self::not_found(api::error_code::REFERENCED_TOOL_RELEASE_NOT_FOUND, error)
+            }
+            EnvironmentToolGrantError::ReleaseSuperseded(_) => {
+                Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
             }
             EnvironmentToolGrantError::GrantAlreadyExists => Self::conflict(
                 api::error_code::ENVIRONMENT_TOOL_GRANT_ALREADY_EXISTS,
@@ -1168,6 +1174,9 @@ impl From<DeploymentWriteError> for ApiError {
             }
             DeploymentWriteError::ToolReleaseImmutableConflict => {
                 Self::conflict(api::error_code::TOOL_RELEASE_IMMUTABLE_CONFLICT, error)
+            }
+            DeploymentWriteError::ToolReleaseSuperseded(_) => {
+                Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)
             }
             DeploymentWriteError::ToolReleaseDePublishedConflict => {
                 Self::conflict(api::error_code::TOOL_RELEASE_LIFECYCLE_CONFLICT, error)

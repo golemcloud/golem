@@ -1,0 +1,7218 @@
+{
+ "cases": {
+  "edge empty pairs: cmp e e": {
+   "script": "97e7f56ef8563c44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: cmp e f": {
+   "script": "c8c54f1326b710ad",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/e’ which is empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty pairs: cmp f e": {
+   "script": "7565e0ec22053ae8",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/e’ which is empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty pairs: cmp f n": {
+   "script": "1ccf881acf3f0fc1",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/n’ after byte 3, in line 2\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty pairs: cmp n f": {
+   "script": "81eeaffc6afc45e6",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/n’ after byte 3, in line 2\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty pairs: cmp n n": {
+   "script": "21968003e9d2f436",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: comm -3 e e": {
+   "script": "2ab5a21c9ea9e851",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: comm -3 e f": {
+   "script": "0a53f9d54b11b46a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\ta\n\tb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: comm -3 f e": {
+   "script": "d82e2fb7e038c487",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: comm -3 f n": {
+   "script": "f2fba02aa57ad956",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: comm -3 n f": {
+   "script": "c445285fd042f4c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: comm -3 n n": {
+   "script": "8f495dfbf657e0f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: comm e e": {
+   "script": "5659e57885ef774e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: comm e f": {
+   "script": "f0950ac2fe267d66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\ta\n\tb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: comm f e": {
+   "script": "2aeb3baac8697e04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: comm f n": {
+   "script": "44480171247b1997",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\t\ta\n\t\tb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: comm n f": {
+   "script": "58af05e10b833566",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\t\ta\n\t\tb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: comm n n": {
+   "script": "1da7a60c3a0aa970",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\t\ta\n\t\tb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: diff -u e e": {
+   "script": "d926494c28659214",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: diff -u e f": {
+   "script": "bf1320263aad8d95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/e\t\n+++ /tmp/f\t\n@@ -0,0 +1,2 @@\n+a\n+b\nstatus=1\n"
+   }
+  },
+  "edge empty pairs: diff -u f e": {
+   "script": "6bc0591d93eb3f71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/f\t\n+++ /tmp/e\t\n@@ -1,2 +0,0 @@\n-a\n-b\nstatus=1\n"
+   }
+  },
+  "edge empty pairs: diff -u f n": {
+   "script": "4aef217d75f60e87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/f\t\n+++ /tmp/n\t\n@@ -1,2 +1,2 @@\n a\n-b\n+b\n\\ No newline at end of file\nstatus=1\n"
+   }
+  },
+  "edge empty pairs: diff -u n f": {
+   "script": "9123f9386438158d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- /tmp/n\t\n+++ /tmp/f\t\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+b\nstatus=1\n"
+   }
+  },
+  "edge empty pairs: diff -u n n": {
+   "script": "f2984700000f4f5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: diff e e": {
+   "script": "45b0d2cd026c0038",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: diff e f": {
+   "script": "b2cc356a9367bfd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0a1,2\n> a\n> b\nstatus=1\n"
+   }
+  },
+  "edge empty pairs: diff f e": {
+   "script": "0e5893156ab49778",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,2d0\n< a\n< b\nstatus=1\n"
+   }
+  },
+  "edge empty pairs: diff f n": {
+   "script": "618833bb483124a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n---\n> b\n\\ No newline at end of file\nstatus=1\n"
+   }
+  },
+  "edge empty pairs: diff n f": {
+   "script": "9441dd6f1290bc28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n\\ No newline at end of file\n---\n> b\nstatus=1\n"
+   }
+  },
+  "edge empty pairs: diff n n": {
+   "script": "4df4764a2a9e4b85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: join -a1 e e": {
+   "script": "df025c1a659f7053",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: join -a1 e f": {
+   "script": "df5e92424f7c1aac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: join -a1 f e": {
+   "script": "9ccc4811754ad3f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: join -a1 f n": {
+   "script": "1409532426a14f67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: join -a1 n f": {
+   "script": "e9e411c3495edcdf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: join -a1 n n": {
+   "script": "4364a0122d2608a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: join e e": {
+   "script": "24956f4d31f28925",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: join e f": {
+   "script": "591f576325ac4286",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: join f e": {
+   "script": "8004a0d253071aa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: join f n": {
+   "script": "78e8c2c0d9bc15b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: join n f": {
+   "script": "9b0ade898ed5ded7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: join n n": {
+   "script": "3724da7187e04181",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: paste e e": {
+   "script": "f1dff5e09b18fc8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty pairs: paste e f": {
+   "script": "92ac4aa74f4f4c7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\ta\n\tb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: paste f e": {
+   "script": "d771a86f9f8330df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\t\nb\t\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: paste f n": {
+   "script": "4276452298fc12ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\ta\nb\tb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: paste n f": {
+   "script": "fc1a572773896ea6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\ta\nb\tb\nstatus=0\n"
+   }
+  },
+  "edge empty pairs: paste n n": {
+   "script": "e0a80bfc2be9e917",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\ta\nb\tb\nstatus=0\n"
+   }
+  },
+  "edge empty: base64 -d blank lines": {
+   "script": "c15386b76a205e26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: base64 -d empty file": {
+   "script": "0a53416afa15ce94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: base64 -d empty pipe": {
+   "script": "488531ab5d371e06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: base64 -d no newline": {
+   "script": "d7ab70d167463545",
+   "status": 0,
+   "stderr": {
+    "text": "base64: invalid input\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: base64 -d no newline two lines": {
+   "script": "f653a4408f4753dc",
+   "status": 0,
+   "stderr": {
+    "text": "base64: invalid input\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: base64 -d null stdin": {
+   "script": "baf58645bcccc3dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: base64 -d only newline": {
+   "script": "5c2873b4bb21f740",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: base64 -d whitespace only": {
+   "script": "822fd718eef3e6c5",
+   "status": 0,
+   "stderr": {
+    "text": "base64: invalid input\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: base64 blank lines": {
+   "script": "aa3d507482c32d80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "CgoK\nstatus=0\n"
+   }
+  },
+  "edge empty: base64 empty file": {
+   "script": "47d25f954d6e22a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: base64 empty pipe": {
+   "script": "dc85b6030a84db25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: base64 no newline": {
+   "script": "09ade05305761359",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YiBh\nstatus=0\n"
+   }
+  },
+  "edge empty: base64 no newline two lines": {
+   "script": "0f0bcf5fa9df14d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YiBhCjEgYw==\nstatus=0\n"
+   }
+  },
+  "edge empty: base64 null stdin": {
+   "script": "d4025f92bb9b2a59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: base64 only newline": {
+   "script": "3e2a55bdebb69543",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Cg==\nstatus=0\n"
+   }
+  },
+  "edge empty: base64 whitespace only": {
+   "script": "003156925ee49a3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "IAkgCg==\nstatus=0\n"
+   }
+  },
+  "edge empty: cat -n blank lines": {
+   "script": "f5443704eaa18997",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\t\n     2\t\n     3\t\nstatus=0\n"
+   }
+  },
+  "edge empty: cat -n empty file": {
+   "script": "f76c2d29cd37da77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cat -n empty pipe": {
+   "script": "010ce05d8c0743fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cat -n no newline": {
+   "script": "626d790c75825bb1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb astatus=0\n"
+   }
+  },
+  "edge empty: cat -n no newline two lines": {
+   "script": "79148cddd8a9f505",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb a\n     2\t1 cstatus=0\n"
+   }
+  },
+  "edge empty: cat -n null stdin": {
+   "script": "6e3818923d867ad9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cat -n only newline": {
+   "script": "85a77a49b38e7e97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\t\nstatus=0\n"
+   }
+  },
+  "edge empty: cat -n whitespace only": {
+   "script": "75be2ea9d6dbd72e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\t \t \nstatus=0\n"
+   }
+  },
+  "edge empty: cat -s blank lines": {
+   "script": "c793a9598841ee18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: cat -s empty file": {
+   "script": "3e9fd0a80109cb9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cat -s empty pipe": {
+   "script": "92570d8c02b7f414",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cat -s no newline": {
+   "script": "4163f24267c457cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b astatus=0\n"
+   }
+  },
+  "edge empty: cat -s no newline two lines": {
+   "script": "da23bf08b20edbb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 cstatus=0\n"
+   }
+  },
+  "edge empty: cat -s null stdin": {
+   "script": "c9fa182620b6c665",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cat -s only newline": {
+   "script": "c633c117f039f858",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: cat -s whitespace only": {
+   "script": "38278d1e933e0bd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: cat blank lines": {
+   "script": "dc55ba08d83919a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: cat empty file": {
+   "script": "aee43025280be771",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cat empty pipe": {
+   "script": "81c1ee63e0b87b14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cat no newline": {
+   "script": "079c86270dfd6de7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b astatus=0\n"
+   }
+  },
+  "edge empty: cat no newline two lines": {
+   "script": "7fa541d612ab375a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 cstatus=0\n"
+   }
+  },
+  "edge empty: cat null stdin": {
+   "script": "8b103de394e7919e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cat only newline": {
+   "script": "838ce89a49018063",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: cat whitespace only": {
+   "script": "af4d79148c099eff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: cksum blank lines": {
+   "script": "e53a4114d6aa637e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2424474014 3\nstatus=0\n"
+   }
+  },
+  "edge empty: cksum empty file": {
+   "script": "7f4ddc80f48595df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4294967295 0 /tmp/e\nstatus=0\n"
+   }
+  },
+  "edge empty: cksum empty pipe": {
+   "script": "214e4c20d0ee75f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4294967295 0\nstatus=0\n"
+   }
+  },
+  "edge empty: cksum no newline": {
+   "script": "3238c9e4eaccfa7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4256508941 3\nstatus=0\n"
+   }
+  },
+  "edge empty: cksum no newline two lines": {
+   "script": "074db5db5b66cdec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3872926097 7\nstatus=0\n"
+   }
+  },
+  "edge empty: cksum null stdin": {
+   "script": "036f270427ab5112",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4294967295 0\nstatus=0\n"
+   }
+  },
+  "edge empty: cksum only newline": {
+   "script": "b8d2df11fd75f64a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3515105045 1\nstatus=0\n"
+   }
+  },
+  "edge empty: cksum whitespace only": {
+   "script": "248fde483c776199",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3686188940 4\nstatus=0\n"
+   }
+  },
+  "edge empty: command substitution blank lines": {
+   "script": "eba90efd0edb73c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\nstatus=0\n"
+   }
+  },
+  "edge empty: command substitution empty": {
+   "script": "1da18b850196626d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\n"
+   }
+  },
+  "edge empty: command substitution empty file": {
+   "script": "999170ffc72a8bdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\nstatus=0\n"
+   }
+  },
+  "edge empty: command substitution empty pipe": {
+   "script": "50e225d9e6d61e95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\nstatus=0\n"
+   }
+  },
+  "edge empty: command substitution keeps inner newlines": {
+   "script": "59f462fcae9c2d68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a\n\nb]\n"
+   }
+  },
+  "edge empty: command substitution newlines only": {
+   "script": "d865197c5e09dfc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\n"
+   }
+  },
+  "edge empty: command substitution no newline": {
+   "script": "dd9dec299ae80189",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[b a] 3\nstatus=0\n"
+   }
+  },
+  "edge empty: command substitution no newline two lines": {
+   "script": "1ab27fb9c0ff328e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[b a\n1 c] 7\nstatus=0\n"
+   }
+  },
+  "edge empty: command substitution null stdin": {
+   "script": "88b7d2fa660dcc95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\nstatus=0\n"
+   }
+  },
+  "edge empty: command substitution only newline": {
+   "script": "ce6473dca47882c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\nstatus=0\n"
+   }
+  },
+  "edge empty: command substitution whitespace only": {
+   "script": "875b7fa0ea77ecd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ \t ] 3\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -c1 blank lines": {
+   "script": "629cf33db4def639",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -c1 empty file": {
+   "script": "f256fc7195f7b5f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -c1 empty pipe": {
+   "script": "bee88931d68a689f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -c1 no newline": {
+   "script": "68af135c387615bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -c1 no newline two lines": {
+   "script": "76298fc05bf38d3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n1\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -c1 null stdin": {
+   "script": "615ac9b7f739d524",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -c1 only newline": {
+   "script": "634ed9914e195be3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -c1 whitespace only": {
+   "script": "42bf997c60dd701b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \nstatus=0\n"
+   }
+  },
+  "edge empty: cut -d -f2 blank lines": {
+   "script": "83fdfdf32ee6b885",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -d -f2 empty file": {
+   "script": "018b6bc606862ca2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -d -f2 empty pipe": {
+   "script": "d5555a52936d86c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -d -f2 no newline": {
+   "script": "d7d170888ebe9818",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -d -f2 no newline two lines": {
+   "script": "d61afe72a7953089",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nc\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -d -f2 null stdin": {
+   "script": "89c505566a9c5a1a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -d -f2 only newline": {
+   "script": "e72688c1714abbb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -d -f2 whitespace only": {
+   "script": "5584871b6951088b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\t\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -f1 blank lines": {
+   "script": "eb1b98e8e34fe129",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -f1 empty file": {
+   "script": "44978357118fd7a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -f1 empty pipe": {
+   "script": "94c708e321cf847b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -f1 no newline": {
+   "script": "1c9fb8fea2094d38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -f1 no newline two lines": {
+   "script": "64eed819089639b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -f1 null stdin": {
+   "script": "ec133cfd99b44d3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -f1 only newline": {
+   "script": "673fcfdc6a070a79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -f1 whitespace only": {
+   "script": "5d1430f441e604ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \nstatus=0\n"
+   }
+  },
+  "edge empty: cut -s blank lines": {
+   "script": "f3f4f5d47927501b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -s empty file": {
+   "script": "edb076c1a969ff47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -s empty pipe": {
+   "script": "fa04a391a7d04147",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -s no newline": {
+   "script": "475832e3db731152",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -s no newline two lines": {
+   "script": "0190fd34f36343ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n1\nstatus=0\n"
+   }
+  },
+  "edge empty: cut -s null stdin": {
+   "script": "30de7098a7246ee7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -s only newline": {
+   "script": "7397da1a50c2da30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: cut -s whitespace only": {
+   "script": "db920fb4ef0c552c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: echo -n then wc": {
+   "script": "706e7421b1669366",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n0\n"
+   }
+  },
+  "edge empty: echo nothing": {
+   "script": "a58058d9c22d6bb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\n\n"
+   }
+  },
+  "edge empty: empty IFS": {
+   "script": "e876cc64267526e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge empty: empty arith": {
+   "script": "321640d52d58df72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n"
+   }
+  },
+  "edge empty: empty array": {
+   "script": "74772344abfa036a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 []\ndone\n"
+   }
+  },
+  "edge empty: empty case": {
+   "script": "4987b3edb17f0d08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\n"
+   }
+  },
+  "edge empty: empty cond": {
+   "script": "36ab6c5d87b0eac2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n"
+   }
+  },
+  "edge empty: empty directory find": {
+   "script": "7478849e437566ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/d\nstatus=0\n"
+   }
+  },
+  "edge empty: empty directory ls": {
+   "script": "5b4a87a04fb62c52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: empty directory rmdir": {
+   "script": "c016b68dc19f9bd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "gone\n"
+   }
+  },
+  "edge empty: empty file cp": {
+   "script": "5647d9fdf747f093",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 /tmp/c\n"
+   }
+  },
+  "edge empty: empty file csplit": {
+   "script": "c8b06a6bedcee5b8",
+   "status": 0,
+   "stderr": {
+    "text": "csplit: ‘1’: line number out of range\n"
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "edge empty: empty file grep -L": {
+   "script": "dd134f5f58cd72cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/e\nstatus=1\n"
+   }
+  },
+  "edge empty: empty file sed -i": {
+   "script": "83265352a58ceb14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge empty: empty file split": {
+   "script": "9b02441a60fca1da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ls: cannot access 'x*': No such file or directory\nstatus=2\n"
+   }
+  },
+  "edge empty: empty file stat": {
+   "script": "1a50ab96949ff607",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge empty: empty file test -s": {
+   "script": "8498fd04946d8892",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n"
+   }
+  },
+  "edge empty: empty file truncate": {
+   "script": "85d10638df2a1a3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge empty: empty for list": {
+   "script": "22cf86a864cb8347",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "edge empty: empty function body call": {
+   "script": "2f963bb3a11274f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge empty: empty glob literal": {
+   "script": "b094034e43b1d86e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*\n"
+   }
+  },
+  "edge empty: empty glob nullglob": {
+   "script": "8b0dea1dc6dc727c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nend\n"
+   }
+  },
+  "edge empty: empty pipeline stage": {
+   "script": "334ec6357206dfcc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: empty positional": {
+   "script": "94eaa679a96c2224",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 [] []\ndone\n"
+   }
+  },
+  "edge empty: empty quoted kept": {
+   "script": "8e769f6d0ae01483",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n[a]\n"
+   }
+  },
+  "edge empty: empty string argument": {
+   "script": "de60e0c6e9421914",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n[]\n[]\n"
+   }
+  },
+  "edge empty: empty test": {
+   "script": "4a6f26fb1f861a57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n1\n0\n1\n"
+   }
+  },
+  "edge empty: empty word removed": {
+   "script": "ea5aea45e809456c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\n"
+   }
+  },
+  "edge empty: expand blank lines": {
+   "script": "dfe51c30352cf408",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: expand empty file": {
+   "script": "e37cd3af340cca77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: expand empty pipe": {
+   "script": "9de1ff962ba074ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: expand no newline": {
+   "script": "cc578b5b86127971",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b astatus=0\n"
+   }
+  },
+  "edge empty: expand no newline two lines": {
+   "script": "de6d5ad464f9d32c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 cstatus=0\n"
+   }
+  },
+  "edge empty: expand null stdin": {
+   "script": "bf45e403fc0cd565",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: expand only newline": {
+   "script": "56bbfc5dd8ac9332",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: expand whitespace only": {
+   "script": "9207857d4873bb9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "         \nstatus=0\n"
+   }
+  },
+  "edge empty: factor blank lines": {
+   "script": "ce12d5b40ed1bc72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: factor empty file": {
+   "script": "2ff6ebc5afac0a05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: factor empty pipe": {
+   "script": "dd6be4374ef3d42f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: factor no newline": {
+   "script": "102165f1f23f6540",
+   "status": 0,
+   "stderr": {
+    "text": "factor: ‘b’ is not a valid positive integer\nfactor: ‘a’ is not a valid positive integer\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: factor no newline two lines": {
+   "script": "ffeae0dbeabd49d0",
+   "status": 0,
+   "stderr": {
+    "text": "factor: ‘b’ is not a valid positive integer\nfactor: ‘a’ is not a valid positive integer\nfactor: ‘c’ is not a valid positive integer\n"
+   },
+   "stdout": {
+    "text": "1:\nstatus=1\n"
+   }
+  },
+  "edge empty: factor null stdin": {
+   "script": "724413d27a3e5e06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: factor only newline": {
+   "script": "c35e785977aedc60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: factor whitespace only": {
+   "script": "517d952802fdc950",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: file blank lines": {
+   "script": "8007745c83f828c9",
+   "status": 0,
+   "stderr": {
+    "text": "Usage: file [-bcCdEhikLlNnprsSvzZ0] [--apple] [--extension] [--mime-encoding]\n            [--mime-type] [-e <testname>] [-F <separator>]  [-f <namefile>]\n            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n            <file> ...\n       file -C [-m <magicfiles>]\n       file [--help]\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: file empty file": {
+   "script": "b9c94f9a7c199b8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\nstatus=0\n"
+   }
+  },
+  "edge empty: file empty pipe": {
+   "script": "e74eaaac7e047c57",
+   "status": 0,
+   "stderr": {
+    "text": "Usage: file [-bcCdEhikLlNnprsSvzZ0] [--apple] [--extension] [--mime-encoding]\n            [--mime-type] [-e <testname>] [-F <separator>]  [-f <namefile>]\n            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n            <file> ...\n       file -C [-m <magicfiles>]\n       file [--help]\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: file no newline": {
+   "script": "51624f36e045e05b",
+   "status": 0,
+   "stderr": {
+    "text": "Usage: file [-bcCdEhikLlNnprsSvzZ0] [--apple] [--extension] [--mime-encoding]\n            [--mime-type] [-e <testname>] [-F <separator>]  [-f <namefile>]\n            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n            <file> ...\n       file -C [-m <magicfiles>]\n       file [--help]\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: file no newline two lines": {
+   "script": "cd3d046b7f7ff8ea",
+   "status": 0,
+   "stderr": {
+    "text": "Usage: file [-bcCdEhikLlNnprsSvzZ0] [--apple] [--extension] [--mime-encoding]\n            [--mime-type] [-e <testname>] [-F <separator>]  [-f <namefile>]\n            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n            <file> ...\n       file -C [-m <magicfiles>]\n       file [--help]\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: file null stdin": {
+   "script": "454a72aaccd408ec",
+   "status": 0,
+   "stderr": {
+    "text": "Usage: file [-bcCdEhikLlNnprsSvzZ0] [--apple] [--extension] [--mime-encoding]\n            [--mime-type] [-e <testname>] [-F <separator>]  [-f <namefile>]\n            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n            <file> ...\n       file -C [-m <magicfiles>]\n       file [--help]\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: file only newline": {
+   "script": "f9d7b99eb7ac00f7",
+   "status": 0,
+   "stderr": {
+    "text": "Usage: file [-bcCdEhikLlNnprsSvzZ0] [--apple] [--extension] [--mime-encoding]\n            [--mime-type] [-e <testname>] [-F <separator>]  [-f <namefile>]\n            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n            <file> ...\n       file -C [-m <magicfiles>]\n       file [--help]\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: file substitution empty": {
+   "script": "94144da4fca67393",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\n"
+   }
+  },
+  "edge empty: file substitution missing": {
+   "script": "706cde4553027383",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/missing: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "[] 1\n"
+   }
+  },
+  "edge empty: file substitution no newline": {
+   "script": "a82e6cd6518b5a12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\n"
+   }
+  },
+  "edge empty: file whitespace only": {
+   "script": "6f08a6624d1be7f6",
+   "status": 0,
+   "stderr": {
+    "text": "Usage: file [-bcCdEhikLlNnprsSvzZ0] [--apple] [--extension] [--mime-encoding]\n            [--mime-type] [-e <testname>] [-F <separator>]  [-f <namefile>]\n            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n            <file> ...\n       file -C [-m <magicfiles>]\n       file [--help]\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: fmt blank lines": {
+   "script": "68b3405c9608c8ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: fmt empty file": {
+   "script": "51d9d4175bc1da08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: fmt empty pipe": {
+   "script": "21acef4e571d924a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: fmt no newline": {
+   "script": "6e41c9d6c2fe8a93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: fmt no newline two lines": {
+   "script": "f6775eee89cd4980",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a 1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: fmt null stdin": {
+   "script": "9cfd14b9f833dc31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: fmt only newline": {
+   "script": "e4bb3c3f7a887c83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: fmt whitespace only": {
+   "script": "2574b92c84822412",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: fold blank lines": {
+   "script": "d93262b2e5ebcd86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: fold empty file": {
+   "script": "3d74d185e5aede82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: fold empty pipe": {
+   "script": "c217f5179c20431e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: fold no newline": {
+   "script": "c025d2b158af8c28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n \nastatus=0\n"
+   }
+  },
+  "edge empty: fold no newline two lines": {
+   "script": "4f6debf052889e89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n \na\n1\n \ncstatus=0\n"
+   }
+  },
+  "edge empty: fold null stdin": {
+   "script": "974d5eba3039aaf8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: fold only newline": {
+   "script": "1c7f3f92d9788640",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: fold whitespace only": {
+   "script": "78eda66c15251be6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \n\t\n \nstatus=0\n"
+   }
+  },
+  "edge empty: grep -c dot blank lines": {
+   "script": "5515fe036a3fa95f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "edge empty: grep -c dot empty file": {
+   "script": "c626981f62d94b71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "edge empty: grep -c dot empty pipe": {
+   "script": "5b0ab6e5ad58c0d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "edge empty: grep -c dot no newline": {
+   "script": "e05b17d424c98798",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -c dot no newline two lines": {
+   "script": "5a27f3f10eb853d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -c dot null stdin": {
+   "script": "5aa232c5aa5c251b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "edge empty: grep -c dot only newline": {
+   "script": "28c8ceaf8e30dc45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "edge empty: grep -c dot whitespace only": {
+   "script": "2603935bd0cd5bd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -c empty blank lines": {
+   "script": "2d64e97a67618fa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -c empty empty file": {
+   "script": "0e59313235f433e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "edge empty: grep -c empty empty pipe": {
+   "script": "b9e562e763dcd026",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "edge empty: grep -c empty no newline": {
+   "script": "45b779d2df2b2965",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -c empty no newline two lines": {
+   "script": "da9dbd88967df2b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -c empty null stdin": {
+   "script": "08a43f93ffd49af3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "edge empty: grep -c empty only newline": {
+   "script": "f6fcf9fa9c69b8a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -c empty whitespace only": {
+   "script": "97bbd88ecd244af6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -o blank lines": {
+   "script": "2f7853b57159d9dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep -o empty file": {
+   "script": "09b2ff14fb190348",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep -o empty pipe": {
+   "script": "26cb0fde1ff6daed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep -o no newline": {
+   "script": "2c9476a708f0b363",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -o no newline two lines": {
+   "script": "c1d9eaf260bb4bc7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nc\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -o null stdin": {
+   "script": "b2d01ea8dabd1ed1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep -o only newline": {
+   "script": "261c2ace7f909091",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep -o whitespace only": {
+   "script": "89fdee6c4dbc83e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep -v blank lines": {
+   "script": "bded15bea635045a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -v empty file": {
+   "script": "828e2e18823023eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep -v empty pipe": {
+   "script": "30807cb9b5da11a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep -v no newline": {
+   "script": "d0360bdce4e521a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -v no newline two lines": {
+   "script": "365065fb936c9479",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -v null stdin": {
+   "script": "a474347562a15b30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep -v only newline": {
+   "script": "a807c2d13d1a3b17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: grep -v whitespace only": {
+   "script": "ebcc5c23dffd8b08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: grep dot blank lines": {
+   "script": "31dabb6621fbbe59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep dot empty file": {
+   "script": "06011f3941735234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep dot empty pipe": {
+   "script": "369a55e1efc102ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep dot no newline": {
+   "script": "319e6ec117e339fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: grep dot no newline two lines": {
+   "script": "cc357f8f0a214505",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: grep dot null stdin": {
+   "script": "a996f7106278ba03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep dot only newline": {
+   "script": "9fb45ef1e99dc40b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: grep dot whitespace only": {
+   "script": "e9291243e8bf5d29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: head -c 1 blank lines": {
+   "script": "e1a4b39ec80b26c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: head -c 1 empty file": {
+   "script": "161ba2b17c10a322",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -c 1 empty pipe": {
+   "script": "a86a06e507088086",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -c 1 no newline": {
+   "script": "9950e292f90be4f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bstatus=0\n"
+   }
+  },
+  "edge empty: head -c 1 no newline two lines": {
+   "script": "6d87038f6dc561cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bstatus=0\n"
+   }
+  },
+  "edge empty: head -c 1 null stdin": {
+   "script": "0eb49c15d5eea8bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -c 1 only newline": {
+   "script": "7c5c149a33cb0ff6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: head -c 1 whitespace only": {
+   "script": "4df2e57d462c68c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " status=0\n"
+   }
+  },
+  "edge empty: head -n -1 blank lines": {
+   "script": "42b6279fdb11bafa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\nstatus=0\n"
+   }
+  },
+  "edge empty: head -n -1 empty file": {
+   "script": "9119da43c3882acc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -n -1 empty pipe": {
+   "script": "ac0572e3883e012f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -n -1 no newline": {
+   "script": "a85ba2e214cad3eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -n -1 no newline two lines": {
+   "script": "ae8c48636518dab3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: head -n -1 null stdin": {
+   "script": "9184d9bc8be26143",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -n -1 only newline": {
+   "script": "22305b75fd3cfa6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -n -1 whitespace only": {
+   "script": "41a8b2cb2b907db6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -n 1 blank lines": {
+   "script": "c5e8109164ca9583",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: head -n 1 empty file": {
+   "script": "a05e2e5b552001eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -n 1 empty pipe": {
+   "script": "af3fd4fe66e12eb9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -n 1 no newline": {
+   "script": "398cc6e6bf90a287",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b astatus=0\n"
+   }
+  },
+  "edge empty: head -n 1 no newline two lines": {
+   "script": "bebed07d3223247d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: head -n 1 null stdin": {
+   "script": "faa08f87cc9c956b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: head -n 1 only newline": {
+   "script": "7bff2f00c7116838",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: head -n 1 whitespace only": {
+   "script": "07ea2cff0bcb633d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: heredoc empty": {
+   "script": "a3f41c7de34dd35c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: heredoc empty wc": {
+   "script": "4fc414161739c950",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge empty: herestring empty": {
+   "script": "da3fc553ba4e2bfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge empty: herestring unset": {
+   "script": "ebb7c4601c51fd2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \\n\n"
+   }
+  },
+  "edge empty: jq -R blank lines": {
+   "script": "419d9fccb636f113",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\"\n\"\"\n\"\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -R empty file": {
+   "script": "4e6a256c64c5b6c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: jq -R empty pipe": {
+   "script": "a445d2beac2eb617",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: jq -R no newline": {
+   "script": "21f5897ec21253d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b a\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -R no newline two lines": {
+   "script": "652b7031de338390",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b a\"\n\"1 c\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -R null stdin": {
+   "script": "61456e3717038803",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: jq -R only newline": {
+   "script": "3bd204a0745426db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -R whitespace only": {
+   "script": "9d44db778e52dc51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\" \\t \"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -Rs blank lines": {
+   "script": "02efb48d39a0a04a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\n\\n\\n\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -Rs empty file": {
+   "script": "2adfd94bfad1c74f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -Rs empty pipe": {
+   "script": "017afcfc47b43188",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -Rs no newline": {
+   "script": "7f5f5a556d1b4450",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b a\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -Rs no newline two lines": {
+   "script": "c4b67b2e4f3740c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"b a\\n1 c\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -Rs null stdin": {
+   "script": "0482d725f98e9db2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -Rs only newline": {
+   "script": "4666348f13bd1bf6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\n\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -Rs whitespace only": {
+   "script": "df7708c371f5bc9e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\" \\t \\n\"\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -e blank lines": {
+   "script": "5d2800250c261279",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "edge empty: jq -e empty file": {
+   "script": "bd6ecf17d08e0700",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "edge empty: jq -e empty pipe": {
+   "script": "f79134482da2541d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "edge empty: jq -e no newline": {
+   "script": "a5f4620add88b7d0",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at line 1, column 2\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "edge empty: jq -e no newline two lines": {
+   "script": "f20579b79a3bcd9b",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at line 1, column 2\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "edge empty: jq -e null stdin": {
+   "script": "2cb67f9ac5fccbe3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "edge empty: jq -e only newline": {
+   "script": "fdc0ccae74c699b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "edge empty: jq -e whitespace only": {
+   "script": "aaacc291b86f6b9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "edge empty: jq -s blank lines": {
+   "script": "b6d6cb87c9cdc86a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -s empty file": {
+   "script": "57800582be0b1b8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -s empty pipe": {
+   "script": "b2c2a59d90514043",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -s no newline": {
+   "script": "802f73151420fd27",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at line 1, column 2\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "edge empty: jq -s no newline two lines": {
+   "script": "6d7d77b3c73dd6c9",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at line 1, column 2\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "edge empty: jq -s null stdin": {
+   "script": "ad4012120a13190d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -s only newline": {
+   "script": "9ad8f0b81101de07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "edge empty: jq -s whitespace only": {
+   "script": "ceb0c67df8af72a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "edge empty: jq blank lines": {
+   "script": "f02ca1dfdc279b15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: jq empty file": {
+   "script": "a48bc5a0c808f8c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: jq empty pipe": {
+   "script": "c27eb7db5acca625",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: jq no newline": {
+   "script": "d2c89398d972b41b",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at line 1, column 2\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "edge empty: jq no newline two lines": {
+   "script": "dbb388ed56c44303",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at line 1, column 2\n"
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "edge empty: jq null stdin": {
+   "script": "220d724c7f97aec4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: jq only newline": {
+   "script": "76a6a07356c22c9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: jq whitespace only": {
+   "script": "36758def30c4ae95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: mapfile blank lines": {
+   "script": "ce2b2e26feed46aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=3\n[][][]\nstatus=0\n"
+   }
+  },
+  "edge empty: mapfile empty file": {
+   "script": "5715f9b9d10621c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=0\n[]\nstatus=0\n"
+   }
+  },
+  "edge empty: mapfile empty pipe": {
+   "script": "cf05a82a34b8d033",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=0\n[]\nstatus=0\n"
+   }
+  },
+  "edge empty: mapfile no newline": {
+   "script": "82af65d4678e6447",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=1\n[b a]\nstatus=0\n"
+   }
+  },
+  "edge empty: mapfile no newline two lines": {
+   "script": "e49c26cea3f92ef0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=2\n[b a][1 c]\nstatus=0\n"
+   }
+  },
+  "edge empty: mapfile null stdin": {
+   "script": "ae6e59ca8641362b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=0\n[]\nstatus=0\n"
+   }
+  },
+  "edge empty: mapfile only newline": {
+   "script": "45afc260a7e735e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=1\n[]\nstatus=0\n"
+   }
+  },
+  "edge empty: mapfile whitespace only": {
+   "script": "7f8bef09b608f46f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "n=1\n[ \t ]\nstatus=0\n"
+   }
+  },
+  "edge empty: md5sum -c blank lines": {
+   "script": "5ae8b76eac0e80ee",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: 'standard input': no properly formatted checksum lines found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: md5sum -c empty file": {
+   "script": "85e7e02cffcd97a0",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: /tmp/e: no properly formatted checksum lines found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: md5sum -c empty pipe": {
+   "script": "a14c090ab1e3d668",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: 'standard input': no properly formatted checksum lines found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: md5sum -c no newline": {
+   "script": "d3a9f4f02d1c11c4",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: 'standard input': no properly formatted checksum lines found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: md5sum -c no newline two lines": {
+   "script": "be8ea24c0ea74cdc",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: 'standard input': no properly formatted checksum lines found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: md5sum -c null stdin": {
+   "script": "9f952b58af7a0b6a",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: 'standard input': no properly formatted checksum lines found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: md5sum -c only newline": {
+   "script": "df02b9d4d2ae1e4e",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: 'standard input': no properly formatted checksum lines found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: md5sum -c whitespace only": {
+   "script": "0c576fb58190fd7c",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: 'standard input': no properly formatted checksum lines found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: md5sum blank lines": {
+   "script": "5238c491fe721e09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2228e977ebea8966e27929f43e39cb67  -\nstatus=0\n"
+   }
+  },
+  "edge empty: md5sum empty file": {
+   "script": "44e367d3ee79fee1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d41d8cd98f00b204e9800998ecf8427e  /tmp/e\nstatus=0\n"
+   }
+  },
+  "edge empty: md5sum empty pipe": {
+   "script": "cb80f8978faa2d3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d41d8cd98f00b204e9800998ecf8427e  -\nstatus=0\n"
+   }
+  },
+  "edge empty: md5sum no newline": {
+   "script": "4f387c6b46f6c468",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "22936088d666c8ef5cea01ba1aeb27c3  -\nstatus=0\n"
+   }
+  },
+  "edge empty: md5sum no newline two lines": {
+   "script": "070a68fe392f5bd9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "db2ec0049fd727af95a08935dbf87b86  -\nstatus=0\n"
+   }
+  },
+  "edge empty: md5sum null stdin": {
+   "script": "829f216a4aa935ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d41d8cd98f00b204e9800998ecf8427e  -\nstatus=0\n"
+   }
+  },
+  "edge empty: md5sum only newline": {
+   "script": "7d22f9101b9999a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "68b329da9893e34099c7d8ad5cb9c940  -\nstatus=0\n"
+   }
+  },
+  "edge empty: md5sum whitespace only": {
+   "script": "8876b9c17a7ab3f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "98c370761ba1768d1cf8fe0f8dba0b1d  -\nstatus=0\n"
+   }
+  },
+  "edge empty: nl blank lines": {
+   "script": "f511eb89b891c26d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "       \n       \n       \nstatus=0\n"
+   }
+  },
+  "edge empty: nl empty file": {
+   "script": "3a0578b5d8f67aa6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: nl empty pipe": {
+   "script": "11580c6fd7789ffd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: nl no newline": {
+   "script": "4198be4916f7abb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb a\nstatus=0\n"
+   }
+  },
+  "edge empty: nl no newline two lines": {
+   "script": "cfb993915c67f792",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\tb a\n     2\t1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: nl null stdin": {
+   "script": "81c44998eb61eb44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: nl only newline": {
+   "script": "cf8ad1840ebd132a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "       \nstatus=0\n"
+   }
+  },
+  "edge empty: nl whitespace only": {
+   "script": "95371c2585f9881b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\t \t \nstatus=0\n"
+   }
+  },
+  "edge empty: no newline base64 -d": {
+   "script": "639c9928a280bb36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a\n"
+   }
+  },
+  "edge empty: no newline cat two files": {
+   "script": "836f6966aa027f6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   b\n"
+   }
+  },
+  "edge empty: no newline cmp": {
+   "script": "8aaaade318fd74c4",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/x’ after byte 1, in line 1\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: no newline comm": {
+   "script": "b94b0fcf7b0cd577",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\t\tb\n"
+   }
+  },
+  "edge empty: no newline diff": {
+   "script": "9a5c076143bb5eb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< a\n\\ No newline at end of file\n---\n> a\nstatus=1\n"
+   }
+  },
+  "edge empty: no newline diff both": {
+   "script": "04d4bd4ce496c8ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< a\n\\ No newline at end of file\n---\n> b\n\\ No newline at end of file\nstatus=1\n"
+   }
+  },
+  "edge empty: no newline expand": {
+   "script": "9e790d40168bf63e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a                               b\n"
+   }
+  },
+  "edge empty: no newline factor": {
+   "script": "2365c1ef15ea3044",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6: 2 3\n10: 2 5\nstatus=0\n"
+   }
+  },
+  "edge empty: no newline fmt": {
+   "script": "b101665abce36f23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   b       c  \\n\n"
+   }
+  },
+  "edge empty: no newline fold": {
+   "script": "ec9b621f3b0f2dda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a   b  \\n   c   d  \\n   e\n"
+   }
+  },
+  "edge empty: no newline grep two files": {
+   "script": "cc44161d10a83d8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/x:a\n/tmp/y:a\n"
+   }
+  },
+  "edge empty: no newline head -n 0": {
+   "script": "b6f68c756c29d6fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: no newline head two files": {
+   "script": "b08d2e5cb4c70d5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /tmp/x <==\na\n==> /tmp/y <==\nb"
+   }
+  },
+  "edge empty: no newline heredoc body": {
+   "script": "b1b94910ae14a205",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n\n"
+   }
+  },
+  "edge empty: no newline join": {
+   "script": "525d1cf41265ff90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a b\n"
+   }
+  },
+  "edge empty: no newline jq object": {
+   "script": "3f56a77a0e5ae3ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge empty: no newline jq truncated": {
+   "script": "1ccf06195888128a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "edge empty: no newline jq values": {
+   "script": "9cf845572c3b2c71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "edge empty: no newline mapfile": {
+   "script": "9d8868f02a0ec04c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a\n][b]"
+   }
+  },
+  "edge empty: no newline md5sum -c": {
+   "script": "7019acc1dcd4ed11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/x: OK\n"
+   }
+  },
+  "edge empty: no newline nl two files": {
+   "script": "0a7d728610916825",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\n     2\tb\n"
+   }
+  },
+  "edge empty: no newline paste": {
+   "script": "fa487b3402a0b796",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\n\tc\n"
+   }
+  },
+  "edge empty: no newline patch": {
+   "script": "f6bd67f01a252a0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file x\n   b\n"
+   }
+  },
+  "edge empty: no newline read -d": {
+   "script": "90bb519515f96ac6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\nlast [b]\n"
+   }
+  },
+  "edge empty: no newline sed $a": {
+   "script": "5f85e05bc1d9a103",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   z  \\n\n"
+   }
+  },
+  "edge empty: no newline sed -i": {
+   "script": "6bb699a82160ccec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b\n"
+   }
+  },
+  "edge empty: no newline sed -s": {
+   "script": "389f26761bfa5efa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   z  \\n   b  \\n   z  \\n\n"
+   }
+  },
+  "edge empty: no newline sh -c": {
+   "script": "90b902b13cb72864",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "edge empty: no newline sort two files": {
+   "script": "ba0a488b05745413",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "edge empty: no newline source": {
+   "script": "7fb9360fd3933c0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sourced\n"
+   }
+  },
+  "edge empty: no newline tac two files": {
+   "script": "b8458250688ff10f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b   a  \\n   b   a  \\n\n"
+   }
+  },
+  "edge empty: no newline tail -c": {
+   "script": "0d38edd408c8c8bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   b   c\n"
+   }
+  },
+  "edge empty: no newline tail -n 0": {
+   "script": "47f001dfd49128b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: no newline tail two files": {
+   "script": "cde6c8cdb414bf80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "==> /tmp/x <==\na\n==> /tmp/y <==\nb"
+   }
+  },
+  "edge empty: no newline tr": {
+   "script": "3960cfa6a955d8bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a  \\n   c\n"
+   }
+  },
+  "edge empty: no newline uniq": {
+   "script": "215bdde2e72b17ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      2 a\n"
+   }
+  },
+  "edge empty: no newline wc two files": {
+   "script": "59130321f2faf1d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 1 1 /tmp/x\n1 2 3 /tmp/y\n1 3 4 total\n"
+   }
+  },
+  "edge empty: no newline xargs": {
+   "script": "08654b809a39de8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "edge empty: numfmt blank lines": {
+   "script": "d5a88de81038617a",
+   "status": 0,
+   "stderr": {
+    "text": "numfmt: invalid number: ‘’\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge empty: numfmt empty file": {
+   "script": "fa63e96a02ff5f2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: numfmt empty pipe": {
+   "script": "4d30d58937577592",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: numfmt no newline": {
+   "script": "f6fa8ab270a9270b",
+   "status": 0,
+   "stderr": {
+    "text": "numfmt: invalid number: ‘b’\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge empty: numfmt no newline two lines": {
+   "script": "b9c7c086c414acb1",
+   "status": 0,
+   "stderr": {
+    "text": "numfmt: invalid number: ‘b’\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge empty: numfmt null stdin": {
+   "script": "16b66c1038f15a6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: numfmt only newline": {
+   "script": "abc3a82eaf9bcaac",
+   "status": 0,
+   "stderr": {
+    "text": "numfmt: invalid number: ‘’\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge empty: numfmt whitespace only": {
+   "script": "36c226b18e69b1a3",
+   "status": 0,
+   "stderr": {
+    "text": "numfmt: invalid number: ‘’\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge empty: od -c blank lines": {
+   "script": "abde782ccdc61ee0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  \\n  \\n  \\n\n0000003\nstatus=0\n"
+   }
+  },
+  "edge empty: od -c empty file": {
+   "script": "2516b95483b1eb24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000\nstatus=0\n"
+   }
+  },
+  "edge empty: od -c empty pipe": {
+   "script": "c1cf8634ed94b587",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000\nstatus=0\n"
+   }
+  },
+  "edge empty: od -c no newline": {
+   "script": "4c6f74c27d8bc228",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   b       a\n0000003\nstatus=0\n"
+   }
+  },
+  "edge empty: od -c no newline two lines": {
+   "script": "7ee101a415cf7809",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   b       a  \\n   1       c\n0000007\nstatus=0\n"
+   }
+  },
+  "edge empty: od -c null stdin": {
+   "script": "c8c15e6871a7c1a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000\nstatus=0\n"
+   }
+  },
+  "edge empty: od -c only newline": {
+   "script": "fec517194ddbdcb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  \\n\n0000001\nstatus=0\n"
+   }
+  },
+  "edge empty: od -c whitespace only": {
+   "script": "b1fb696a69f853e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000      \\t      \\n\n0000004\nstatus=0\n"
+   }
+  },
+  "edge empty: od -tx1 blank lines": {
+   "script": "ca9b5ab552bacb26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 0a 0a 0a\nstatus=0\n"
+   }
+  },
+  "edge empty: od -tx1 empty file": {
+   "script": "c851a5966e39882d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: od -tx1 empty pipe": {
+   "script": "97138c2adacd0004",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: od -tx1 no newline": {
+   "script": "161635ee09dd88ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 20 61\nstatus=0\n"
+   }
+  },
+  "edge empty: od -tx1 no newline two lines": {
+   "script": "ec4109d965f983ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 20 61 0a 31 20 63\nstatus=0\n"
+   }
+  },
+  "edge empty: od -tx1 null stdin": {
+   "script": "d01418c54df6fcc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: od -tx1 only newline": {
+   "script": "75aef1c80da68887",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 0a\nstatus=0\n"
+   }
+  },
+  "edge empty: od -tx1 whitespace only": {
+   "script": "d43c5b33ed315679",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 20 09 20 0a\nstatus=0\n"
+   }
+  },
+  "edge empty: paste -s blank lines": {
+   "script": "beb7e90e0a6eacc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\t\t\nstatus=0\n"
+   }
+  },
+  "edge empty: paste -s empty file": {
+   "script": "d2048cc63b1ee43a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: paste -s empty pipe": {
+   "script": "7f49a9b9ae0f2a3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: paste -s no newline": {
+   "script": "db11ecadf5b6a98f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: paste -s no newline two lines": {
+   "script": "c1b8b4ff60b57067",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\t1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: paste -s null stdin": {
+   "script": "423e3967e2b87636",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: paste -s only newline": {
+   "script": "ebe71197f28ec853",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: paste -s whitespace only": {
+   "script": "a502e96e030a4925",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: paste two columns blank lines": {
+   "script": "5e968d3007ead6bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\t\n\t\nstatus=0\n"
+   }
+  },
+  "edge empty: paste two columns empty file": {
+   "script": "a2f7ad8281f474f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: paste two columns empty pipe": {
+   "script": "34ad8e66b85262f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: paste two columns no newline": {
+   "script": "147f17ef1f43a39c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\t\nstatus=0\n"
+   }
+  },
+  "edge empty: paste two columns no newline two lines": {
+   "script": "02987836f49c0f8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\t1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: paste two columns null stdin": {
+   "script": "2a848e3e5e5f0ca3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: paste two columns only newline": {
+   "script": "b9dc330894987279",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\t\nstatus=0\n"
+   }
+  },
+  "edge empty: paste two columns whitespace only": {
+   "script": "4414fa2bb4f252b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \t\nstatus=0\n"
+   }
+  },
+  "edge empty: printf empty format": {
+   "script": "ea6c7cb07adb17cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: printf missing format": {
+   "script": "054d56af15561141",
+   "status": 0,
+   "stderr": {
+    "text": "printf: usage: printf [-v var] format [arguments]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge empty: read -d empty blank lines": {
+   "script": "88c80ed9075351c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 3\nstatus=0\n"
+   }
+  },
+  "edge empty: read -d empty empty file": {
+   "script": "573231ddb597ce5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 0\nstatus=0\n"
+   }
+  },
+  "edge empty: read -d empty empty pipe": {
+   "script": "fe6af9909af20a55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 0\nstatus=0\n"
+   }
+  },
+  "edge empty: read -d empty no newline": {
+   "script": "50e02fa31581b5ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 3\nstatus=0\n"
+   }
+  },
+  "edge empty: read -d empty no newline two lines": {
+   "script": "76e9f8dc0fef2415",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 7\nstatus=0\n"
+   }
+  },
+  "edge empty: read -d empty null stdin": {
+   "script": "97aec3b43303ea99",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 0\nstatus=0\n"
+   }
+  },
+  "edge empty: read -d empty only newline": {
+   "script": "6f50f726d88b9101",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 1\nstatus=0\n"
+   }
+  },
+  "edge empty: read -d empty whitespace only": {
+   "script": "71427159b3941cea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 4\nstatus=0\n"
+   }
+  },
+  "edge empty: read -n blank lines": {
+   "script": "01b4032fe0690067",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=0 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read -n empty file": {
+   "script": "69993bf7b18dbb34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read -n empty pipe": {
+   "script": "991b4e95f9672db3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read -n no newline": {
+   "script": "afae9bc813ba446d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=0 [b]\nstatus=0\n"
+   }
+  },
+  "edge empty: read -n no newline two lines": {
+   "script": "66e5859e37ff7f0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=0 [b]\nstatus=0\n"
+   }
+  },
+  "edge empty: read -n null stdin": {
+   "script": "af77a447b6cae694",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read -n only newline": {
+   "script": "db9d494367e69c24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=0 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read -n whitespace only": {
+   "script": "f4e72688387580f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=0 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read blank lines": {
+   "script": "a2a964ececca7786",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=0 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read empty file": {
+   "script": "1fcfd9220504ef29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read empty pipe": {
+   "script": "fed76612fe759ac5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read no newline": {
+   "script": "fe4458b87335354d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 [b a]\nstatus=0\n"
+   }
+  },
+  "edge empty: read no newline two lines": {
+   "script": "4ee8e42524d9a673",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=0 [b a]\nstatus=0\n"
+   }
+  },
+  "edge empty: read null stdin": {
+   "script": "0dfb97c7c253ff78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=1 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read only newline": {
+   "script": "eb94c5cc22801617",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=0 []\nstatus=0\n"
+   }
+  },
+  "edge empty: read whitespace only": {
+   "script": "a0cdb26e05a41e36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "read=0 []\nstatus=0\n"
+   }
+  },
+  "edge empty: rev blank lines": {
+   "script": "f3d6a8e46af1f45b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: rev empty file": {
+   "script": "3977a680e5e6125d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: rev empty pipe": {
+   "script": "bfb82a0e7557ba19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: rev no newline": {
+   "script": "03f5e2424242919e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a bstatus=0\n"
+   }
+  },
+  "edge empty: rev no newline two lines": {
+   "script": "a4924bb990d74dfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc 1status=0\n"
+   }
+  },
+  "edge empty: rev null stdin": {
+   "script": "de9db9bbc3901339",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: rev only newline": {
+   "script": "5a3e065d31d49dc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: rev whitespace only": {
+   "script": "2180843da729f36b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: sed $a blank lines": {
+   "script": "f7657189239c4dc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nend\nstatus=0\n"
+   }
+  },
+  "edge empty: sed $a empty file": {
+   "script": "2f2308a2c0171074",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed $a empty pipe": {
+   "script": "b3e86e0c0887a6f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed $a no newline": {
+   "script": "7c4676f25e28af8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nend\nstatus=0\n"
+   }
+  },
+  "edge empty: sed $a no newline two lines": {
+   "script": "0b7418ecd2383c12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 c\nend\nstatus=0\n"
+   }
+  },
+  "edge empty: sed $a null stdin": {
+   "script": "a030cb0d2d66f764",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed $a only newline": {
+   "script": "c4719e899b1d0211",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nend\nstatus=0\n"
+   }
+  },
+  "edge empty: sed $a whitespace only": {
+   "script": "22056f53e5887ec2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nend\nstatus=0\n"
+   }
+  },
+  "edge empty: sed $d blank lines": {
+   "script": "6d977b6fc7b66c2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\nstatus=0\n"
+   }
+  },
+  "edge empty: sed $d empty file": {
+   "script": "db499d9db4a6a6db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed $d empty pipe": {
+   "script": "5abc2f646c29136e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed $d no newline": {
+   "script": "0812eb2f95c1a180",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed $d no newline two lines": {
+   "script": "44e7b47d0d622236",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: sed $d null stdin": {
+   "script": "6730f7332f3cd324",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed $d only newline": {
+   "script": "1ac32fe798fa5e88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed $d whitespace only": {
+   "script": "f70547418f2b0a08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed -z blank lines": {
+   "script": "efee9c30b81981c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ">\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: sed -z empty file": {
+   "script": "38f504a849909062",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed -z empty pipe": {
+   "script": "0204bc26b59aa5e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed -z no newline": {
+   "script": "66d579981967cc0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ">b astatus=0\n"
+   }
+  },
+  "edge empty: sed -z no newline two lines": {
+   "script": "48b34b026799ea98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ">b a\n1 cstatus=0\n"
+   }
+  },
+  "edge empty: sed -z null stdin": {
+   "script": "2b38174965d396f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed -z only newline": {
+   "script": "326c3b277176099b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ">\nstatus=0\n"
+   }
+  },
+  "edge empty: sed -z whitespace only": {
+   "script": "b948df6f0c7ede59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "> \t \nstatus=0\n"
+   }
+  },
+  "edge empty: sed N blank lines": {
+   "script": "870549ff37a1a6ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "+\n\nstatus=0\n"
+   }
+  },
+  "edge empty: sed N empty file": {
+   "script": "299d087eca942248",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed N empty pipe": {
+   "script": "964ae79380678243",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed N no newline": {
+   "script": "2b3a6edb967ba725",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b astatus=0\n"
+   }
+  },
+  "edge empty: sed N no newline two lines": {
+   "script": "f5572b5a70aeee4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a+1 cstatus=0\n"
+   }
+  },
+  "edge empty: sed N null stdin": {
+   "script": "42aef6b6ee2916d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed N only newline": {
+   "script": "864c50761c1f2263",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: sed N whitespace only": {
+   "script": "215e69dfbc2fbe77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: sed line count blank lines": {
+   "script": "cea1478d91325393",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: sed line count empty file": {
+   "script": "80e8052dc2e038cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed line count empty pipe": {
+   "script": "1240d3c2da963e4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed line count no newline": {
+   "script": "bc337bc747ad7740",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: sed line count no newline two lines": {
+   "script": "67d98b8bdb4599fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "edge empty: sed line count null stdin": {
+   "script": "25ff98d794efd887",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed line count only newline": {
+   "script": "6337d7d4e84dcca9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: sed line count whitespace only": {
+   "script": "582baf557b5b26fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: sed p blank lines": {
+   "script": "704ce35209874d96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\n\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: sed p empty file": {
+   "script": "aceddcf133d9921b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed p empty pipe": {
+   "script": "c23349967d777fd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed p no newline": {
+   "script": "0d3ad4ac43cf9e33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nb astatus=0\n"
+   }
+  },
+  "edge empty: sed p no newline two lines": {
+   "script": "ce909250dad3d833",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nb a\n1 c\n1 cstatus=0\n"
+   }
+  },
+  "edge empty: sed p null stdin": {
+   "script": "ba67d617cac031fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sed p only newline": {
+   "script": "9fc29654280df924",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\nstatus=0\n"
+   }
+  },
+  "edge empty: sed p whitespace only": {
+   "script": "42b3d78fcbbae552",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \n \t \nstatus=0\n"
+   }
+  },
+  "edge empty: semicolon only": {
+   "script": "41b805ea7ac014e2",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `;'\nbash: -c: line 1: `;'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge empty: sort -c blank lines": {
+   "script": "3b3316a0bd9ed679",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -c empty file": {
+   "script": "93680f422a0d3a52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -c empty pipe": {
+   "script": "1c125a1a3f1eac15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -c no newline": {
+   "script": "df4b491a892ac04b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -c no newline two lines": {
+   "script": "02484ea3b86e171c",
+   "status": 0,
+   "stderr": {
+    "text": "sort: -:2: disorder: 1 c\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge empty: sort -c null stdin": {
+   "script": "8033e54d1a055f96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -c only newline": {
+   "script": "721dced99325df2b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -c whitespace only": {
+   "script": "0534ec18cc489b3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -n blank lines": {
+   "script": "672d3d58feef8c2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: sort -n empty file": {
+   "script": "ceea7dc267838227",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -n empty pipe": {
+   "script": "16bda3f3eab02943",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -n no newline": {
+   "script": "b392601ad0884ee7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: sort -n no newline two lines": {
+   "script": "a6d70293d9726b9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: sort -n null stdin": {
+   "script": "aa317154cea93c09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -n only newline": {
+   "script": "f21242ce5396d4c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: sort -n whitespace only": {
+   "script": "7e307e2819f72616",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: sort -u blank lines": {
+   "script": "be2dce88fc8237a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: sort -u empty file": {
+   "script": "562f011588a68714",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -u empty pipe": {
+   "script": "cbf6a567513ff5b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -u no newline": {
+   "script": "c2bcb95bd39c4316",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: sort -u no newline two lines": {
+   "script": "c777e42bdb04169f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 c\nb a\nstatus=0\n"
+   }
+  },
+  "edge empty: sort -u null stdin": {
+   "script": "21e1fafe4bbe62b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort -u only newline": {
+   "script": "4a9aaadcca81fe5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: sort -u whitespace only": {
+   "script": "a064bfe0966a0149",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: sort blank lines": {
+   "script": "dff20c9bbd49ed4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: sort empty file": {
+   "script": "12b08affbd1e0a90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort empty pipe": {
+   "script": "ba2ac47a808485fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort no newline": {
+   "script": "4e822952f46a4aea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: sort no newline two lines": {
+   "script": "654229ec259d1916",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 c\nb a\nstatus=0\n"
+   }
+  },
+  "edge empty: sort null stdin": {
+   "script": "3af1356311dc286e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: sort only newline": {
+   "script": "3c2d1a0f787dadac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: sort whitespace only": {
+   "script": "682b2036934094e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: tac blank lines": {
+   "script": "68b429a6d4f01ccc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: tac empty file": {
+   "script": "bce64d72b94da49d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tac empty pipe": {
+   "script": "2e05a8bcd5d83246",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tac no newline": {
+   "script": "ec35bd54fb8a9478",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b astatus=0\n"
+   }
+  },
+  "edge empty: tac no newline two lines": {
+   "script": "4eeb592832bbe439",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 cb a\nstatus=0\n"
+   }
+  },
+  "edge empty: tac null stdin": {
+   "script": "c7d3fcea3b0506d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tac only newline": {
+   "script": "25b2c9b19f81070c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: tac whitespace only": {
+   "script": "d25f41bb09b1cecb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: tail -c 1 blank lines": {
+   "script": "2ade5a239ed62a5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: tail -c 1 empty file": {
+   "script": "dfb064e64332dbde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -c 1 empty pipe": {
+   "script": "a50502705e314796",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -c 1 no newline": {
+   "script": "38380d0cd4695abc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "astatus=0\n"
+   }
+  },
+  "edge empty: tail -c 1 no newline two lines": {
+   "script": "4ed0d255e55d66c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cstatus=0\n"
+   }
+  },
+  "edge empty: tail -c 1 null stdin": {
+   "script": "19c11b5012a64289",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -c 1 only newline": {
+   "script": "5973af51c4b27360",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: tail -c 1 whitespace only": {
+   "script": "4073f7b5334c8c2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: tail -n +2 blank lines": {
+   "script": "1caa83fa3e5ba9c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\nstatus=0\n"
+   }
+  },
+  "edge empty: tail -n +2 empty file": {
+   "script": "6587ea6cf71dc846",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -n +2 empty pipe": {
+   "script": "e7a8a1a8cbf4a1b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -n +2 no newline": {
+   "script": "fc76a8ec46bededb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -n +2 no newline two lines": {
+   "script": "2bd06ba140cbc8d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 cstatus=0\n"
+   }
+  },
+  "edge empty: tail -n +2 null stdin": {
+   "script": "cf4307057c19db77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -n +2 only newline": {
+   "script": "09a3576dc7be3652",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -n +2 whitespace only": {
+   "script": "29bbaa70842f8b89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -n 1 blank lines": {
+   "script": "84f529d7225225c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: tail -n 1 empty file": {
+   "script": "e997203c3d185048",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -n 1 empty pipe": {
+   "script": "395b9fef8ac8d110",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -n 1 no newline": {
+   "script": "7fa1253eb0d47d4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b astatus=0\n"
+   }
+  },
+  "edge empty: tail -n 1 no newline two lines": {
+   "script": "ad9549850bb63cdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 cstatus=0\n"
+   }
+  },
+  "edge empty: tail -n 1 null stdin": {
+   "script": "4f3a60e7317f7b05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tail -n 1 only newline": {
+   "script": "e9b8a4958add851b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: tail -n 1 whitespace only": {
+   "script": "ddb22decb4858558",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: tee blank lines": {
+   "script": "62951aaad08667a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: tee empty file": {
+   "script": "1936effd0a4abfbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: tee empty pipe": {
+   "script": "a833f7dffc534a69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: tee no newline": {
+   "script": "b53560b4dddbf59c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: tee no newline two lines": {
+   "script": "41852417f81ff38f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nstatus=0\n"
+   }
+  },
+  "edge empty: tee null stdin": {
+   "script": "b29dbef6c9059c34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: tee only newline": {
+   "script": "14884445ace27e6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: tee whitespace only": {
+   "script": "f7cbb58855635a5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\nstatus=0\n"
+   }
+  },
+  "edge empty: tr -d newline blank lines": {
+   "script": "01cf7621493031b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tr -d newline empty file": {
+   "script": "9894826b1d1ed90d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tr -d newline empty pipe": {
+   "script": "6bb0a6297eff8b75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tr -d newline no newline": {
+   "script": "7c444b1bd291ac6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b astatus=0\n"
+   }
+  },
+  "edge empty: tr -d newline no newline two lines": {
+   "script": "e421b3fd10beb6d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a1 cstatus=0\n"
+   }
+  },
+  "edge empty: tr -d newline null stdin": {
+   "script": "a4279de8b9596e2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tr -d newline only newline": {
+   "script": "7746eddf5daae889",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tr -d newline whitespace only": {
+   "script": "6e4396c3dfba4ad6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t status=0\n"
+   }
+  },
+  "edge empty: tr upper blank lines": {
+   "script": "e1c45f603cf67d18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: tr upper empty file": {
+   "script": "1d87a30be506e930",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tr upper empty pipe": {
+   "script": "216b271b35df531c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tr upper no newline": {
+   "script": "b63363dbb75578b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B Astatus=0\n"
+   }
+  },
+  "edge empty: tr upper no newline two lines": {
+   "script": "e22caa34da08b506",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "B A\n1 Cstatus=0\n"
+   }
+  },
+  "edge empty: tr upper null stdin": {
+   "script": "86d3d3d310cee4f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tr upper only newline": {
+   "script": "17bb8a1193ad5486",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: tr upper whitespace only": {
+   "script": "dfb5307e3a6f8ffd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: true pipe": {
+   "script": "52222cdaaf8d5edf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tsort blank lines": {
+   "script": "8bd183ea03a381c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tsort empty file": {
+   "script": "740947398d88b0a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tsort empty pipe": {
+   "script": "2ed48e1fb796a20b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tsort no newline": {
+   "script": "9bb443c7619ab446",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na\nstatus=0\n"
+   }
+  },
+  "edge empty: tsort no newline two lines": {
+   "script": "b1ff1bf8213f6aa7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nb\nc\na\nstatus=0\n"
+   }
+  },
+  "edge empty: tsort null stdin": {
+   "script": "1e7a5ecfb9eb1bf2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tsort only newline": {
+   "script": "9dcc62ddf1b60ef5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: tsort whitespace only": {
+   "script": "0efbb6744be65128",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: unexpand -a blank lines": {
+   "script": "1993215915634e4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n\n\nstatus=0\n"
+   }
+  },
+  "edge empty: unexpand -a empty file": {
+   "script": "00cdfb013a719286",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: unexpand -a empty pipe": {
+   "script": "c29eb034bbdb64ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: unexpand -a no newline": {
+   "script": "37e9a264a5082771",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b astatus=0\n"
+   }
+  },
+  "edge empty: unexpand -a no newline two lines": {
+   "script": "f639e8d0a69a036c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 cstatus=0\n"
+   }
+  },
+  "edge empty: unexpand -a null stdin": {
+   "script": "c0e54e6402c68cf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: unexpand -a only newline": {
+   "script": "e4e3db368c854303",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: unexpand -a whitespace only": {
+   "script": "b82a42630cae93fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\t \nstatus=0\n"
+   }
+  },
+  "edge empty: uniq -c blank lines": {
+   "script": "28eb491f86024444",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      3 \nstatus=0\n"
+   }
+  },
+  "edge empty: uniq -c empty file": {
+   "script": "3e668af5a8805b02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: uniq -c empty pipe": {
+   "script": "b98cd04985de666f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: uniq -c no newline": {
+   "script": "06ef3aa2e28b1b32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b a\nstatus=0\n"
+   }
+  },
+  "edge empty: uniq -c no newline two lines": {
+   "script": "0492a5ffc1062b09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 b a\n      1 1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: uniq -c null stdin": {
+   "script": "cf8afa42a631addd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: uniq -c only newline": {
+   "script": "5f69a5de28b5dfac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 \nstatus=0\n"
+   }
+  },
+  "edge empty: uniq -c whitespace only": {
+   "script": "5a3ad4a019b91249",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1  \t \nstatus=0\n"
+   }
+  },
+  "edge empty: uniq blank lines": {
+   "script": "022abdaf39d2aedf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: uniq empty file": {
+   "script": "d693cbc36fbc31c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: uniq empty pipe": {
+   "script": "4b3784a7f9296e43",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: uniq no newline": {
+   "script": "fb0c1e74e61757ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\nstatus=0\n"
+   }
+  },
+  "edge empty: uniq no newline two lines": {
+   "script": "09f76a4007d63b18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: uniq null stdin": {
+   "script": "c312c81b9ce0642f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: uniq only newline": {
+   "script": "ac962c907a302325",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "edge empty: uniq whitespace only": {
+   "script": "c90a24760d7284a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \t \nstatus=0\n"
+   }
+  },
+  "edge empty: unset IFS": {
+   "script": "587f5f0fa0d8e391",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge empty: wc -L blank lines": {
+   "script": "6128e05d0b989f76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -L empty file": {
+   "script": "dacdf97484c562a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 /tmp/e\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -L empty pipe": {
+   "script": "5b9119896b14a810",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -L no newline": {
+   "script": "dccc8c83c4b8df93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -L no newline two lines": {
+   "script": "f45aa2dd1c0dcd4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -L null stdin": {
+   "script": "28011a1bb156ca76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -L only newline": {
+   "script": "0682981adefc3de7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -L whitespace only": {
+   "script": "14dbb6f67eafd529",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c blank lines": {
+   "script": "e399b7a234cee569",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c empty file": {
+   "script": "39fa6c92e3b32e4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 /tmp/e\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c empty pipe": {
+   "script": "97d8a0082bd69254",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c no newline": {
+   "script": "7d1c48f69504bb42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c no newline two lines": {
+   "script": "e38240c3dd3aad59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c null stdin": {
+   "script": "552a43671630a6e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c only newline": {
+   "script": "f4828257de691dc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c via cat blank lines": {
+   "script": "442bd9108a9ebb8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c via cat empty file": {
+   "script": "7b1b01481ca3b712",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c via cat empty pipe": {
+   "script": "1592bc1259a5abf0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c via cat no newline": {
+   "script": "3322e3ca0927d5bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c via cat no newline two lines": {
+   "script": "628f4758efa47285",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c via cat null stdin": {
+   "script": "9711991dd6e9cb62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c via cat only newline": {
+   "script": "77848b175ce67524",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c via cat whitespace only": {
+   "script": "74fb8cae229f40ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -c whitespace only": {
+   "script": "ceb300e57f894357",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -l blank lines": {
+   "script": "b9b484374a58e820",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -l empty file": {
+   "script": "8189cb8b7eaea90e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 /tmp/e\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -l empty pipe": {
+   "script": "60176ba489a097a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -l no newline": {
+   "script": "0d1978a74eed7652",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -l no newline two lines": {
+   "script": "226d836878eded3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -l null stdin": {
+   "script": "2380481368ad96db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -l only newline": {
+   "script": "ad588972cf47cfc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -l whitespace only": {
+   "script": "695478d01f38c2a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -m blank lines": {
+   "script": "45de23ed800ae206",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -m empty file": {
+   "script": "6d56dccb48812d82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 /tmp/e\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -m empty pipe": {
+   "script": "f251ab654f20fe00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -m no newline": {
+   "script": "566d73532b05aa9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -m no newline two lines": {
+   "script": "d03bef504dfa6991",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -m null stdin": {
+   "script": "90736be5e4ac2d4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -m only newline": {
+   "script": "c4603f3a13d23f0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -m whitespace only": {
+   "script": "27448cc19815f084",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -w blank lines": {
+   "script": "9f5d1450189a6a73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -w empty file": {
+   "script": "f20689b91a6309cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 /tmp/e\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -w empty pipe": {
+   "script": "e575ca0e45c45208",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -w no newline": {
+   "script": "8a846501f6beeda4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -w no newline two lines": {
+   "script": "77eb0bdd20e3f8fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -w null stdin": {
+   "script": "75e44e791a87d9ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -w only newline": {
+   "script": "07d8d8d1d1e55d82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc -w whitespace only": {
+   "script": "c8d287d858e45694",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc blank lines": {
+   "script": "6031d3f3dc5d2ed8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      3       0       3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc empty file": {
+   "script": "3e0678fb898ac987",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 0 0 /tmp/e\nstatus=0\n"
+   }
+  },
+  "edge empty: wc empty pipe": {
+   "script": "d8e06490dc804d2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      0       0       0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc no newline": {
+   "script": "83dd563e12676c35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      0       2       3\nstatus=0\n"
+   }
+  },
+  "edge empty: wc no newline two lines": {
+   "script": "b3394362c793b4ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1       4       7\nstatus=0\n"
+   }
+  },
+  "edge empty: wc null stdin": {
+   "script": "b262c246042602d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      0       0       0\nstatus=0\n"
+   }
+  },
+  "edge empty: wc only newline": {
+   "script": "e3b9bd7669e0f795",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1       0       1\nstatus=0\n"
+   }
+  },
+  "edge empty: wc whitespace only": {
+   "script": "5a2b41058b76880d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1       0       4\nstatus=0\n"
+   }
+  },
+  "edge empty: while read blank lines": {
+   "script": "11091460dedec39c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n[]\n[]\nstatus=0\n"
+   }
+  },
+  "edge empty: while read empty file": {
+   "script": "55a71455bbb8376a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: while read empty pipe": {
+   "script": "2e0580ec1eab2325",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: while read no newline": {
+   "script": "b5089d6d274c7b0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: while read no newline two lines": {
+   "script": "5550b1da383f22ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[b a]\nstatus=0\n"
+   }
+  },
+  "edge empty: while read null stdin": {
+   "script": "ceb72bff976aca27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: while read only newline": {
+   "script": "12786939b18e73fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "edge empty: while read or last blank lines": {
+   "script": "0bad18c3a702cdfc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n[]\n[]\nstatus=0\n"
+   }
+  },
+  "edge empty: while read or last empty file": {
+   "script": "a75958eff4b57234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: while read or last empty pipe": {
+   "script": "ce81f5ba93c4471d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: while read or last no newline": {
+   "script": "130803eae52161d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[b a]\nstatus=0\n"
+   }
+  },
+  "edge empty: while read or last no newline two lines": {
+   "script": "e52bdf727f71ca01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[b a]\n[1 c]\nstatus=0\n"
+   }
+  },
+  "edge empty: while read or last null stdin": {
+   "script": "79dfb9387598e63a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: while read or last only newline": {
+   "script": "f5f855da7de70f4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "edge empty: while read or last whitespace only": {
+   "script": "108186b4bae751b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ \t ]\nstatus=0\n"
+   }
+  },
+  "edge empty: while read whitespace only": {
+   "script": "2ab00603d1311649",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ \t ]\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs -r blank lines": {
+   "script": "5f0df3056eb60681",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: xargs -r empty file": {
+   "script": "b911c673898763a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: xargs -r empty pipe": {
+   "script": "a7b179056d850347",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: xargs -r no newline": {
+   "script": "b9f8a4655e11f8a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run b a\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs -r no newline two lines": {
+   "script": "1a9326eb5894e36d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run b a 1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs -r null stdin": {
+   "script": "c35574c9685ae7d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: xargs -r only newline": {
+   "script": "ad0e09bd4198027c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: xargs -r whitespace only": {
+   "script": "5956e81b99c922c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "edge empty: xargs blank lines": {
+   "script": "550bc47bbb5fb1fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs empty file": {
+   "script": "d4662f32b466fbf8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs empty pipe": {
+   "script": "ad6fe6226a6e6a20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs no newline": {
+   "script": "ed70bb6d87f04b2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run b a\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs no newline two lines": {
+   "script": "9934fb140cb4c72b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run b a 1 c\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs null stdin": {
+   "script": "0d9128b495604ec0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs only newline": {
+   "script": "9f3c4b37f3b2758d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run\nstatus=0\n"
+   }
+  },
+  "edge empty: xargs whitespace only": {
+   "script": "281c90bf36408ef7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run\nstatus=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

@@ -1,0 +1,2318 @@
+{
+ "cases": {
+  "parse: 1000 nested parameter expansions": {
+   "script": "5f0ee7250badd485",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nafter\n"
+   }
+  },
+  "parse: 1000 nested parameter expansions in a here-document": {
+   "script": "bbbcaa35d08b1891",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nafter\n"
+   }
+  },
+  "parse: 3000 nested quoted parameter expansions": {
+   "script": "90ba24c994264ee1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nafter\n"
+   }
+  },
+  "parse: @E transform bytes": {
+   "script": "729e37227b86f193",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff 41\n2\n"
+   }
+  },
+  "parse: ANSI-C hex and octal bytes": {
+   "script": "031a0eee84ab8e57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62\n 61 ff 62 0a\n3\n e9 74 e9 0a\n"
+   }
+  },
+  "parse: ANSI-C octal above 377 and code points that are not characters": {
+   "script": "d5ee2218d4399a0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ed a0 80\nlen=3\n ed bf bf\nlen=3\n f4 90 80 80\nlen=4\n f7 bf bf bf\nlen=4\n f8 88 80 80 80\nlen=5\n fd bf bf bf bf bf\nlen=6\nlen=0\n ff\nlen=1\nlen=0\n 61 0b\nlen=2\n ff 00 0a\n1\n"
+   }
+  },
+  "parse: ANSI-C quotes in a double-quoted default": {
+   "script": "acc54730af43cd62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\naAb x  y\n[]\n"
+   }
+  },
+  "parse: GLOBIGNORE with relative patterns": {
+   "script": "3da0569aea4be2c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hid b.txt c d\n.hid c d\n.hid a.txt b.txt\n.hid c d\nd/y\na.txt b.txt c d\n/tmp/a.txt\na.txt b.txt c d\n"
+   }
+  },
+  "parse: IFS with a multibyte character": {
+   "script": "0cdcb1e7476f109a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "MyA8YT4gPKk+IDxiPgoyIDxhPiA8Yj4KMyA8YT4gPGI+IDxjPgoyIDw+IDxhPgoyIDxhPiA8qWI+CjQgPGE+IDypPiA8qT4gPGI+CjMgPGE+IDyCrD4gPGI+Cg=="
+   }
+  },
+  "parse: a backquote left open in a here-document": {
+   "script": "9cb80a85fc728d2d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: bad substitution: no closing \"`\" in `t forget\n\nbash: line 8: bad substitution: no closing \"`\" in `c\nd\n\n"
+   },
+   "stdout": {
+    "text": "before\nafter status=1\nsame\ns=0\nquoted ` ok\n"
+   }
+  },
+  "parse: a backslash that ends the input or a backquote": {
+   "script": "bb9b7d9fe0f2dcdb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\\na \\\n"
+   }
+  },
+  "parse: a bang after a pipe": {
+   "script": "1e4a5efd993646a3",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `echo a | ! true'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a bracketed word without = is an element": {
+   "script": "8e1770924db11e38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\ndeclare -a b=([0]=\"[ 1 ]\" [1]=\"=x\")\ndeclare -a b=([0]=\"[ 1 ]\")\n"
+   }
+  },
+  "parse: a command substitution left open in a here-document": {
+   "script": "22851ac1aeb89f4f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: command substitution: line 3: unexpected EOF while looking for matching `)'\nbash: command substitution: line 10: unexpected EOF while looking for matching `)'\nbash: command substitution: line 16: unexpected EOF while looking for matching `)'\n"
+   },
+   "stdout": {
+    "text": "s=1\n1\ns=1\nsame\ns=0\n"
+   }
+  },
+  "parse: a command substitution that does not parse in a here-document": {
+   "script": "dbcdb0ac9d97f036",
+   "status": 0,
+   "stderr": {
+    "text": "bash: command substitution: line 2: syntax error near unexpected token `)'\nbash: command substitution: line 2: `if) more'\nbash: command substitution: line 6: syntax error near unexpected token `fi' while looking for matching `)'\nbash: command substitution: line 6: `echo a; fi) x'\nbash: command substitution: line 11: unexpected EOF while looking for matching `)'\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\n"
+   }
+  },
+  "parse: a comment hides the end of a quoted arithmetic expansion": {
+   "script": "c816fb9adbd357e9",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: bad substitution: no closing `)' in \"x$((1 #c))y\"\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a comment hides the end of an arithmetic expansion": {
+   "script": "ce6a6d37136fe393",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: bad substitution: no closing `)' in a$((1 # c))b\n"
+   },
+   "stdout": {
+    "text": "5 4\n"
+   }
+  },
+  "parse: a compound assignment argument of echo": {
+   "script": "e53872cfa17b6f4a",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `('\nbash: -c: line 1: `echo x=(a b)'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a compound assignment left open": {
+   "script": "5b14d542ce6d6009",
+   "status": 1,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected EOF while looking for matching `)'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a compound assignment left open inside if": {
+   "script": "1871b31bd354071e",
+   "status": 1,
+   "stderr": {
+    "text": "bash: -c: line 2: unexpected EOF while looking for matching `)'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional and-list missing a term": {
+   "script": "b4f37715d2cc078d",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected token `&&' in conditional command\nbash: -c: line 1: syntax error near `&'\nbash: -c: line 1: `[[ a && && b ]]'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional binary operator without its argument": {
+   "script": "4fa196e57ee172d7",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected argument `]]' to conditional binary operator\nbash: -c: line 1: syntax error near `]]'\nbash: -c: line 1: `[[ a == ]]'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional group left open at a newline": {
+   "script": "69b0e101e22cbe4c",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected token `newline', conditional binary operator expected\nbash: -c: line 1: expected `)'\nbash: -c: line 1: syntax error near `a'\nbash: -c: line 1: `[[ ( a'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional group without its closing parenthesis": {
+   "script": "04f4e43506284976",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected token `]]', expected `)'\nbash: -c: line 1: syntax error near `]]'\nbash: -c: line 1: `[[ ( a == b ]]'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional left open at the end": {
+   "script": "82173d4bc00041e4",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected EOF while looking for `]]'\nbash: -c: line 2: syntax error: unexpected end of file from `[[' command on line 1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional left open inside if": {
+   "script": "b1e683888ae93ab3",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 2: unexpected argument `newline' to conditional binary operator\nbash: -c: line 2: syntax error near `=='\nbash: -c: line 2: `[[ a =='\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional missing its binary operator": {
+   "script": "f87d989ff9f3cf0c",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected token `b', conditional binary operator expected\nbash: -c: line 1: syntax error near `b'\nbash: -c: line 1: `[[ a b ]]'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional unary operator without its argument": {
+   "script": "256b5e1f88d7c2e5",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected argument `]]' to conditional unary operator\nbash: -c: line 1: syntax error near `]]'\nbash: -c: line 1: `[[ -f ]]'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional word after a group": {
+   "script": "e459a2dfe3fb2944",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error in conditional expression: unexpected token `b'\nbash: -c: line 1: syntax error near `b'\nbash: -c: line 1: `[[ ( a ) b ]]'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional word before a newline": {
+   "script": "62880a45b1392535",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected token `newline', conditional binary operator expected\nbash: -c: line 1: syntax error near `a'\nbash: -c: line 1: `[[ a'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a conditional word that is not an operator": {
+   "script": "45d882b0de97acad",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected token `3', conditional binary operator expected\nbash: -c: line 1: syntax error near `3'\nbash: -c: line 1: `[[ -% 3 ]]'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a for brace body needs its separator": {
+   "script": "f68c08c0dd9b4a0b",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `{'\nbash: -c: line 1: `echo before; set -- p; for b { echo c$b; }; echo end'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a here-document in a substitution with parentheses in its body": {
+   "script": "4a45d28f6fecbe0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[)]\n[(]\na)b\n[) (]\n"
+   }
+  },
+  "parse: a here-document tag with a comma and a blank": {
+   "script": "2b3194a6e8c9b80a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: warning: here-document at line 1 delimited by end-of-file (wanted `A, B')\n"
+   },
+   "stdout": {
+    "text": "hello\n"
+   }
+  },
+  "parse: a misplaced done after a missing separator": {
+   "script": "84f86f963fba1972",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `done'\nbash: -c: line 1: `while true do echo x; done'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a misplaced fi on a last line without a newline": {
+   "script": "be8986a3f83ea837",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `fi'\nbash: -c: line 1: `echo first; fi'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a negative subscript before the first element": {
+   "script": "6058393dfcd2d730",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: [-5]=x: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a negative subscript before the first element when appending": {
+   "script": "8765eee96afc79d3",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: [-5]=x: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a quote left open in a here-document's command substitution": {
+   "script": "6b1e5d01ba68c9b5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: command substitution: line 2: unexpected EOF while looking for matching `''\nbash: command substitution: line 7: unexpected EOF while looking for matching `)'\nbash: command substitution: line 10: unexpected EOF while looking for matching ``'\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\n"
+   }
+  },
+  "parse: a quote left open inside a compound assignment": {
+   "script": "4a54d3c1744352eb",
+   "status": 1,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected EOF while looking for matching `\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a regular expression keeps its blanks": {
+   "script": "391e5174279d06af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nno2\ntab\n"
+   }
+  },
+  "parse: a script that ends on a here-document's tag": {
+   "script": "330f84cf35a7bda0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: here-document at line 1 delimited by end-of-file (wanted `A')\n"
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "parse: a subscript before the first element abandons the command after the elements before it": {
+   "script": "27672953d442b3ec",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [-5]=x-5: bad array subscript\nbash: line 2: [-5]=x-5: bad array subscript\nbash: line 4: [-9]=x: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "s=1\ndeclare -a b=([0]=\"1\")\ns=1\ndeclare -a c=([0]=\"1\")\ns=1\n"
+   }
+  },
+  "parse: a subscript nested too deeply at run time": {
+   "script": "ccc9e3a58a7a61be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\ndeclare -a a=([0]=\"p\")\n\ns=0\ns=0\ndeclare -a a=([0]=\"p\" [1]=\"z\")\n"
+   }
+  },
+  "parse: a subscript that does not evaluate ends the shell": {
+   "script": "9e66326be96bd077",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 2: arithmetic syntax error in expression (error token is \"2\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a subscript that does not evaluate ends the shell in declare": {
+   "script": "12b9472da7d58186",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: x y: arithmetic syntax error in expression (error token is \"y\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a subscript that does not evaluate ends the shell in local": {
+   "script": "51d896f17aeab30d",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: x y: arithmetic syntax error in expression (error token is \"y\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a syntax error after a here-document the script ends in": {
+   "script": "08557ec6133d806c",
+   "status": 2,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 2 delimited by end-of-file (wanted `A')\nbash: -c: line 6: syntax error: unexpected end of file from `{' command on line 1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a syntax error in a command substitution names the line it is on": {
+   "script": "adf0cd5edbe7d212",
+   "status": 127,
+   "stderr": {
+    "text": "bash: -c: line 2: syntax error near unexpected token `fi' while looking for matching `)'\nbash: -c: line 2: `echo $(fi)'\nbash: -c: line 3: syntax error near unexpected token `fi' while looking for matching `)'\nbash: -c: line 3: `  echo \"a $(echo b; fi) c\"'\nbash: -c: line 3: syntax error near unexpected token `fi' while looking for matching `)'\nbash: -c: line 3: `fi)'\nbash: -c: line 2: syntax error near unexpected token `)'\nbash: -c: line 2: `echo $(if)'\nbash: -c: line 1: syntax error near unexpected token `fi' while looking for matching `)'\nbash: -c: line 1: `echo ${x:-$(fi)}'\nbash: -c: line 1: syntax error near unexpected token `fi' while looking for matching `)'\nbash: -c: line 1: `: x; echo $(echo $(fi))'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: a syntax error in an eval's command substitution ends the shell": {
+   "script": "8ab9081420ed004b",
+   "status": 127,
+   "stderr": {
+    "text": "bash: eval: line 4: syntax error near unexpected token `fi' while looking for matching `)'\nbash: eval: line 4: `echo $(fi)'\nbash: eval: line 3: syntax error near unexpected token `fi' while looking for matching `)'\nbash: eval: line 3: `y=$(echo a; fi)'\nbash: eval: line 1: syntax error near unexpected token `fi' while looking for matching `)'\nbash: eval: line 1: `echo $(fi)'\nbash: eval: line 2: syntax error near unexpected token `fi' while looking for matching `)'\nbash: eval: line 2: `echo $(fi)'\nbash: eval: line 3: syntax error near unexpected token `fi' while looking for matching `)'\nbash: eval: line 3: `echo $(fi)'\n/tmp/s.sh: line 3: syntax error near unexpected token `fi' while looking for matching `)'\n/tmp/s.sh: line 3: `echo $(fi)'\n"
+   },
+   "stdout": {
+    "text": "x\ntrapped 127\ns=1\ns=1\ns=0\n"
+   }
+  },
+  "parse: a syntax error in backquotes is reported where it runs": {
+   "script": "47939c4a2447977f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: command substitution: line 2: syntax error near unexpected token `fi'\nbash: command substitution: line 2: `fi'\nbash: command substitution: line 4: syntax error near unexpected token `fi'\nbash: command substitution: line 4: `fi'\nbash: command substitution: line 7: syntax error near unexpected token `fi'\nbash: command substitution: line 7: `echo a; fi'\n"
+   },
+   "stdout": {
+    "text": "x\n\ns=0\n\ns=0\ns=2\n"
+   }
+  },
+  "parse: a usage message in a substitution": {
+   "script": "383f4b006a46519d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Usage: tool [options]\n  1) install\n  2) remove (the default\ndone\n"
+   }
+  },
+  "parse: alternative and default of empty arrays": {
+   "script": "ae35c443dd3ccb29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <> <D> <D>\n4 <> <W> <> <D>\n4 <W> <W> <> <>\n3 <> <D> <D>\n2 <> <>\n1 <W>\n2 <D> <>\n"
+   }
+  },
+  "parse: ampersand in a pattern replacement": {
+   "script": "e9fb65862650896f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a[b]cb a[b]cb a[b]c[b] a&cb a&cb a&cb\nabcb abcb a&cb a<b>cb abbcb a\\bcb\n[a]bcb abc[b] a<bcb> a$0cb a$1cb\na[&]cb\na(b)cb\na[.]b\nx<b> y<b>\n"
+   }
+  },
+  "parse: an associative array's elements need subscripts in a plain assignment": {
+   "script": "76d5f46b72ac071a",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: m: $v: must use subscript when assigning associative array\n"
+   },
+   "stdout": {
+    "text": "declare -A m=([a]=\"b\" )\n"
+   }
+  },
+  "parse: an associative array's elements need subscripts in local": {
+   "script": "57cad7ba12abe9b1",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: m: '[y]': must use subscript when assigning associative array\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: an associative array's elements need subscripts once the first has one": {
+   "script": "5aab386a0d0df595",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: m: '[y]': must use subscript when assigning associative array\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: an associative array's elements need subscripts when appending": {
+   "script": "4cf6b5799ca5aac7",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: m: g: must use subscript when assigning associative array\n"
+   },
+   "stdout": {
+    "text": "declare -A m=([c]=\"d\" )\n"
+   }
+  },
+  "parse: an empty compound-assignment subscript abandons the command": {
+   "script": "b3860c371006f293",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: []=x: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "s=1\ndeclare -a b=([0]=\"1\")\n"
+   }
+  },
+  "parse: an empty compound-assignment subscript abandons the command in declare": {
+   "script": "3586ee4357061e7d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: []=x: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "s=1\ndeclare -a b=([0]=\"1\")\n"
+   }
+  },
+  "parse: an empty conditional at the end": {
+   "script": "0ec5c5ea45532e7c",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 2: unexpected token `EOF' in conditional command\nbash: -c: line 2: syntax error: unexpected end of file from `[[' command on line 1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: an escaped blank before a comment in an arithmetic expansion": {
+   "script": "a87c540e825b863c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: bad substitution: no closing `)' in $((1\\ #c))\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: an eval closes a here-document left open, as bash does": {
+   "script": "5f76e11d3d247e92",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 3: warning: here-document at line 2 delimited by end-of-file (wanted `E')\nbash: line 8: warning: here-document at line 8 delimited by end-of-file (wanted `F')\n"
+   },
+   "stdout": {
+    "text": "x\na\ns=0\nb\ns=0\n"
+   }
+  },
+  "parse: an eval's unexpected end of file names its command's line from the eval's": {
+   "script": "0343ce95c7fb4a7a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 3: syntax error: unexpected end of file from `case' command on line 2\nbash: eval: line 7: syntax error: unexpected end of file from `if' command on line 5\nbash: eval: line 10: syntax error: unexpected end of file from `while' command on line 9\n"
+   },
+   "stdout": {
+    "text": "x\ns=2\ns=2\ns=2\n"
+   }
+  },
+  "parse: an expansion left open names the line it began on": {
+   "script": "99cb1457c38d41de",
+   "status": 0,
+   "stderr": {
+    "text": "bash: -c: line 2: unexpected EOF while looking for matching `}'\nbash: -c: line 2: unexpected EOF while looking for matching `}'\nbash: -c: line 2: unexpected EOF while looking for matching `)'\nbash: -c: line 2: unexpected EOF while looking for matching `]'\nbash: -c: line 2: unexpected EOF while looking for matching `)'\nbash: -c: line 2: unexpected EOF while looking for matching `)'\nbash: -c: line 3: unexpected EOF while looking for matching `)'\nbash: eval: line 3: unexpected EOF while looking for matching `}'\nbash: eval: line 4: unexpected EOF while looking for matching `)'\n"
+   },
+   "stdout": {
+    "text": "s=2\ns=2\n"
+   }
+  },
+  "parse: an extra done at the end": {
+   "script": "f2be69a9ca64e245",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `done'\nbash: -c: line 1: `for f in a b; do echo $f; done; done'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: an extra parenthesis after a compound assignment": {
+   "script": "abbfe826069fe81e",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `)'\nbash: -c: line 1: `x=(a b)); echo c'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: an invalid indirect name abandons the command, not the script": {
+   "script": "96be11b962aeeb69",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 1a: invalid variable name\nbash: line 3: 1a: invalid variable name\nbash: line 5: 1a: invalid variable name\n"
+   },
+   "stdout": {
+    "text": "line2\nnext 1\nlast\n"
+   }
+  },
+  "parse: an open parenthesis at the end": {
+   "script": "b8869c2c735a3a05",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `newline'\nbash: -c: line 1: `echo ('\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: an operator inside a compound assignment": {
+   "script": "bb0c3faf47cf197c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `|'\nbash: -c: line 1: `x=(a | b)'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: append to a braced target after a here-document": {
+   "script": "40e54520e5344fe6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first\nsecond\n"
+   }
+  },
+  "parse: arithmetic commands keep their text": {
+   "script": "4d06e176da697778",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    ((  x  +=  1  ));\n    ((x));\n    ((\ty\t));\n    ((  z\n  +1  ));\n    for ((i = 0 ; i < 1 ; i++  ))\n    do\n        :;\n    done;\n    for ((1; 1; 1))\n    do\n        break;\n    done\n}\n1  1\n"
+   }
+  },
+  "parse: array element assignments with blanks and operators": {
+   "script": "4829823157e293cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a b=([1]=\"y\")\ndeclare -a a=([2]=\"z\")\ndeclare -a d=([1]=\"w\")\ndeclare -a e=([2]=\"v\")\ndeclare -a f=([0]=\"q\" [1]=\"x\")\ng[1 + 1]=u\n"
+   }
+  },
+  "parse: backquote unescaping": {
+   "script": "5894e7249254464f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/home/x V\nV\n$v\na\\b\nhi\n\"hi\"\na$b\nnested\nab\nxy\n"
+   }
+  },
+  "parse: backquotes and a file substitution": {
+   "script": "67596b46acfa25e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 78 fe 7c 78 fe 7c\n"
+   }
+  },
+  "parse: bad substitution diagnostics quote the enclosing text": {
+   "script": "1b361f477d64bdb9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a${v w}b: bad substitution\nbash: line 1: a${v w}b: bad substitution\nbash: line 1: a${v w}b: bad substitution\nbash: line 1: a${v w}: bad substitution\nbash: line 1: ${v w}: bad substitution\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "parse: bad substitution ends the script": {
+   "script": "eaa6e858c6998cd2",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ${v:}: bad substitution\n"
+   },
+   "stdout": {
+    "text": "before\n"
+   }
+  },
+  "parse: bad substitution in a here-document or here-string fails the command": {
+   "script": "e74f84621b2d16bd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ${v:}: bad substitution\nbash: line 1: x ${v w} y\n: bad substitution\n"
+   },
+   "stdout": {
+    "text": "after 1\nafter 1\n"
+   }
+  },
+  "parse: bad substitution in a redirection target": {
+   "script": "a1000f7d7ef6ee7d",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ${dest }: bad substitution\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: bad substitution with an unclosed subscript": {
+   "script": "9da1a435392f0717",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: bad substitution: no closing `}' in \"${a[}\"\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "parse: bad substitutions in subshells": {
+   "script": "7e43f2e2fc22b90e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bash: line 1: ${}: bad substitution\ns=1\nbash: line 1: ${1a}: bad substitution\ns=1\nbash: line 1: ${v w}: bad substitution\ns=1\nbash: line 1: ${#v:-x}: bad substitution\ns=1\nbash: line 1: ${#v:1}: bad substitution\ns=1\nbash: line 1: ${[0]}: bad substitution\ns=1\nbash: line 1: ${${v}}: bad substitution\ns=1\nbash: line 1: ${#!v}: bad substitution\ns=1\nbash: line 1: ${x$}: bad substitution\ns=1\n"
+   }
+  },
+  "parse: bad transformation ends bash -c with 127": {
+   "script": "112943e9701f0391",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: ${v@Z}: bad substitution\nbash: line 1: ${v@QQ}: bad substitution\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "parse: bash 5.3 command substitutions in the current shell": {
+   "script": "618a575028c8e192",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "z 2\n[hi\nthere]\n[val] [unset]\nout\n[v2] [keep]\ns=1\n/ /\nabc\ng\n2 2\n}\na b\ncq\n[a]\n"
+   }
+  },
+  "parse: blanks inside a compound-assignment subscript belong to it": {
+   "script": "cf4a38cd1603ed81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a b=([1]=\"x\")\ndeclare -a a=([0]=\"p\" [2]=\"y\")\ndeclare -a b=([2]=\"x\" [3]=\"y\" [4]=\"z\" [5]=\"w\")\ndeclare -a b=([1]=\"x\")\ndeclare -a b=([1]=\"x\")\ndeclare -a b=([1]=\"x\")\ndeclare -a b=([1]=\"a\" [2]=\"b\" [3]=\"c\")\n"
+   }
+  },
+  "parse: blanks inside an associative compound-assignment key": {
+   "script": "572f5e87774330ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([\" a b \"]=\"x\" )\ndeclare -A m=([\"e f\"]=\"z\" [\"c d\"]=\"y\" [\"  \"]=\"v\" [\"g h\"]=\"w\" [\" a b \"]=\"x\" )\n"
+   }
+  },
+  "parse: braced redirect target after a here-document": {
+   "script": "d7cc657154a30aa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\n"
+   }
+  },
+  "parse: byte arguments to tr, cut and printf": {
+   "script": "e7e561e8cd3a0082",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aXb\nb\n ff 0a\n"
+   }
+  },
+  "parse: case toggles": {
+   "script": "f53e72e949ea93d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abC aBc AbC abC\nAB cd Ab cD\nÉà\nXy\n"
+   }
+  },
+  "parse: case with pat) inside a command substitution": {
+   "script": "b0fa922e9075c375",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "penguin\nm\npb\n1 nested 2\n"
+   }
+  },
+  "parse: command substitutions that parse in a here-document": {
+   "script": "5adb78c35af8f528",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ") ) c 3 b\ns=0\n"
+   }
+  },
+  "parse: compound assignment arguments only for assignment builtins": {
+   "script": "ccf6bf0e99385646",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 1: syntax error near unexpected token `('\nbash: eval: line 1: `true x=(a b)'\nbash: eval: line 1: syntax error near unexpected token `('\nbash: eval: line 1: `builtin declare x=(a)'\nbash: eval: line 1: syntax error near unexpected token `('\nbash: eval: line 1: `'declare' x=(a)'\nbash: eval: line 1: syntax error near unexpected token `('\nbash: eval: line 1: `for i in x=(a); do :; done'\n"
+   },
+   "stdout": {
+    "text": "s=2\ns=2\ns=2\ns=2\ndeclare -a x=([0]=\"d\" [1]=\"e\")\ndeclare -a y=([0]=\"c\")\ndeclare -a l=([0]=\"a\" [1]=\"b\")\ndeclare -ax e=([0]=\"a\")\ndeclare -ar r=([0]=\"b\")\ndeclare -a t=([0]=\"c\")\ndeclare -ax w=([0]=\"d\")\n"
+   }
+  },
+  "parse: compound assignment errors in eval and source": {
+   "script": "1ee55c7467de53f4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 1: syntax error near unexpected token `('\nbash: eval: line 1: `x=(a (b) c)'\nbash: eval: line 1: syntax error near unexpected token `fi'\nbash: eval: line 1: `echo a; fi'\n/tmp/s.sh: line 1: syntax error near unexpected token `;'\n/tmp/s.sh: line 1: `x+=(a b; )'\nbash: eval: line 1: unexpected EOF while looking for matching `)'\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=2\ns=1\ns=1\n"
+   }
+  },
+  "parse: declare -f after a here-document": {
+   "script": "3c9b222bcd6e82e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    cat <<A\na\nA\n\n    if true;    then\n        :;\n    fi;\n    cat <<B\nb\nB\n\n    while false;    do\n        :;\n    done;\n    cat <<C\nc\nC\n\n    echo x\n    if true; then\n        :;\n    fi\n}\nh () \n{ \n    cat <<A > /tmp/x\na\nA\n\n    echo x > /dev/null;\n    echo y\n}\nk () \n{ \n    sleep 0 & echo a;\n    sleep 0 &\n}\n"
+   }
+  },
+  "parse: declare -f here-document round trip": {
+   "script": "f883334d5a31ea96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "config for prod\nbuilt\nstatus=0\nbuild () \n{ \n    cat <<EOF\nconfig for $1\nEOF\n\n    echo built\n}\n"
+   }
+  },
+  "parse: declare -f here-document shapes": {
+   "script": "626af8e1cda17289",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    cat <<EOF |\nx1\nEOF\n  grep x\n    cat <<EOF && \nb2\nEOF\n echo ok\n    cat <<EOF &\nb3\nEOF\n  while read l;    do\n        echo $l;\n    done <<EOF\nb4\nEOF\n\n    cat <<A <<-B > /dev/null\na5\nA\nb5\nB\n\n    cat <<EOF\nlast\nEOF\n\n}\ng () \n{ \n    cat <<'Q'\nquoted $x\nQ\n\n}\nh () \n{ \n    cat <<'EOF' 2>&1 1>&2 1>&2\ne\nEOF\n\n    cat <<X\nX\n\n}\nquoted $x\ne\n"
+   }
+  },
+  "parse: declare -f here-documents in conditions and substitutions": {
+   "script": "d18025f884aca28b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    if cat <<A\na\nA\n    then\n        echo t;\n    fi;\n    while read -r l <<B\nb\nB\n    do\n        echo \"$l\";\n        break;\n    done;\n    x=$(cat <<C\nc\nC\n);\n    echo \"multi\nline\";\n    case x in \n        x)\n            cat <<D\nd\nD\n\n        ;;\n    esac\n}\na\nt\nb\nmulti\nline\nd\n"
+   }
+  },
+  "parse: declare -f other bodies, elif and nested functions": {
+   "script": "00ae1f48fa670562",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    ( echo sub ) > /dev/null\n}\ng () \n{ \n    echo g\n} 2> /dev/null\nh () \n{ \n    if true; then\n        echo t;\n    else\n        if false; then\n            echo e;\n        else\n            if :; then\n                echo x;\n            fi;\n        fi;\n    fi\n}\nk () \n{ \n    function inner () \n    { \n        echo i\n    };\n    function inner2 () \n    { \n        ( echo j )\n    }\n}\nm () \n{ \n    for a in \"$@\";\n    do\n        echo \"<$a>\";\n    done\n}\nk is a function\nk () \n{ \n    function inner () \n    { \n        echo i\n    };\n    function inner2 () \n    { \n        ( echo j )\n    }\n}\nt\n"
+   }
+  },
+  "parse: declare -f redirections and substitutions": {
+   "script": "148f7fd9fecba87c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    diff <(echo a) <(echo a; echo b) > /dev/null;\n    cat < <(echo x) 2>&1 1>&2;\n    x=$(( 1 + 2 ));\n    (( x++ ));\n    echo a 2>&1 | cat;\n    { \n        echo\n    } > /dev/null 2>&1\n}\nx\na\ng () \n{ \n    cat < /dev/null > /dev/null 2> /dev/null <> /dev/null >> /dev/null <<< s;\n    cat 3< /dev/null 4<<< r\n}\n"
+   }
+  },
+  "parse: declare and local compound assignments with blank subscripts": {
+   "script": "881f38531568ee65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a c=([1]=\"x\")\ndeclare -a d=([2]=\"q\")\n"
+   }
+  },
+  "parse: declare evaluates a compound subscript as an assignment does": {
+   "script": "2026a897958d62bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a c=([3]=\"1\")\ndeclare -a a=([0]=\"0\" [1]=\"0\")\ndeclare -- x=\"2\"\n"
+   }
+  },
+  "parse: declare takes options only before the first name": {
+   "script": "994835791c494d4e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `-r': not a valid identifier\nbash: line 1: declare: `--': not a valid identifier\nbash: line 1: declare: `+i': not a valid identifier\nbash: line 1: declare: `-x': not a valid identifier\nbash: line 1: declare: `-p': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "s=1\ndeclare -a x\ndeclare -a v=([0]=\"4\")\ns=1\ndeclare -a x\ndeclare -- y\ns=1\ndeclare -i n1\ndeclare -i n2\ns=1\ns=1\n"
+   }
+  },
+  "parse: declare's element += appends to the element": {
+   "script": "50f8929724fa01c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"1\" [1]=\"2z\")\ndeclare -a a=([0]=\"1q\" [1]=\"2z\" [5]=\"n\")\ndeclare -ai n=([0]=\"6\" [1]=\"5\")\ndeclare -A m=([k]=\"vw\" [j]=\"x\" )\ndeclare -a s=([0]=\"abcd\")\ndeclare -a b=([0]=\"x\")\ndeclare -a b=([0]=\"p\" [1]=\"q\")\n"
+   }
+  },
+  "parse: declare's element subscript counts back from the array's end": {
+   "script": "9a23bea33251227e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a[-5]: bad array subscript\nbash: line 1: a[-5]: bad array subscript\nbash: line 1: b[]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"1\" [1]=\"x\")\nsame 1\ndeclare -a a=([0]=\"1\" [1]=\"x\")\nin 1\ndeclare -a a\nsame 1\ndeclare -a c=([3]=\"v\")\n"
+   }
+  },
+  "parse: declare's element without a subscript or value is not a valid identifier": {
+   "script": "239c66bcfce4ac8e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `a[]': not a valid identifier\nbash: line 1: declare: a: not found\nbash: line 1: declare: `a[]': not a valid identifier\nbash: line 1: declare: `m[]': not a valid identifier\nbash: line 1: b[]: bad array subscript\nbash: line 1: c[-1]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "same 1\nsame 1\ndeclare -a a=([0]=\"1\")\nsame 1\nsame 1\ndeclare -a b=()\nsame 1\ndeclare -a c=()\n"
+   }
+  },
+  "parse: declare's empty associative subscript is a bad array subscript": {
+   "script": "d9e1e4a395abf410",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: m[]: bad array subscript\nbash: line 1: m2[]: bad array subscript\nbash: line 1: m3[]: bad array subscript\nbash: line 1: m4[]: bad array subscript\nbash: line 1: m[]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "same 1\ndeclare -A m\nsame 1\ndeclare -A m2=()\nin 1\ndeclare -A m3\nsame 1\ndeclare -Ar m4=([k]=\"v\" )\nsame 1\n"
+   }
+  },
+  "parse: declare's must-use-subscript error shows the element as written": {
+   "script": "a5a5156d4b067a43",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: m: '\"$v c\"': must use subscript when assigning associative array\nbash: line 1: m: \"$v c\": must use subscript when assigning associative array\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\n"
+   }
+  },
+  "parse: deeply nested text given to eval is refused where eval runs": {
+   "script": "ef3227a944bc686a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nafter 0\n"
+   }
+  },
+  "parse: deeply nested text in single quotes is only text": {
+   "script": "a33d64d60f29ac32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6002\n"
+   }
+  },
+  "parse: echo -e bytes": {
+   "script": "a28bfbeeeb934899",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff 0a\n 61 e9 62\n 5b fe 41 5d 0a\n"
+   }
+  },
+  "parse: escaped characters in pattern lists": {
+   "script": "e9d3b73826f217f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\na* c\nc\nm1\nm2\n"
+   }
+  },
+  "parse: eval syntax errors are numbered from the eval's line": {
+   "script": "0720527a054012e0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 2: syntax error near unexpected token `fi'\nbash: eval: line 2: `echo a; fi'\nbash: eval: line 6: unexpected token `b', conditional binary operator expected\nbash: eval: line 6: syntax error near `b'\nbash: eval: line 6: `[[ a b ]]'\nbash: eval: line 8: unexpected EOF while looking for matching `)'\n"
+   },
+   "stdout": {
+    "text": "x\ns=2\ns=2\ns=1\n"
+   }
+  },
+  "parse: expansions after a here-document on the same line": {
+   "script": "cf6b2f807f264e20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nbc 3 ab x 6\nend\n"
+   }
+  },
+  "parse: expansions left open in a here-document": {
+   "script": "3cbf75183529d885",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: a ${x\nb\n: bad substitution\nbash: line 7: bad substitution: no closing `)' in a $((x+\nb\n\nbash: line 12: bad substitution: no closing `]' in a $[1+2\nb\n\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\n"
+   }
+  },
+  "parse: failglob abandons the top-level command, line by line": {
+   "script": "ecf61d2395762531",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: no match: nomatch*\nbash: line 4: no match: nomatch*\nbash: line 6: no match: nomatch*\nbash: line 8: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": "after 1\nafter2 1\nafter3 1\nafter4 1\n"
+   }
+  },
+  "parse: failglob in a function ends the shell": {
+   "script": "f184b5b5da06e339",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: failglob in a redirection ends the shell": {
+   "script": "b7980b9f6b1c4628",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: failglob in a subshell ends only the subshell": {
+   "script": "b7d1ac8cb522e501",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\nbash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": "status=1\ns2=1\n"
+   }
+  },
+  "parse: file names that are not UTF-8": {
+   "script": "0fc9ed1853b04a4f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\ne=0\n"
+   }
+  },
+  "parse: for with an invalid name or a brace body": {
+   "script": "0540afc8dcd61354",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\nb1\nb2\ncp\ncq\ne\ni0\ni1\nj0\nend\n"
+   }
+  },
+  "parse: function with a multi-line string reads back": {
+   "script": "095be4bc88d8be61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n  b\nc\n\td\nf is a function\nf () \n{ \n    printf '%s\\n' \"a\n  b\" 'c\n\td'\n}\n"
+   }
+  },
+  "parse: globstar results": {
+   "script": "5faeb7a55f209371",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a a-b a-b/y a/z b.txt d d/e d/e/h d/f g x x/a.txt z.txt\na a-b a-b/y a/z d d/e d/e/h d/f x x/a.txt\nd/ d/e d/e/h d/f\na-b/ a/ d/ d/e/ x/\nb.txt x/a.txt z.txt\nd/e/h\nx/a.txt\n[a]\n[a-b]\n./ ./a ./a-b ./a-b/y ./a/z ./b.txt ./d ./d/e ./d/e/h ./d/f ./g ./x ./x/a.txt ./z.txt\na-b/y a/z d/e d/f x/a.txt\n/tmp/a /tmp/a-b /tmp/a-b/y /tmp/a/z /tmp/d /tmp/d/e /tmp/d/e/h /tmp/d/f /tmp/x /tmp/x/a.txt\n/tmp/b.txt /tmp/x/a.txt /tmp/z.txt\n/tmp/d/ /tmp/d/e /tmp/d/e/h /tmp/d/f\n"
+   }
+  },
+  "parse: here-document and here-string bytes": {
+   "script": "33169bad51983ee2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " fe 0a\n fe 0a\n"
+   }
+  },
+  "parse: here-document inside a substitution on a here-document line": {
+   "script": "ad6910b23811c6c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer\ny=inner\n"
+   }
+  },
+  "parse: here-document line continuation": {
+   "script": "3cec1dc8576f47db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "RUN apt-get update &&     apt-get install -y curl\na b\nc\\\nd \\e\nq \\\nr\nt \tu\n"
+   }
+  },
+  "parse: here-document parameter words keep single quotes": {
+   "script": "98304b0e0cb06918",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "['x'] [y] ['z w'] [q r] [$] [o] [\"1\"] ['1']\n"
+   }
+  },
+  "parse: here-document tag spelled with a parameter": {
+   "script": "318df03d9adf1202",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nend\n"
+   }
+  },
+  "parse: increment signs, empty hex and # in arithmetic": {
+   "script": "06c4655c8dc969dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 0 0 0 0 c=0\ns=1\n5\n"
+   }
+  },
+  "parse: indexed compound-assignment subscripts are arithmetic": {
+   "script": "d556be560c0dcc9e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a b=([1]=\"q\" [2]=\"r\")\ndeclare -a b=([8]=\"y\")\ndeclare -a b=([0]=\"a\" [1]=\"b\" [2]=\"z\")\ndeclare -a b=([3]=\"s\" [4]=\"r\")\ndeclare -a b=([5]=\"q\")\ndeclare -a b=([0]=\"a\" [1]=\"b\")\ndeclare -- i=\"2\"\n"
+   }
+  },
+  "parse: invalid indirect names": {
+   "script": "afde7af98359b0ce",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a b: invalid variable name\nbash: line 1: : invalid variable name\nbash: line 1: p q: invalid variable name\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "parse: jq --args and --jsonargs take negative numbers": {
+   "script": "8c5916fe528a0912",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-5,3]\ns=0\n[\"-5\",\"-.5\",\"3\"]\ns=0\n\"0\"\n{\"positional\":[\"a\",\"-b\"],\"named\":{}}\n"
+   }
+  },
+  "parse: jq --jsonargs and --argjson parse as jq does": {
+   "script": "644397bc7d609f2c",
+   "status": 0,
+   "stderr": {
+    "text": "jq: invalid JSON text passed to --jsonargs\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs at https://jqlang.org\njq: invalid JSON text passed to --jsonargs\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs at https://jqlang.org\njq: invalid JSON text passed to --argjson\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs at https://jqlang.org\n"
+   },
+   "stdout": {
+    "text": "[1,{\"a\":2},-1E+3,null]\ns=0\ns=2\ns=2\nnull\ns=2\n"
+   }
+  },
+  "parse: jq --seq reads a JSON text sequence": {
+   "script": "29f08212889aee25",
+   "status": 0,
+   "stderr": {
+    "text": "jq: ignoring parse error: Unfinished abandoned text at EOF at line 2, column 0\njq: ignoring parse error: Potentially truncated top-level numeric value at EOF at line 1, column 2\njq: ignoring parse error: Truncated value at line 1, column 8\njq: ignoring parse error: Potentially truncated top-level numeric value at line 1, column 3\njq: ignoring parse error: Unmatched '}' at line 1, column 5 (need RS to resync)\njq: ignoring parse error: Unfinished string at EOF at line 1, column 3\njq: ignoring parse error: Potentially truncated top-level numeric value at line 1, column 2\njq: ignoring parse error: Truncated value at line 1, column 6\n"
+   },
+   "stdout": {
+    "text": "\u001e1\n\u001e[2]\ns=0\ns=0\ns=0\n\u001e2\ns=0\n\u001e2\n\u001e1\n\u001e2\n\u001e3\n\u001e3\n\u001e[1,[2]]\n\u001e2\n\u001enull\ns=0\n"
+   }
+  },
+  "parse: jq --slurpfile and --rawfile read as jq does": {
+   "script": "bd42a99f2fca9fed",
+   "status": 0,
+   "stderr": {
+    "text": "jq: Bad JSON in --slurpfile x /tmp/s.json: Unfinished JSON term at EOF at line 1, column 4\n"
+   },
+   "stdout": {
+    "text": "s=2\n[1,2]\n\"a�b\"\n"
+   }
+  },
+  "parse: jq -s prints nothing before a parse error": {
+   "script": "cccc79ea18c60047",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at line 2, column 0\njq: parse error: Invalid numeric literal at EOF at line 1, column 1\njq: parse error: Invalid numeric literal at line 2, column 0\n"
+   },
+   "stdout": {
+    "text": "s=5\ns=5\n1\n2\ns=5\n"
+   }
+  },
+  "parse: jq .5 and 1. literals and IN": {
+   "script": "18573cc65b8799cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0.30000000000000004]\n[0.5,1,1E+2,5,1E+1000,12,1.50]\ntrue\ntrue\nnull\n"
+   }
+  },
+  "parse: jq a computed zero negates to -0, a literal zero to 0": {
+   "script": "671695d615056600",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-0,-0,0,-0,-0,0]\n[0,0.0,0]\n0\n[-0,-0]\n"
+   }
+  },
+  "parse: jq bad escapes in a program string": {
+   "script": "4925c50283c81cb3",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: Invalid \\uXXXX\\uXXXX surrogate pair escape at line 1, column 8 (while parsing '\"\\ud83d\"') at <top-level>, line 1, column 2:\n    \"\\ud83d\"\n     ^^^^^^\njq: 1 compile error\njq: error: Invalid escape at line 1, column 4 (while parsing '\"\\x\"') at <top-level>, line 1, column 2:\n    \"\\x\"\n     ^^\njq: 1 compile error\njq: error: Invalid \\uXXXX escape at line 1, column 6 (while parsing '\"\\u12\"') at <top-level>, line 1, column 2:\n    \"\\u12\"\n     ^^^^\njq: 1 compile error\njq: error: Invalid characters in \\uXXXX escape at line 1, column 8 (while parsing '\"\\u12g4\"') at <top-level>, line 1, column 2:\n    \"\\u12g4\"\n     ^^^^^^\njq: 1 compile error\njq: error: Invalid escape at line 2, column 1 (while parsing '\"\\\n\"') at <top-level>, line 1, column 2:\n    \"\\\n     ^\njq: 1 compile error\n"
+   },
+   "stdout": {
+    "text": "s=3\ns=3\ns=3\ns=3\n\"aé1\\t\"\ns=3\n"
+   }
+  },
+  "parse: jq big integers in arithmetic become doubles": {
+   "script": "2eccbdfb130aaf94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[12345678901234568000000]\n[12345678901234567890123,100000000000000000001,1.000000000000000000001]\nfalse\n\"12345678901234567890123\"\n\"12345678901234567890123\"\n12345678901234567890123\n-12345678901234567890123\n[9007199254740992,9007199254740993,9223372036854776000]\n354224848179262000000\n"
+   }
+  },
+  "parse: jq builtin errors are jq's": {
+   "script": "ffc7e1093e5dbd12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 | keys => jq: error (at <unknown>): number (1) has no keys|\nnull | keys => jq: error (at <unknown>): null (null) has no keys|\n1 | to_entries => jq: error (at <unknown>): number (1) has no keys|\n1 | with_entries(.) => jq: error (at <unknown>): number (1) has no keys|\ntrue | length => jq: error (at <unknown>): boolean (true) has no length|\n1 | has(\"a\") => jq: error (at <unknown>): Cannot check whether number has a string key|\n{} | has(0) => jq: error (at <unknown>): Cannot check whether object has a number key|\n{} | has(null) => jq: error (at <unknown>): Cannot check whether object has a null key|\n[1] | has(0.5) => true|\n1 | contains(\"a\") => jq: error (at <unknown>): number (1) and string (\"a\") cannot have their containment checked|\ntrue | contains(false) => jq: error (at <unknown>): boolean (true) and boolean (false) cannot have their containment checked|\n1 | inside(\"a\") => jq: error (at <unknown>): string (\"a\") and number (1) cannot have their containment checked|\n1 | sort => jq: error (at <unknown>): number (1) cannot be sorted, as it is not an array|\n1 | sort_by(.) => jq: error (at <unknown>): Cannot iterate over number (1)|\n{} | sort_by(.) => jq: error (at <unknown>): object ({}) and array ([]) cannot be sorted, as they are not both arrays|\n1 | unique => jq: error (at <unknown>): number (1) cannot be sorted, as it is not an array|\n1 | min => jq: error (at <unknown>): number (1) and number (1) cannot be iterated over|\n{\"a\":1} | min => jq: error (at <unknown>): object ({\"a\":1}) and object ({\"a\":1}) cannot be iterated over|\n{\"a\":1} | min_by(.) => jq: error (at <unknown>): object ({\"a\":1}) and array ([[1]]) cannot be iterated over|\n1 | reverse => jq: error (at <unknown>): Cannot index number with number (0)|\n\"abc\" | reverse => jq: error (at <unknown>): Cannot index string with number (2)|\nnull | reverse => []|\n1 | flatten => jq: error (at <unknown>): Cannot iterate over number (1)|\n[1] | flatten(-1) => jq: error (at <unknown>): flatten depth must not be negative|\n{\"a\":[1]} | flatten => [1]|\n[1] | from_entries => jq: error (at <unknown>): Cannot index number with string (\"key\")|\n[{\"key\":null}] | from_entries => jq: error (at <unknown>): Cannot use null (null) as object key|\n1 | combinations => jq: error (at <unknown>): Cannot index number with number (0)|\n1 | range(.;\"a\") => jq: error (at <unknown>): Range bounds must be numeric|\n1 | limit(\"a\"; 1) => jq: error (at <unknown>): string (\"a\") and number (1) cannot be subtracted|\n1 | getpath(1) => jq: error (at <unknown>): Path must be specified as an array|\n1 | delpaths(1) => jq: error (at <unknown>): Paths must be specified as an array|\n1 | delpaths([1]) => jq: error (at <unknown>): Path must be specified as array, not number|\n{} | delpaths([[\"a\",0]]) => {}|\n{\"a\":1} | delpaths([[]]) => null|\n[1] | del(.[5]) => [1]|\n"
+   }
+  },
+  "parse: jq builtins jaq lacked: $__loc__, lgamma_r, get_search_list and builtins": {
+   "script": "4276944d80ad692d",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): modulemeta input module name must be a string\n"
+   },
+   "stdout": {
+    "text": "{\"file\":\"<top-level>\",\"line\":1}\n{\"file\":\"<top-level>\",\"line\":3}\n[[-0.12078223763524522,1],[1.2655121234846454,-1],[1.7976931348623157e+308,1],[1.7976931348623157e+308,1],[0.6931471805599453,1]]\n[\"~/.jq\",\"$ORIGIN/../lib/jq\",\"$ORIGIN/../lib\"]\n[\"/tmp\"]\n[\"/tmp\",\"/x\"]\n226\n[\"have_literal_numbers/0\",\"have_decnum/0\",\"input_line_number/0\",\"input_filename/0\",\"now/0\",\"localtime/0\",\"gmtime/0\",\"mktime/0\"]\ns=5\n"
+   }
+  },
+  "parse: jq byte order marks": {
+   "script": "d8efe8f92994bfe3",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at EOF at line 1, column 6\njq: parse error: Malformed BOM\n"
+   },
+   "stdout": {
+    "text": "{\"a\":1}\ns=0\ns=0\n1\ns=5\ns=5\n\"﻿\\\"x\\\"\"\ns=0\n"
+   }
+  },
+  "parse: jq checks module metadata and import paths as it parses": {
+   "script": "5d3c16abfb2887a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jq: error: Module metadata must be an object at <top-level>, line 1, column 8:|    module 1; .|           ^|jq: 1 compile error| s=3\njq: error: Module metadata must be constant at <top-level>, line 1, column 8:|    module {a: .}; .|           ^^^^^^|jq: 1 compile error| s=3\njq: error: Module metadata must be an object at <top-level>, line 1, column 17:|    import \"a\" as a 1; .|                    ^|jq: 1 compile error| s=3\njq: error: Import path must be constant at <top-level>, line 1, column 8:|    import \"a\\(1)\" as a; .|           ^^^^^^^|jq: 1 compile error| s=3\nnull| s=0\n1| s=0\n"
+   }
+  },
+  "parse: jq compares, contains, merges, writes and frees deeply nested values": {
+   "script": "77dbffa86d2734af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[true,false,true]\n3001\n[20021,\"[<skipped: too deep>]\"]\n1\n"
+   }
+  },
+  "parse: jq date builtins as jq 1.8": {
+   "script": "4575b91b79bf5f51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"x\" | fromdate => jq: error (at <unknown>): date \"x\" does not match format \"%Y-%m-%dT%H:%M:%SZ\"|\n\"x\" | strptime(\"%Y\") => jq: error (at <unknown>): date \"x\" does not match format \"%Y\"|\n1 | strptime(\"%Y\") => jq: error (at <unknown>): strptime/1 requires string inputs and arguments|\n\"x\" | mktime => jq: error (at <unknown>): mktime requires array inputs|\n[1] | mktime => -62135683200|\n[] | mktime => -2209075200|\n[2024,0,1] | mktime => 1704067200|\n[2024.5,0,1,0,0,0,0,0] | mktime => 1704067200|\n[\"a\"] | mktime => jq: error (at <unknown>): mktime requires parsed datetime inputs|\n\"x\" | gmtime => jq: error (at <unknown>): gmtime() requires numeric inputs|\n\"x\" | localtime => jq: error (at <unknown>): localtime() requires numeric inputs|\n1 | strftime(1) => jq: error (at <unknown>): strftime/1 requires a string format|\n\"x\" | strftime(\"%Y\") => jq: error (at <unknown>): strftime/1 requires parsed datetime inputs|\n[1] | todate => \"0000-12-31T00:00:00Z\"|\n86400.5 | todate => \"1970-01-02T00:00:00Z\"|\n\"2000-01-01T00:00:00.5Z\" | fromdate => jq: error (at <unknown>): date \"2000-01-01T00:00:00.5Z\" does not match format \"%Y-%m-%dT%H:%M:%SZ\"|\n"
+   }
+  },
+  "parse: jq destructuring alternatives": {
+   "script": "5db4786e8a3e6dfd",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): Cannot index number with string (\"a\")\n"
+   },
+   "stdout": {
+    "text": "[1,2]\n[3,null]\n{\"a\":null,\"b\":3}\ns=5\n[1,2,null]\n[3,null,null]\n"
+   }
+  },
+  "parse: jq error positions name the operand and line": {
+   "script": "26e3ffa0b3dbef0f",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at /tmp/a.json:1): Cannot index string with string (\"a\")\njq: error (at /tmp/b.json:1): Cannot index number with string (\"a\")\njq: error (at /tmp/f1:1): Cannot index number with string (\"a\")\njq: error (at /tmp/f2:3): Cannot index string with string (\"a\")\njq: error (at /tmp/g.json:1): Cannot index number with string (\"a\")\njq: error (at /tmp/g.json:1): Cannot index number with string (\"a\")\njq: error (at <stdin>:1): Cannot index object with number (0)\njq: error (at <stdin>:4): Cannot index object with number (0)\n"
+   },
+   "stdout": {
+    "text": "s=5\ns=5\ns=5\ns=5\n"
+   }
+  },
+  "parse: jq error positions under -s and -R": {
+   "script": "da275d743c689c9e",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <stdin>:0): Cannot index array with string (\"a\")\njq: error (at <stdin>:2): Cannot index array with string (\"a\")\njq: error (at <stdin>:1): Cannot index string with string (\"a\")\njq: error (at <stdin>:2): Cannot index string with string (\"a\")\njq: error (at <stdin>:2): Cannot index string with string (\"a\")\njq: error (at <stdin>:0): Cannot index array with string (\"a\")\njq: error (at <unknown>): x\njq: error (at <stdin>:1) (not a string): {\"a\":1}\njq: error (at <stdin>:2) (not a string): {\"a\":2}\n"
+   },
+   "stdout": {
+    "text": "s=5\ns=5\n"
+   }
+  },
+  "parse: jq exit statuses follow jq's last input": {
+   "script": "8c5af1c2778cbff9",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <stdin>:0): x\njq: error (at <stdin>:0): x\n{}\nbye\n"
+   },
+   "stdout": {
+    "text": "null\ns=1\ns=4\n1\nnull\ns=1\nnull\ns=1\ns=5\ns=5\ns=1\n"
+   }
+  },
+  "parse: jq folds constant object keys as jq does": {
+   "script": "82b26ade11101aa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jq: error: Cannot use number (2) as object key at <top-level>, line 1, column 3:|    {(1+1): 2}|      ^^^|jq: 1 compile error|s=3\njq: error: Cannot use number (0.30000000000000004) as object key at <top-level>, line 1, column 3:|    {(0.1+0.2): 2}|      ^^^^^^^|jq: 1 compile error|s=3\njq: error: Cannot use boolean (true) as object key at <top-level>, line 1, column 3:|    {(1<2): 3}|      ^^^|jq: 1 compile error|s=3\njq: error: Cannot use array ([]) as object key at <top-level>, line 1, column 3:|    {([]): 1}|      ^^|jq: 1 compile error|s=3\njq: error: Cannot use array ([1,[2,{\"a\":[3]}]]) as object key at <top-level>, line 1, column 3:|    {([1,[2,{\"a\":[3]}]]): 1}|      ^^^^^^^^^^^^^^^^^|jq: 1 compile error|s=3\njq: error: Cannot use object ({\"a\":2}) as object key at <top-level>, line 1, column 3:|    {({a:(1+1)}):1}|      ^^^^^^^^^|jq: 1 compile error|s=3\njq: error: Cannot use object ({\"file\":\"<top-level>\",\"li...}) as object key at <top-level>, line 1, column 3:|    {($__loc__): 1}|      ^^^^^^^^|jq: 1 compile error|s=3\njq: error: Cannot use number (1.50) as object key at <top-level>, line 1, column 3:|    {(1.50): 2}|      ^^^^|jq: 1 compile error|s=3\njq: error: Cannot use number (1E+3) as object key at <top-level>, line 1, column 3:|    {(1e3): 2}|      ^^^|jq: 1 compile error|s=3\njq: error: Cannot use number (1) as object key at <top-level>, line 1, column 3:|    {(null+1):1}|      ^^^^^^|jq: 1 compile error|s=3\njq: error: Cannot use array ([\"a\",\"b\"]) as object key at <top-level>, line 1, column 3:|    {(\"a,b\" / \",\"): 1}|      ^^^^^^^^^^^|jq: 1 compile error|s=3\njq: error: Cannot use object ({\"__loc__\":{\"file\":\"<top-...}) as object key at <top-level>, line 1, column 3:|    {({$__loc__}):1}|      ^^^^^^^^^^|jq: 1 compile error|s=3\njq: error: Cannot use array ([\"x\"]) as object key at <top-level>, line 1, column 3:|    {([@base64 \"x\"]):1}|      ^^^^^^^^^^^^^|jq: 1 compile error|s=3\njq: error: Cannot use boolean (true) as object key at <top-level>, line 1, column 16:|    def true: 5; {(true): 1}|                   ^^^^|jq: 1 compile error|s=3\njq: error: Cannot use boolean (true) as object key at <top-level>, line 1, column 3:|    {(true):1} | {(false): 2}|      ^^^^|jq: error: Cannot use boolean (false) as object key at <top-level>, line 1, column 16:|    {(true):1} | {(false): 2}|                   ^^^^^|jq: 2 compile errors|s=3\n"
+   }
+  },
+  "parse: jq get_jq_origin and get_prog_origin": {
+   "script": "2cf21716d6ff8ddd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"/tmp/o3/real\"\n[\".\",\"/tmp/o3/real\"]\n\".\"\n\"/tmp/o3/real\"\n\"/tmp/o3/real\"\n\"/tmp/o3/real\"\n"
+   }
+  },
+  "parse: jq implode": {
+   "script": "8426377cc9bb6f20",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): string (\"a\") can't be imploded, unicode codepoint needs to be numeric\njq: error (at <unknown>): implode input must be an array\njq: error (at <unknown>): number (null) can't be imploded, unicode codepoint needs to be numeric\njq: error (at <unknown>): object ({\"aaaaaaaaaaaaaaaaaaaaaaa...}) can't be imploded, unicode codepoint needs to be numeric\n"
+   },
+   "stdout": {
+    "text": "\"AB😀\"\n\"�\"\ns=0\n\"�\"\ns=0\n\"�\"\ns=0\n\"\\u0001\"\ns=0\n\"\\u0000A\"\ns=0\ns=5\ns=5\ns=5\ns=5\n"
+   }
+  },
+  "parse: jq index errors are jq's": {
+   "script": "55d2d50d8deb19ae",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <stdin>:1): Cannot index number with string (\"a\")\njq: error (at <stdin>:2): Cannot index string with string (\"a\")\njq: error (at <stdin>:3): Cannot index array with string (\"a\")\njq: error (at <stdin>:6): Cannot index boolean with string (\"a\")\njq: error (at <unknown>): Cannot index array with string (\"aaaaaaaaaaaaaaaaaaaaaaaa...\")\njq: error (at <unknown>): Cannot index object with array ([1])\njq: error (at <unknown>): Cannot index number with number (0)\njq: error (at <unknown>): Cannot index string with number (0)\njq: error (at <unknown>): Cannot index boolean with object ({})\njq: error (at <unknown>): Cannot index object with null (null)\njq: error (at <unknown>): Cannot index number with number (1)\n"
+   },
+   "stdout": {
+    "text": "null\nnull\ns=5\n"
+   }
+  },
+  "parse: jq input -0 keeps its sign": {
+   "script": "6bd051d12b9e6bd3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-0,-0,-0.0]\n-0\n[\"-0\"]\n"
+   }
+  },
+  "parse: jq input and inputs meet a parse error": {
+   "script": "253ffdef41ece14b",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <stdin>:0): Invalid numeric literal at line 1, column 4\njq: error (at <stdin>:0): Invalid numeric literal at line 1, column 4\njq: parse error: Invalid numeric literal at line 1, column 6\n"
+   },
+   "stdout": {
+    "text": "s=5\n1\ns=5\n[1,2]\ns=5\n"
+   }
+  },
+  "parse: jq input past the end": {
+   "script": "ba2b262484757f4c",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <stdin>:0): break\njq: error (at <stdin>:1): break\n"
+   },
+   "stdout": {
+    "text": "s=5\ns=5\n[2]\ns=0\n"
+   }
+  },
+  "parse: jq input_line_number": {
+   "script": "9cd1b6c8107586f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,1]\n[2,2]\n[3,3]\n[1,0]\n[2,0]\n[3,0]\n[[1,2],2]\n[3,3]\n[4,4]\n[\"x\",1]\n[\"a\",1]\n[\"b\",1]\n0\n"
+   }
+  },
+  "parse: jq input_line_number counts jq's 4091-byte chunks": {
+   "script": "242c08a839a1a3e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 [1,0]\n   2044 [2,0]\n    956 [2,1]\n      1 [3,2]\n"
+   }
+  },
+  "parse: jq invalid UTF-8 input becomes U+FFFD as jq decodes it": {
+   "script": "5c3d8569f992e753",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 61 ef bf bd 62 22 0a 22 ef bf bd 22 0a 22 ef\n bf bd 22 0a 22 ef bf bd 22 0a 22 ef bf bd 28 22\n 0a 22 ef bf bd 22 0a 22 ef bf bd ef bf bd 22 0a\n 22 ef bf bd 22 0a\n 22 78 ef bf bd 79 22 0a\n"
+   }
+  },
+  "parse: jq iteration and arithmetic errors are jq's": {
+   "script": "e6ba44ec53362bc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 | .[] => jq: error (at <unknown>): Cannot iterate over number (1)|\nnull | .[] => jq: error (at <unknown>): Cannot iterate over null (null)|\n\"a\" | .[] => jq: error (at <unknown>): Cannot iterate over string (\"a\")|\n{} + 1 => jq: error (at <unknown>): object ({}) and number (1) cannot be added|\n[] + {} => jq: error (at <unknown>): array ([]) and object ({}) cannot be added|\n\"a\" + 1 => jq: error (at <unknown>): string (\"a\") and number (1) cannot be added|\n1 - \"a\" => jq: error (at <unknown>): number (1) and string (\"a\") cannot be subtracted|\n[1] - 1 => jq: error (at <unknown>): array ([1]) and number (1) cannot be subtracted|\n{} * 2 => jq: error (at <unknown>): object ({}) and number (2) cannot be multiplied|\n\"a\" * {} => jq: error (at <unknown>): string (\"a\") and object ({}) cannot be multiplied|\n1 / \"a\" => jq: error (at <unknown>): number (1) and string (\"a\") cannot be divided|\n[] / [] => jq: error (at <unknown>): array ([]) and array ([]) cannot be divided|\n{} % 1 => jq: error (at <unknown>): object ({}) and number (1) cannot be divided (remainder)|\n\"a\" % 2 => jq: error (at <unknown>): string (\"a\") and number (2) cannot be divided (remainder)|\n-\"a\" => jq: error (at <unknown>): string (\"a\") cannot be negated|\n-[1] => jq: error (at <unknown>): array ([1]) cannot be negated|\nnull | abs => jq: error (at <unknown>): null (null) cannot be negated|\n1 | add => jq: error (at <unknown>): Cannot iterate over number (1)|\n1 | map(.) => jq: error (at <unknown>): Cannot iterate over number (1)|\n1 | any => jq: error (at <unknown>): Cannot iterate over number (1)|\n1 | .a = 1 => jq: error (at <unknown>): Cannot index number with string (\"a\")|\n{} | .[0] = 1 => jq: error (at <unknown>): Cannot index object with number (0)|\n[] | .[\"a\"] = 1 => jq: error (at <unknown>): Cannot index array with string (\"a\")|\n[1] | .[nan] = 3 => jq: error (at <unknown>): Cannot set array element at NaN index|\n[1] | .[1.5] = 3 => [1,3]|\n1 | .[1:2] => jq: error (at <unknown>): Cannot index number with object ({\"start\":1,\"end\":2})|\n\"abc\" | .[1:\"a\"] => jq: error (at <unknown>): Array/string slice indices must be integers|\n[1,2,3] | [.[1.5:], .[:1.5], .[-1.5:]] => [[2,3],[1,2],[2,3]]|\n1 | {(.): 2} => jq: error (at <unknown>): Cannot use number (1) as object key|\n"
+   }
+  },
+  "parse: jq jq 1.8 builtins jaq lacked": {
+   "script": "b990d7794d91758d",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): x is not a valid format\n"
+   },
+   "stdout": {
+    "text": "{\"1\":{\"id\":1,\"v\":\"a\"},\"2\":{\"id\":2,\"v\":\"b\"}}\n[[1,\"x\"],[2,null]]\n\"abc\"\ntrue\ntrue\n\"1,\\\"a\\\"\"\n\"[1,\\\"a\\\"]\"\n\"[1,\\\"a\\\"]\"\ns=5\n"
+   }
+  },
+  "parse: jq leaves object keys it cannot fold to run time": {
+   "script": "a2321c2e9ca6d071",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jq: error (at <unknown>): Cannot use number (-1) as object key|s=5\njq: error (at <unknown>): Cannot use number (1) as object key|s=5\njq: error (at <unknown>): Cannot use number (null) as object key|s=5\njq: error (at <unknown>): string (\"a\") and number (1) cannot be added|s=5\njq: error (at <unknown>): number (1) and number (0) cannot be divided because the divisor is zero|s=5\njq: error (at <unknown>): Cannot use array ([-1]) as object key|s=5\njq: error (at <unknown>): Cannot use object ({\"a\":null}) as object key|s=5\njq: error (at <unknown>): Cannot use null (null) as object key|s=5\n{\"ab\":1}|s=0\n{\"x\":1}|s=0\njq: error (at <unknown>): Cannot use number (1) as object key|s=5\njq: error (at <unknown>): string (\"a\") and number (1) cannot be added|s=5\n"
+   }
+  },
+  "parse: jq limit, skip and nth refuse negative counts": {
+   "script": "064bd4db30dcb4e6",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): limit doesn't support negative count\njq: error (at <unknown>): skip doesn't support negative count\njq: error (at <unknown>): nth doesn't support negative indices\n"
+   },
+   "stdout": {
+    "text": "s=5\ns=5\ns=5\n[]\n[1,2]\n[]\n"
+   }
+  },
+  "parse: jq module imports jq does not find": {
+   "script": "1cecf48f9c50acb9",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: module not found: a (Could not expand ~/.jq. (Could not find home directory.))\n\njq: 1 compile error\njq: error: module not found: a (Could not expand ~/.jq. (Could not find home directory.))\n\njq: 1 compile error\n"
+   },
+   "stdout": {
+    "text": "s=3\ns=3\n"
+   }
+  },
+  "parse: jq module imports jq finds are refused": {
+   "script": "2b30459771766c3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\ns=0\n7\ns=0\n"
+   }
+  },
+  "parse: jq modulemeta is refused": {
+   "script": "3f2f0772aa066fcd",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): module not found: foo (Could not expand ~/.jq. (Could not find home directory.))\n"
+   },
+   "stdout": {
+    "text": "s=5\n"
+   }
+  },
+  "parse: jq names an undefined label as it binds it, at its break": {
+   "script": "d713121b74b6773e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jq: error: $*label-x is not defined at <top-level>, line 1, column 1:|    break $x|    ^^^^^^^^|jq: 1 compile error| s=3\njq: error: $*label-b is not defined at <top-level>, line 1, column 12:|    label $a | break $b|               ^^^^^^^^|jq: 1 compile error| s=3\njq: error: $*label-b is not defined at <top-level>, line 1, column 12:|    label $a | break   $b|               ^^^^^^^^^^|jq: 1 compile error| s=3\njq: error: $*label-x is not defined at <top-level>, line 1, column 8:|    [.[] | break $x]|           ^^^^^^^^|jq: 1 compile error| s=3\njq: error: $*label-x is not defined at <top-level>, line 1, column 1:|    break $x, break $y|    ^^^^^^^^|jq: error: $*label-y is not defined at <top-level>, line 1, column 11:|    break $x, break $y|              ^^^^^^^^|jq: 2 compile errors| s=3\n"
+   }
+  },
+  "parse: jq names the first unknown letter of a short option": {
+   "script": "9ce0a1d09d40efbc",
+   "status": 0,
+   "stderr": {
+    "text": "jq: Unknown option -u\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs at https://jqlang.org\njq: Unknown option -x\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs at https://jqlang.org\njq: Unknown option --nope\nUse jq --help for help with command-line options,\nor see the jq manpage, or online docs at https://jqlang.org\n"
+   },
+   "stdout": {
+    "text": "s=2\ns=2\ns=2\n"
+   }
+  },
+  "parse: jq number literals jq reads": {
+   "script": "937559d7bd4ea201",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid numeric literal at line 1, column 15\njq: parse error: Invalid numeric literal at EOF at line 1, column 4\n"
+   },
+   "stdout": {
+    "text": "[1.7976931348623157e+308,-1.7976931348623157e+308,null,1,0.5,5]\n[null,null,null,0,-0,1E+5,1]\ns=5\ns=5\n[-0,-0.0,0.0,-0,1.0,1.50,1E+3,0.01]\n"
+   }
+  },
+  "parse: jq one reader across operands": {
+   "script": "bc4ccb3e198c4503",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at /tmp/d.json:1): Unmatched ']' at line 1, column 2\n"
+   },
+   "stdout": {
+    "text": "[[1,2],\"/tmp/d.json\"]\n[\"z\",\"/tmp/d.json\"]\n\"abc\"\nnull\n[5,\"<stdin>\"]\n"
+   }
+  },
+  "parse: jq parse error positions": {
+   "script": "ea84817c5cd826e6",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Unmatched '}' at line 3, column 1\njq: parse error: Unfinished JSON term at EOF at line 1, column 6\njq: parse error: Invalid numeric literal at EOF at line 4, column 3\njq: parse error: Expected separator between values at EOF at line 5, column 3\njq: parse error: Expected another array element at line 2, column 4\njq: parse error: Unfinished string at EOF at line 2, column 0\n"
+   },
+   "stdout": {
+    "text": "s=5\ns=5\n1\n2\ns=5\ns=5\ns=5\ns=5\n"
+   }
+  },
+  "parse: jq parse errors are jq's": {
+   "script": "e678a015d33b543f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\" 1} => jq: parse error: Expected separator between values at line 1, column 7|\n{\"a\":1,} => jq: parse error: Expected another key-value pair at line 1, column 8|\n{,} => jq: parse error: Expected value before ',' at line 1, column 2|\n[,1] => jq: parse error: Expected value before ',' at line 1, column 2|\n:1 => jq: parse error: Expected string key before ':' at line 1, column 1|\n{\"a\"::1} => jq: parse error: Expected string key before ':' at line 1, column 6|\n{1:2} => jq: parse error: Object keys must be strings at line 1, column 3|\n[1:2] => jq: parse error: ':' not as part of an object at line 1, column 3|\n{\"a\"} => jq: parse error: Objects must consist of key:value pairs at line 1, column 5|\n{\"a\":1 \"b\":2} => jq: parse error: Expected separator between values at line 1, column 10|\n[1 2] => jq: parse error: Expected separator between values at line 1, column 5|\ntru => jq: parse error: Invalid literal at EOF at line 1, column 3|\ntruex => jq: parse error: Invalid literal at EOF at line 1, column 5|\n'a' => jq: parse error: Invalid string literal; expected \", but got ' at EOF at line 1, column 3|\n\"a\\x\" => jq: parse error: Invalid escape at line 1, column 5|\n\"\\u12\" => jq: parse error: Invalid \\uXXXX escape at line 1, column 6|\n\"\\u12g4\" => jq: parse error: Invalid characters in \\uXXXX escape at line 1, column 8|\n\"\\ud800\" => jq: parse error: Invalid \\uXXXX\\uXXXX surrogate pair escape at line 1, column 8|\n\"\\ud800\\u0041\" => jq: parse error: Invalid \\uXXXX\\uXXXX surrogate pair escape at line 1, column 14|\n\"a => jq: parse error: Unfinished string at EOF at line 1, column 2|\n[ => jq: parse error: Unfinished JSON term at EOF at line 1, column 1|\n] => jq: parse error: Unmatched ']' at line 1, column 1|\n} => jq: parse error: Unmatched '}' at line 1, column 1|\n1 } => 1|jq: parse error: Unmatched '}' at line 1, column 3|\n{\"a\":[} => jq: parse error: Unmatched '}' at line 1, column 7|\n\"x\\u0001\" => \"x\\u0001\"|\n\"a\tb\" => jq: parse error: Invalid string: control characters from U+0000 through U+001F must be escaped at line 1, column 5|\n[1,,2] => jq: parse error: Expected value before ',' at line 1, column 4|\n{\"a\":1,,} => jq: parse error: Expected value before ',' at line 1, column 8|\n{\"a\":} => jq: parse error: Unmatched '}' at line 1, column 6|\n1] => jq: parse error: Unmatched ']' at line 1, column 2|\n[1} => jq: parse error: Objects must consist of key:value pairs at line 1, column 3|\nnul => jq: parse error: Invalid literal at EOF at line 1, column 3|\nnan5 => jq: parse error: Invalid numeric literal at EOF at line 1, column 4|\n"
+   }
+  },
+  "parse: jq prints values nested deeper than 1,000 levels": {
+   "script": "dea6252ddae50634",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "be2c79f395f57b18aab59a09ac4479e9  -\n259edd86d953b3ce97becde7f1177b03  -\n01101dd18a8aaf09a87ab2376c67b760  -\n2999\n3b4a8e5c627feb7d99db0e4a37185de5  -\n"
+   }
+  },
+  "parse: jq raw input across operands": {
+   "script": "8b2de406191985ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"ab\",1,\"/tmp/r2\"]\n[\"c\",1,\"/tmp/r2\"]\n\"ab\\nc\"\n"
+   }
+  },
+  "parse: jq recovers from syntax errors as jq does": {
+   "script": "b3c5447276de3e17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jq: error: syntax error, unexpected end of file at <top-level>, line 1, column 11:|    if . then 1|              ^|jq: error: Possibly unterminated 'if' statement at <top-level>, line 1, column 1:|    if . then 1|    ^^^^^^^^^^^|jq: 2 compile errors| s=3\njq: error: syntax error, unexpected end of file, expecting end or '|' or ',' at <top-level>, line 1, column 18:|    if . then 1 else 2|                     ^|jq: error: Possibly unterminated 'if' statement at <top-level>, line 1, column 1:|    if . then 1 else 2|    ^^^^^^^^^^^^^^^^^^|jq: 2 compile errors| s=3\njq: error: syntax error, unexpected end of file at <top-level>, line 1, column 7:|    try 1 catch|          ^^^^^|jq: error: Possibly unterminated 'try' statement at <top-level>, line 1, column 1:|    try 1 catch|    ^^^^^^^^^^^|jq: 2 compile errors| s=3\njq: error: syntax error, unexpected IDENT, expecting ':' at <top-level>, line 1, column 9:|    . as {a b} | 1|            ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected IDENT, expecting '}' at <top-level>, line 1, column 4:|    {a b: 1}|       ^|jq: error: May need parentheses around object key expression at <top-level>, line 1, column 2:|    {a b: 1}|     ^^^|jq: 2 compile errors| s=3\njq: error: Cannot use number (1) as object key at <top-level>, line 1, column 3:|    {(1): 2, a b: 3}|      ^|jq: error: syntax error, unexpected IDENT, expecting '}' at <top-level>, line 1, column 12:|    {(1): 2, a b: 3}|               ^|jq: error: May need parentheses around object key expression at <top-level>, line 1, column 2:|    {(1): 2, a b: 3}|     ^^^^^^^^^^^|jq: 3 compile errors| s=3\njq: error: syntax error, unexpected end of file at <top-level>, line 1, column 7:|    .a | .%|          ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting BINDING at <top-level>, line 1, column 5:|    . | break|        ^^^^^|jq: error: break requires a label to break to at <top-level>, line 1, column 5:|    . | break|        ^^^^^|jq: 2 compile errors| s=3\njq: error: syntax error, unexpected end of file, expecting BINDING at <top-level>, line 1, column 1:|    break|    ^^^^^|jq: error: break requires a label to break to at <top-level>, line 1, column 1:|    break|    ^^^^^|jq: 2 compile errors| s=3\njq: error: syntax error, unexpected IDENT, expecting end of file at <top-level>, line 1, column 5:|    .123abc|        ^^^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected INVALID_CHARACTER, expecting '|' or ',' or ')' at <top-level>, line 1, column 7:|    {a: (1}|          ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting '}' at <top-level>, line 1, column 19:|    [.[] | {a: .b, c: .d|                      ^^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file at <top-level>, line 2, column 4:|    2 +|       ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file at <top-level>, line 1, column 13:|    if 1 then 2 elif|                ^^^^|jq: error: Possibly unterminated 'if' statement at <top-level>, line 1, column 1:|    if 1 then 2 elif|    ^^^^^^^^^^^^^^^^|jq: 2 compile errors| s=3\njq: error: syntax error, unexpected QQSTRING_INTERP_END at <top-level>, line 1, column 8:|    \"\\(1 + )\"|           ^|jq: 1 compile error| s=3\n"
+   }
+  },
+  "parse: jq refuses a constant non-string object key before running": {
+   "script": "3ce94735bb2cfc7d",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: Cannot use number (1) as object key at <top-level>, line 1, column 3:\n    {(1): 2}\n      ^\njq: 1 compile error\njq: error: Cannot use number (1) as object key at <top-level>, line 1, column 4:\n    {( 1 ): 2}\n       ^\njq: 1 compile error\njq: error: Cannot use number (2) as object key at <top-level>, line 1, column 9:\n    {a: 1, (2): 3, (4): 5}\n            ^\njq: error: Cannot use number (4) as object key at <top-level>, line 1, column 17:\n    {a: 1, (2): 3, (4): 5}\n                    ^\njq: 2 compile errors\njq: error: Cannot use number (2) as object key at <top-level>, line 1, column 9:\n    {(1): {(2): 3}}\n            ^\njq: error: Cannot use number (1) as object key at <top-level>, line 1, column 3:\n    {(1): {(2): 3}}\n      ^\njq: 2 compile errors\njq: error: Cannot use number (1) as object key at <top-level>, line 1, column 8:\n    . as {(1): $x} | $x\n           ^\njq: 1 compile error\njq: error: Cannot use number (1) as object key at <top-level>, line 1, column 10:\n    def f: {(1):2}; 3\n             ^\njq: 1 compile error\njq: error: Cannot use number (1) as object key at <top-level>, line 1, column 3:\n    {(1):2} | foo\n      ^\njq: 1 compile error\njq: error: Cannot use number (1) as object key at <top-level>, line 2, column 2:\n    (1): 2}\n     ^\njq: 1 compile error\njq: error: Cannot use number (1) as object key at <top-level>, line 1, column 3:\n    {(1 # c\n      ^\njq: 1 compile error\n"
+   },
+   "stdout": {
+    "text": "s=3\ns=3\ns=3\ns=3\ns=3\ns=3\ns=3\ns=3\ns=3\n"
+   }
+  },
+  "parse: jq refuses a program nested more than 256 levels deep": {
+   "script": "02b4b9191cf44ab3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\ns=0\n[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]\ns=0\n"
+   }
+  },
+  "parse: jq refuses a program without a main query": {
+   "script": "1e47a9748dc08a65",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: Top-level program not given (try \".\")\njq: 1 compile error\njq: error: Top-level program not given (try \".\")\njq: 1 compile error\n"
+   },
+   "stdout": {
+    "text": "jq: error: Top-level program not given (try \".\")|jq: 1 compile error| s=3\njq: error: Top-level program not given (try \".\")|jq: 1 compile error| s=3\njq: error: Top-level program not given (try \".\")|jq: 1 compile error| s=3\njq: error: Top-level program not given (try \".\")|jq: 1 compile error| s=3\njq: error: Top-level program not given (try \".\")|jq: 1 compile error| s=3\ns=3\ns=3\n"
+   }
+  },
+  "parse: jq refuses evaluation that would recurse past the stack": {
+   "script": "888aa7d99f9418c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2000\ns=0\n0\ns=0\n"
+   }
+  },
+  "parse: jq remainder truncates to integers": {
+   "script": "fd335d3b2d251cdf",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): number (5) and number (0.5) cannot be divided (remainder) because the divisor is zero\n"
+   },
+   "stdout": {
+    "text": "[1,-1,1,1,-1,0,0,0,5]\ns=5\ntrue\n"
+   }
+  },
+  "parse: jq reports string escapes, and the end of a program after blanks or a comment, as jq does": {
+   "script": "f280bde7c6e753f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jq: error: Invalid escape at line 1, column 4 (while parsing '\"\\q\"') at <top-level>, line 1, column 2:|    \"\\q\"|     ^^|jq: 1 compile error| s=3\njq: error: Invalid \\uXXXX escape at line 1, column 6 (while parsing '\"\\u12\"') at <top-level>, line 1, column 3:|    \"a\\u12\"|      ^^^^|jq: 1 compile error| s=3\njq: error: Invalid \\uXXXX\\uXXXX surrogate pair escape at line 1, column 8 (while parsing '\"\\ud800\"') at <top-level>, line 1, column 2:|    \"\\ud800\"|     ^^^^^^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected INVALID_CHARACTER, expecting QQSTRING_TEXT or QQSTRING_INTERP_START or QQSTRING_END at <top-level>, line 1, column 3:|    \"x\\|      ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file at <top-level>, line 1, column 4:|    . |  |       ^^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file at <top-level>, line 1, column 7:|    . | # c|          ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file at <top-level>, line 2, column 12:|      # comment|               ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file at <top-level>, line 1, column 4:|    1 +\t|       ^|jq: 1 compile error| s=3\n"
+   }
+  },
+  "parse: jq rounding past 2^53": {
+   "script": "bca59b834ca7e15e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1e+30,12345678901234568000000,3,-3,null,1.7976931348623157e+308,\"2e+22\"]\n"
+   }
+  },
+  "parse: jq runs a binary operator's right operand first": {
+   "script": "b5e1222dc886c711",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[111,112,121,122,211,212,221,222]\n[3,6,4,8]\n[false,false,true,false]\n\"y\"\n[11,\"a\"]\n[\"2 2\",\"3 2\",\"2 4\",\"3 4\"]\n[{\"a\":1,\"b\":3},{\"a\":1,\"b\":4},{\"a\":2,\"b\":3},{\"a\":2,\"b\":4}]\n"
+   }
+  },
+  "parse: jq runs a program nested 256 levels deep": {
+   "script": "a64422d2463fcd41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n[1]\n1\n"
+   }
+  },
+  "parse: jq runs flat chains of 1,000 elements": {
+   "script": "2bd4271c47cdd78c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\ntrue\n1\n1\n1000\n1000\n1\n2\n1000\n"
+   }
+  },
+  "parse: jq runs flat chains of 10,000 elements": {
+   "script": "a3a3b2c03e566a58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10000\n10000\n-9998\nnull\nnull\n"
+   }
+  },
+  "parse: jq string builtin errors are jq's": {
+   "script": "77d548290deb14db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 | split(\",\") => jq: error (at <unknown>): split input and separator must be strings|\n1 | test(\"a\") => jq: error (at <unknown>): number (1) cannot be matched, as it is not a string|\n\"a\" | test(1) => jq: error (at <unknown>): number not a string or array|\n\"A\" | test([\"a\",\"i\"]) => true|\n\"A\" | test([]) => jq: error (at <unknown>): array not a string or array|\n\"a\" | test(\"a\"; \"q\") => jq: error (at <unknown>): q is not a valid modifier string|\n1 | sub(\"a\";\"b\") => jq: error (at <unknown>): number (1) cannot be matched, as it is not a string|\n\"a\" | sub(1;\"b\") => jq: error (at <unknown>): number (1) is not a string|\n\"a1b2\" | [scan(\"([a-z])([0-9])\")] => [[\"a\",\"1\"],[\"b\",\"2\"]]|\n1 | ascii_downcase => jq: error (at <unknown>): explode input must be a string|\n1 | explode => jq: error (at <unknown>): explode input must be a string|\n1 | ltrimstr(\"a\") => jq: error (at <unknown>): startswith() requires string inputs|\n\"a\" | ltrimstr(1) => jq: error (at <unknown>): startswith() requires string inputs|\n1 | startswith(\"a\") => jq: error (at <unknown>): startswith() requires string inputs|\n1 | endswith(\"a\") => jq: error (at <unknown>): endswith() requires string inputs|\n1 | trim => jq: error (at <unknown>): trim input must be a string|\n1 | utf8bytelength => jq: error (at <unknown>): number (1) only strings have UTF-8 byte length|\n{} | @sh => jq: error (at <unknown>): object ({}) can not be escaped for shell|\n[{}] | @sh => jq: error (at <unknown>): object ({}) can not be escaped for shell|\n1 | @base64d => jq: error (at <unknown>): string (\"1\") trailing base64 byte found|\n\"%%%\" | @base64d => jq: error (at <unknown>): string (\"%%%\") is not valid base64 data|\n\"YQ\" | @base64d => \"a\"|\n\"YWJjZA\" | @base64d => \"abcd\"|\n\"=\" | @base64d => \"\"|\n\"/w==\" | @base64d | explode => [65533]|\n\"a\" | sqrt => jq: error (at <unknown>): string (\"a\") number required|\n[] | floor => jq: error (at <unknown>): array ([]) number required|\npow(\"a\";2) => jq: error (at <unknown>): string (\"a\") number required|\n"
+   }
+  },
+  "parse: jq string repetition as jq 1.8 counts": {
+   "script": "7daa131cc2b8889c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"\",\"ab\",\"abab\",null,\"\",\"\",null,\"\",\"\"]\n"
+   }
+  },
+  "parse: jq surrogate pair escapes": {
+   "script": "54dbf978630d568d",
+   "status": 0,
+   "stderr": {
+    "text": "jq: parse error: Invalid \\uXXXX\\uXXXX surrogate pair escape at line 1, column 33\n"
+   },
+   "stdout": {
+    "text": " 22 f0 9f 98 80 22 0a\n 22 61 ef bf bd 62 22 0a\n 22 f0 9f 98 80 22 0a 22 ef bf bd 78 22 0a\ns=0\n"
+   }
+  },
+  "parse: jq syntax errors are bison's, at jq's locations": {
+   "script": "97f564ab3af8bf44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jq: error: syntax error, unexpected end of file at <top-level>, line 1, column 2:|    .[|     ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected INVALID_CHARACTER, expecting end of file at <top-level>, line 1, column 1:|    )|    ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected INVALID_CHARACTER, expecting end of file at <top-level>, line 1, column 3:|    1 )|      ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected INVALID_CHARACTER at <top-level>, line 1, column 5:|    1 | )|        ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file at <top-level>, line 1, column 1:|    {|    ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected '}' at <top-level>, line 1, column 4:|    {a:}|       ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected ']' at <top-level>, line 1, column 4:|    [1,]|       ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting FORMAT or QQSTRING_START or '[' at <top-level>, line 1, column 3:|    .a.|      ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting QQSTRING_TEXT or QQSTRING_INTERP_START or QQSTRING_END at <top-level>, line 1, column 2:|    \"abc|     ^^^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected INVALID_CHARACTER, expecting end of file at <top-level>, line 1, column 1:|    @|    ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting '$' at <top-level>, line 1, column 1:|    $|    ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting ',' or ']' at <top-level>, line 1, column 7:|    . as [$a|          ^^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected ';' at <top-level>, line 1, column 8:|    def f: ;|           ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected ':', expecting '|' or ',' or ']' at <top-level>, line 1, column 6:|    .[1:2:3]|         ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected .., expecting end of file at <top-level>, line 1, column 4:|    .. ..|       ^^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected QQSTRING_START, expecting QQSTRING_INTERP_END or '|' or ',' at <top-level>, line 1, column 5:|    \"\\(1\"|        ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected IDENT, expecting '}' at <top-level>, line 1, column 4:|    {a b}|       ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected INVALID_CHARACTER, expecting ';' or ')' at <top-level>, line 1, column 22:|    [.[] | select(.a == 1]|                         ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting '|' or ',' or ':' or ']' at <top-level>, line 1, column 5:|    .[\"a\"|        ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting BINDING at <top-level>, line 1, column 1:|    label|    ^^^^^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting FORMAT or QQSTRING_START at <top-level>, line 1, column 1:|    import|    ^^^^^^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected LITERAL, expecting end of file at <top-level>, line 1, column 3:|    1 2|      ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected IDENT, expecting end of file at <top-level>, line 1, column 4:|    .a b|       ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected INVALID_CHARACTER, expecting end of file at <top-level>, line 1, column 1:|    é|    ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected ';', expecting '|' or ',' or ')' at <top-level>, line 1, column 27:|    foreach .[] as $x (0; .; .; .)|                              ^|jq: 1 compile error| s=3\njq: error: syntax error, unexpected end of file, expecting '(' at <top-level>, line 1, column 13:|    reduce . as $x|                ^^|jq: 1 compile error| s=3\njq: error: Cannot use number (1) as object key at <top-level>, line 1, column 3:|    {(1):2} | )|      ^|jq: error: syntax error, unexpected INVALID_CHARACTER at <top-level>, line 1, column 11:|    {(1):2} | )|              ^|jq: 2 compile errors| s=3\njq: error: syntax error, unexpected INVALID_CHARACTER, expecting end of file at <top-level>, line 1, column 1:|    ) | {(1):2}|    ^|jq: 1 compile error| s=3\n"
+   }
+  },
+  "parse: jq the sign of zero": {
+   "script": "5679d2a5e82bf3e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0,0.0,-0,0,-0,0,-0,-0]\n0.0\n-0\n\"[-0]\"\n\"0\"\n[-0,0]\n[1,3,2,3]\n"
+   }
+  },
+  "parse: jq tonumber and fromjson messages": {
+   "script": "8b803266f3137df0",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error (at <unknown>): string (\"abc\") cannot be parsed as a number\njq: error (at <unknown>): string (\"1 2\") cannot be parsed as a number\njq: error (at <unknown>): array ([1]) cannot be parsed as a number\njq: error (at <unknown>): null (null) cannot be parsed as a number\njq: error (at <unknown>): Unexpected extra JSON values (while parsing '1 2')\njq: error (at <unknown>): Unfinished JSON term at EOF at line 1, column 1 (while parsing '{')\njq: error (at <unknown>): Expected another array element at line 1, column 4 (while parsing '[1,]')\njq: error (at <unknown>): Invalid numeric literal at EOF at line 1, column 1 (while parsing 'x')\njq: error (at <unknown>): number (1) only strings can be parsed\njq: error (at <unknown>): Expected JSON value (while parsing '')\n"
+   },
+   "stdout": {
+    "text": "s=5\ns=5\ns=5\ns=5\ns=5\ns=5\ns=5\nnull\ns=0\ns=5\ns=5\ns=5\n[\"1.7976931348623157e+308\",\"1.7976931348623157e+308\",\"-1.7976931348623157e+308\"]\n[true,false,\"string (\\\"x\\\") cannot be parsed as a boolean\",\"number (1) cannot be parsed as a boolean\"]\n"
+   }
+  },
+  "parse: jq tonumber edge cases": {
+   "script": "33db67efc926a681",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,\"string (\\\" 1\\\") cannot be parsed as a number\",\"string (\\\"1 \\\") cannot be parsed as a number\",\"string (\\\"0x10\\\") cannot be parsed as a number\",1E+3,null,\"string (\\\"-\\\") cannot be parsed as a number\",\"string (\\\"\\\") cannot be parsed as a number\",\"string (\\\"1.5.6\\\") cannot be parsed as a number\",1,0.5,1E+1000,-0]\n"
+   }
+  },
+  "parse: jq tostream, fromstream and truncate_stream": {
+   "script": "00929b27176d3c8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[\"a\",0],1]\n[[\"a\",1,\"b\"],2]\n[[\"a\",1,\"b\"]]\n[[\"a\",1]]\n[[\"c\"],[]]\n[[\"c\"]]\n{\"a\":[1,{\"b\":2}],\"c\":[]}\n[[[0],2],[[0]]]\n"
+   }
+  },
+  "parse: jq unreadable operands": {
+   "script": "10a0b48602550c15",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: Could not open file /nonexistent: No such file or directory\njq: error: Could not open file /nonexistent: No such file or directory\njq: error: Is a directory\njq: error: Could not open file /nonexistent: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "1\ns=2\n1\n2\n1\ns=2\n1\ns=2\n[1,2]\ns=2\n1\ns=0\n"
+   }
+  },
+  "parse: key-value and attribute transforms of arrays": {
+   "script": "fe94de141da755cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <0 \"one\" 1 \"two three\" 2 \"\">\n1 <0 \"one\" 1 \"two three\" 2 \"\">\n1 <k \"v\" >\n6 <0> <one> <1> <two three> <2> <>\n1 <0 one 1 two three 2 >\n2 <k> <v>\n3 <declare> <-a> <a=([0]=\"one\" [1]=\"two three\" [2]=\"\")>\n1 <declare -a a=([0]=\"one\" [1]=\"two three\" [2]=\"\")>\n3 <declare -a a='two three'> <'two three'> <a>\n4 <a> <a> <a> <a a a>\n1 <declare -ir r='5'>\n2 <declare -x ex='1'> <x>\n2 <t='target'> <>\n4 <set> <--> <'one'> <'two three'>\n1 <set -- 'one' 'two three'>\n2 <'one'> <'two three'>\n3 <> <> < >\n1 <>\n3 <declare> <-a> <e=()>\n1 <>\n4 <declare -a d> <declare> <-a> <d>\n7 <'a> <b'> <0> <\"x> <y\"> <1> <\"z\">\n7 <'a> <b'> <0> <x> <y> <1> <z>\n2 <a> <a>\n"
+   }
+  },
+  "parse: key-value pairs fill an associative array without subscripts": {
+   "script": "338558a320628c4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([c]=\"d\" [a]=\"b\" )\ndeclare -A n=([c]=\"\" [a]=\"b\" )\n"
+   }
+  },
+  "parse: legacy arithmetic nests brackets": {
+   "script": "70747442b4474381",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 11 20 -21 0\n11 20 30\n"
+   }
+  },
+  "parse: lengths of special parameters": {
+   "script": "f1aa2681259d794b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n1 3 3\n1\n1\n"
+   }
+  },
+  "parse: letter ranges across punctuation": {
+   "script": "0f7f2bad58b3f4fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8 <Z> <[> <> <]> <^> <_> <`> <a>\n35 <A> <B> <C> <D> <E> <F> <G> <H> <I> <J> <K> <L> <M> <N> <O> <P> <Q> <R> <S> <T> <U> <V> <W> <X> <Y> <Z> <[> <> <]> <^> <_> <`> <a> <b> <c>\n8 <a> <`> <_> <^> <]> <> <[> <Z>\nY [ ] _ a\n"
+   }
+  },
+  "parse: line numbers after a closed here-document on the same line": {
+   "script": "16ee77e7f65a84b0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 4: warning: here-document at line 3 delimited by end-of-file (wanted `B')\nbash: line 4: warning: here-document at line 4 delimited by end-of-file (wanted `C')\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: line numbers of here-documents ended by the end of the script": {
+   "script": "f6b7cc4e98c8e4f9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 5: warning: here-document at line 3 delimited by end-of-file (wanted `S')\n"
+   },
+   "stdout": {
+    "text": "s\necho t\n"
+   }
+  },
+  "parse: line numbers of several open here-documents": {
+   "script": "f0a21a9834d09eda",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: warning: here-document at line 1 delimited by end-of-file (wanted `EOF1')\nbash: line 2: warning: here-document at line 2 delimited by end-of-file (wanted `EOF2')\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: local, readonly, export and typeset take options only before the first name": {
+   "script": "61a935ac7f3c4bc7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: local: `-r': not a valid identifier\nbash: line 1: readonly: `-f': not a valid identifier\nbash: line 1: export: `-n': not a valid identifier\nbash: line 1: typeset: `-i': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "s=1\ndeclare -- a\ndeclare -- b=\"1\"\ns=1\ndeclare -r a\ns=1\ndeclare -x e1\ns=1\ndeclare -- t1\ndeclare -- t2=\"3\"\n"
+   }
+  },
+  "parse: mapfile keeps bytes and control characters": {
+   "script": "9c4abcbb1516731b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 7c fe 62 7c\n2\n 78 03 7c 04 79 7c\n"
+   }
+  },
+  "parse: multi-line substitution on the here-document line": {
+   "script": "54daa7f91f5b6d16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nx=hi\nend\n"
+   }
+  },
+  "parse: negated extglob and the empty string": {
+   "script": "b64c4bf703f80dd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<b><ab><><x>\ne1\ne2\ne4\n"
+   }
+  },
+  "parse: nested subshells with a blank between the parentheses": {
+   "script": "65f6ef98c75162ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n/tmp\n[deep]\nend\n"
+   }
+  },
+  "parse: no warning when the script exits before the here-document": {
+   "script": "6c56b814f8a85bfa",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "parse: null bytes in a substitution": {
+   "script": "ad75e4c6a88efaf9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: command substitution: ignored null byte in input\n"
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "parse: patterns over bytes": {
+   "script": "d0d4ea201a634545",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff 62 0a\nmatch\na-b\n"
+   }
+  },
+  "parse: per-character case conversion": {
+   "script": "9e0d953c42015b69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "STRAẞE ﬁX ŉ İI Ǆ ẞ ΣΑΣ ΣΣ Ω Ǉ I\nstraße ﬁx ŉ ii ǆ ß σασ σς ω ǉ ı\nSTRAẞE ﬁX ŉ iI ǆ ß σασ ΣΣ ω ǉ I\nStraße ﬁx ŉ İi ǅ ẞ ΣΑΣ σς Ω ǈ ı\nSTRAẞE ﬁX ŉ İI Ǆ ẞ ΣΑΣ ΣΣ Ω Ǉ I\nstraße ﬁx ŉ ii ǆ ß σασ σς ω ǉ ı\nSTRAẞE ﬁX ŉ İI Ǆ ẞ ΣΑΣ ΣΣ Ω Ǉ I\nstraße ﬁx ŉ ii ǆ ß σασ σς ω ǉ ı\nẞa ẞa ẞa 2 ẞA\nﬁa\nẞob\nÉté\n"
+   }
+  },
+  "parse: prefix names skip declared but unset variables": {
+   "script": "3b296ed31589cabd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "pre_y pre_z\n2 <pre_y> <pre_z>\n1 <pre_y-pre_z>\n"
+   }
+  },
+  "parse: printf -v keeps bytes": {
+   "script": "371dac736d74d048",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ff\n1\n"
+   }
+  },
+  "parse: process substitution in an assignment": {
+   "script": "769babaeb81296c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first\n/dev/fd/63\n2 /dev/fd/63 /dev/fd/62\n/dev/fd/63 x/dev/fd/62\n/dev/fd/63\n/dev/fd/63\n/dev/fd/63\n"
+   }
+  },
+  "parse: process substitution inside a word": {
+   "script": "8cfaeb36c7df705e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b/dev/fd/63c\n/dev/fd/63\ninner\na/dev/fd/63\nyes\nless\nlt\n1 x<(y) x<(y)\none\ntwo\n"
+   }
+  },
+  "parse: quotes inside arithmetic": {
+   "script": "0791a2a9ee4ac626",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=1\ns=1\ns=1\ns=1\n3 8\n10 4 5\ncond-quotes\n"
+   }
+  },
+  "parse: quoting of bytes": {
+   "script": "e978f6840270bf32",
+   "status": 127,
+   "stderr": {
+    "base64": "YmFzaDogbGluZSAxOiB6OiBh/2IBCg=="
+   },
+   "stdout": {
+    "text": "declare -- x=$'a\\377b\\001'\n$'a\\377b\\001'\n$'a\\377b\\001'\ndeclare -a y=([0]=\"1\" [1]=$'a\\377b\\001')\n"
+   }
+  },
+  "parse: read keeps an invalid byte": {
+   "script": "6165cc00c878600c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 62\n3\n"
+   }
+  },
+  "parse: read keeps control characters": {
+   "script": "4912f883ecb0228d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 01 62 1b 63 7f 64\n 78 04 79 03 7a\nab\n"
+   }
+  },
+  "parse: read keeps escaped IFS characters": {
+   "script": "73a72254af168627",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a:b|c\n[a b|c ]\n[a\\|b c]\n[ a:b\\c ]\n2 x:y\n[a]\n"
+   }
+  },
+  "parse: set -x shows a compound assignment as written": {
+   "script": "5c53b6e2527e9ae4",
+   "status": 0,
+   "stderr": {
+    "text": "+ a=($x \"$x\" [1]=$x '[2]=q' $(echo 7))\n++ echo 7\n+ b+=([ 3 ]=y)\n+ m=()\n+ c=(\"\" x)\n+ set +x\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: set -x shows a declaration's compound assignments quoted": {
+   "script": "b2f468d51943b712",
+   "status": 0,
+   "stderr": {
+    "text": "+ c=('1' 'a b' ['5']='5' '5')\n+ declare -a c\n+ d=(['k']='v w' ['j']='5')\n+ declare -A d\n+ f\n+ e=('1' ['3']='2')\n+ local e\n+ r=('q')\n+ readonly r\n+ s=('t')\n+ export s\n+ x=('1')\n+ declare -a x y=2 z\n+ e=()\n+ declare -A e\n+ q=('')\n+ declare -a q\n+ z=('it'\\''s' 'a\tb')\n+ declare -a z\n+ z+=(['5']='2')\n+ declare -a z\n+ set +x\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "parse: shortest match can be empty": {
+   "script": "f4f50d0f1a0fbb9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc abc   abc abc c a\nabc abc\nabc def abc def\none two one two\n[]\n"
+   }
+  },
+  "parse: substitution of Latin-1 text": {
+   "script": "378386e547ac5740",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "len=4\n 63 61 66 e9\n 63 61 66 e9 0a\nafter\n"
+   }
+  },
+  "parse: substitution of a lone byte": {
+   "script": "5ddf8e5589ca0c26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "len=3\n 61 ff 62 0a\nafter\n"
+   }
+  },
+  "parse: the special parameter ! in braces": {
+   "script": "46a86721eb42fb92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] [d] [] [0]\nsame\nset \nc\n[] []\n"
+   }
+  },
+  "parse: the warning comes before the command holding the here-document": {
+   "script": "d16edc90b436b0ab",
+   "status": 0,
+   "stderr": {
+    "text": "e1\nbash: line 3: warning: here-document at line 2 delimited by end-of-file (wanted `EOF')\ne2\ne3\n"
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "parse: two here-documents on one line in a substitution": {
+   "script": "d26e4c7bf98aed27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "(a\nb)\n)X(\n"
+   }
+  },
+  "parse: two here-documents with expansions between them": {
+   "script": "9a71e028f60a8b87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "second\n1\n"
+   }
+  },
+  "parse: valid UTF-8 is unchanged": {
+   "script": "92d94247b6fe00ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 café\n1 é\n"
+   }
+  },
+  "parse: while-read copy of Latin-1 text": {
+   "script": "ec10175f75d4f669",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 63 61 66 e9 0a\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

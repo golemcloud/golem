@@ -1,0 +1,208 @@
+{
+ "cases": {
+  "syntax: comments": {
+   "script": "e6a81e950dd26321",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb#not-a-comment\n#quoted\n"
+   }
+  },
+  "syntax: deep nesting": {
+   "script": "b68f5ce456a4ff0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "deep\n"
+   }
+  },
+  "syntax: empty script": {
+   "script": "e3b0c44298fc1c14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "syntax: error in a trap body runs later": {
+   "script": "9786a74f9d6b44b4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: exit trap: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "syntax: error inside a function body": {
+   "script": "29d703cad38665df",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 3: syntax error near unexpected token `;'\nbash: -c: line 3: `g() { if; }'\n"
+   },
+   "stdout": {
+    "text": "in\n"
+   }
+  },
+  "syntax: error inside eval": {
+   "script": "a2258117887ba1c8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   },
+   "stdout": {
+    "text": "status=2\nafter\n"
+   }
+  },
+  "syntax: error on a later line": {
+   "script": "aa1026d4a5a9f596",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 2: syntax error near unexpected token `then'\nbash: -c: line 2: `if then'\n"
+   },
+   "stdout": {
+    "text": "first\n"
+   }
+  },
+  "syntax: error on the same line": {
+   "script": "d8f2a44f872aee60",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `then'\nbash: -c: line 1: `echo first; if then; echo after'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "syntax: function name validity": {
+   "script": "17847dde191a5d02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dash\ndot\n"
+   }
+  },
+  "syntax: keywords as arguments": {
+   "script": "c341dde916385377",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "if then fi do done case esac in { }\n"
+   }
+  },
+  "syntax: line continuation": {
+   "script": "ac4e037e80b6ed79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n12\n"
+   }
+  },
+  "syntax: long lines": {
+   "script": "105e06a5774e9a22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5000\n"
+   }
+  },
+  "syntax: missing done": {
+   "script": "15e0bcb8c82fa7d6",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 2: syntax error: unexpected end of file from `for' command on line 1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "syntax: only comments": {
+   "script": "2a8456803d65e9af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "syntax: reserved words need separators": {
+   "script": "b039c377e95c9212",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\nt2\n"
+   }
+  },
+  "syntax: semicolons and newlines": {
+   "script": "a9b837bea29430a6",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 4: syntax error near unexpected token `;;'\nbash: -c: line 4: `echo c ;; echo d'\n"
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "syntax: stray fi": {
+   "script": "395005414ab19654",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 2: syntax error near unexpected token `fi'\nbash: -c: line 2: `fi'\n"
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "syntax: unexpected token": {
+   "script": "bbc6e75f9f5911e5",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 2: syntax error near unexpected token `)'\nbash: -c: line 2: `) oops'\n"
+   },
+   "stdout": {
+    "text": "first\n"
+   }
+  },
+  "syntax: unterminated quote": {
+   "script": "8776d7eb38d8c7c2",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 2: unexpected EOF while looking for matching `\"'\n"
+   },
+   "stdout": {
+    "text": "first\n"
+   }
+  },
+  "syntax: unterminated substitution": {
+   "script": "77fac5876cac5251",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 3: unexpected EOF while looking for matching `)'\n"
+   },
+   "stdout": {
+    "text": "first\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

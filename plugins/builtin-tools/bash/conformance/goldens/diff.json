@@ -1,0 +1,768 @@
+{
+ "cases": {
+  "cmp: default differ message": {
+   "script": "310395c2350b8b72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f1 /tmp/f2 differ: char 4, line 1\nstatus=1\n"
+   }
+  },
+  "cmp: eof at a line boundary": {
+   "script": "2f7b9431cc3f936b",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/l1’ after byte 4, line 2\ncmp: EOF on ‘/tmp/l1’ after byte 4\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "cmp: eof on shorter file": {
+   "script": "8ce3a2f2c2a6eaa3",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘/tmp/short’ after byte 3, in line 1\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "cmp: identical files silent": {
+   "script": "82add46222350bf7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "cmp: ignore initial colon pair skips independently": {
+   "script": "9db26d2c00b8559f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/ce3 /tmp/ce4 differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "cmp: ignore initial skips both sides": {
+   "script": "8bfd4e0e9e3e22c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "cmp: invalid ignore initial value diagnostic": {
+   "script": "c172ef142111d8c6",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: invalid --ignore-initial value ‘/tmp/ce7’\ncmp: Try 'cmp --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "cmp: missing file errors": {
+   "script": "d7e8c2ab73bd8f2a",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: /tmp/nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "cmp: missing operand diagnostic": {
+   "script": "2c769620ed412dc4",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: missing operand after ‘cmp’\ncmp: Try 'cmp --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "cmp: positional skip applies to first file only": {
+   "script": "0c3079e09b933f1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/ce5 /tmp/ce6 differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "cmp: silent suppresses output": {
+   "script": "b332dc80aefaa024",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "cmp: single operand defaults second to stdin": {
+   "script": "af152a9e42cdf8aa",
+   "status": 0,
+   "stderr": {
+    "text": "cmp: EOF on ‘-’ which is empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "cmp: verbose lists differences": {
+   "script": "45e938116e7bafa9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 141 142\n4 141 142\nstatus=1\n"
+   }
+  },
+  "diff: -e and -y on files this large are refused": {
+   "script": "6d1e827fac03ceaa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18\nstatus=1\n30001\nstatus=1\n"
+   }
+  },
+  "diff: binary files differ": {
+   "script": "a835ba7bf7a5b9ca",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Binary files /tmp/bin1 and /tmp/bin2 differ\n"
+   }
+  },
+  "diff: binary files identical": {
+   "script": "de756d49537eab36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "diff: brief differ": {
+   "script": "46a65dc8f541b3da",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files /tmp/a and /tmp/b differ\n"
+   }
+  },
+  "diff: bundled short options ruaN": {
+   "script": "20a314b9aaaf3a25",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- L\n+++ R\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n"
+   }
+  },
+  "diff: color flag accepted": {
+   "script": "d3347ad85a5ab97a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files /tmp/a and /tmp/b differ\n"
+   }
+  },
+  "diff: context custom count": {
+   "script": "a6969d83c7493569",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*** L\n--- R\n***************\n*** 2,4 ****\n  2\n! 3\n  4\n--- 2,4 ----\n  2\n! X\n  4\n"
+   }
+  },
+  "diff: context groups nearby changes into one hunk": {
+   "script": "6696a13744caa466",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*** L\n--- R\n***************\n*** 1,7 ****\n  one\n  two\n! three\n  four\n  five\n  six\n  seven\n--- 1,8 ----\n  one\n  two\n! THREE\n  four\n  five\n  six\n  seven\n+ eight\n"
+   }
+  },
+  "diff: context with labels": {
+   "script": "1aee95fc41133f54",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "*** L\n--- R\n***************\n*** 1 ****\n! one\n--- 1 ----\n! two\n"
+   }
+  },
+  "diff: ed format": {
+   "script": "f93276965bc81ea1",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c\nTWO\n.\n"
+   }
+  },
+  "diff: extra operand diagnostic": {
+   "script": "4010f2370fced96e",
+   "status": 0,
+   "stderr": {
+    "text": "diff: extra operand ‘/tmp/de3’\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "diff: identical files are silent": {
+   "script": "737e496496cc25a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "diff: ignore all space treats lines as identical": {
+   "script": "153d7f4a431c47c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "diff: ignore blank lines still refused": {
+   "script": "63c1b9d1e3f98bed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< x\n---\n> y\nstatus=1\n"
+   }
+  },
+  "diff: ignore case treats lines as identical": {
+   "script": "b87ac88e04a166cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "diff: ignore space change collapses amount not presence": {
+   "script": "4bc4a731c2e2188f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n1c1\n<  x\n---\n> x\nstatus=1\n"
+   }
+  },
+  "diff: ignore space change real change still reported": {
+   "script": "fe99723b3eb61ee5",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- L\n+++ R\n@@ -1,3 +1,3 @@\n a   b\n-old\n+new\n c\n"
+   }
+  },
+  "diff: invalid context length diagnostic": {
+   "script": "7f534dc4a61e3073",
+   "status": 0,
+   "stderr": {
+    "text": "diff: invalid context length ‘-1’\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "diff: invalid short option diagnostic": {
+   "script": "f6a7478497593862",
+   "status": 0,
+   "stderr": {
+    "text": "diff: invalid option -- 'K'\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "diff: invalid width diagnostic": {
+   "script": "40b21255da456b54",
+   "status": 0,
+   "stderr": {
+    "text": "diff: invalid width ‘0’\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "diff: large files that differ throughout": {
+   "script": "edc91f42de8ccb83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1d0\n< 1\n30000a30000\n> 30001\nstatus=1\n"
+   }
+  },
+  "diff: missing file without new-file errors": {
+   "script": "6164843f5a5dab79",
+   "status": 0,
+   "stderr": {
+    "text": "diff: /tmp/nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "diff: missing operand diagnostic": {
+   "script": "ca1d8d7bf62af3b9",
+   "status": 0,
+   "stderr": {
+    "text": "diff: missing operand after ‘diff’\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "diff: new file treats missing as empty": {
+   "script": "0ffb2ed02c7e2f3c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0a1\n> hello\n"
+   }
+  },
+  "diff: normal format default": {
+   "script": "7c6c640ab98f0622",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< two\n---\n> TWO\n"
+   }
+  },
+  "diff: option requires argument diagnostic": {
+   "script": "6df87aa1bcc9baae",
+   "status": 0,
+   "stderr": {
+    "text": "diff: option requires an argument -- 'U'\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "diff: recursive header echoes attached numeric argument": {
+   "script": "c1cf6f20ecacbfbd",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -rU5 --label L --label R L R\n--- L\n+++ R\n@@ -1 +1 @@\n-one\n+two\n"
+   }
+  },
+  "diff: recursive header echoes bundled short options": {
+   "script": "e06455480e14c59c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -ruN --label L --label R L R\n--- L\n+++ R\n@@ -1 +1 @@\n-one\n+two\n"
+   }
+  },
+  "diff: recursive header echoes long options": {
+   "script": "57418cb2dd598ff8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff --recursive --unified --label L --label R L R\n--- L\n+++ R\n@@ -1 +1 @@\n-one\n+two\n"
+   }
+  },
+  "diff: recursive header echoes separate numeric argument": {
+   "script": "7c94affd9fe93f61",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -r -U 5 --label L --label R L R\n--- L\n+++ R\n@@ -1 +1 @@\n-one\n+two\n"
+   }
+  },
+  "diff: recursive header echoes separate short options": {
+   "script": "0f3684751c666175",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -r -u -N --label L --label R L R\n--- L\n+++ R\n@@ -1 +1 @@\n-one\n+two\n"
+   }
+  },
+  "diff: recursive header quotes an option needing escaping": {
+   "script": "3540a792ba532492",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -ru '--color=never' --label L --label R L R\n--- L\n+++ R\n@@ -1 +1 @@\n-one\n+two\n"
+   }
+  },
+  "diff: recursive type mismatch": {
+   "script": "773c46f67365391c",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "File a/x is a directory while file b/x is a regular file\n"
+   }
+  },
+  "diff: recursive walk": {
+   "script": "eae1527b90fcd000",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -r a/common.txt b/common.txt\n1c1\n< old\n---\n> new\nOnly in a: onlya.txt\nOnly in b: onlyb.txt\ndiff -r a/sub/f.txt b/sub/f.txt\n1c1\n< 1\n---\n> 2\n"
+   }
+  },
+  "diff: report identical": {
+   "script": "7d7c32b5fa80ee96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files /tmp/a and /tmp/c are identical\n"
+   }
+  },
+  "diff: round trip -Naur tree then patch -p1": {
+   "script": "d8e6ea9b077971a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ROUNDTRIP_OK\n"
+   }
+  },
+  "diff: round trip forward and reverse": {
+   "script": "2a44e78643830a68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "FORWARD_OK\nREVERSE_OK\n"
+   }
+  },
+  "diff: round trip via cmp": {
+   "script": "88f365a78462e94a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "CMP_OK\n"
+   }
+  },
+  "diff: side by side": {
+   "script": "58fb2bb17510a066",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\t\t\t\t\t\t\t\tone\ntwo\t\t\t\t\t\t\t      |\tTWO\nthree\t\t\t\t\t\t\t\tthree\n\t\t\t\t\t\t\t      >\tfour\n"
+   }
+  },
+  "diff: stdin operand": {
+   "script": "1b4408b101690ae3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "diff: unified custom context": {
+   "script": "c1aaded4f6808d2e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- L\n+++ R\n@@ -3,3 +3,3 @@\n 3\n-4\n+X\n 5\n"
+   }
+  },
+  "diff: unified groups nearby changes into one hunk": {
+   "script": "430c1d437286c2f7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- L\n+++ R\n@@ -1,7 +1,8 @@\n one\n two\n-three\n+THREE\n four\n five\n six\n seven\n+eight\n"
+   }
+  },
+  "diff: unified with labels": {
+   "script": "c04a1676a2d9fe66",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- L\n+++ R\n@@ -1,5 +1,5 @@\n 1\n 2\n-3\n+X\n 4\n 5\n"
+   }
+  },
+  "diff: unrecognized long option diagnostic": {
+   "script": "0dbfd2ea4563f6a4",
+   "status": 0,
+   "stderr": {
+    "text": "diff: unrecognized option '--bogus'\ndiff: Try 'diff --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "patch: already applied is detected": {
+   "script": "794549e542f07d55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file /tmp/pt9.txt\nReversed (or previously applied) patch detected!  Skipping patch.\n1 out of 1 hunk ignored -- saving rejects to file /tmp/pt9.txt.rej\nline1\nline2-changed\nline3\n"
+   }
+  },
+  "patch: apply from stdin": {
+   "script": "767a52c2cbffbc22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file /tmp/pt1.txt\nline1\nline2-changed\nline3\n"
+   }
+  },
+  "patch: apply via -i flag": {
+   "script": "0dc701854d305538",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file /tmp/pt2.txt\nline1\nline2-changed\nline3\n"
+   }
+  },
+  "patch: compound command preserves piped stdin": {
+   "script": "7408f91a4957de10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "patch: creation via dev null": {
+   "script": "4bfe6aaee3907190",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file newfile.txt\nhello\nworld\n"
+   }
+  },
+  "patch: default strip cant find file transcript": {
+   "script": "cafd0b056d2e3d60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "can't find file to patch at input line 3\nPerhaps you should have used the -p or --strip option?\nThe text leading up to this was:\n--------------------------\n|--- a/src/main.rs\n|+++ b/src/main.rs\n--------------------------\nFile to patch: \nSkip this patch? [y] \nSkipping patch.\n1 out of 1 hunk ignored\nstatus=1\n"
+   }
+  },
+  "patch: deletion via dev null": {
+   "script": "05b9d33648b83aeb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file delfile.txt\nDELETED\n"
+   }
+  },
+  "patch: dry run does not modify": {
+   "script": "5450afccfc2ad032",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "checking file /tmp/pt4.txt\nline1\nline2\nline3\n"
+   }
+  },
+  "patch: empty input is silent success": {
+   "script": "5511ce4c211d1dc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "patch: failing hunk writes rej": {
+   "script": "d544d2eb3bfabdfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file /tmp/pt8.txt\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED -- saving rejects to file /tmp/pt8.txt.rej\n---\nAAA\nBBB\nCCC\n---\n--- a\n+++ b\n@@ -1,3 +1,3 @@\n line1\n-line2\n+line2-changed\n line3\n"
+   }
+  },
+  "patch: garbage only input is reported": {
+   "script": "c1e959574956a02e",
+   "status": 0,
+   "stderr": {
+    "text": "patch: **** Only garbage was found in the patch input.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "patch: git style p1 strip": {
+   "script": "ee59f271c8930787",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file x.txt\none\nTWO\nthree\n"
+   }
+  },
+  "patch: hunk offset search": {
+   "script": "311a970e1bd590d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file /tmp/pt7.txt\nHunk #1 succeeded at 6 (offset 5 lines).\n0\n0\n0\n0\n0\nline1\nline2-changed\nline3\n"
+   }
+  },
+  "patch: multi file patch": {
+   "script": "b4ff3ebb82b95742",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file alpha.txt\npatching file beta.txt\nALPHA\nbeta\n"
+   }
+  },
+  "patch: output flag redirects": {
+   "script": "443d09e5d4f9e087",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file /tmp/pt5.out (read from /tmp/pt5.txt)\nline1\nline2-changed\nline3\n---\nline1\nline2\nline3\n"
+   }
+  },
+  "patch: positional file and patchfile": {
+   "script": "f7ab88413f16463f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file /tmp/pt3.txt\nline1\nline2-changed\nline3\n"
+   }
+  },
+  "patch: reverse undoes a patch": {
+   "script": "e75ff006d3991aea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file xr.txt\none\ntwo\nthree\n"
+   }
+  },
+  "patch: silent suppresses success message": {
+   "script": "72d7a5ca7ce1483b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "line1\nline2-changed\nline3\n"
+   }
+  },
+  "patch: truncated hunk reports unexpected eof": {
+   "script": "f89b1497fcef7990",
+   "status": 0,
+   "stderr": {
+    "text": "patch: **** unexpected end of file in patch\n"
+   },
+   "stdout": {
+    "text": "patching file /tmp/pe3.txt\nstatus=2\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

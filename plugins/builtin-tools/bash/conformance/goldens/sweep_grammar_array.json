@@ -1,0 +1,3538 @@
+{
+ "cases": {
+  "gram array assoc append bare string": {
+   "script": "0df1344699406985",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([0]=\"x\" [a]=\"1\" )\n"
+   }
+  },
+  "gram array assoc append element": {
+   "script": "5fd88e4c16417927",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "gram array assoc append list": {
+   "script": "cd436898eae34688",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12 2\n"
+   }
+  },
+  "gram array assoc assignment without declare -A after declare": {
+   "script": "948ad44ae39149ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "gram array assoc assoc @A transform": {
+   "script": "f64ba9cd4b205613",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m\n"
+   }
+  },
+  "gram array assoc assoc @K transform": {
+   "script": "17ae80f0df287066",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "k \"v w\"\n"
+   }
+  },
+  "gram array assoc assoc exported is not": {
+   "script": "25671ff9913e3728",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram array assoc assoc in a for loop over keys": {
+   "script": "e7c9ecb02785e49f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "only\n"
+   }
+  },
+  "gram array assoc assoc in arithmetic": {
+   "script": "30199e6878a3e2b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n7\n"
+   }
+  },
+  "gram array assoc assoc key quoting in declare -p": {
+   "script": "811bc4167ba4a349",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([\"\\$x\"]=\"\\`y\\`\" [\"a'b\"]=\"c\\\"d\" )\n"
+   }
+  },
+  "gram array assoc assoc key with a closing bracket in a variable": {
+   "script": "9f6ab74e59b22da0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([\"a]b\"]=\"1\" )\n"
+   }
+  },
+  "gram array assoc assoc keys @k transform": {
+   "script": "bae7320dfc8a70b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "k v w\n"
+   }
+  },
+  "gram array assoc assoc slice": {
+   "script": "d2cb0eb7204c0bc7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram array assoc assoc unset with a glob-looking key": {
+   "script": "5872c3d9f32ba4e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([mk]=\"1\" )\n"
+   }
+  },
+  "gram array assoc assoc with an empty key via variable": {
+   "script": "9dac3724079f8e16",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: m[$e]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array assoc assoc with nameref": {
+   "script": "09a12984bd77086a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "vw\n"
+   }
+  },
+  "gram array assoc bare assignment": {
+   "script": "a506725a5b6c87aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([0]=\"x\" )\n"
+   }
+  },
+  "gram array assoc bare expansion": {
+   "script": "1807db4a3ecbd1a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[zero]\n"
+   }
+  },
+  "gram array assoc convert assoc to indexed": {
+   "script": "cb27972fd6eb074d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: m: cannot convert associative to indexed array\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram array assoc convert indexed to assoc": {
+   "script": "6524e8409bcc5ac4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: a: cannot convert indexed to associative array\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram array assoc count and keys sorted by loop": {
+   "script": "bb318a8d2e507341",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c 3\n"
+   }
+  },
+  "gram array assoc declare -A in a function is local": {
+   "script": "a510429619498c19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram array assoc declare -gA in a function": {
+   "script": "43029ca1f351c75d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "gram array assoc declare required": {
+   "script": "5dafc70103eefaac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a m=([0]=\"2\")\n"
+   }
+  },
+  "gram array assoc default on missing key": {
+   "script": "f2b1b69151fab3ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dflt unset\n"
+   }
+  },
+  "gram array assoc integer assoc": {
+   "script": "552dcb093d6fc5cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -Ai m=([k]=\"3\" [j]=\"9\" )\n"
+   }
+  },
+  "gram array assoc key at": {
+   "script": "248da256cd8b9268",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"@\"]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key bracket": {
+   "script": "806a0e9e1b371868",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"]\"]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key dash": {
+   "script": "041e4b58aa2289b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([-]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key digits": {
+   "script": "1092ce4436174afd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([10]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key dollar": {
+   "script": "92b8d4cd2c2ce41d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"\\$x\"]=\"val\" )\n[val]\nafter unset 1\n"
+   }
+  },
+  "gram array assoc key empty": {
+   "script": "d931105a332ad715",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: m['']: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array assoc key expression": {
+   "script": "2d56167c5fbdd7c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([1+1]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key negative": {
+   "script": "1c89884e1ddc4b30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([-1]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key order of declare -p": {
+   "script": "855106db53f5efac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([four]=\"4\" [two]=\"2\" [three]=\"3\" [one]=\"1\" )\n"
+   }
+  },
+  "gram array assoc key order of expansion": {
+   "script": "7a809725037531bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "four two three one\n4 2 3 1\n"
+   }
+  },
+  "gram array assoc key plain": {
+   "script": "a49ed1c5bbc0b7c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([k]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key quote": {
+   "script": "2f7f2a591d5fdbff",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected EOF while looking for matching `''\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array assoc key star": {
+   "script": "c75231234d9c95b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"*\"]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key unicode": {
+   "script": "961818bdebcd0553",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([é]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key value pair list": {
+   "script": "352733007b8f0b22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v1 v2 2\n"
+   }
+  },
+  "gram array assoc key value pair list odd": {
+   "script": "cabd0d506cebb6bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([k1]=\"v1\" [k2]=\"\" )\n"
+   }
+  },
+  "gram array assoc key variable": {
+   "script": "b1b72f6bc5f1641c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([var]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc key with space": {
+   "script": "5f6d661e03762ec3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"a b\"]=\"val\" )\n[val]\nafter unset 0\n"
+   }
+  },
+  "gram array assoc keys and values": {
+   "script": "11a9467424c403a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\none=1\ntwo=2\n"
+   }
+  },
+  "gram array assoc keys with arithmetic look are strings": {
+   "script": "c917257cc86339bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\ndeclare -A m=([2]=\"b\" [1+1]=\"a\" )\n"
+   }
+  },
+  "gram array assoc length of an element": {
+   "script": "ca24bea1b1dc20a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "gram array assoc literal key at": {
+   "script": "dce960117ff9d592",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"@\"]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key bracket": {
+   "script": "a19a6841a0891f37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"]\"]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key dash": {
+   "script": "ecc482a8f6d75b79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([-]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key digits": {
+   "script": "e1848e0f4109b916",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([10]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key dollar": {
+   "script": "53b3e98f18ce97ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"\\$x\"]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key empty": {
+   "script": "e479369aa041467b",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ['']='lit': bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array assoc literal key expression": {
+   "script": "862f947c6923c84a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([1+1]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key negative": {
+   "script": "2fab7489993869a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([-1]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key plain": {
+   "script": "abd2ccb8290f3d66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([k]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key quote": {
+   "script": "b2d98bfb4a4a5e98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"it's\"]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key star": {
+   "script": "2eda29c8c9a9e0b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"*\"]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key unicode": {
+   "script": "7b47a6044c03b7c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([é]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key variable": {
+   "script": "4a71d9126ec0d352",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([var]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc literal key with space": {
+   "script": "519f7dedeba4b986",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A m=([\"a b\"]=\"lit\" )\n"
+   }
+  },
+  "gram array assoc local assoc in a function": {
+   "script": "3da152625c3320cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\nbash: line 1: declare: lm: not found\nstatus=1\n"
+   }
+  },
+  "gram array assoc lowercase assoc": {
+   "script": "6cc337b284c345e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -Al m=([K]=\"val\" )\n"
+   }
+  },
+  "gram array assoc mapfile into assoc": {
+   "script": "b69ff730da36a5f8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: mapfile: m: not an indexed array\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram array assoc mixed pair styles": {
+   "script": "7328d118d419b96d",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: m: 'b': must use subscript when assigning associative array\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array assoc nameref to an assoc element": {
+   "script": "dcad5c8991c7d402",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "changed\n"
+   }
+  },
+  "gram array assoc pattern operators": {
+   "script": "eab3a8026853248c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HELLO ello heLlo\n"
+   }
+  },
+  "gram array assoc read -a into assoc": {
+   "script": "4b15c92dc9606c0b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: read: m: not an indexed array\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram array assoc readonly assoc": {
+   "script": "1a7aeb25dbc7301b",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: m: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array assoc subscript expansion": {
+   "script": "63c9d14a7091aba3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([\"a b\"]=\"12\" )\n"
+   }
+  },
+  "gram array assoc subscript with command substitution": {
+   "script": "d1f4ea1eeb53a7e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([key]=\"v\" )\n"
+   }
+  },
+  "gram array assoc test key bracket": {
+   "script": "7410c3ef3a728aba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set\n"
+   }
+  },
+  "gram array assoc test key empty": {
+   "script": "370b228b99f2ce74",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ['']='v': bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array assoc test key plain": {
+   "script": "0baf7d72cd2f4f89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set\n"
+   }
+  },
+  "gram array assoc test key quote": {
+   "script": "58e5ac546ee07a16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set\n"
+   }
+  },
+  "gram array assoc test key unicode": {
+   "script": "066ded371c899d00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set\n"
+   }
+  },
+  "gram array assoc unset element": {
+   "script": "613c4846d97bc698",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -A m=([b]=\"2\" )\n"
+   }
+  },
+  "gram array assoc unset whole": {
+   "script": "79989276f077916a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a m=([0]=\"1\")\n"
+   }
+  },
+  "gram array indexed BASH_REMATCH is an array": {
+   "script": "19cf350ec4db90d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 a b\n"
+   }
+  },
+  "gram array indexed FUNCNAME is an array": {
+   "script": "466ab68c2473bf2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 f g\n"
+   }
+  },
+  "gram array indexed PIPESTATUS is an array": {
+   "script": "f56c929b5931348a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 1 3\n"
+   }
+  },
+  "gram array indexed append list: bare name": {
+   "script": "53234487d8bdf4c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x> <x>\n"
+   }
+  },
+  "gram array indexed append list: declare -p": {
+   "script": "97bf4affb5ec9e64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\" [2]=\"z w\")\n"
+   }
+  },
+  "gram array indexed append list: keys": {
+   "script": "01dcdd052fd26047",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <0> <1> <2>\n"
+   }
+  },
+  "gram array indexed append list: values quoted": {
+   "script": "a1e47c0763c3e85d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <x> <y> <z w>\n"
+   }
+  },
+  "gram array indexed append to an unset array": {
+   "script": "eb06d1dbc7940c65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"xy\")\n"
+   }
+  },
+  "gram array indexed append to element: count": {
+   "script": "80fd6f9e918c15fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <2>\n"
+   }
+  },
+  "gram array indexed append to element: declare -p": {
+   "script": "c69dbd59ff691f21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"ysuffix\")\n"
+   }
+  },
+  "gram array indexed append to element: slice": {
+   "script": "99de527fcf830f07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <ysuffix>\n"
+   }
+  },
+  "gram array indexed append to element: star quoted": {
+   "script": "6318270edbeeefe1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x ysuffix>\n"
+   }
+  },
+  "gram array indexed append to element: values quoted": {
+   "script": "2df5131cf5b02711",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x> <ysuffix>\n"
+   }
+  },
+  "gram array indexed arithmetic index: bare name": {
+   "script": "db8e29480392edf7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x> <x>\n"
+   }
+  },
+  "gram array indexed arithmetic index: declare -p": {
+   "script": "91e80ae92b14bd1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\" [2]=\"two\")\n"
+   }
+  },
+  "gram array indexed arithmetic index: keys": {
+   "script": "bb67bc3e34560033",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <0> <1> <2>\n"
+   }
+  },
+  "gram array indexed arithmetic index: values quoted": {
+   "script": "dc714bb049a84492",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <x> <y> <two>\n"
+   }
+  },
+  "gram array indexed array expansion in a for loop with IFS": {
+   "script": "f1dfd3d768179fa7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<x y>\n<z>\n"
+   }
+  },
+  "gram array indexed array exported is not": {
+   "script": "c222020fa25916fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram array indexed array in arithmetic": {
+   "script": "436403f5d70d3497",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20 4 0\n"
+   }
+  },
+  "gram array indexed array of arrays is not a thing": {
+   "script": "6494f199ee68a136",
+   "status": 1,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `('\nbash: -c: line 1: `p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=((1 2) 3); echo status=$?'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed array passed by name": {
+   "script": "8377ece6d9032e8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x added\n"
+   }
+  },
+  "gram array indexed assign at subscript": {
+   "script": "c8349f651c9c5121",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a[@]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed assignment of a quoted list: declare -p": {
+   "script": "7fa79e82f3b269d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"(x)\" [1]=\"[1]=y\")\n"
+   }
+  },
+  "gram array indexed assignment of a quoted list: element one": {
+   "script": "df3169d8789e8670",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[1]=y>\n"
+   }
+  },
+  "gram array indexed assignment of a quoted list: suffix literal": {
+   "script": "4110d2add2e74622",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <(x)[1]>\n"
+   }
+  },
+  "gram array indexed assignment of a quoted list: values quoted": {
+   "script": "8b952c794ad21b92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <(x)> <[1]=y>\n"
+   }
+  },
+  "gram array indexed assignment with += in list: count": {
+   "script": "5f21f6d379cbc6ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <2>\n"
+   }
+  },
+  "gram array indexed assignment with += in list: declare -p": {
+   "script": "32f2d359c32a4d5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [5]=\"y\")\n"
+   }
+  },
+  "gram array indexed assignment with += in list: slice": {
+   "script": "c9e6533e2b058f2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <y>\n"
+   }
+  },
+  "gram array indexed assignment with += in list: star quoted": {
+   "script": "88206c4645fe9e71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x y>\n"
+   }
+  },
+  "gram array indexed assignment with += in list: values quoted": {
+   "script": "48bda712d6e8570a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x> <y>\n"
+   }
+  },
+  "gram array indexed bad subscript expression": {
+   "script": "83d58381bfed37b8",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1+: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed brace assignment: bare name": {
+   "script": "aa645a3287770882",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <1> <1>\n"
+   }
+  },
+  "gram array indexed brace assignment: declare -p": {
+   "script": "7007f61df554950a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"1\" [1]=\"2\" [2]=\"3\" [3]=\"x\" [4]=\"y\")\n"
+   }
+  },
+  "gram array indexed brace assignment: keys": {
+   "script": "61a83405f5a491fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <0> <1> <2> <3> <4>\n"
+   }
+  },
+  "gram array indexed brace assignment: values quoted": {
+   "script": "25969a4db5ba761e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 <1> <2> <3> <x> <y>\n"
+   }
+  },
+  "gram array indexed command substitution assignment: count": {
+   "script": "9a7f75b43b65519c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <3>\n"
+   }
+  },
+  "gram array indexed command substitution assignment: declare -p": {
+   "script": "f257a3ab31966241",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"l1\" [1]=\"l\" [2]=\"2\")\n"
+   }
+  },
+  "gram array indexed command substitution assignment: slice": {
+   "script": "0b9305185071f674",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <l> <2>\n"
+   }
+  },
+  "gram array indexed command substitution assignment: star quoted": {
+   "script": "a97d8dbd06b187d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <l1 l 2>\n"
+   }
+  },
+  "gram array indexed command substitution assignment: values quoted": {
+   "script": "6d3dcd64f0faf833",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <l1> <l> <2>\n"
+   }
+  },
+  "gram array indexed compound assignment in declare with spaces": {
+   "script": "9426e2e4a4bfde6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram array indexed copy: count": {
+   "script": "8332a17a7bf3c44f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <2>\n"
+   }
+  },
+  "gram array indexed copy: declare -p": {
+   "script": "b6a0efc2d8a74499",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y z\")\n"
+   }
+  },
+  "gram array indexed copy: slice": {
+   "script": "b8dd946195698583",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <y z>\n"
+   }
+  },
+  "gram array indexed copy: star quoted": {
+   "script": "39efed9232760d64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x y z>\n"
+   }
+  },
+  "gram array indexed copy: values quoted": {
+   "script": "53217c4ffd037a26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x> <y z>\n"
+   }
+  },
+  "gram array indexed declare -a: bare name": {
+   "script": "3943318c6f4085c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <d1> <d1>\n"
+   }
+  },
+  "gram array indexed declare -a: declare -p": {
+   "script": "c6e080e9b1c60834",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"d1\" [1]=\"d2\")\n"
+   }
+  },
+  "gram array indexed declare -a: keys": {
+   "script": "ea1d7dd51c14c88b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <0> <1>\n"
+   }
+  },
+  "gram array indexed declare -a: values quoted": {
+   "script": "884f0bf6de2c4a0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <d1> <d2>\n"
+   }
+  },
+  "gram array indexed default on an array with an empty element": {
+   "script": "fc18194a6bc5c1ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[empty] []\n"
+   }
+  },
+  "gram array indexed default on an empty array": {
+   "script": "2c6355e37bfabff1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[empty] [unset]\n"
+   }
+  },
+  "gram array indexed element assignment keeps attributes": {
+   "script": "03c9e5a584316aec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -ai a=([0]=\"2\" [1]=\"6\")\n"
+   }
+  },
+  "gram array indexed element beyond end: declare -p": {
+   "script": "184da25eb4d8de30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [10]=\"far\")\n"
+   }
+  },
+  "gram array indexed element beyond end: last element": {
+   "script": "176d467332cede71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <far>\n"
+   }
+  },
+  "gram array indexed element beyond end: length of first": {
+   "script": "e18320f6d3a03490",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <1> <1>\n"
+   }
+  },
+  "gram array indexed element beyond end: values quoted": {
+   "script": "33c13acd9094eea1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x> <far>\n"
+   }
+  },
+  "gram array indexed element beyond end: values unquoted": {
+   "script": "0369fbe1f8dd8787",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x> <far>\n"
+   }
+  },
+  "gram array indexed element with spaces in index: bare name": {
+   "script": "a03da4836596e96f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <> <>\n"
+   }
+  },
+  "gram array indexed element with spaces in index: declare -p": {
+   "script": "d127fb4fd925b0b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([1]=\"spaced\")\n"
+   }
+  },
+  "gram array indexed element with spaces in index: keys": {
+   "script": "98589430969e704a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <1>\n"
+   }
+  },
+  "gram array indexed element with spaces in index: values quoted": {
+   "script": "8559dfabbd261e64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <spaced>\n"
+   }
+  },
+  "gram array indexed empty subscript": {
+   "script": "22e80be3511f5cb0",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a[]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed empty: declare -p": {
+   "script": "5f2a46d8dd76a2da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=()\n"
+   }
+  },
+  "gram array indexed empty: last element": {
+   "script": "34b32f49e0217b49",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram array indexed empty: length of first": {
+   "script": "2b261673de5e5e18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <0> <0>\n"
+   }
+  },
+  "gram array indexed empty: values quoted": {
+   "script": "11ac58ab78ece9e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram array indexed empty: values unquoted": {
+   "script": "aad346d846707c8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram array indexed explicit indices: declare -p": {
+   "script": "e81493fc971d8ca0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([1]=\"a\" [3]=\"c\")\n"
+   }
+  },
+  "gram array indexed explicit indices: last element": {
+   "script": "a8f97ff7fcc81095",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <c>\n"
+   }
+  },
+  "gram array indexed explicit indices: length of first": {
+   "script": "46e2f0738efb61b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <0> <0>\n"
+   }
+  },
+  "gram array indexed explicit indices: values quoted": {
+   "script": "5f74fc7405fe2e49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <c>\n"
+   }
+  },
+  "gram array indexed explicit indices: values unquoted": {
+   "script": "54db1a4439e775f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <a> <c>\n"
+   }
+  },
+  "gram array indexed glob assignment: declare -p": {
+   "script": "5909709640fcec89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"f1\" [1]=\"f2\")\n"
+   }
+  },
+  "gram array indexed glob assignment: element one": {
+   "script": "ed83d5d8d9e3dc90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <f2>\n"
+   }
+  },
+  "gram array indexed glob assignment: suffix literal": {
+   "script": "833396b6f61f7051",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <f1[1]>\n"
+   }
+  },
+  "gram array indexed glob assignment: values quoted": {
+   "script": "07a80c9cd54d3e09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <f1> <f2>\n"
+   }
+  },
+  "gram array indexed hex index: declare -p": {
+   "script": "6ed3ae51ba40238a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([16]=\"sixteen\")\n"
+   }
+  },
+  "gram array indexed hex index: last element": {
+   "script": "c1a0893cf029ea7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <sixteen>\n"
+   }
+  },
+  "gram array indexed hex index: length of first": {
+   "script": "83e66d5cb474532b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <0> <0>\n"
+   }
+  },
+  "gram array indexed hex index: values quoted": {
+   "script": "2ee29ff14e13a222",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <sixteen>\n"
+   }
+  },
+  "gram array indexed hex index: values unquoted": {
+   "script": "37a96975361f25b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <sixteen>\n"
+   }
+  },
+  "gram array indexed ifs during assignment: bare name": {
+   "script": "5bccba9fb7666821",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <c1> <c1>\n"
+   }
+  },
+  "gram array indexed ifs during assignment: declare -p": {
+   "script": "7308825e88b1d224",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"c1\" [1]=\"c2\")\n"
+   }
+  },
+  "gram array indexed ifs during assignment: keys": {
+   "script": "fc160beb53183d78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <0> <1>\n"
+   }
+  },
+  "gram array indexed ifs during assignment: values quoted": {
+   "script": "88d281b93f46e767",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <c1> <c2>\n"
+   }
+  },
+  "gram array indexed increment an element": {
+   "script": "a8fc3423dd2c3103",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"2\" [3]=\"2\")\n"
+   }
+  },
+  "gram array indexed iteration by index": {
+   "script": "2fc347bd53786c35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0=x\n4=y\n5=z\n"
+   }
+  },
+  "gram array indexed large index": {
+   "script": "e7393d885efb5730",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9223372036854775807\n"
+   }
+  },
+  "gram array indexed length of a sparse array": {
+   "script": "c317dc297856843f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 100\n"
+   }
+  },
+  "gram array indexed length of each element is not a thing": {
+   "script": "6c0c9ca8ce2c9d92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 2\n"
+   }
+  },
+  "gram array indexed list: count": {
+   "script": "a9227c805aa43e43",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <3>\n"
+   }
+  },
+  "gram array indexed list: declare -p": {
+   "script": "954e3ce974345cd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y z\" [2]=\"\")\n"
+   }
+  },
+  "gram array indexed list: slice": {
+   "script": "b105245e621e0da7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <y z> <>\n"
+   }
+  },
+  "gram array indexed list: star quoted": {
+   "script": "7cc37f43fa52abdd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x y z >\n"
+   }
+  },
+  "gram array indexed list: values quoted": {
+   "script": "cbaa0ed591d24d2b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <x> <y z> <>\n"
+   }
+  },
+  "gram array indexed local array in a function": {
+   "script": "cc7ef2163e1a162c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l1 l2\ng\n"
+   }
+  },
+  "gram array indexed local copy of a global array": {
+   "script": "eeeb8c57141705a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "g1 g2 l\n"
+   }
+  },
+  "gram array indexed mapfile then modify": {
+   "script": "71a15ca626179104",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"1\" [1]=\"2\" [5]=\"6\")\n"
+   }
+  },
+  "gram array indexed mixed indices: declare -p": {
+   "script": "76db4d341ac527f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [5]=\"y\" [6]=\"z\")\n"
+   }
+  },
+  "gram array indexed mixed indices: element one": {
+   "script": "e98ca5566b8d4dd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram array indexed mixed indices: suffix literal": {
+   "script": "e85b2a60658037f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x[1]>\n"
+   }
+  },
+  "gram array indexed mixed indices: values quoted": {
+   "script": "e11cdaf30ec5c12d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <x> <y> <z>\n"
+   }
+  },
+  "gram array indexed name index: bare name": {
+   "script": "953d2ba480974de9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <> <>\n"
+   }
+  },
+  "gram array indexed name index: declare -p": {
+   "script": "a2eb14ef9bc227d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([2]=\"byname\")\n"
+   }
+  },
+  "gram array indexed name index: keys": {
+   "script": "b3a373854a475317",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <2>\n"
+   }
+  },
+  "gram array indexed name index: values quoted": {
+   "script": "6aa44675cc7b58fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <byname>\n"
+   }
+  },
+  "gram array indexed negative index assignment: declare -p": {
+   "script": "2f338b644adc9d43",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\" [2]=\"last\")\n"
+   }
+  },
+  "gram array indexed negative index assignment: element one": {
+   "script": "b3e7ae637d9636d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <y>\n"
+   }
+  },
+  "gram array indexed negative index assignment: suffix literal": {
+   "script": "9bf0309aa99cef52",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <x[1]>\n"
+   }
+  },
+  "gram array indexed negative index assignment: values quoted": {
+   "script": "004a9a0130c5db06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <x> <y> <last>\n"
+   }
+  },
+  "gram array indexed negative index beyond start read": {
+   "script": "5c2184a9674c4047",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "gram array indexed negative index beyond start write": {
+   "script": "a8de78a9940255ce",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a[-3]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed negative index of sparse": {
+   "script": "b981dd285e1cdfb9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y []\n"
+   }
+  },
+  "gram array indexed nested subscript": {
+   "script": "68d30133d33692f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 3\n"
+   }
+  },
+  "gram array indexed octal index: count": {
+   "script": "ee481484f874d60c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <1>\n"
+   }
+  },
+  "gram array indexed octal index: declare -p": {
+   "script": "41adb95ee60fc076",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([8]=\"eight\")\n"
+   }
+  },
+  "gram array indexed octal index: slice": {
+   "script": "7d10e0514026d45f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <eight>\n"
+   }
+  },
+  "gram array indexed octal index: star quoted": {
+   "script": "b40af5efe1eb6237",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <eight>\n"
+   }
+  },
+  "gram array indexed octal index: values quoted": {
+   "script": "8e68bfe23689a585",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <eight>\n"
+   }
+  },
+  "gram array indexed pattern operators on each element": {
+   "script": "5bd0aace78a30aa7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "pple anana herry banan cherry apple bANana cherry APPLE BANANA CHERRY\n"
+   }
+  },
+  "gram array indexed printf -v into an element": {
+   "script": "0901edf1acdaae09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([2]=\"p-q\")\n"
+   }
+  },
+  "gram array indexed quoted arithmetic index: declare -p": {
+   "script": "51b6a6ca2c760295",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: '1+1': arithmetic syntax error: operand expected (error token is \"'1+1'\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed quoted arithmetic index: element one": {
+   "script": "12c6d8c04d784d55",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: '1+1': arithmetic syntax error: operand expected (error token is \"'1+1'\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed quoted arithmetic index: suffix literal": {
+   "script": "ec475fa7e23b3c03",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: '1+1': arithmetic syntax error: operand expected (error token is \"'1+1'\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed quoted arithmetic index: values quoted": {
+   "script": "3795305a151a11a0",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: '1+1': arithmetic syntax error: operand expected (error token is \"'1+1'\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed quoted empty elements survive": {
+   "script": "c3a4b153698d610a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n1\n"
+   }
+  },
+  "gram array indexed read -a: declare -p": {
+   "script": "23551217fa679828",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"r1\" [1]=\"r2\")\n"
+   }
+  },
+  "gram array indexed read -a: last element": {
+   "script": "1aead1ff013b38a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <r2>\n"
+   }
+  },
+  "gram array indexed read -a: length of first": {
+   "script": "e617c795a7a1e05b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <2> <2>\n"
+   }
+  },
+  "gram array indexed read -a: values quoted": {
+   "script": "8131dfd1692bf680",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <r1> <r2>\n"
+   }
+  },
+  "gram array indexed read -a: values unquoted": {
+   "script": "2f4a3a89965c9809",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <r1> <r2>\n"
+   }
+  },
+  "gram array indexed read into an element": {
+   "script": "941f231e80530354",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([1]=\"line\")\n"
+   }
+  },
+  "gram array indexed readonly array append": {
+   "script": "47d8895570bf2dc9",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed readonly array element assignment": {
+   "script": "d1a3af7ddaa39d0d",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: a: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed scalar becomes array: declare -p": {
+   "script": "11546fc2a238e72a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"scalar\" [1]=\"one\")\n"
+   }
+  },
+  "gram array indexed scalar becomes array: element one": {
+   "script": "1bc27be872c01d77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <one>\n"
+   }
+  },
+  "gram array indexed scalar becomes array: suffix literal": {
+   "script": "1e6d64e1cc910609",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <scalar[1]>\n"
+   }
+  },
+  "gram array indexed scalar becomes array: values quoted": {
+   "script": "33bd9a79d6274fba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <scalar> <one>\n"
+   }
+  },
+  "gram array indexed slice of a sparse array": {
+   "script": "fed99a0211b203e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b c / c / c\n"
+   }
+  },
+  "gram array indexed slice with negative length": {
+   "script": "97f6a74ec619581d",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: -1: substring expression < 0\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram array indexed sparse after unset: declare -p": {
+   "script": "7686bc464008a68a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [2]=\"z\")\n"
+   }
+  },
+  "gram array indexed sparse after unset: last element": {
+   "script": "a5b6594a4d1e8355",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <z>\n"
+   }
+  },
+  "gram array indexed sparse after unset: length of first": {
+   "script": "b4583237ff7aeb0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <1> <1>\n"
+   }
+  },
+  "gram array indexed sparse after unset: values quoted": {
+   "script": "91c049c8e83150e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x> <z>\n"
+   }
+  },
+  "gram array indexed sparse after unset: values unquoted": {
+   "script": "49ef29d9f434f092",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <x> <z>\n"
+   }
+  },
+  "gram array indexed split assignment: declare -p": {
+   "script": "b6e59679902ff81e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"p\" [1]=\"q\" [2]=\"r\")\n"
+   }
+  },
+  "gram array indexed split assignment: last element": {
+   "script": "2a92211f3632f373",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <r>\n"
+   }
+  },
+  "gram array indexed split assignment: length of first": {
+   "script": "080f47df558c5e75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 <1> <1>\n"
+   }
+  },
+  "gram array indexed split assignment: values quoted": {
+   "script": "d1c28b58619c40ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <p> <q> <r>\n"
+   }
+  },
+  "gram array indexed split assignment: values unquoted": {
+   "script": "a20bcf6f87a69f6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 <p> <q> <r>\n"
+   }
+  },
+  "gram array indexed star with empty IFS": {
+   "script": "e3caa8788e12bc2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xy\n2\n"
+   }
+  },
+  "gram array indexed string append to an array name": {
+   "script": "ce2b023ea65a698e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"xz\" [1]=\"y\")\n"
+   }
+  },
+  "gram array indexed subscript with a string that names a variable": {
+   "script": "e84b6d5a67e26447",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram array indexed subscript with side effects": {
+   "script": "11fc73883d6e7773",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x y 2\n"
+   }
+  },
+  "gram array indexed transform on each element": {
+   "script": "e1c5268c26c9b978",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'x y' 'it'\\''s'\ndeclare -a a=([0]=\"x y\" [1]=\"it's\")\n"
+   }
+  },
+  "gram array indexed unset at subscript": {
+   "script": "0a3cb6b29095e14a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 unset\n"
+   }
+  },
+  "gram array indexed unset element unquoted": {
+   "script": "87fdaa351126bc7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([1]=\"y\")\n"
+   }
+  },
+  "gram array indexed unset element with a matching file": {
+   "script": "bcee0e11ffd420ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\")\n"
+   }
+  },
+  "gram array indexed unset in a loop over keys": {
+   "script": "f57184ff61ce7d4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([1]=\"2\" [3]=\"4\")\n"
+   }
+  },
+  "gram array indexed unset name index: count": {
+   "script": "872eefdc0ff44249",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <1>\n"
+   }
+  },
+  "gram array indexed unset name index: declare -p": {
+   "script": "f3413f47301fb60b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"zero\")\n"
+   }
+  },
+  "gram array indexed unset name index: slice": {
+   "script": "7df5538f1c914ffe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 <>\n"
+   }
+  },
+  "gram array indexed unset name index: star quoted": {
+   "script": "ce4329e46f45d07d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <zero>\n"
+   }
+  },
+  "gram array indexed unset name index: values quoted": {
+   "script": "e899cd1d65209fd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <zero>\n"
+   }
+  },
+  "gram array indexed unset negative index": {
+   "script": "bec6070631d7fa6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\")\n"
+   }
+  },
+  "gram array indexed unset star subscript": {
+   "script": "c45fa15586f7d51c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=()\n"
+   }
+  },
+  "gram array indexed unset whole": {
+   "script": "320b625534f70c9e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: a: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram array indexed uppercase attribute on elements": {
+   "script": "baa3dfd508051b49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -au a=([0]=\"X\" [1]=\"Y\")\n"
+   }
+  },
+  "gram array indexed whole unset then element: declare -p": {
+   "script": "6a93c6dba549f25d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([2]=\"new\")\n"
+   }
+  },
+  "gram array indexed whole unset then element: element one": {
+   "script": "4965032378aea789",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <>\n"
+   }
+  },
+  "gram array indexed whole unset then element: suffix literal": {
+   "script": "b1612723f5f48a58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <[1]>\n"
+   }
+  },
+  "gram array indexed whole unset then element: values quoted": {
+   "script": "502374309d8f5c46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 <new>\n"
+   }
+  },
+  "gram array nameref append: assoc": {
+   "script": "03bca2019b75027f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -A t=([0]=\"X\" [k]=\"v\" )\n"
+   }
+  },
+  "gram array nameref append: invalid name": {
+   "script": "6abf02b914dec303",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `a b': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "decl=1\nbash: line 1: declare: t: not found\n"
+   }
+  },
+  "gram array nameref append: readonly": {
+   "script": "3193b7a099bc63b5",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: t: readonly variable\n"
+   },
+   "stdout": {
+    "text": "decl=0\n"
+   }
+  },
+  "gram array nameref append: unset scalar": {
+   "script": "d38b8fe0dbbcde80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -- t=\"X\"\n"
+   }
+  },
+  "gram array nameref arithmetic: array element": {
+   "script": "5e1cacdcb7cf4bc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0 1\n"
+   }
+  },
+  "gram array nameref arithmetic: empty": {
+   "script": "5a376b175cd76490",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "decl=1\nstatus=0 1\n"
+   }
+  },
+  "gram array nameref arithmetic: integer": {
+   "script": "a57a6146e08f7f12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0 6\n"
+   }
+  },
+  "gram array nameref arithmetic: positional": {
+   "script": "9c2c5c333f0ea950",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `1': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "decl=1\nstatus=0 1\n"
+   }
+  },
+  "gram array nameref arithmetic: scalar": {
+   "script": "508b55c71ad9a9cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0 1\n"
+   }
+  },
+  "gram array nameref assign: another nameref": {
+   "script": "69f6c00641fe18e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0\ndeclare -n t=\"t2\"\n"
+   }
+  },
+  "gram array nameref assign: array": {
+   "script": "ebfd2fca21315c91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0\ndeclare -a t=([0]=\"new\" [1]=\"b\" [2]=\"c\")\n"
+   }
+  },
+  "gram array nameref assign: array element": {
+   "script": "8fbf95e1ebf89acc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0\ndeclare -a t=([0]=\"a\" [1]=\"new\" [2]=\"c\")\n"
+   }
+  },
+  "gram array nameref assign: assoc": {
+   "script": "c2f6f7ab3e3c4952",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0\ndeclare -A t=([0]=\"new\" [k]=\"v\" )\n"
+   }
+  },
+  "gram array nameref assign: assoc element": {
+   "script": "3914635bc1d8aebc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0\ndeclare -A t=([k]=\"new\" )\n"
+   }
+  },
+  "gram array nameref assign: empty": {
+   "script": "92632b3f98ff9534",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "decl=1\nstatus=0\nbash: line 1: declare: t: not found\n"
+   }
+  },
+  "gram array nameref assign: integer": {
+   "script": "ff0c6175e90fb017",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0\ndeclare -i t=\"0\"\n"
+   }
+  },
+  "gram array nameref assign: invalid name": {
+   "script": "33e668313119da13",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `a b': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "decl=1\nstatus=0\nbash: line 1: declare: t: not found\n"
+   }
+  },
+  "gram array nameref assign: itself": {
+   "script": "0592eda1bb34400c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: r: nameref variable self references not allowed\n"
+   },
+   "stdout": {
+    "text": "decl=1\nstatus=0\nbash: line 1: declare: t: not found\n"
+   }
+  },
+  "gram array nameref assign: positional": {
+   "script": "5e8e2a44c94e1cfe",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `1': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "decl=1\nstatus=0\nbash: line 1: declare: t: not found\n"
+   }
+  },
+  "gram array nameref assign: readonly": {
+   "script": "a1a8ab06a34d32eb",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: t: readonly variable\n"
+   },
+   "stdout": {
+    "text": "decl=0\n"
+   }
+  },
+  "gram array nameref assign: scalar": {
+   "script": "efbfcaec1ade816b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0\ndeclare -- t=\"new\"\n"
+   }
+  },
+  "gram array nameref assign: unset scalar": {
+   "script": "d93e718b22e34f2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nstatus=0\ndeclare -- t=\"new\"\n"
+   }
+  },
+  "gram array nameref assignment to a nameref retargets only with -n": {
+   "script": "646becd173d4e761",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y 2 y\n"
+   }
+  },
+  "gram array nameref change target with declare -n": {
+   "script": "d3df18b015cb2767",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram array nameref circular reference warning": {
+   "script": "3286936e406dea4f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: warning: a: circular name reference\n"
+   },
+   "stdout": {
+    "text": "[]\nstatus=0\n"
+   }
+  },
+  "gram array nameref declare +n": {
+   "script": "5f9df5674781863b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\ndeclare -- r=\"t\"\n"
+   }
+  },
+  "gram array nameref declare -p: another nameref": {
+   "script": "23cc6cac37d7420e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref declare -p: array": {
+   "script": "ee11388e1e756b3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref declare -p: array element": {
+   "script": "84a37c63c87579ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -n r=\"t[1]\"\n"
+   }
+  },
+  "gram array nameref declare -p: assoc": {
+   "script": "048afecedb811b79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref declare -p: assoc element": {
+   "script": "cbca6e6bba65a08a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -n r=\"t[k]\"\n"
+   }
+  },
+  "gram array nameref declare -p: empty": {
+   "script": "261a1fd77ba8036c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `': not a valid identifier\nbash: line 1: declare: r: not found\n"
+   },
+   "stdout": {
+    "text": "decl=1\n"
+   }
+  },
+  "gram array nameref declare -p: integer": {
+   "script": "ead69fbc6102b6d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref declare -p: invalid name": {
+   "script": "0ebcc77e960382ce",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `a b': invalid variable name for name reference\nbash: line 1: declare: r: not found\n"
+   },
+   "stdout": {
+    "text": "decl=1\n"
+   }
+  },
+  "gram array nameref declare -p: itself": {
+   "script": "38b6a496d0b1ba00",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: r: nameref variable self references not allowed\nbash: line 1: declare: r: not found\n"
+   },
+   "stdout": {
+    "text": "decl=1\n"
+   }
+  },
+  "gram array nameref declare -p: positional": {
+   "script": "955e0e7993c607c7",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `1': invalid variable name for name reference\nbash: line 1: declare: r: not found\n"
+   },
+   "stdout": {
+    "text": "decl=1\n"
+   }
+  },
+  "gram array nameref declare -p: readonly": {
+   "script": "5a352559dd2cedfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref declare -p: scalar": {
+   "script": "f6ee3557266d0f58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref declare -p: unset scalar": {
+   "script": "372eed7a281f8e8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref elements: another nameref": {
+   "script": "9789c16a23c0df03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeep 0\n"
+   }
+  },
+  "gram array nameref elements: array": {
+   "script": "1861ae55e47dcff4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\na b c 0 1 2\n"
+   }
+  },
+  "gram array nameref elements: assoc element": {
+   "script": "d1ce30cd3d72c1f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n\n"
+   }
+  },
+  "gram array nameref elements: itself": {
+   "script": "465999e6f095eb82",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: r: nameref variable self references not allowed\n"
+   },
+   "stdout": {
+    "text": "decl=1\n\n"
+   }
+  },
+  "gram array nameref indirect expansion of a nameref": {
+   "script": "23519bfece4c3d76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram array nameref length: array element": {
+   "script": "5d50bccdf4f4d85d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n1 0\n"
+   }
+  },
+  "gram array nameref length: empty": {
+   "script": "02437e5e34088af7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "decl=1\n0 0\n"
+   }
+  },
+  "gram array nameref length: integer": {
+   "script": "00e20b997ac554ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n1 1\n"
+   }
+  },
+  "gram array nameref length: positional": {
+   "script": "a8ca73d6b81b1608",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `1': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "decl=1\n0 0\n"
+   }
+  },
+  "gram array nameref length: scalar": {
+   "script": "be82a1dd2aa0d959",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n5 1\n"
+   }
+  },
+  "gram array nameref local -n shadowing its target name": {
+   "script": "b0d400bc24513e02",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: local: warning: v: circular name reference\nbash: line 1: warning: v: circular name reference\nbash: line 1: warning: v: maximum nameref depth (8) exceeded\n"
+   },
+   "stdout": {
+    "text": "x\nstatus=0\n"
+   }
+  },
+  "gram array nameref local -n to a caller variable": {
+   "script": "d7f14795a5bca7e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from f\n"
+   }
+  },
+  "gram array nameref local -n to a local of the caller": {
+   "script": "ef6af08472aafe0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set-by-g\n"
+   }
+  },
+  "gram array nameref name: assoc": {
+   "script": "9ef9587ede253593",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nt\n"
+   }
+  },
+  "gram array nameref name: invalid name": {
+   "script": "313855a7323245db",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `a b': invalid variable name for name reference\nbash: line 1: r: invalid indirect expansion\n"
+   },
+   "stdout": {
+    "text": "decl=1\n"
+   }
+  },
+  "gram array nameref name: readonly": {
+   "script": "98967c4b3d9348fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nt\n"
+   }
+  },
+  "gram array nameref name: unset scalar": {
+   "script": "6ef337c235fe5a64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nt\n"
+   }
+  },
+  "gram array nameref nameref -p listing": {
+   "script": "92fba9e2418e6ea4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -n r=\"t\"\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref nameref array keys": {
+   "script": "b37b1791bd2a5f28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "k\n"
+   }
+  },
+  "gram array nameref nameref declared without -n is plain": {
+   "script": "8e22a5d196d2dd17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram array nameref nameref element access": {
+   "script": "23293c7e263a0bd7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\ndeclare -a a=([0]=\"x\" [1]=\"y\" [2]=\"z\")\n"
+   }
+  },
+  "gram array nameref nameref exported": {
+   "script": "fe0042979cc17889",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[t] [unset]\n"
+   }
+  },
+  "gram array nameref nameref in a for loop over names": {
+   "script": "f78ffdb9397b0c9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "gram array nameref nameref in a subshell": {
+   "script": "d517240da296dbfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n1\n"
+   }
+  },
+  "gram array nameref nameref in arithmetic context": {
+   "script": "e15b42625b9d3903",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n4\n"
+   }
+  },
+  "gram array nameref nameref invalid target at use": {
+   "script": "e72bad6d7c89846e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram array nameref nameref to a nameref chain assignment": {
+   "script": "f6a8553226887b33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "gram array nameref nameref to a readonly nameref": {
+   "script": "2f5fe430511ed1c8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram array nameref nameref to a special variable": {
+   "script": "bef15631e1dcdf67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 1\n"
+   }
+  },
+  "gram array nameref nameref to a variable named by expansion": {
+   "script": "d2533cda6f0ac092",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "gram array nameref nameref to an array element with an expression index": {
+   "script": "ed28d2b63db53720",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "z\n"
+   }
+  },
+  "gram array nameref nameref to an assoc key with spaces": {
+   "script": "de3eaf2de6ec0d06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "gram array nameref nameref to an unset array element then assign": {
+   "script": "ed8a693dea324267",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [3]=\"new\")\n"
+   }
+  },
+  "gram array nameref nameref to positional is refused": {
+   "script": "4533f73e78c06ac3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `1': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram array nameref nameref to whole array appended": {
+   "script": "e2308b2b80d5b042",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"x\" [1]=\"y\" [2]=\"z\")\n"
+   }
+  },
+  "gram array nameref nameref with -i attribute": {
+   "script": "87281fe379f247a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "gram array nameref read: another nameref": {
+   "script": "556da3ec7ae12f8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n[deep]\n"
+   }
+  },
+  "gram array nameref read: array": {
+   "script": "e4a42dba4929b59b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n[a]\n"
+   }
+  },
+  "gram array nameref read: array element": {
+   "script": "2732b4d5a9f882e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n[b]\n"
+   }
+  },
+  "gram array nameref read: assoc": {
+   "script": "9986c3eac0e8d330",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n[]\n"
+   }
+  },
+  "gram array nameref read: assoc element": {
+   "script": "977672b5818837d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n[v]\n"
+   }
+  },
+  "gram array nameref read: empty": {
+   "script": "2ce39d055f2acae4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "decl=1\n[]\n"
+   }
+  },
+  "gram array nameref read: integer": {
+   "script": "975ef1b5e38788c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n[5]\n"
+   }
+  },
+  "gram array nameref read: invalid name": {
+   "script": "eb89ee1f2f695480",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `a b': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "decl=1\n[]\n"
+   }
+  },
+  "gram array nameref read: itself": {
+   "script": "876bdc19679f59a2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: r: nameref variable self references not allowed\n"
+   },
+   "stdout": {
+    "text": "decl=1\n[]\n"
+   }
+  },
+  "gram array nameref read: positional": {
+   "script": "2a823a361d4831d2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: `1': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "decl=1\n[]\n"
+   }
+  },
+  "gram array nameref read: readonly": {
+   "script": "2933e0157cb186e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n[ro]\n"
+   }
+  },
+  "gram array nameref read: scalar": {
+   "script": "2e8c55d02aa96a3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n[value]\n"
+   }
+  },
+  "gram array nameref read: unset scalar": {
+   "script": "242ec8d8cf348042",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\n[]\n"
+   }
+  },
+  "gram array nameref self reference": {
+   "script": "9783465d831ac1ff",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: s: nameref variable self references not allowed\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram array nameref typeset -n": {
+   "script": "a875abecefc4e9fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "gram array nameref unset -n: another nameref": {
+   "script": "59cf071f7ee7f88f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nbash: line 1: declare: r: not found\ndeclare -n t=\"t2\"\n"
+   }
+  },
+  "gram array nameref unset -n: array": {
+   "script": "3fb8a8541d42b847",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nbash: line 1: declare: r: not found\ndeclare -a t=([0]=\"a\" [1]=\"b\" [2]=\"c\")\n"
+   }
+  },
+  "gram array nameref unset -n: assoc element": {
+   "script": "7be85025119bf6af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nbash: line 1: declare: r: not found\ndeclare -A t=([k]=\"v\" )\n"
+   }
+  },
+  "gram array nameref unset -n: itself": {
+   "script": "d819b236d6480435",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: r: nameref variable self references not allowed\n"
+   },
+   "stdout": {
+    "text": "decl=1\nbash: line 1: declare: r: not found\nbash: line 1: declare: t: not found\n"
+   }
+  },
+  "gram array nameref unset nameref assignment sets the reference": {
+   "script": "2fea269b29fcf9b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "through\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref unset: array element": {
+   "script": "71235f884494e221",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\ndeclare -a t=([0]=\"a\" [2]=\"c\")\ndeclare -n r=\"t[1]\"\n"
+   }
+  },
+  "gram array nameref unset: empty": {
+   "script": "d8261a86f3d47bb8",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "decl=1\nbash: line 1: declare: t: not found\nbash: line 1: declare: r: not found\n"
+   }
+  },
+  "gram array nameref unset: integer": {
+   "script": "8966379229a41627",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nbash: line 1: declare: t: not found\ndeclare -n r=\"t\"\n"
+   }
+  },
+  "gram array nameref unset: positional": {
+   "script": "5f1c18cfa037f328",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: declare: `1': invalid variable name for name reference\n"
+   },
+   "stdout": {
+    "text": "decl=1\nbash: line 1: declare: t: not found\nbash: line 1: declare: r: not found\n"
+   }
+  },
+  "gram array nameref unset: scalar": {
+   "script": "6147414b7b3e1ed8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "decl=0\nbash: line 1: declare: t: not found\ndeclare -n r=\"t\"\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

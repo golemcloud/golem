@@ -1,0 +1,1828 @@
+{
+ "cases": {
+  "opt bash: allexport": {
+   "script": "212cdfb9e0edbccd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt bash: c default name": {
+   "script": "15e84c1b2230bcf2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bash\n"
+   }
+  },
+  "opt bash: c exit status": {
+   "script": "4381517e538097cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n"
+   }
+  },
+  "opt bash: c missing argument": {
+   "script": "ee755732bb6574dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nbash: -c: option requires an argument\n"
+   }
+  },
+  "opt bash: c with name and args": {
+   "script": "0701a5bb70163060",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name|a|2\n"
+   }
+  },
+  "opt bash: combined flags": {
+   "script": "01b2f8685ef1c22e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt bash: dollar dash": {
+   "script": "8c979cc9560b5095",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\n"
+   }
+  },
+  "opt bash: double dash": {
+   "script": "3e320c43be9a28e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\nstatus=0\n"
+   }
+  },
+  "opt bash: errexit": {
+   "script": "3e8b38d52dd2235a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt bash: exit code over 255": {
+   "script": "140ac7f2aea79fca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=44\n"
+   }
+  },
+  "opt bash: exported function": {
+   "script": "687e9f4d8cd3e2d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\n"
+   }
+  },
+  "opt bash: help status": {
+   "script": "69f9f54564ce56d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt bash: invalid long option": {
+   "script": "3288934bcb6b39a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nbash: --bogus: invalid option\nUsage:\tbash [GNU long option] [option] ...\n\tbash [GNU long option] [option] script-file ...\nGNU long options:\n\t--debug\n\t--debugger\n\t--dump-po-strings\n\t--dump-strings\n\t--help\n\t--init-file\n\t--login\n\t--noediting\n\t--noprofile\n\t--norc\n\t--posix\n\t--pretty-print\n\t--rcfile\n\t--restricted\n\t--verbose\n\t--version\nShell options:\n\t-ilrsD or -c command or -O shopt_option\t\t(invocation only)\n\t-abefhkmnptuvxBCEHPT or -o option\n"
+   }
+  },
+  "opt bash: invalid option name": {
+   "script": "31dafdf13f987513",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nbash: line 0: bash: bogus: invalid option name\n"
+   }
+  },
+  "opt bash: invalid shopt name": {
+   "script": "6f5a48ee8fd50296",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nbash: line 0: bogus: invalid shell option name\n"
+   }
+  },
+  "opt bash: invalid short option": {
+   "script": "2118fbb575019431",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nbash: -Q: invalid option\nUsage:\tbash [GNU long option] [option] ...\n\tbash [GNU long option] [option] script-file ...\nGNU long options:\n\t--debug\n\t--debugger\n\t--dump-po-strings\n\t--dump-strings\n\t--help\n\t--init-file\n\t--login\n\t--noediting\n\t--noprofile\n\t--norc\n\t--posix\n\t--pretty-print\n\t--rcfile\n\t--restricted\n\t--verbose\n\t--version\nShell options:\n\t-ilrsD or -c command or -O shopt_option\t\t(invocation only)\n\t-abefhkmnptuvxBCEHPT or -o option\n"
+   }
+  },
+  "opt bash: isolated cd": {
+   "script": "0332caa7c5c980c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "opt bash: isolated variables": {
+   "script": "f8a73b1149df4250",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt bash: login shell": {
+   "script": "6ab527ee4c94aab4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "login\n"
+   }
+  },
+  "opt bash: nested": {
+   "script": "75c3e3ee1a842eee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner\n"
+   }
+  },
+  "opt bash: no function inheritance": {
+   "script": "d1307acfcc45d08d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\nbash: line 1: f: command not found\n"
+   }
+  },
+  "opt bash: noediting": {
+   "script": "c279b894e6da30f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt bash: noexec": {
+   "script": "14c0a920ff41cd51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt bash: noexec syntax error": {
+   "script": "5be5b98b263d1094",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nbash: -c: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   }
+  },
+  "opt bash: noglob": {
+   "script": "3cf011c827bab10e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a*\n"
+   }
+  },
+  "opt bash: noprofile": {
+   "script": "819417346e1b6cf0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt bash: norc": {
+   "script": "4b6da08f46df06f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt bash: nounset": {
+   "script": "69e2d33abff6d01f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\nbash: line 1: nope: unbound variable\n"
+   }
+  },
+  "opt bash: pipefail option": {
+   "script": "c976311ba8b6c827",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt bash: plus O option": {
+   "script": "6162a547b5e09e03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "off\n"
+   }
+  },
+  "opt bash: plus o option": {
+   "script": "d203bc32764f42a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "went on\n"
+   }
+  },
+  "opt bash: positional count": {
+   "script": "a68ca2deb8574f0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nb\n"
+   }
+  },
+  "opt bash: posix mode": {
+   "script": "535900e431a7ff4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "posix\n"
+   }
+  },
+  "opt bash: posix o": {
+   "script": "4e4177c289cd52c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "posix\n"
+   }
+  },
+  "opt bash: rcfile refused": {
+   "script": "87db125f32e94a55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\nstatus=0\n"
+   }
+  },
+  "opt bash: restricted": {
+   "script": "8255113db96e5552",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nbash: line 1: cd: restricted\n"
+   }
+  },
+  "opt bash: restricted long": {
+   "script": "0d79bba3b0e89165",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\nstatus=0\n"
+   }
+  },
+  "opt bash: set options after c": {
+   "script": "4cb18ef91212cf77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arg\nstatus=0\n"
+   }
+  },
+  "opt bash: shopt option": {
+   "script": "b11193f3c8a79596",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "on\n"
+   }
+  },
+  "opt bash: stdin inherited": {
+   "script": "7558e1a0bd4f0d45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\n"
+   }
+  },
+  "opt bash: stdin script": {
+   "script": "192d51927f790d11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from stdin\n2\n"
+   }
+  },
+  "opt bash: stdin script default": {
+   "script": "bedec67130b13f9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "piped\n"
+   }
+  },
+  "opt bash: syntax error in c": {
+   "script": "7933e5f0ab5de029",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nbash: -c: line 1: syntax error near unexpected token `then'\nbash: -c: line 1: `if then'\n"
+   }
+  },
+  "opt bash: verbose": {
+   "script": "cf9604a5298e28d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nstatus=0\necho hi\n"
+   }
+  },
+  "opt bash: version first line": {
+   "script": "51fc66f0fc17c4ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "GNU bash,\n"
+   }
+  },
+  "opt bash: xtrace": {
+   "script": "7afeeadeb5877643",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nstatus=0\n+ echo hi\n"
+   }
+  },
+  "opt curl: compressed refused": {
+   "script": "ed7213ee70e787c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: config file missing": {
+   "script": "71d59ee44f37865d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=26\ncurl: option -K: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: connection refused fail": {
+   "script": "98b5c5cb57d5a339",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: connection refused status": {
+   "script": "12d8c3e3cb4cd887",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: cookie jar refused": {
+   "script": "e04bd4efacc05b58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\njar\n"
+   }
+  },
+  "opt curl: cookie refused": {
+   "script": "e71def936cc1348b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: create dirs refused": {
+   "script": "28185331318f1db7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\na\n"
+   }
+  },
+  "opt curl: data file missing": {
+   "script": "6f6805793eeb80d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=26\ncurl: option -d: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: data urlencode refused": {
+   "script": "0f01a3dbe084d745",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: empty url": {
+   "script": "f1b3c4e58b2a50db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option : blank argument where content is expected\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: fail with body refused": {
+   "script": "40c6027e944a2d3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: form bad syntax": {
+   "script": "359d8c4d9eb22554",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option -F: is badly used here\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: form file missing": {
+   "script": "8116a5022bc6e3f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=26\n"
+   }
+  },
+  "opt curl: get with data refused": {
+   "script": "167cee6c3eb8ddb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: head refused": {
+   "script": "71517de9c21bb666",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: header refused": {
+   "script": "8ced56eaedca94c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: help": {
+   "script": "9a242380f39d9fe7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt curl: include refused": {
+   "script": "a8c56f787f0be7ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: insecure refused": {
+   "script": "854b67f4fe1790f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: invalid connect timeout": {
+   "script": "64dbf04e8e66248e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option --connect-timeout: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: invalid max time": {
+   "script": "e1e101ca1bc92264",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: invalid retry": {
+   "script": "02001103be647f2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option --retry: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: invalid retry delay": {
+   "script": "78bf6ffd011f9623",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option --retry-delay: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: json refused": {
+   "script": "b4f4a89234e2e6c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: location refused": {
+   "script": "17f71ae8e30b9751",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: malformed port": {
+   "script": "14ede1e2168cb817",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\ncurl: (3) URL rejected: Port number was not a decimal number between 0 and 65535\n"
+   }
+  },
+  "opt curl: method refused": {
+   "script": "e7ad457191e457df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: missing argument long": {
+   "script": "9ad43071dc58d6c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option --max-time: requires parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: missing argument output": {
+   "script": "faf1345a00fdd6d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option -o: requires parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: missing argument short": {
+   "script": "9d586dab5c6c4c63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option -H: requires parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: negative max time": {
+   "script": "6f38d6f7f1103b4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option -m: expected a proper numerical parameter\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: no url": {
+   "script": "8826212ed9ce2eae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: no url with options": {
+   "script": "d289ddbe9d44d9f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: (2) no URL specified\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: output dir missing": {
+   "script": "7c375bcfb7d26b5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: output file not created on failure": {
+   "script": "26e444df332e8b87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n"
+   }
+  },
+  "opt curl: range refused": {
+   "script": "fb045fdc62da742d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: referer refused": {
+   "script": "a603a8dc473bedb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: remote name no path": {
+   "script": "b52909eb52d20950",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n"
+   }
+  },
+  "opt curl: remote name refused": {
+   "script": "b50771f764e27e8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n"
+   }
+  },
+  "opt curl: resolve failure status": {
+   "script": "0fb3dca750709e6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=6\n0\n"
+   }
+  },
+  "opt curl: retry refused": {
+   "script": "40e280c5cacfb773",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: several urls refused": {
+   "script": "32c1ef29a655acbf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: silent show error": {
+   "script": "8a09de5432e3711a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=6\ncurl: (6) Could not resolve host: host.invalid\n"
+   }
+  },
+  "opt curl: unknown option": {
+   "script": "805e1f8b7e61d50d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: option --bogus: is unknown\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: unknown short option": {
+   "script": "90a6ba5eaba1921a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\ncurl: (2) no URL specified\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: unsupported protocol": {
+   "script": "5f03a97924c2a3be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\ncurl: (1) Protocol \"gopher2\" not supported\n"
+   }
+  },
+  "opt curl: unsupported protocol silent": {
+   "script": "b09e478d7cc17554",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n0\n"
+   }
+  },
+  "opt curl: upload file missing": {
+   "script": "846552dcf84e1cab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=26\ncurl: cannot open '/tmp/nosuch'\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   }
+  },
+  "opt curl: url option": {
+   "script": "f34fbf9ca83b7953",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: user agent refused": {
+   "script": "23906d8ed9b4cea3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: user refused": {
+   "script": "9ede394440754da6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n0\n"
+   }
+  },
+  "opt curl: verbose refused": {
+   "script": "95a3a9bd52e4a723",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n"
+   }
+  },
+  "opt curl: version": {
+   "script": "ef49b96f966e5cbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt curl: write out exitcode": {
+   "script": "c2ecd97a025fa623",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 status=7\n"
+   }
+  },
+  "opt curl: write out on failure": {
+   "script": "dfea196dc47dfe34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[000] status=7\n"
+   }
+  },
+  "opt curl: write out unknown variable": {
+   "script": "cdcce72ed37bdb07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\ncurl: unknown --write-out variable: 'bogus'\n"
+   }
+  },
+  "opt sh: allexport": {
+   "script": "299de612bdafb029",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt sh: c default name": {
+   "script": "1275e0924f66bf0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sh\n"
+   }
+  },
+  "opt sh: c exit status": {
+   "script": "b06d7af8b6b895f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n"
+   }
+  },
+  "opt sh: c missing argument": {
+   "script": "013c58a1e8d51b9e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nsh: -c: option requires an argument\n"
+   }
+  },
+  "opt sh: c with name and args": {
+   "script": "0ef2bbef4c46a8de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name|a|2\n"
+   }
+  },
+  "opt sh: combined flags": {
+   "script": "4a41e414bd21ac3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sh: dollar dash": {
+   "script": "493d8169e009c1a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\n"
+   }
+  },
+  "opt sh: double dash": {
+   "script": "124fec390cae1c5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\nstatus=0\n"
+   }
+  },
+  "opt sh: errexit": {
+   "script": "10ad811f104ecfef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sh: exit code over 255": {
+   "script": "0c7ad6d8a6b384e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=44\n"
+   }
+  },
+  "opt sh: exported function": {
+   "script": "88ba4c1f187a3079",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\n"
+   }
+  },
+  "opt sh: help status": {
+   "script": "4997ebdd94920759",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt sh: invalid long option": {
+   "script": "2cda0dbaf85f2993",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nsh: --bogus: invalid option\nUsage:\tsh [GNU long option] [option] ...\n\tsh [GNU long option] [option] script-file ...\nGNU long options:\n\t--debug\n\t--debugger\n\t--dump-po-strings\n\t--dump-strings\n\t--help\n\t--init-file\n\t--login\n\t--noediting\n\t--noprofile\n\t--norc\n\t--posix\n\t--pretty-print\n\t--rcfile\n\t--restricted\n\t--verbose\n\t--version\nShell options:\n\t-ilrsD or -c command or -O shopt_option\t\t(invocation only)\n\t-abefhkmnptuvxBCEHPT or -o option\n"
+   }
+  },
+  "opt sh: invalid option name": {
+   "script": "538d4c7cac10fb00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nsh: line 0: sh: bogus: invalid option name\n"
+   }
+  },
+  "opt sh: invalid shopt name": {
+   "script": "d45626d0174dcadd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nsh: line 0: bogus: invalid shell option name\n"
+   }
+  },
+  "opt sh: invalid short option": {
+   "script": "ffac5e9937bb2b1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nsh: -Q: invalid option\nUsage:\tsh [GNU long option] [option] ...\n\tsh [GNU long option] [option] script-file ...\nGNU long options:\n\t--debug\n\t--debugger\n\t--dump-po-strings\n\t--dump-strings\n\t--help\n\t--init-file\n\t--login\n\t--noediting\n\t--noprofile\n\t--norc\n\t--posix\n\t--pretty-print\n\t--rcfile\n\t--restricted\n\t--verbose\n\t--version\nShell options:\n\t-ilrsD or -c command or -O shopt_option\t\t(invocation only)\n\t-abefhkmnptuvxBCEHPT or -o option\n"
+   }
+  },
+  "opt sh: isolated cd": {
+   "script": "10353697010e276c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "opt sh: isolated variables": {
+   "script": "08615423b0423e83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "opt sh: login shell": {
+   "script": "005e1cd3c1b5c7bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "login\n"
+   }
+  },
+  "opt sh: nested": {
+   "script": "c8b23602645c25b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner\n"
+   }
+  },
+  "opt sh: no function inheritance": {
+   "script": "b07c64801dfa819c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\nsh: line 1: f: command not found\n"
+   }
+  },
+  "opt sh: noediting": {
+   "script": "53817b82e80afc75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt sh: noexec": {
+   "script": "757394df5bf9f989",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt sh: noexec syntax error": {
+   "script": "eba44f5a9434a630",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nsh: -c: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   }
+  },
+  "opt sh: noglob": {
+   "script": "4bdcaaecde7f12dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a*\n"
+   }
+  },
+  "opt sh: noprofile": {
+   "script": "1a8f0d138b8e3db8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt sh: norc": {
+   "script": "041ac50788a2c39f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "opt sh: nounset": {
+   "script": "57f451d18fff0c09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\nsh: line 1: nope: unbound variable\n"
+   }
+  },
+  "opt sh: pipefail option": {
+   "script": "731a32b4cf91ff2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "opt sh: plus O option": {
+   "script": "49a8c49727050c11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "off\n"
+   }
+  },
+  "opt sh: plus o option": {
+   "script": "62884cced27961d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "went on\n"
+   }
+  },
+  "opt sh: positional count": {
+   "script": "7543929cb73ebd19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nb\n"
+   }
+  },
+  "opt sh: posix mode": {
+   "script": "b71bacc85dc6d9ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "posix\n"
+   }
+  },
+  "opt sh: posix o": {
+   "script": "7f998dd5d0a746a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "posix\n"
+   }
+  },
+  "opt sh: rcfile refused": {
+   "script": "e94df366f3cf1d49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\nstatus=0\n"
+   }
+  },
+  "opt sh: restricted": {
+   "script": "88194884b0667348",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nsh: line 1: cd: restricted\n"
+   }
+  },
+  "opt sh: restricted long": {
+   "script": "495781a16843c209",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\nstatus=0\n"
+   }
+  },
+  "opt sh: set options after c": {
+   "script": "29a3b321c93aa97f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arg\nstatus=0\n"
+   }
+  },
+  "opt sh: shopt option": {
+   "script": "74effb94bfceaab4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "on\n"
+   }
+  },
+  "opt sh: stdin inherited": {
+   "script": "60ba57d507486e17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\n"
+   }
+  },
+  "opt sh: stdin script": {
+   "script": "51f9c2006bae2c11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from stdin\n2\n"
+   }
+  },
+  "opt sh: stdin script default": {
+   "script": "5f101f84518dea49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "piped\n"
+   }
+  },
+  "opt sh: syntax error in c": {
+   "script": "ee994927b1261330",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nsh: -c: line 1: syntax error near unexpected token `then'\nsh: -c: line 1: `if then'\n"
+   }
+  },
+  "opt sh: verbose": {
+   "script": "d1031e4438f7389e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nstatus=0\necho hi\n"
+   }
+  },
+  "opt sh: version first line": {
+   "script": "70e4d7e8edca87c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "GNU bash,\n"
+   }
+  },
+  "opt sh: xtrace": {
+   "script": "fbd64608fa2bb814",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nstatus=0\n+ echo hi\n"
+   }
+  },
+  "opt wget: connection refused quiet": {
+   "script": "750cc2145a7266e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: content disposition refused": {
+   "script": "cb77955862528bbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: continue refused": {
+   "script": "f44ca33ea329fd84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: empty url": {
+   "script": "88ea2b0d0ea3dd19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n0\n"
+   }
+  },
+  "opt wget: header refused": {
+   "script": "66b3bfc286eaf66d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: help": {
+   "script": "7de9499e27ad3807",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "opt wget: input file missing": {
+   "script": "272f44e0c7ca44d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n0\n"
+   }
+  },
+  "opt wget: invalid max redirect": {
+   "script": "1a84bf0016dc1b14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: invalid timeout": {
+   "script": "791ff608a880d891",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nwget: --timeout: Invalid time period 'x'\n"
+   }
+  },
+  "opt wget: invalid tries": {
+   "script": "c56ee2c5633fb31a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: max redirect refused": {
+   "script": "137452be2650b7b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: missing argument": {
+   "script": "abb5265470d61781",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nwget: option requires an argument -- 'O'\nUsage: wget [OPTION]... [URL]...\n\nTry `wget --help' for more options.\n"
+   }
+  },
+  "opt wget: no clobber refused": {
+   "script": "dbad23a3676170a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: no url": {
+   "script": "9fe3798d21504da9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nwget: missing URL\nUsage: wget [OPTION]... [URL]...\n\nTry `wget --help' for more options.\n"
+   }
+  },
+  "opt wget: output directory missing": {
+   "script": "cd8e8061f698620c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n0\n"
+   }
+  },
+  "opt wget: output document not left": {
+   "script": "5ccb03754c515a56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\nout\n"
+   }
+  },
+  "opt wget: output stdout refused": {
+   "script": "6f38b8d161d86c11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: post data and file": {
+   "script": "2801d0e40a669004",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n0\n"
+   }
+  },
+  "opt wget: post data refused": {
+   "script": "1d9cc7130cde7246",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: post file missing": {
+   "script": "15f07ba777f5287b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n0\n"
+   }
+  },
+  "opt wget: prefix refused": {
+   "script": "f3701ec3e549c545",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "opt wget: resolve failure quiet": {
+   "script": "836575e9843e1ef7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: server response refused": {
+   "script": "3f0a4c673c97e6f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: several urls": {
+   "script": "74fe7a23a9c96349",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: spider refused": {
+   "script": "1e438394bec19942",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: timeout refused": {
+   "script": "2a4363f7a5396555",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: timestamping refused": {
+   "script": "b43f2959d777657f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: tries refused": {
+   "script": "4d19ff7434086e56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: unknown option": {
+   "script": "91f261cf77b3546b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nwget: unrecognized option '--bogus'\nUsage: wget [OPTION]... [URL]...\n\nTry `wget --help' for more options.\n"
+   }
+  },
+  "opt wget: unknown short option": {
+   "script": "1e1b14b813041a4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\nwget: invalid option -- 'Z'\nUsage: wget [OPTION]... [URL]...\n\nTry `wget --help' for more options.\n"
+   }
+  },
+  "opt wget: unsupported scheme": {
+   "script": "65f1706e77f9452b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n0\n"
+   }
+  },
+  "opt wget: unsupported scheme message": {
+   "script": "41235e2e25dd8ac8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nERROR: could not open HSTS store. HSTS will be disabled.\nftpx://x/: Unsupported scheme.\n"
+   }
+  },
+  "opt wget: user agent refused": {
+   "script": "3de8e7916851a8ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n0\n"
+   }
+  },
+  "opt wget: version": {
+   "script": "adf7e970dfc774f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

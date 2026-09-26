@@ -1,0 +1,38 @@
+[package]
+name = "waget"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# An embeddable HTTP command library and a standalone CLI binary.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "waget"
+path = "src/main.rs"
+
+[dependencies]
+# `http::Method` in the parsed request; `whttp` is the shared cfg-gated transport
+# (wasi-fetch/reqwest) plus redirect following + timeouts, so waget only parses flags and formats
+# output.
+http = "1"
+whttp = { path = "../whttp" }
+# `run_streaming`'s sink parameter (`&mut dyn futures::io::AsyncWrite`) — the shell hands it
+# `OpenFile::async_io()`, which is exactly this trait; the standalone bin doesn't call it.
+futures = { workspace = true }
+
+# wasm: `wasip3`'s `wasi:cli/run@0.3.0` export is the standalone bin's entry point, an async
+# task in which whttp's wasi-fetch futures are awaited. It must be THIS wit-bindgen (the one
+# wasip3 pins), not golem-rust's fork, or the futures would be polled by a runtime that never
+# receives their wakeups.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasip3 = "0.7"
+
+# native: tokio gives the standalone bin a runtime. (reqwest moved to whttp.)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

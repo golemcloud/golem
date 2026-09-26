@@ -1,0 +1,5718 @@
+{
+ "cases": {
+  "gram control alias alias -p": {
+   "script": "c068ea9be2075233",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias z='echo it'\\''s'\n"
+   }
+  },
+  "gram control alias alias in a function body defined later": {
+   "script": "d0253cc1fca5381b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "gram control alias alias listing": {
+   "script": "47cdfa3578e895f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alias a1='echo x'\nalias a2='y'\nalias a1='echo x'\n"
+   }
+  },
+  "gram control alias alias not in quotes": {
+   "script": "694e5b19c9bcb743",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "gram control alias alias used inside a function defined after it": {
+   "script": "82e20edd2b84d0f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "early\n"
+   }
+  },
+  "gram control alias alias with a keyword": {
+   "script": "7792e26707c7f46c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kw\n"
+   }
+  },
+  "gram control alias expanded after expand_aliases on an earlier line": {
+   "script": "3868d1efe0ec97ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "gram control alias invalid alias name": {
+   "script": "4c9567da98c839d6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: alias: `a b': invalid alias name\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram control alias not expanded by default": {
+   "script": "16c0a6f0a3bf29f4",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 2: hi: command not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control alias recursive alias stops": {
+   "script": "fc98e3685ee02c19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "stop\n"
+   }
+  },
+  "gram control alias same line definition is not used": {
+   "script": "3bc985347bc045b1",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 2: hi: command not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control alias trailing space expands the next word": {
+   "script": "4b24c0288be21de1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "run word\n"
+   }
+  },
+  "gram control alias unalias": {
+   "script": "c09258fbdc9f4aa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "gram control alias unalias -a": {
+   "script": "0e291ddc7ab1a4be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control alias unknown alias": {
+   "script": "f713138e992082d7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: alias: nosuch: not found\nbash: line 1: unalias: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "gram control case array word": {
+   "script": "029e4830ed5c6f7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arr\n"
+   }
+  },
+  "gram control case bracket with dash first": {
+   "script": "e079e9ae490af0d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dash\n"
+   }
+  },
+  "gram control case case inside a function with return": {
+   "script": "53e82fb72450dfc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\nno-return\n"
+   }
+  },
+  "gram control case case inside a loop with break": {
+   "script": "a17c22bec06e71cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram control case character classes": {
+   "script": "258cc169b35bcccd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "digit\nspace\n"
+   }
+  },
+  "gram control case dollar at word": {
+   "script": "8441cc6bead4e1b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "joined\n"
+   }
+  },
+  "gram control case empty body": {
+   "script": "ec9739ceabc36e12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram control case empty pattern": {
+   "script": "c846c495b53aa91c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\n"
+   }
+  },
+  "gram control case esac as a word": {
+   "script": "0dec9a4259ca2694",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "esac\nesac\n"
+   }
+  },
+  "gram control case fallthrough to the end": {
+   "script": "487c5bf05f47ad35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "gram control case in a pipeline": {
+   "script": "dfaa2c4ee3667313",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "key\n"
+   }
+  },
+  "gram control case keyword words as patterns": {
+   "script": "088aca51d364dd7d",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `)'\nbash: -c: line 1: `case if in if) echo kw;; esac; case esac in esac) echo es;; esac'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control case last clause without terminator": {
+   "script": "c1316492a55a6e3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "last\n"
+   }
+  },
+  "gram control case leading parenthesis": {
+   "script": "9b403c231d5fd99e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "paren\n"
+   }
+  },
+  "gram control case negated bracket": {
+   "script": "05cc178e21c60dcc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "not\n"
+   }
+  },
+  "gram control case newlines everywhere": {
+   "script": "6166e4566ec932c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nl\n"
+   }
+  },
+  "gram control case no match status": {
+   "script": "1351ee61696e00d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram control case nocasematch": {
+   "script": "6eb716d769a132ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ci\n"
+   }
+  },
+  "gram control case pattern \"$pv\": word '*'": {
+   "script": "c029fc121cdca0de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern \"$pv\": word 'a b'": {
+   "script": "f86a66c786bca35d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern \"$pv\": word 'x'": {
+   "script": "2c4e5a07b23b5278",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern $pv: word '*'": {
+   "script": "1c10e6b9b07dc985",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern $pv: word 'a b'": {
+   "script": "91797f6c41b16e3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern $pv: word 'x'": {
+   "script": "78e3386d9b0a91b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern 'ab': word ''": {
+   "script": "ef41a619db7ed39a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern 'ab': word 'ab'": {
+   "script": "3fa56841a3b871a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern 'ab': word 'cd'": {
+   "script": "4379bf2da76a4b98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern *: word '*'": {
+   "script": "71e35cdbc0215977",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern *: word 'a b'": {
+   "script": "14188b39a71e590b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern *: word 'x'": {
+   "script": "d6579ba91a48facb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern *b: word ''": {
+   "script": "10eea0515f80bc93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern *b: word 'ab'": {
+   "script": "87a2b44949899a24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern *b: word 'cd'": {
+   "script": "518b22426f2670b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern ?: word '*'": {
+   "script": "dd252733cb3494fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern ?: word 'a b'": {
+   "script": "d2cb42427b178f7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern ?: word 'x'": {
+   "script": "966d5667dc1edb64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern [ab]*: word '*'": {
+   "script": "e95f18e1d7407c2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern [ab]*: word 'a b'": {
+   "script": "41ae3906df4f9922",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern [ab]*: word 'x'": {
+   "script": "afb3f0c86b266a80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern a*: word ''": {
+   "script": "10b9fc44b19ee54b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern a*: word 'ab'": {
+   "script": "da282f957b447d72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "matched\n"
+   }
+  },
+  "gram control case pattern a*: word 'cd'": {
+   "script": "83f546b05eaa2546",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern ab|cd: word '*'": {
+   "script": "bbd29dc31490f219",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern ab|cd: word 'a b'": {
+   "script": "3bdb772d031a0d2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern ab|cd: word 'x'": {
+   "script": "3d12c6f25c7c8fd0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "no\n"
+   }
+  },
+  "gram control case pattern expanded lazily": {
+   "script": "7ef88b04774952db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "gram control case pattern from command substitution": {
+   "script": "b3b9aa98ebc55495",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub\n"
+   }
+  },
+  "gram control case pattern list with spaces": {
+   "script": "25f1c62816418dc0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "spaced\n"
+   }
+  },
+  "gram control case pattern with escaped star": {
+   "script": "b705352df5e5fac5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "star\nother\n"
+   }
+  },
+  "gram control case redirect on case": {
+   "script": "9d91ebbb244e54d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "r\n"
+   }
+  },
+  "gram control case status is the body's": {
+   "script": "d0a7f555a6846835",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram control case terminators ;& ;& ;&: word 'ab'": {
+   "script": "ad6274a99ef40424",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nempty\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;& ;;&: word ''": {
+   "script": "f7ff7c7eb69b3200",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;& ;;&: word 'a b'": {
+   "script": "2bf4d6115170200d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nempty\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;; ;;&: word '*'": {
+   "script": "bf1e55a320d2425f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;; ;;&: word 'a b'": {
+   "script": "fe3fcd85cbd9708d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;; ;;&: word 'ab'": {
+   "script": "58c0a270cd0b33a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;; ;;&: word 'cd'": {
+   "script": "ce6a7eca8a42271e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;; ;;: word 'cd'": {
+   "script": "c747c0ac221d77af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;;& ;&: word '*'": {
+   "script": "24eef729c8fff565",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;;& ;&: word 'x'": {
+   "script": "c281afb84a9778ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;;& ;;&: word ''": {
+   "script": "188f45f5e851275c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;;& ;;&: word 'a b'": {
+   "script": "46d8c018b8e3f192",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;& ;;& ;;: word 'ab'": {
+   "script": "6e4b162e351d56ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;& ;&: word '*'": {
+   "script": "150561690483e2e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;& ;&: word 'ab'": {
+   "script": "e37dba97c6da3a03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;& ;;&: word 'x'": {
+   "script": "95eb3c1e464f0751",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nempty\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;& ;;: word 'cd'": {
+   "script": "0187176447d7fca5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;; ;&: word '*'": {
+   "script": "1694b8c479cde383",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;; ;&: word 'x'": {
+   "script": "e1e1b0020f43e5a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;;& ;&: word 'a b'": {
+   "script": "1fbadb9df47047dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;;& ;&: word 'cd'": {
+   "script": "51a713b8b75c8d7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;;& ;;&: word ''": {
+   "script": "b3d3789c90809d19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;;& ;;&: word 'ab'": {
+   "script": "94ba8d9ff89fb38e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;;& ;;: word '*'": {
+   "script": "936178f25461e9ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;; ;;& ;;: word 'a b'": {
+   "script": "2de10a2dda873889",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;& ;;&: word '*'": {
+   "script": "a8bf9f857cf118eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;& ;;: word ''": {
+   "script": "e3e6e4c962e8f3df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;; ;&: word ''": {
+   "script": "261ac0be6203d0a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;; ;&: word 'cd'": {
+   "script": "9b94ad46d18fcd59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;; ;&: word 'x'": {
+   "script": "f9b35f2ad8fc0475",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;; ;;&: word 'a b'": {
+   "script": "6fd02eacc087ea09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;; ;;&: word 'cd'": {
+   "script": "5d3b2b3e451e7eca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;; ;;: word ''": {
+   "script": "a4c62cf9f7d7c8ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;; ;;: word '*'": {
+   "script": "250312c5b7a14dc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "default\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;; ;;: word 'ab'": {
+   "script": "f075b706e1a86239",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;;& ;;&: word ''": {
+   "script": "bc64efdd8c171cd9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case terminators ;;& ;;& ;;: word 'x'": {
+   "script": "55e6091d6084adbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\ndefault\nstatus=0\n"
+   }
+  },
+  "gram control case test next skips non-matches": {
+   "script": "b1c3154ea54bf227",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n3\n"
+   }
+  },
+  "gram control case unset word": {
+   "script": "75244e47c1a5913a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "unset-empty\n"
+   }
+  },
+  "gram control case word expansion once": {
+   "script": "b296a300d95249ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n1\n"
+   }
+  },
+  "gram control case word with glob characters is literal": {
+   "script": "bc2ec84fd7c27433",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "g\nlit\n"
+   }
+  },
+  "gram control errexit arithmetic in and list": {
+   "script": "f499e6038f8b1fad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit arithmetic zero exits": {
+   "script": "6e71dcb96bf2a433",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit brace group failure mid list": {
+   "script": "b0905826e906612f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit command substitution in an argument does not exit": {
+   "script": "3c0ff62c25b1ee3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nsurvived\n"
+   }
+  },
+  "gram control errexit command substitution in assignment exits": {
+   "script": "d3ced6ac174a7983",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit errexit and eval": {
+   "script": "839f8fc30d22e675",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit errexit and eval in a condition": {
+   "script": "87153ecc863f5547",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit errexit and source": {
+   "script": "156d2824147fdafb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit errexit exit status": {
+   "script": "acb3a50af588fca6",
+   "status": 7,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit errexit in a condition's subshell": {
+   "script": "7febf1b320975c63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-cond\nt\n"
+   }
+  },
+  "gram control errexit errexit in a for loop": {
+   "script": "3d08f563e5e2d23b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram control errexit errexit in a subshell of an or list": {
+   "script": "1169ca1d004b5c45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-sub\n"
+   }
+  },
+  "gram control errexit errexit in background job": {
+   "script": "fba6a2ff04ffad80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "waited\n"
+   }
+  },
+  "gram control errexit errexit in case body": {
+   "script": "eebb1ecfb62c9c3f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit errexit set inside a function": {
+   "script": "0d4c0105ff8a52bd",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit errexit shows in dash flags": {
+   "script": "c7a25119086ac620",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "has-e\nno-e\n"
+   }
+  },
+  "gram control errexit errexit with ERR trap": {
+   "script": "013a8dd9837fa32a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err 1\n"
+   }
+  },
+  "gram control errexit errexit with a failed builtin": {
+   "script": "2ef1963e7b4dd9e0",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: cd: /nonexistent: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit errexit with a failed redirect": {
+   "script": "6ad78427d88668aa",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/such: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit errexit with a negated pipeline": {
+   "script": "0fef6f09f0b667af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit errexit with command not found": {
+   "script": "b2f611a891afbf2f",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: no_such_command_zz: command not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit errexit with return status": {
+   "script": "a7615fd93139ae01",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit failure at the end of an and list exits": {
+   "script": "7505c3ed067db778",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit failure in an and list does not exit": {
+   "script": "eecf1e6db768d55e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit failure in an or list does not exit": {
+   "script": "b13934cb3b23ead2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit function failing exits": {
+   "script": "4c2c0aceafe8dbbb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit function in a condition ignores errexit": {
+   "script": "476ef80e2ff635fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inside\nt\ninside\nand\n"
+   }
+  },
+  "gram control errexit group failure exits": {
+   "script": "ae9c1100a39e3da6",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit group in an or list": {
+   "script": "52ed2683669cff0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-group\nsurvived\n"
+   }
+  },
+  "gram control errexit if condition does not exit": {
+   "script": "5a7ea4948e36239f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit inherit_errexit in substitution": {
+   "script": "02d8b4f585126194",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nsurvived\n"
+   }
+  },
+  "gram control errexit let zero exits": {
+   "script": "bbd4ead8b7779df7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit local with failing substitution does not exit": {
+   "script": "0615c2e0a5511858",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\nsurvived\n"
+   }
+  },
+  "gram control errexit negated failure does not exit": {
+   "script": "ef694d078de85ba5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit pipeline first stage fails": {
+   "script": "21074f3723244341",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit pipeline last stage fails": {
+   "script": "1f303533deac5ee2",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit pipeline with pipefail": {
+   "script": "9d032602b6463014",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit set +e turns it off": {
+   "script": "acca73cff440463a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit set -o errexit": {
+   "script": "899a1ae1777f595a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit simple failure exits": {
+   "script": "e115f8b63275405b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "gram control errexit subshell failure exits": {
+   "script": "956d50c7172585d6",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit subshell inner failure": {
+   "script": "2e1c96234d275ac3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit test failure exits": {
+   "script": "cffbc3d072b83cb2",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control errexit until condition does not exit": {
+   "script": "54e6f64b3d552238",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control errexit while condition does not exit": {
+   "script": "877d30dd2ce8097b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram control eval assignments": {
+   "script": "7ac19da1edd47cce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "gram control eval defines a function": {
+   "script": "1e47205e43076c97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from-eval\n"
+   }
+  },
+  "gram control eval eval and set -e in a condition": {
+   "script": "599512b6e03b5acb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inside\n"
+   }
+  },
+  "gram control eval eval of a double quoted expansion": {
+   "script": "dbcdda468aa9d456",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a  b\na b\n"
+   }
+  },
+  "gram control eval eval of an alias definition": {
+   "script": "d66606a653f42e3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aliased\n"
+   }
+  },
+  "gram control eval eval with LINENO": {
+   "script": "7c730e3b6fe948da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "gram control eval eval with options": {
+   "script": "5ff8cef6cd0418c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dd\nbash: line 1: eval: -x: invalid option\neval: usage: eval [arg ...]\nstatus=2\n"
+   }
+  },
+  "gram control eval exit in eval": {
+   "script": "3226dc5ae729d7cf",
+   "status": 5,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control eval indirect assignment": {
+   "script": "eddb374b549a66eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "value\n"
+   }
+  },
+  "gram control eval joins its arguments": {
+   "script": "e3ac014c2ae05073",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one two  three\n"
+   }
+  },
+  "gram control eval multiple lines": {
+   "script": "a8a0e7a8ca731b3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l1\nl2\n"
+   }
+  },
+  "gram control eval nested eval": {
+   "script": "e5cc00bb96fb9589",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nested\n"
+   }
+  },
+  "gram control eval return in eval inside a function": {
+   "script": "7531c50b1ce31647",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram control eval status": {
+   "script": "ce238f5674ef4eae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n0\n"
+   }
+  },
+  "gram control eval syntax error message": {
+   "script": "ccb5e894cff4d56f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 1: syntax error near unexpected token `newline'\nbash: eval: line 1: `echo ('\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram control eval with a here-document": {
+   "script": "a3d5725ba0adc97f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hd\n"
+   }
+  },
+  "gram control exit exit after output without newline": {
+   "script": "b68d1744b57fefdc",
+   "status": 2,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "partial"
+   }
+  },
+  "gram control exit exit in a command substitution": {
+   "script": "9cf26c898b68e2f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=4\n"
+   }
+  },
+  "gram control exit exit in a function": {
+   "script": "b01b013a0455d661",
+   "status": 9,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit exit in a pipeline stage": {
+   "script": "b98dda19eba6ff76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control exit exit in a trap": {
+   "script": "2c89ee3a6f967e92",
+   "status": 8,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit exit inside a loop": {
+   "script": "1212e4f774e3aa32",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit exit status of last command": {
+   "script": "d0ea33e20fac4865",
+   "status": 5,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit exit with double dash": {
+   "script": "d6340c3263b76ba2",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit explicit status": {
+   "script": "8aed2bf0f474a1ff",
+   "status": 42,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit huge status": {
+   "script": "285b4fc3033b501f",
+   "status": 2,
+   "stderr": {
+    "text": "bash: line 1: exit: 99999999999999999999: numeric argument required\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit logout is not allowed": {
+   "script": "59a14ea1262f30a8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: logout: not login shell: use `exit'\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram control exit negative status": {
+   "script": "6e5ed9221cea6a1f",
+   "status": 255,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit no argument keeps last status": {
+   "script": "fe90088618d2a068",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit non-numeric status": {
+   "script": "a763766f7d5eba47",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: exit: abc: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "gram control exit status modulo 256": {
+   "script": "687ab796eecd00fe",
+   "status": 44,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit status with plus sign": {
+   "script": "e0add05fc0d9591a",
+   "status": 5,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit status with spaces": {
+   "script": "df8ea98f588252a1",
+   "status": 7,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control exit too many arguments": {
+   "script": "37adc09a844af350",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: exit: too many arguments\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control group BASH_SUBSHELL in a pipeline": {
+   "script": "367c3f5de7e40a3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n0\n"
+   }
+  },
+  "gram control group BASH_SUBSHELL levels": {
+   "script": "171c89ae2a75bcf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n2\n0\n"
+   }
+  },
+  "gram control group background group": {
+   "script": "3114c7ade8a5c2db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bg\ndone\n"
+   }
+  },
+  "gram control group double parenthesis subshell": {
+   "script": "fb05724a79eda3ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "spaced\n"
+   }
+  },
+  "gram control group exit in a group ends the shell": {
+   "script": "b6cf84865d2020ae",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in\n"
+   }
+  },
+  "gram control group exit in a subshell": {
+   "script": "a532f5eb0c412e3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n0\n"
+   }
+  },
+  "gram control group group as a pipeline stage": {
+   "script": "426379c6f5663e3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a>\n<b>\n"
+   }
+  },
+  "gram control group group needs a separator": {
+   "script": "d29e1ddec0085cb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "gram control group group redirect": {
+   "script": "8568191931216da9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\ne\n"
+   }
+  },
+  "gram control group group shares variables": {
+   "script": "40ed14a728e3c759",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram control group group status": {
+   "script": "37814914e146040f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n"
+   }
+  },
+  "gram control group group with a trailing newline": {
+   "script": "079fc817d8e2cf0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nl\n"
+   }
+  },
+  "gram control group lastpipe keeps the last stage": {
+   "script": "e34dd4f77a33e7ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "gram control group lastpipe with a group": {
+   "script": "63f0f5be18d23e08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "gram control group nested subshells": {
+   "script": "41ba8be46fd729da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "deep\n2\n"
+   }
+  },
+  "gram control group subshell exit status in a condition": {
+   "script": "8016a385f32687c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "gram control group subshell isolates cd": {
+   "script": "11b5765fd90a8b6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "gram control group subshell isolates functions": {
+   "script": "68d1c43326279063",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "none\n"
+   }
+  },
+  "gram control group subshell isolates options": {
+   "script": "a3da988a182ac044",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\noff\n"
+   }
+  },
+  "gram control group subshell isolates traps": {
+   "script": "de45b7f7ff88ec72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nmain\n"
+   }
+  },
+  "gram control group subshell isolates variables": {
+   "script": "210dce03e54f154b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram control group subshell pid differs": {
+   "script": "41e9aee1ad61ea4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "same-main\ndiffers\n"
+   }
+  },
+  "gram control group subshell with function body": {
+   "script": "9662367c935c3ec3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in\nout\n"
+   }
+  },
+  "gram control group subshell without space": {
+   "script": "132bb57b6c2d95c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "gram control group variables after a pipeline": {
+   "script": "f4bf2888f0b53900",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n0\n"
+   }
+  },
+  "gram control if condition output": {
+   "script": "84f971abae6fad21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cond\nbody\n"
+   }
+  },
+  "gram control if if as a function body": {
+   "script": "07ce747bc14094ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "arg\nnone\n"
+   }
+  },
+  "gram control if if elif else: ! true / (exit 7)": {
+   "script": "c2e821617fcde3cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: (( 0 )) / false": {
+   "script": "c44f2b4863005a4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: (exit 7) / (exit 7)": {
+   "script": "b29aa7bc30cd2235",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: [ ] / (exit 7)": {
+   "script": "0b3ec809ef6f89a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: [[ -n x ]] / cond_fn": {
+   "script": "eed40d14030aadf4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: [[ -n x ]] / true": {
+   "script": "5fb721a04cf7eeb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: cond_fn / (exit 7)": {
+   "script": "4eada2c392ad04f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: false / (exit 7)": {
+   "script": "bd44f11f67d74fc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: false / cond_fn": {
+   "script": "cb71669e6d34f2e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: false | true / cond_fn": {
+   "script": "dda2936431b0adbe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: false | true / false": {
+   "script": "97184ee9434c42e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: false | true / true": {
+   "script": "a28a8736cf23b0a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: false || true / true": {
+   "script": "8d335d6e97ba6dee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: true && false / (exit 7)": {
+   "script": "72b269467a7d47bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: true && false / cond_fn": {
+   "script": "0d77b2d644a5567f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: true && false / false": {
+   "script": "fd556ccd68130d25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: true && false / true": {
+   "script": "7f1348ba45409bd0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "elif\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: true / false": {
+   "script": "eb25f7ac5de65df8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: true / true": {
+   "script": "95262872bc452136",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: { false; true; } / cond_fn": {
+   "script": "d7260a274fc87dde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif else: { false; true; } / true": {
+   "script": "c8a1fc50475f7c40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: ! true / true": {
+   "script": "736ddb6c16ef167f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "elif\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: (( 0 )) / cond_fn": {
+   "script": "5d463695f1063d44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if elif: (exit 7) / cond_fn": {
+   "script": "32541e4a525eb8b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if elif: [ ] / cond_fn": {
+   "script": "e2b67050cc62bcfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if elif: [[ -n x ]] / (exit 7)": {
+   "script": "bfddf90df628a63d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: cond_fn / false": {
+   "script": "9ce8bf5baad441dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if elif: false / true": {
+   "script": "897ba1719bafbe8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "elif\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: false | true / cond_fn": {
+   "script": "43d7f01ccd76767b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: false || true / (exit 7)": {
+   "script": "479df32a36bce153",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: false || true / false": {
+   "script": "c9fe8704f68bf2d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: true && false / true": {
+   "script": "d84bf3a2e35d43a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "elif\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: true / cond_fn": {
+   "script": "6f3e387d1d367831",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: { false; true; } / (exit 7)": {
+   "script": "beffae51367b63c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if elif: { false; true; } / cond_fn": {
+   "script": "47f9ad9a69650557",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if else: ! true": {
+   "script": "54e09b24ed2b42bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if else: (( 0 ))": {
+   "script": "769197c2d0baed37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if else: (exit 7)": {
+   "script": "0a3532680b6d5719",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if else: [ ]": {
+   "script": "4f223e533ed3a527",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if else: [[ -n x ]]": {
+   "script": "b71c149a7509598f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if else: cond_fn": {
+   "script": "286da56c091272ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if else: false": {
+   "script": "7058c1d12c255338",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if else: false | true": {
+   "script": "f63271899b512caf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if else: false || true": {
+   "script": "69c2aea5af6694f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if else: true": {
+   "script": "e9e1d4a43e0ee3c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if else: true && false": {
+   "script": "eb328d1fd673b260",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "else\nstatus=0\n"
+   }
+  },
+  "gram control if if else: { false; true; }": {
+   "script": "e60d890bea8237d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if in a pipeline": {
+   "script": "9283b7bac9005cca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "piped\n"
+   }
+  },
+  "gram control if if with a background condition": {
+   "script": "81ea57d7d1df4cfe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bg\n"
+   }
+  },
+  "gram control if if with a list condition": {
+   "script": "c0bac5add37853d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "last-counts\n"
+   }
+  },
+  "gram control if if with a negated group": {
+   "script": "fcb5c8bd3187bd63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\n"
+   }
+  },
+  "gram control if if: ! true": {
+   "script": "6a115792ae444804",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if: (( 0 ))": {
+   "script": "52642adacf3cc00c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if: (exit 7)": {
+   "script": "28a8470b6530aea7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if: [ ]": {
+   "script": "2e183ba78e423cd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if: [[ -n x ]]": {
+   "script": "9c154b88358b4094",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if: cond_fn": {
+   "script": "3466d742a21cbc85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if: false": {
+   "script": "ea53e6af36473918",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if: false | true": {
+   "script": "d179244f05c5868b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if: false || true": {
+   "script": "ace5dcf99dfd94bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if: true": {
+   "script": "731486dc826bf5e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if if: true && false": {
+   "script": "1447cdf9571bacf8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if if: { false; true; }": {
+   "script": "df6586f70fafed2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if nested: ! true / (exit 7)": {
+   "script": "6c9e22d0515e5e37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: (( 0 )) / (exit 7)": {
+   "script": "1423a18402ffa2fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: (( 0 )) / true": {
+   "script": "6269d1b11b294ab2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: (exit 7) / cond_fn": {
+   "script": "66e2688b4f820b3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: (exit 7) / true": {
+   "script": "8321eaa546a86330",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: [ ] / false": {
+   "script": "cae7148ed07e2071",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: [[ -n x ]] / false": {
+   "script": "c7ede1dfe0ef4093",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if nested: cond_fn / false": {
+   "script": "f891340a577e4e03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: cond_fn / true": {
+   "script": "45aeb533e775ceb8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: false / false": {
+   "script": "0ce530ded4150729",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: false / true": {
+   "script": "8c0e10784016f386",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: false | true / (exit 7)": {
+   "script": "b87ff5c63efe3230",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if nested: false || true / cond_fn": {
+   "script": "22910ad1399a0a44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if nested: true && false / false": {
+   "script": "790feddda165de4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "outer-else\nstatus=0\n"
+   }
+  },
+  "gram control if nested: true / cond_fn": {
+   "script": "867879bafe5e106c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if nested: { false; true; } / false": {
+   "script": "23853863ead392b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if nested: { false; true; } / true": {
+   "script": "9f2e279d06b5c701",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner\nstatus=0\n"
+   }
+  },
+  "gram control if newlines: ! true / (exit 7)": {
+   "script": "fa155c5f3aa663dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if newlines: ! true / cond_fn": {
+   "script": "8117bb7d7e2ac596",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if newlines: ! true / false": {
+   "script": "aba826b9fc13019f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if newlines: (( 0 )) / true": {
+   "script": "842093779a267ddd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "elif\nstatus=0\n"
+   }
+  },
+  "gram control if newlines: (exit 7) / false": {
+   "script": "2349c4ad9b1dd6b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if newlines: [ ] / cond_fn": {
+   "script": "5f6c906bd67dd9b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if newlines: [ ] / false": {
+   "script": "96b17a45933e2fd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if newlines: [ ] / true": {
+   "script": "df715365a03bd482",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "elif\nstatus=0\n"
+   }
+  },
+  "gram control if newlines: [[ -n x ]] / cond_fn": {
+   "script": "9a8256e849285093",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if newlines: cond_fn / cond_fn": {
+   "script": "a0da308d2e8f1130",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if newlines: false / cond_fn": {
+   "script": "0a2925161b1f2565",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if newlines: false | true / (exit 7)": {
+   "script": "b936c00189843790",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if newlines: false || true / cond_fn": {
+   "script": "ad3d4a3757d8cfd8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if newlines: true && false / false": {
+   "script": "fddf59b47c52dc5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control if newlines: true / (exit 7)": {
+   "script": "48ae0e26e0054f35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if newlines: true / false": {
+   "script": "be9859f96eb964b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if newlines: { false; true; } / cond_fn": {
+   "script": "38c02afc5ed345a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "then\nstatus=0\n"
+   }
+  },
+  "gram control if redirect on if": {
+   "script": "e233de842d187d4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in\n"
+   }
+  },
+  "gram control if status is the body's": {
+   "script": "282229a8130e75c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n"
+   }
+  },
+  "gram control if status of a failed elif chain": {
+   "script": "0dc9c72bd53fc2e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram control if status when no branch runs": {
+   "script": "57b698fb363d8b23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram control list ! false && echo o && (exit 3)": {
+   "script": "9fb79306b9fc6a26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=3 pipe=3\n"
+   }
+  },
+  "gram control list ! false && echo o || false": {
+   "script": "c2a190dbfed7e462",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list ! false | true || false": {
+   "script": "a551c4b3858e3f13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=1\n"
+   }
+  },
+  "gram control list ! false || ! false && true": {
+   "script": "f5f6349fc4035389",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=0\n"
+   }
+  },
+  "gram control list ! false || ! false || true": {
+   "script": "59a9722f55264dd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=1\n"
+   }
+  },
+  "gram control list ! false || ! false; true": {
+   "script": "8403c16eb41d98fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=0\n"
+   }
+  },
+  "gram control list ! false || (exit 3) && false": {
+   "script": "d4e9860e109964b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=1\n"
+   }
+  },
+  "gram control list ! false || (exit 3); echo o": {
+   "script": "fff1a1fc94a069ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list ! false || true | ! false": {
+   "script": "cebb4d83fdbec4de",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `! false || true | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control list ! false; false && ! false": {
+   "script": "8d951e6c84dc9e14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=1\n"
+   }
+  },
+  "gram control list ! false; true || true": {
+   "script": "53f6092317fb10fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=0\n"
+   }
+  },
+  "gram control list (exit 3) && true | false": {
+   "script": "53a3648f228d251f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=3\n"
+   }
+  },
+  "gram control list (exit 3) | echo o | ! false": {
+   "script": "70b6384d66a98fe5",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `(exit 3) | echo o | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control list (exit 3) | false || true": {
+   "script": "0c92ec305de8a3b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=0\n"
+   }
+  },
+  "gram control list (exit 3) || ! false; (exit 3)": {
+   "script": "046479323e241a03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=3\n"
+   }
+  },
+  "gram control list (exit 3) || (exit 3) | ! false": {
+   "script": "9de4c2230f496f66",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `(exit 3) || (exit 3) | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control list (exit 3) || true && echo o": {
+   "script": "52cd015959cb0c2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list (exit 3) || true; ! false": {
+   "script": "8381eb1cb6ba91ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=1\n"
+   }
+  },
+  "gram control list (exit 3); echo o && (exit 3)": {
+   "script": "7582a833c3796885",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=3 pipe=3\n"
+   }
+  },
+  "gram control list echo o && false && ! false": {
+   "script": "611be72c481e5f5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=1 pipe=1\n"
+   }
+  },
+  "gram control list echo o && true && true": {
+   "script": "99e8d567a399b222",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list echo o | ! false || ! false": {
+   "script": "ed29d2a2c94ab173",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `echo o | ! false || ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control list echo o | ! false || false": {
+   "script": "cee6863df81bd313",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `echo o | ! false || false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control list echo o | false || true": {
+   "script": "4a7341243f8707ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=0\n"
+   }
+  },
+  "gram control list echo o | false; true": {
+   "script": "a3d3e249d4f853cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=0\n"
+   }
+  },
+  "gram control list echo o || ! false | false": {
+   "script": "58af6e262aec86f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list echo o || (exit 3) | ! false": {
+   "script": "dbd9dd7653f6018b",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `echo o || (exit 3) | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control list echo o || echo o; true": {
+   "script": "2142e552d65d42b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list echo o || false | true": {
+   "script": "93c5918fab9c1d41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list echo o; ! false || echo o": {
+   "script": "3e59bad28688667c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=1\n"
+   }
+  },
+  "gram control list echo o; echo o && echo o": {
+   "script": "54ba78f24bdc81ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\no\no\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list echo o; false | false": {
+   "script": "b52d9d31430c84c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=1 pipe=1 1\n"
+   }
+  },
+  "gram control list echo o; false | true": {
+   "script": "cd9b1404a0eb277d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=1 0\n"
+   }
+  },
+  "gram control list echo o; true || (exit 3)": {
+   "script": "4cfd75029f4471a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list false && ! false | false": {
+   "script": "fed5b31ef7e153c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=1\n"
+   }
+  },
+  "gram control list false && (exit 3) && true": {
+   "script": "385d44800c622861",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=1\n"
+   }
+  },
+  "gram control list false && false || echo o": {
+   "script": "80b19cb8456417aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list false | (exit 3) || ! false": {
+   "script": "a917812554282ba1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=1\n"
+   }
+  },
+  "gram control list false | false && ! false": {
+   "script": "8b22d6eec49d5e4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=1 1\n"
+   }
+  },
+  "gram control list false | false | ! false": {
+   "script": "80013dc012b9a02f",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `false | false | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control list false || echo o | (exit 3)": {
+   "script": "d5489dffbae6b38f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=0 3\n"
+   }
+  },
+  "gram control list false || true && echo o": {
+   "script": "569741b31138d732",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list false; (exit 3) || false": {
+   "script": "6b8e7c0bd755d8c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=1\n"
+   }
+  },
+  "gram control list false; echo o; false": {
+   "script": "ef0149af20140c90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=1 pipe=1\n"
+   }
+  },
+  "gram control list true && ! false | false": {
+   "script": "3ebbb7758f668908",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=1 1\n"
+   }
+  },
+  "gram control list true && (exit 3) && (exit 3)": {
+   "script": "a4a2189efad9903e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=3\n"
+   }
+  },
+  "gram control list true && (exit 3) && true": {
+   "script": "747e87f79cd33c95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=3\n"
+   }
+  },
+  "gram control list true && (exit 3); echo o": {
+   "script": "8964b6b370ebf903",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=0\n"
+   }
+  },
+  "gram control list true | ! false | echo o": {
+   "script": "364d6b30d7be6e16",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `true | ! false | echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control list true | echo o | (exit 3)": {
+   "script": "4b634596e595d22b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=0 0 3\n"
+   }
+  },
+  "gram control list true || false | ! false": {
+   "script": "5789939e1cf70e3c",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `true || false | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control list true; false | echo o": {
+   "script": "f8bbed6306ff7d63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o\nstatus=0 pipe=1 0\n"
+   }
+  },
+  "gram control list true; false || (exit 3)": {
+   "script": "87f4464f2bb201db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=3\n"
+   }
+  },
+  "gram control list true; true | false": {
+   "script": "7e27492a43237c69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=0 1\n"
+   }
+  },
+  "gram control list true; true; (exit 3)": {
+   "script": "f31194c9111d7c62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=3\n"
+   }
+  },
+  "gram control loop arith for around for: exit 4 at second": {
+   "script": "262707ca9309624f",
+   "status": 4,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a "
+   }
+  },
+  "gram control loop arith for around select: break 5 at first": {
+   "script": "7b27cceb786a90d3",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? "
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop arith for around select: break x at first": {
+   "script": "160b64058a94cfaa",
+   "status": 2,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? bash: line 1: break: x: numeric argument required\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control loop arith for around select: continue -1 at first": {
+   "script": "7d0486e46aa05a26",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? bash: line 1: continue: -1: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "end status=1\n"
+   }
+  },
+  "gram control loop arith for around select: continue -1 at second": {
+   "script": "c879a0dfc3a3fa23",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? #? bash: line 1: continue: -1: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "1a end status=1\n"
+   }
+  },
+  "gram control loop arith for around select: continue 2 at first": {
+   "script": "785feb860bbe4a6b",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? 1) a\n2) b\n3) c\n#? 1) a\n2) b\n3) c\n#? "
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop arith for around select: continue 9 at first": {
+   "script": "c4b8495e18519009",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? 1) a\n2) b\n3) c\n#? 1) a\n2) b\n3) c\n#? "
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop arith for around select: return at first": {
+   "script": "3c9dc792ae6837ed",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? bash: line 1: return: can only `return' from a function or sourced script\n#? #? #? 1) a\n2) b\n3) c\n#? bash: line 1: return: can only `return' from a function or sourced script\n#? #? #? 1) a\n2) b\n3) c\n#? bash: line 1: return: can only `return' from a function or sourced script\n#? #? #? "
+   },
+   "stdout": {
+    "text": "1a 1b 1c \n|1\n2a 2b 2c \n|2\n3a 3b 3c \n|3\nend status=0\n"
+   }
+  },
+  "gram control loop arith for around while: break 0 at second": {
+   "script": "359120393754cd7d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "11 end status=1\n"
+   }
+  },
+  "gram control loop arith for around while: break 2 at second": {
+   "script": "1b88ccbab45642bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11 end status=0\n"
+   }
+  },
+  "gram control loop arith for around while: break at first": {
+   "script": "eb4cd7b4ac9d0e5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "|1\n|2\n|3\nend status=0\n"
+   }
+  },
+  "gram control loop arith for around while: continue -1 at second": {
+   "script": "226097254553cab4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: -1: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "11 end status=1\n"
+   }
+  },
+  "gram control loop arith for around while: continue 9 at first": {
+   "script": "5f463bb8c8650a1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop arith for around while: continue at first": {
+   "script": "1105bdb87f76f025",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12 13 |1\n22 23 |2\n32 33 |3\nend status=0\n"
+   }
+  },
+  "gram control loop arith for around while: exit 4 at first": {
+   "script": "497f71e9f5aa0044",
+   "status": 4,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control loop break in a function called from a loop": {
+   "script": "46df1331b1070707",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: only meaningful in a `for', `while', or `until' loop\nbash: line 1: break: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "1\n2\nend\n"
+   }
+  },
+  "gram control loop break in a pipeline inside a loop": {
+   "script": "539dc4132b54ea45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "gram control loop break in a subshell inside a loop": {
+   "script": "9e1b9bc2d5181f63",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: only meaningful in a `for', `while', or `until' loop\nbash: line 1: break: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "gram control loop break inside eval": {
+   "script": "d477f7000dc79ff6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "gram control loop break outside a loop": {
+   "script": "296a98d7316969c4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control loop break with a large count": {
+   "script": "c33ee210c6e35695",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\n"
+   }
+  },
+  "gram control loop continue in a function called from a loop": {
+   "script": "b0949100cae1f7b5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: only meaningful in a `for', `while', or `until' loop\nbash: line 1: continue: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "1\n2\nend\n"
+   }
+  },
+  "gram control loop continue outside a loop": {
+   "script": "de3bd4aa5c23f765",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: only meaningful in a `for', `while', or `until' loop\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control loop for around for: break 0 at second": {
+   "script": "e09ecc69b17961bc",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "1a end status=1\n"
+   }
+  },
+  "gram control loop for around for: break 5 at second": {
+   "script": "f01201f5d0fa2848",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a end status=0\n"
+   }
+  },
+  "gram control loop for around for: break at second": {
+   "script": "44cf85dfd59e83b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a |1\n2a |2\n3a |3\nend status=0\n"
+   }
+  },
+  "gram control loop for around for: continue -1 at first": {
+   "script": "fd1993d57d92b212",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: -1: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "end status=1\n"
+   }
+  },
+  "gram control loop for around for: exit 4 at second": {
+   "script": "19e79575b6e00a45",
+   "status": 4,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a "
+   }
+  },
+  "gram control loop for around select: break 0 at first": {
+   "script": "6af7cf05b10577b3",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? bash: line 1: break: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "end status=1\n"
+   }
+  },
+  "gram control loop for around select: break 2 at second": {
+   "script": "f4ecfdab9dcecda2",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? #? "
+   },
+   "stdout": {
+    "text": "1a end status=0\n"
+   }
+  },
+  "gram control loop for around select: break at first": {
+   "script": "97b6ab4a709acf8a",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? 1) a\n2) b\n3) c\n#? 1) a\n2) b\n3) c\n#? "
+   },
+   "stdout": {
+    "text": "|1\n|2\n|3\nend status=0\n"
+   }
+  },
+  "gram control loop for around while: break x at first": {
+   "script": "22e4a84d5f8ffabb",
+   "status": 2,
+   "stderr": {
+    "text": "bash: line 1: break: x: numeric argument required\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control loop for around while: continue 2 at second": {
+   "script": "0b5504c603b984df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11 21 31 end status=0\n"
+   }
+  },
+  "gram control loop for around while: continue 9 at second": {
+   "script": "3ce64b1cea24e2c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11 21 31 end status=0\n"
+   }
+  },
+  "gram control loop for around while: continue at first": {
+   "script": "fa444b1dc73054c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12 13 |1\n22 23 |2\n32 33 |3\nend status=0\n"
+   }
+  },
+  "gram control loop for around while: exit 4 at first": {
+   "script": "58b116994379ee37",
+   "status": 4,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control loop for around while: return at second": {
+   "script": "62472b906c364ca9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: can only `return' from a function or sourced script\nbash: line 1: return: can only `return' from a function or sourced script\nbash: line 1: return: can only `return' from a function or sourced script\n"
+   },
+   "stdout": {
+    "text": "11 12 13 |1\n21 22 23 |2\n31 32 33 |3\nend status=0\n"
+   }
+  },
+  "gram control loop for loop variable after the loop": {
+   "script": "ca13d9ee7e010a4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram control loop for over empty expansion": {
+   "script": "499c8a66e9e90c4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "gram control loop for over quoted empty": {
+   "script": "cf48ffe712eda997",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "gram control loop for variable is not local": {
+   "script": "7e9ba71892634a08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\n"
+   }
+  },
+  "gram control loop for with a readonly variable": {
+   "script": "d5530ab7334bbd98",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ro: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram control loop for with a semicolon before do": {
+   "script": "36ca73dbc0336d2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "gram control loop for with an invalid name": {
+   "script": "54375413d90cd16e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: `1x': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram control loop for with braces body": {
+   "script": "2c555e409cf8e6ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b1\nb2\n"
+   }
+  },
+  "gram control loop for with newline before in": {
+   "script": "3a8ceaa7b89d8610",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\ny\n"
+   }
+  },
+  "gram control loop for without in inside a function": {
+   "script": "d3f0b8627eaccc31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\ny\n"
+   }
+  },
+  "gram control loop for without in uses positionals": {
+   "script": "505673f3a01401bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[p]\n[q r]\n"
+   }
+  },
+  "gram control loop infinite loop with break": {
+   "script": "a04e1564da49b726",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "gram control loop loop in a pipeline runs in a subshell": {
+   "script": "cd8bd32168626ae0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram control loop loop input redirected keeps variables": {
+   "script": "7ee99b0422f84352",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram control loop loop output redirected": {
+   "script": "d4c6d6fa677f93a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "gram control loop loop status with no iterations": {
+   "script": "0dd159f743f46e83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram control loop nested loop depth counting": {
+   "script": "1dac4632880ceac0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "111\n211\n"
+   }
+  },
+  "gram control loop select at end of input": {
+   "script": "4d37eee2070ec728",
+   "status": 0,
+   "stderr": {
+    "text": "1) one\n#? "
+   },
+   "stdout": {
+    "text": "\nstatus=1\n"
+   }
+  },
+  "gram control loop select prints a menu": {
+   "script": "a90b8fd241f7ff6d",
+   "status": 0,
+   "stderr": {
+    "text": "1) one\n2) two\npick: "
+   },
+   "stdout": {
+    "text": "got [two] reply [2]\n"
+   }
+  },
+  "gram control loop select with an invalid reply": {
+   "script": "d27a08f4d48627c3",
+   "status": 0,
+   "stderr": {
+    "text": "1) one\n#? "
+   },
+   "stdout": {
+    "text": "[] [9]\n"
+   }
+  },
+  "gram control loop select without in": {
+   "script": "557caf1fd450b234",
+   "status": 0,
+   "stderr": {
+    "text": "1) x\n2) y\n#? "
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "gram control loop until around for: break 5 at second": {
+   "script": "7c9a469a0567b7eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a end status=0\n"
+   }
+  },
+  "gram control loop until around for: break x at second": {
+   "script": "08317edc28e3a2f5",
+   "status": 2,
+   "stderr": {
+    "text": "bash: line 1: break: x: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "1a "
+   }
+  },
+  "gram control loop until around for: continue 2 at first": {
+   "script": "6b7095deafcebeb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop until around for: continue 9 at first": {
+   "script": "599626276c3e3a0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop until around for: return at second": {
+   "script": "f09b7cec5eab7823",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: can only `return' from a function or sourced script\nbash: line 1: return: can only `return' from a function or sourced script\nbash: line 1: return: can only `return' from a function or sourced script\n"
+   },
+   "stdout": {
+    "text": "1a 1b 1c |1\n2a 2b 2c |2\n3a 3b 3c |3\nend status=0\n"
+   }
+  },
+  "gram control loop until around select: break 0 at first": {
+   "script": "ee387a57d4c46a76",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? bash: line 1: break: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "end status=1\n"
+   }
+  },
+  "gram control loop until around select: continue at second": {
+   "script": "fe66841aa7f800dd",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? #? #? #? 1) a\n2) b\n3) c\n#? #? #? #? 1) a\n2) b\n3) c\n#? #? #? #? "
+   },
+   "stdout": {
+    "text": "1a 1c \n|1\n2a 2c \n|2\n3a 3c \n|3\nend status=0\n"
+   }
+  },
+  "gram control loop until around while: break 2 at first": {
+   "script": "890ea17f0977147c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop until around while: break at second": {
+   "script": "7472eca2ec5f61e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11 |1\n21 |2\n31 |3\nend status=0\n"
+   }
+  },
+  "gram control loop until around while: continue -1 at first": {
+   "script": "cb78db7d0ffff8d9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: -1: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "end status=1\n"
+   }
+  },
+  "gram control loop until around while: exit 4 at first": {
+   "script": "6917e3c9cbdb54eb",
+   "status": 4,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control loop until status": {
+   "script": "bae154928136d193",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram control loop until with continue": {
+   "script": "81028ebe504400a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n4\n"
+   }
+  },
+  "gram control loop while around for: break 2 at first": {
+   "script": "191de5e48098313f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop while around for: break 2 at second": {
+   "script": "5d39bc8503b9bdee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a end status=0\n"
+   }
+  },
+  "gram control loop while around for: break 5 at second": {
+   "script": "1a669fd63e0d92c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a end status=0\n"
+   }
+  },
+  "gram control loop while around for: break x at first": {
+   "script": "21e2601c4587a803",
+   "status": 2,
+   "stderr": {
+    "text": "bash: line 1: break: x: numeric argument required\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control loop while around for: continue 2 at first": {
+   "script": "1127b8376ccff3c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop while around for: continue 9 at first": {
+   "script": "5e515d357c56e43b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop while around for: continue at second": {
+   "script": "f08951b5c14e5218",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1a 1c |1\n2a 2c |2\n3a 3c |3\nend status=0\n"
+   }
+  },
+  "gram control loop while around select: break 2 at second": {
+   "script": "3b4fdeccb8aa6a1a",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? #? "
+   },
+   "stdout": {
+    "text": "1a end status=0\n"
+   }
+  },
+  "gram control loop while around select: break at second": {
+   "script": "d7139081adc8cf86",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? #? 1) a\n2) b\n3) c\n#? #? 1) a\n2) b\n3) c\n#? #? "
+   },
+   "stdout": {
+    "text": "1a |1\n2a |2\n3a |3\nend status=0\n"
+   }
+  },
+  "gram control loop while around select: continue 2 at first": {
+   "script": "f8204cf46f0d479f",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? 1) a\n2) b\n3) c\n#? 1) a\n2) b\n3) c\n#? "
+   },
+   "stdout": {
+    "text": "end status=0\n"
+   }
+  },
+  "gram control loop while around select: continue at first": {
+   "script": "99eb079b66069705",
+   "status": 0,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? #? #? #? 1) a\n2) b\n3) c\n#? #? #? #? 1) a\n2) b\n3) c\n#? #? #? #? "
+   },
+   "stdout": {
+    "text": "1b 1c \n|1\n2b 2c \n|2\n3b 3c \n|3\nend status=0\n"
+   }
+  },
+  "gram control loop while around select: exit 4 at second": {
+   "script": "77c4bdbe1e406571",
+   "status": 4,
+   "stderr": {
+    "text": "1) a\n2) b\n3) c\n#? #? "
+   },
+   "stdout": {
+    "text": "1a "
+   }
+  },
+  "gram control loop while around while: break 0 at second": {
+   "script": "31f563e1d7a03087",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: break: 0: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "11 end status=1\n"
+   }
+  },
+  "gram control loop while around while: break 5 at second": {
+   "script": "f071940930f0c146",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11 end status=0\n"
+   }
+  },
+  "gram control loop while around while: continue -1 at first": {
+   "script": "010960498b627083",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: continue: -1: loop count out of range\n"
+   },
+   "stdout": {
+    "text": "end status=1\n"
+   }
+  },
+  "gram control loop while around while: exit 4 at second": {
+   "script": "c711d2e82f28c4b0",
+   "status": 4,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11 "
+   }
+  },
+  "gram control loop while around while: return at second": {
+   "script": "7f8f320cf6d60930",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: can only `return' from a function or sourced script\nbash: line 1: return: can only `return' from a function or sourced script\nbash: line 1: return: can only `return' from a function or sourced script\n"
+   },
+   "stdout": {
+    "text": "11 12 13 |1\n21 22 23 |2\n31 32 33 |3\nend status=0\n"
+   }
+  },
+  "gram control loop while condition list": {
+   "script": "8c669db949c07d73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c0\nb\nc1\n"
+   }
+  },
+  "gram control loop while read with here-document": {
+   "script": "619337436fcf06aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<l1>\n<l2>\n"
+   }
+  },
+  "gram control loop while status with false body": {
+   "script": "c246775e8aa3b087",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram control nounset [[ -v is fine": {
+   "script": "9869954192971379",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "unset\n"
+   }
+  },
+  "gram control nounset alternative operator allowed": {
+   "script": "5a43c6dfbe4fe43e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "gram control nounset arithmetic bare name": {
+   "script": "91a609adc497849e",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset arithmetic unset": {
+   "script": "85987f66fed25a71",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset declared without value": {
+   "script": "d7fc3d6e68d28be2",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: d: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset default operator allowed": {
+   "script": "ff89f629171e4ea8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d e\n"
+   }
+  },
+  "gram control nounset dollar at with no arguments": {
+   "script": "12a521937e457cbe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] [] 0\n"
+   }
+  },
+  "gram control nounset empty array at": {
+   "script": "aaf2e98611b43abb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nok\n"
+   }
+  },
+  "gram control nounset empty variable is fine": {
+   "script": "045f076495d7b30a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "gram control nounset in a function": {
+   "script": "839fbfb28a86c5f9",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: $1: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset in a here-document": {
+   "script": "0eea3c7d899062e9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: undefined: unbound variable\n"
+   },
+   "stdout": {
+    "text": "not\n"
+   }
+  },
+  "gram control nounset indirect to unset": {
+   "script": "4543b1618386e18f",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: !r: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset length of unset": {
+   "script": "ba9a7c820ce00f71",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset set +u": {
+   "script": "359d95057a668355",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "gram control nounset unset array element": {
+   "script": "8b82d007d995d051",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: a[3]: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset unset array whole": {
+   "script": "1996d87e6fd2e842",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nnot\n"
+   }
+  },
+  "gram control nounset unset assoc element": {
+   "script": "b0ce17aabcd243e5",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: m[k]: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset unset in a substring": {
+   "script": "0e71581c82d0b82b",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset unset in a trim": {
+   "script": "60c7b6f73ea5f160",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset unset nameref target": {
+   "script": "91c0e5b993795f33",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: r: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset unset positional": {
+   "script": "d866235b8cb08127",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: $2: unbound variable\n"
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "gram control nounset unset special dollar bang": {
+   "script": "bbb034e0939828e6",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: $!: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset unset variable": {
+   "script": "db994c4fbb32733a",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control nounset unset variable in a subshell": {
+   "script": "095149e15b36dd64",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: undefined: unbound variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram control option BASHOPTS reflects shopt": {
+   "script": "b4504fd675f4c048",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "has\n"
+   }
+  },
+  "gram control option SHELLOPTS reflects set -o": {
+   "script": "6f98bea384d3a4d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "has\n"
+   }
+  },
+  "gram control option allexport exports": {
+   "script": "e8913be115f2556e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram control option dash flags": {
+   "script": "ef2f2a7152a4f1d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hBc\nfhBc\nhuBc\n"
+   }
+  },
+  "gram control option noexec skips commands": {
+   "script": "f9f77656f03f55cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "before\n"
+   }
+  },
+  "gram control option noexec still checks syntax at parse": {
+   "script": "4f3a0ad01d2d5626",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control option posix mode flag": {
+   "script": "8708f5e429977853",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "posix\n"
+   }
+  },
+  "gram control option set - turns off x and v": {
+   "script": "6738145ac6ba8e3e",
+   "status": 0,
+   "stderr": {
+    "text": "+ set -\n"
+   },
+   "stdout": {
+    "text": "quiet\n"
+   }
+  },
+  "gram control option set -- clears positionals": {
+   "script": "f4821208949f2ba6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram control option set -o listing of one option": {
+   "script": "be524d4c6a9ee7dd",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "noglob on\nset -o noglob\n"
+   }
+  },
+  "gram control option set unknown option": {
+   "script": "5d66a23cdaf330e2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: set: nosuchopt: invalid option name\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram control option set with only a double dash": {
+   "script": "c2d9d2e9a9261a7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram control option shopt -o": {
+   "script": "61f280ca863a8284",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "huBc\nhBc\n"
+   }
+  },
+  "gram control option shopt -p of one option": {
+   "script": "635d247a28ee4006",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shopt -u extglob\nshopt -s extglob\n"
+   }
+  },
+  "gram control option shopt -q status": {
+   "script": "951df18d351d3ccc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n"
+   }
+  },
+  "gram control option time of a failing pipeline": {
+   "script": "b7787c8d98559f95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n"
+   }
+  },
+  "gram control option time with empty TIMEFORMAT": {
+   "script": "339cacf50e1f690c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control option verbose prints input": {
+   "script": "d845ce8416993cc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v\n"
+   }
+  },
+  "gram control pipeline status ! (exit 2) | (exit 3)": {
+   "script": "7cc6e38063648a2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=2 3\n"
+   }
+  },
+  "gram control pipeline status ! false | true": {
+   "script": "5e92b58668ed720d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=1 0\n"
+   }
+  },
+  "gram control pipeline status ! true | false": {
+   "script": "a47a5b8e77b0bbcb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=0 1\n"
+   }
+  },
+  "gram control pipeline status (exit 2) | (exit 3)": {
+   "script": "4a80d319a5b4b473",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=2 3\n"
+   }
+  },
+  "gram control pipeline status false | true": {
+   "script": "c0a6dcb630ae0866",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=1 0\n"
+   }
+  },
+  "gram control pipeline status set -o pipefail; ! (exit 2) | (exit 3)": {
+   "script": "0a7d4580073557df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=2 3\n"
+   }
+  },
+  "gram control pipeline status set -o pipefail; ! false | true": {
+   "script": "b77db90bb2e2f378",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=1 0\n"
+   }
+  },
+  "gram control pipeline status set -o pipefail; ! true | false": {
+   "script": "0f37e4bcf2f54a86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 pipe=0 1\n"
+   }
+  },
+  "gram control pipeline status set -o pipefail; (exit 2) | (exit 3)": {
+   "script": "47f0c206ffc15ecc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3 pipe=2 3\n"
+   }
+  },
+  "gram control pipeline status set -o pipefail; false | true": {
+   "script": "aac5388dc850433a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=1 0\n"
+   }
+  },
+  "gram control pipeline status set -o pipefail; true | false": {
+   "script": "011c7a239ed11c1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=0 1\n"
+   }
+  },
+  "gram control pipeline status true | false": {
+   "script": "7ea64538d8b72051",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipe=0 1\n"
+   }
+  },
+  "gram control source BASH_SOURCE and FUNCNAME": {
+   "script": "96f2bb35382c9afd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/s.sh none\n"
+   }
+  },
+  "gram control source LINENO inside": {
+   "script": "c7505f4b2aa59a1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l1\nl2\n"
+   }
+  },
+  "gram control source RETURN trap": {
+   "script": "cc135fe5a9784a5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nret\n"
+   }
+  },
+  "gram control source a directory": {
+   "script": "64b11684354304d6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: .: /tmp: is a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram control source defines functions": {
+   "script": "c4989fdbb4af3ed5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sf\n"
+   }
+  },
+  "gram control source empty file": {
+   "script": "125c1e7e9f867168",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram control source exit ends the shell": {
+   "script": "b05ba0a12af354be",
+   "status": 6,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control source in a function sees locals": {
+   "script": "227af26353254751",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "local\n"
+   }
+  },
+  "gram control source in a pipeline": {
+   "script": "562b81a365834d4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "gram control source keeps outer arguments": {
+   "script": "f6da4c54794d0e07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "args: outer\nouter\n"
+   }
+  },
+  "gram control source local in a sourced file at top level": {
+   "script": "0238b0d6a2a3d3f4",
+   "status": 0,
+   "stderr": {
+    "text": "/tmp/s.sh: line 1: local: can only be used in a function\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram control source missing argument": {
+   "script": "2dc9eaef57cad600",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: .: filename argument required\n.: usage: . [-p path] filename [arguments]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram control source missing file": {
+   "script": "f8c79ce604e2e219",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/missing.sh: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram control source nested source": {
+   "script": "5c24a31a977fbf4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner\nouter\n"
+   }
+  },
+  "gram control source receives arguments": {
+   "script": "2822997f38546983",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "args: 2 a b c\n"
+   }
+  },
+  "gram control source relative path": {
+   "script": "430b1656ce159cea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rel\n"
+   }
+  },
+  "gram control source return ends the file": {
+   "script": "9cb1e3362592688d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "before\nstatus=4\n"
+   }
+  },
+  "gram control source return without value": {
+   "script": "dc8836ba2648cb65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram control source sets variables": {
+   "script": "0530ec3cf8fe5452",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram control source syntax error": {
+   "script": "56ec138ef40e7316",
+   "status": 0,
+   "stderr": {
+    "text": "/tmp/s.sh: line 1: syntax error near unexpected token `then'\n/tmp/s.sh: line 1: `if then'\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram control source with redirected input": {
+   "script": "7fcb09dd9842bf78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[input]\n"
+   }
+  },
+  "gram control xtrace PS4 with expansion": {
+   "script": "64dcf48b48e465c6",
+   "status": 0,
+   "stderr": {
+    "text": "+1: echo l\n+2: echo m\n"
+   },
+   "stdout": {
+    "text": "l\nm\n"
+   }
+  },
+  "gram control xtrace arithmetic command": {
+   "script": "ee4fd268bb015e77",
+   "status": 0,
+   "stderr": {
+    "text": "+ ((  1 + 2  ))\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace arithmetic for loop": {
+   "script": "4ba6cd7f412f76b1",
+   "status": 0,
+   "stderr": {
+    "text": "+ (( i=0 ))\n+ (( i<1 ))\n+ :\n+ (( i++ ))\n+ (( i<1 ))\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace array assignment": {
+   "script": "a0bd41700848b20a",
+   "status": 0,
+   "stderr": {
+    "text": "+ a=(1 'two words')\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace assignment": {
+   "script": "dac0ee4ededa0eee",
+   "status": 0,
+   "stderr": {
+    "text": "+ v=1\n+ w='x y'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace assignment and command": {
+   "script": "68181ac9449cd3b5",
+   "status": 0,
+   "stderr": {
+    "text": "+ v=1\n+ true\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace assignment with tilde": {
+   "script": "c32d16e16209a6e9",
+   "status": 0,
+   "stderr": {
+    "text": "+ HOME=/h\n+ v=/h/x\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace backslash argument": {
+   "script": "d8820d355aabfe45",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo 'a\\b'\n"
+   },
+   "stdout": {
+    "text": "a\\b\n"
+   }
+  },
+  "gram control xtrace brace group": {
+   "script": "2924b189f61c6c3c",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo g\n"
+   },
+   "stdout": {
+    "text": "g\n"
+   }
+  },
+  "gram control xtrace case": {
+   "script": "a321340ef6dc684a",
+   "status": 0,
+   "stderr": {
+    "text": "+ case x in\n+ :\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace command substitution": {
+   "script": "5a392af6af4df92b",
+   "status": 0,
+   "stderr": {
+    "text": "++ echo inner\n+ x=inner\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace conditional command": {
+   "script": "91a67d7bc13230ff",
+   "status": 1,
+   "stderr": {
+    "text": "+ [[ a == b ]]\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace custom PS4": {
+   "script": "1914325ff60b7e00",
+   "status": 0,
+   "stderr": {
+    "text": ">> echo ps4\n"
+   },
+   "stdout": {
+    "text": "ps4\n"
+   }
+  },
+  "gram control xtrace declare": {
+   "script": "c992a3bf174820eb",
+   "status": 0,
+   "stderr": {
+    "text": "+ declare -i n=5\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace empty command substitution": {
+   "script": "7c6e55aab6e307e9",
+   "status": 0,
+   "stderr": {
+    "text": "++ true\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace eval": {
+   "script": "afba9a53383fe164",
+   "status": 0,
+   "stderr": {
+    "text": "+ eval 'echo e'\n++ echo e\n"
+   },
+   "stdout": {
+    "text": "e\n"
+   }
+  },
+  "gram control xtrace export": {
+   "script": "3af7957eb3f47637",
+   "status": 0,
+   "stderr": {
+    "text": "+ export E=1\n+ E=1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace for loop": {
+   "script": "24e79d4e95aa6024",
+   "status": 0,
+   "stderr": {
+    "text": "+ for i in 1 2\n+ :\n+ for i in 1 2\n+ :\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace function call": {
+   "script": "31b27a96d3bf220f",
+   "status": 0,
+   "stderr": {
+    "text": "+ f arg\n+ echo in\n"
+   },
+   "stdout": {
+    "text": "in\n"
+   }
+  },
+  "gram control xtrace here-document": {
+   "script": "ed24adf6f042c0b6",
+   "status": 0,
+   "stderr": {
+    "text": "+ cat\n"
+   },
+   "stdout": {
+    "text": "hd\n"
+   }
+  },
+  "gram control xtrace if": {
+   "script": "d24afcedc4ca99ae",
+   "status": 0,
+   "stderr": {
+    "text": "+ true\n+ :\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace local in a function": {
+   "script": "9a0ac4ce3ad24d01",
+   "status": 0,
+   "stderr": {
+    "text": "+ f\n+ local l=1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace negation": {
+   "script": "9ecd4b09f15a9cfc",
+   "status": 0,
+   "stderr": {
+    "text": "+ false\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace newline argument": {
+   "script": "beb8985a76ff1bed",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo $'a\\nb'\n"
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "gram control xtrace pipeline": {
+   "script": "a4597187e2b3b941",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "p\n+ cat\n+ echo p\n"
+   }
+  },
+  "gram control xtrace quoted arguments": {
+   "script": "783b4f57a7530681",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo 'a b' c '' $'t\\tt'\n"
+   },
+   "stdout": {
+    "text": "a b c  t\tt\n"
+   }
+  },
+  "gram control xtrace redirection is not shown": {
+   "script": "f97282c7a4f209ae",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo r\n+ cat\n"
+   },
+   "stdout": {
+    "text": "r\n"
+   }
+  },
+  "gram control xtrace set +x is traced": {
+   "script": "584367788665b5f6",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo on\n+ set +x\n"
+   },
+   "stdout": {
+    "text": "on\noff\n"
+   }
+  },
+  "gram control xtrace simple command": {
+   "script": "6de9b8f3e4a7e225",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo a b\n"
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "gram control xtrace special characters": {
+   "script": "598e924317df3e63",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo '*' '$v' 'a\"b' 'it'\\''s'\n"
+   },
+   "stdout": {
+    "text": "* $v a\"b it's\n"
+   }
+  },
+  "gram control xtrace subshell depth": {
+   "script": "1b7eb13eabc54e34",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo sub\n+ echo deeper\n"
+   },
+   "stdout": {
+    "text": "sub\ndeeper\n"
+   }
+  },
+  "gram control xtrace trap handler": {
+   "script": "cce7b579ab63146a",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo body\n+ echo handler\n"
+   },
+   "stdout": {
+    "text": "body\nhandler\n"
+   }
+  },
+  "gram control xtrace unicode argument": {
+   "script": "e5697683edf375b7",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo héllo\n"
+   },
+   "stdout": {
+    "text": "héllo\n"
+   }
+  },
+  "gram control xtrace while": {
+   "script": "0ae9dbbe6fa0f57d",
+   "status": 1,
+   "stderr": {
+    "text": "+ i=0\n+ ((  i < 1  ))\n+ ((  i++  ))\n+ ((  i < 1  ))\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram control xtrace xtrace via set -o": {
+   "script": "ad4ab4ecee494989",
+   "status": 0,
+   "stderr": {
+    "text": "+ echo o\n"
+   },
+   "stdout": {
+    "text": "o\n"
+   }
+  },
+  "gram control xtrace xtrace with BASH_XTRACEFD": {
+   "script": "41d75f204e512ef3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "traced\n+ echo traced\n+ set +x\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

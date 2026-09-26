@@ -62,15 +62,12 @@ use golem_common::model::tool_middleware_release::{
 };
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::{ExternalTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue};
+use golem_schema::tool::argv as arguments;
 use std::io::Read;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
-
-mod arguments;
-#[cfg(test)]
-mod arguments_tests;
 
 pub struct ToolCommandHandler {
     ctx: Arc<Context>,

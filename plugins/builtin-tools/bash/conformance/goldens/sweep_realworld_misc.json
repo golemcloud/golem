@@ -1,0 +1,3458 @@
+{
+ "cases": {
+  "real tldr bash: execute commands": {
+   "script": "75f5c5213e92d57f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bash is executed\n"
+   }
+  },
+  "real tldr bash: execute commands and print them": {
+   "script": "ef3af62ce05cfa9a",
+   "status": 0,
+   "stderr": {
+    "text": "+ a=1\n+ echo 1\n"
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "real tldr bash: execute commands and stop at the first error": {
+   "script": "8a996836ab8b0002",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nstatus=1\n"
+   }
+  },
+  "real tldr bash: execute commands from stdin": {
+   "script": "0b28ae9432457765",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bash is executed\n"
+   }
+  },
+  "real tldr bash: execute commands from stdin that fail": {
+   "script": "5226a5b6e4492c1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=1\n"
+   }
+  },
+  "real tldr bash: execute commands from stdin without rc files": {
+   "script": "8acfc79e0566be2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "norc\n"
+   }
+  },
+  "real tldr bash: execute commands with a heredoc on stdin": {
+   "script": "597bdd637384e594",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x is 5\n"
+   }
+  },
+  "real tldr bash: execute commands with a syntax error": {
+   "script": "2deb609ae6ec5978",
+   "status": 0,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `fi'\nbash: -c: line 1: `echo ok; fi'\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr bash: execute commands with an exit status": {
+   "script": "d6d928ca07a67b97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=42\n"
+   }
+  },
+  "real tldr bash: execute commands with an unset variable check": {
+   "script": "015d1f659df9d70e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nope: unbound variable\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "real tldr bash: execute commands with arguments": {
+   "script": "eab90e90af38dd8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<x y><z>\n"
+   }
+  },
+  "real tldr bash: execute commands with pipefail": {
+   "script": "2728957276aa4229",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr bash: nested execute commands": {
+   "script": "521aa04c606fca4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nested inner\n"
+   }
+  },
+  "real tldr date: a fixed offset time zone": {
+   "script": "9d08a4145ba645c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2016-09-08 06:36:38 +0300\n"
+   }
+  },
+  "real tldr date: another time zone": {
+   "script": "ccc9a4f73ca836e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2016-09-07 23:36:38 EDT\n"
+   }
+  },
+  "real tldr date: default format of @-1": {
+   "script": "31f8bb2996eb7485",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Wed Dec 31 23:59:59 UTC 1969\n"
+   }
+  },
+  "real tldr date: default format of @0": {
+   "script": "0b2ad6f7d6636dd4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Thu Jan  1 00:00:00 UTC 1970\n"
+   }
+  },
+  "real tldr date: default format of @1473305798": {
+   "script": "0c540b9d3e73912f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Thu Sep  8 03:36:38 UTC 2016\n"
+   }
+  },
+  "real tldr date: default format of @1700000000.5": {
+   "script": "a116277626c30cb2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Tue Nov 14 22:13:20 UTC 2023\n"
+   }
+  },
+  "real tldr date: default format of @2147483648": {
+   "script": "8e10a3d094935cbf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Tue Jan 19 03:14:08 UTC 2038\n"
+   }
+  },
+  "real tldr date: file modification time": {
+   "script": "769ffd1e087ae0c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2020-05-06 07:08:09\n"
+   }
+  },
+  "real tldr date: iso 8601 in utc of @-1": {
+   "script": "d784c15819dc8275",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1969-12-31T23:59:59Z\n"
+   }
+  },
+  "real tldr date: iso 8601 in utc of @0": {
+   "script": "c77bceeb3716cd26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1970-01-01T00:00:00Z\n"
+   }
+  },
+  "real tldr date: iso 8601 in utc of @1473305798": {
+   "script": "ac8d987b4f5d0f4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2016-09-08T03:36:38Z\n"
+   }
+  },
+  "real tldr date: iso 8601 in utc of @1700000000.5": {
+   "script": "ff0ad18bc9e15a02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2023-11-14T22:13:20Z\n"
+   }
+  },
+  "real tldr date: iso 8601 in utc of @2147483648": {
+   "script": "1b9661d41ec3435e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2038-01-19T03:14:08Z\n"
+   }
+  },
+  "real tldr date: iso 8601 option": {
+   "script": "2c5670d4ed88754f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2016-09-08\n2016-09-08T03:36:38+00:00\n"
+   }
+  },
+  "real tldr date: iso week number of 2020-12-31": {
+   "script": "67532a1333be3560",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "53\n"
+   }
+  },
+  "real tldr date: iso week number of 2021-01-03": {
+   "script": "928a452ac70b84f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "53\n"
+   }
+  },
+  "real tldr date: iso week number of 2021-01-04": {
+   "script": "b5858a924c7637b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "01\n"
+   }
+  },
+  "real tldr date: iso week number of 2026-06-15": {
+   "script": "d9f35bbaf4de4c1a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "25\n"
+   }
+  },
+  "real tldr date: locale format of @-1": {
+   "script": "4c29f93f997c8716",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Wed Dec 31 23:59:59 1969\n"
+   }
+  },
+  "real tldr date: locale format of @0": {
+   "script": "b0a6e7646165a198",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Thu Jan  1 00:00:00 1970\n"
+   }
+  },
+  "real tldr date: locale format of @1473305798": {
+   "script": "e01ecf57a4add0a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Thu Sep  8 03:36:38 2016\n"
+   }
+  },
+  "real tldr date: locale format of @1700000000.5": {
+   "script": "9b34b182369830ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Tue Nov 14 22:13:20 2023\n"
+   }
+  },
+  "real tldr date: locale format of @2147483648": {
+   "script": "1370b52113ee46ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Tue Jan 19 03:14:08 2038\n"
+   }
+  },
+  "real tldr date: many format directives": {
+   "script": "e974c53b1155dbc0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Thu Thursday Sep September 08  8 03 03 252 09 36 AM 38 4 4 16 2016 UTC +0000 %\n"
+   }
+  },
+  "real tldr date: padding modifiers": {
+   "script": "7206adc0dd389efe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8  9 02016 THU SEP\n"
+   }
+  },
+  "real tldr date: rfc 3339 date": {
+   "script": "2267a2e0aa94e7ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2016-09-08\n"
+   }
+  },
+  "real tldr date: rfc 3339 ns": {
+   "script": "21bec7520aee1da9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2016-09-08 03:36:38.000000000+00:00\n"
+   }
+  },
+  "real tldr date: rfc 3339 seconds of @-1": {
+   "script": "2fbc8119216415a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1969-12-31 23:59:59+00:00\n"
+   }
+  },
+  "real tldr date: rfc 3339 seconds of @0": {
+   "script": "18470aedfb19cfc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1970-01-01 00:00:00+00:00\n"
+   }
+  },
+  "real tldr date: rfc 3339 seconds of @1473305798": {
+   "script": "39762e7299da7751",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2016-09-08 03:36:38+00:00\n"
+   }
+  },
+  "real tldr date: rfc 3339 seconds of @1700000000.5": {
+   "script": "f26d7f91e8971149",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2023-11-14 22:13:20+00:00\n"
+   }
+  },
+  "real tldr date: rfc 3339 seconds of @2147483648": {
+   "script": "f36e5ac3c957851b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2038-01-19 03:14:08+00:00\n"
+   }
+  },
+  "real tldr date: rfc 3339 with a bad precision": {
+   "script": "ed66d90c58f30c2a",
+   "status": 1,
+   "stderr": {
+    "text": "date: invalid argument ‘minutes’ for ‘--rfc-3339’\nValid arguments are:\n  - ‘date’\n  - ‘seconds’\n  - ‘ns’\nTry 'date --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr date: rfc email option": {
+   "script": "fa9032dbe1097c39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Thu, 08 Sep 2016 03:36:38 +0000\n"
+   }
+  },
+  "real tldr date: unix timestamp of '1 Sep 2018 10:00'": {
+   "script": "be080a8be9bd4a8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1535796000\nstatus=0\n"
+   }
+  },
+  "real tldr date: unix timestamp of '2018-09-01 12:34:56 +0200'": {
+   "script": "ae67b6630401312a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1535798096\nstatus=0\n"
+   }
+  },
+  "real tldr date: unix timestamp of '2018-09-01 next day'": {
+   "script": "55e52a50f5be5d3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1535846400\nstatus=0\n"
+   }
+  },
+  "real tldr date: unix timestamp of '2018-09-01'": {
+   "script": "baf04676cb48a173",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1535760000\nstatus=0\n"
+   }
+  },
+  "real tldr date: unix timestamp of '2018-09-01T12:34:56Z'": {
+   "script": "7241c192ca171e60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1535805296\nstatus=0\n"
+   }
+  },
+  "real tldr date: unix timestamp of '2020-02-29 +1 year'": {
+   "script": "9db9cebf1f48483c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1614556800\nstatus=0\n"
+   }
+  },
+  "real tldr date: unix timestamp of '2024-01-31 +1 month'": {
+   "script": "44b8d095f5d31b88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1709337600\nstatus=0\n"
+   }
+  },
+  "real tldr date: unix timestamp of 'Sep 1 2018'": {
+   "script": "113a7268e2f068d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1535760000\nstatus=0\n"
+   }
+  },
+  "real tldr date: unix timestamp of a date": {
+   "script": "8b99ffad15d9c5c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1535760000\n"
+   }
+  },
+  "real tldr date: unix timestamp of a date (long)": {
+   "script": "76b559b2619ffc7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1535760000\n"
+   }
+  },
+  "real tldr date: utc (long)": {
+   "script": "a1b243ce82fe4e51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2016-09-08T03:36:38Z\n"
+   }
+  },
+  "real tldr env: change directory": {
+   "script": "e27602f13f989b94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/sub\n"
+   }
+  },
+  "real tldr env: clear the environment": {
+   "script": "df4c072743eb233a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr env: clear the environment (long)": {
+   "script": "57e49e2234f21004",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "real tldr env: clear the environment and set one variable": {
+   "script": "99ea2d7295e55948",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Y=2\n"
+   }
+  },
+  "real tldr env: null-terminated output": {
+   "script": "13dd5e88ad81ac74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   A   =   1  \\0   B   =   2  \\0\n0000010\n"
+   }
+  },
+  "real tldr env: run a missing program": {
+   "script": "4292402689ff5c68",
+   "status": 127,
+   "stderr": {
+    "text": "env: ‘nosuchprogram’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr env: run a program": {
+   "script": "f21a7389e597d76d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\n"
+   }
+  },
+  "real tldr env: run under a different name": {
+   "script": "fc122d1a6b04583d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "custom\n"
+   }
+  },
+  "real tldr env: run under a different name (long)": {
+   "script": "92f0eb0ab3b96990",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "custom\n"
+   }
+  },
+  "real tldr env: set a variable": {
+   "script": "a7bbbf5924ccd8ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "real tldr env: set a variable with an equals sign in its value": {
+   "script": "62cff470164bb049",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a=b\n"
+   }
+  },
+  "real tldr env: set several variables": {
+   "script": "02c7013a7cb9e2ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "123\n"
+   }
+  },
+  "real tldr env: show the environment's golem variables": {
+   "script": "2d50f3b1856cc8df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "GOLEM_AGENT_ID=conformance-agent\nGOLEM_AGENT_TYPE=Conformance\nGOLEM_COMPONENT_ID=00000000-0000-0000-0000-000000000000\nGOLEM_COMPONENT_REVISION=0\nGOLEM_WORKER_NAME=conformance-agent\n"
+   }
+  },
+  "real tldr env: unset a variable": {
+   "script": "4c80bfe9f43d8d3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "real tldr env: unset a variable (long)": {
+   "script": "92740014d0f25a3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "real tldr expr: and \"\" 0": {
+   "script": "02633108f4349fbf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: and 0 0": {
+   "script": "ce5b34d654b9342d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: and 0 7": {
+   "script": "22899379cfed2bf1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: and 5 7": {
+   "script": "aae37c7e3ebfced7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic -7 % 2": {
+   "script": "b609bca6493c882f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-1\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic -7 + 2": {
+   "script": "19410a0658e7867c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-5\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic -7 - 2": {
+   "script": "65599d754898871c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-9\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic -7 / 2": {
+   "script": "d0ddb355735aae33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-3\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic -7 \\* 2": {
+   "script": "d3054bd1b4d658da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-14\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 % 0": {
+   "script": "92b565350286a9fa",
+   "status": 0,
+   "stderr": {
+    "text": "expr: division by zero\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 % 3": {
+   "script": "32e63b0e2fb70e18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 + 0": {
+   "script": "50afe99fbb4ad6b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 + 3": {
+   "script": "b2bdb4ccb029157a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 - 0": {
+   "script": "f6ad4292dfebd4ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 - 3": {
+   "script": "d4e98b042fb25c1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 / 0": {
+   "script": "1829360b2c71e566",
+   "status": 0,
+   "stderr": {
+    "text": "expr: division by zero\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 / 3": {
+   "script": "689bf967c0bb1b97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 \\* 0": {
+   "script": "d5557e33151b6ba0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: arithmetic 7 \\* 3": {
+   "script": "83bbec8c0fdf95aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "21\nstatus=0\n"
+   }
+  },
+  "real tldr expr: arithmetic on a non-integer": {
+   "script": "7c579a2c291d0148",
+   "status": 0,
+   "stderr": {
+    "text": "expr: non-integer argument\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr expr: arithmetic overflow": {
+   "script": "1e7b8f0996741345",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9223372036854775808\nstatus=0\n"
+   }
+  },
+  "real tldr expr: colon match": {
+   "script": "1e3fe27be1ea830d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n123\n"
+   }
+  },
+  "real tldr expr: comparison of strings and numbers": {
+   "script": "e8ff2b86c0f2cff3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: index of ''": {
+   "script": "c59165cb7a35192e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: index of 'g'": {
+   "script": "0a962e8685fcd8c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\nstatus=0\n"
+   }
+  },
+  "real tldr expr: index of 'ri'": {
+   "script": "0deb21384dde92a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "real tldr expr: index of 'xyz'": {
+   "script": "2c370d8c8bc5e07b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: length of ''": {
+   "script": "0236a4524c86324a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: length of 'a b'": {
+   "script": "24b5d8d4ec5c9f6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "real tldr expr: length of 'héllo'": {
+   "script": "c773db63692ca6af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\nstatus=0\n"
+   }
+  },
+  "real tldr expr: length of 'string'": {
+   "script": "75ea3a505f8c9663",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\nstatus=0\n"
+   }
+  },
+  "real tldr expr: match '\\(ab\\)*'": {
+   "script": "803792b39e6ca797",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=1\n"
+   }
+  },
+  "real tldr expr: match '\\(s.r\\)'": {
+   "script": "d375efcc83f0e35e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "str\nstatus=0\n"
+   }
+  },
+  "real tldr expr: match 's*'": {
+   "script": "47dc97f09aec374e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nstatus=0\n"
+   }
+  },
+  "real tldr expr: match 'st.*'": {
+   "script": "ceb4e083fd8886cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\nstatus=0\n"
+   }
+  },
+  "real tldr expr: match 'str'": {
+   "script": "0c0c9d98ea3c7a75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nstatus=0\n"
+   }
+  },
+  "real tldr expr: match 'x'": {
+   "script": "d4808218fecab34d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: or \"\" 0": {
+   "script": "0110454cc1f29868",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: or 0 0": {
+   "script": "22961e5a662ecf6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "real tldr expr: or 0 7": {
+   "script": "c295f66e35b2e52c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nstatus=0\n"
+   }
+  },
+  "real tldr expr: or 5 7": {
+   "script": "68c062d0246d896b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\nstatus=0\n"
+   }
+  },
+  "real tldr expr: parentheses": {
+   "script": "935c7a3e24b4eb5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20\n"
+   }
+  },
+  "real tldr expr: substr 0 2": {
+   "script": "fade3b57fa383ac4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=1\n"
+   }
+  },
+  "real tldr expr: substr 1 100": {
+   "script": "56f98d4a2605fe33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "string\nstatus=0\n"
+   }
+  },
+  "real tldr expr: substr 2 3": {
+   "script": "b7fd3fa5dbb14022",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "tri\nstatus=0\n"
+   }
+  },
+  "real tldr expr: substr 3 x": {
+   "script": "9080461152bb1933",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=1\n"
+   }
+  },
+  "real tldr expr: substr 5 0": {
+   "script": "6c8451dfdc551423",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=1\n"
+   }
+  },
+  "real tldr factor: empty stdin": {
+   "script": "331f9fba02c6f6ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr factor: factorize -6": {
+   "script": "bd47c1410a4cab05",
+   "status": 0,
+   "stderr": {
+    "text": "factor: invalid option -- '6'\nTry 'factor --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr factor: factorize 0": {
+   "script": "114fa5093e9cabdf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0:\nstatus=0\n"
+   }
+  },
+  "real tldr factor: factorize 08": {
+   "script": "543d3a3362dbe634",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8: 2 2 2\nstatus=0\n"
+   }
+  },
+  "real tldr factor: factorize 1": {
+   "script": "6d278f28683b154c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1:\nstatus=0\n"
+   }
+  },
+  "real tldr factor: factorize 12 13 14": {
+   "script": "e3894c26583005b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12: 2 2 3\n13: 13\n14: 2 7\nstatus=0\n"
+   }
+  },
+  "real tldr factor: factorize 18446744073709551615": {
+   "script": "95d128071244e16d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18446744073709551615: 3 5 17 257 641 65537 6700417\nstatus=0\n"
+   }
+  },
+  "real tldr factor: factorize 2305843009213693951": {
+   "script": "b80583a785c1219f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2305843009213693951: 2305843009213693951\nstatus=0\n"
+   }
+  },
+  "real tldr factor: factorize 4294967297": {
+   "script": "1f120d7cc5c9bbf0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4294967297: 641 6700417\nstatus=0\n"
+   }
+  },
+  "real tldr factor: factorize 84": {
+   "script": "873a30efeef97c28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "84: 2 2 3 7\nstatus=0\n"
+   }
+  },
+  "real tldr factor: factorize 97": {
+   "script": "e13a45ba4e205652",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "97: 97\nstatus=0\n"
+   }
+  },
+  "real tldr factor: from stdin": {
+   "script": "0468b421e95260c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "84: 2 2 3 7\n"
+   }
+  },
+  "real tldr factor: several from stdin": {
+   "script": "86dba181675c34a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6: 2 3\n15: 3 5\n21: 3 7\n"
+   }
+  },
+  "real tldr jq: add keys": {
+   "script": "23b1505a96e0fbea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"key1\": \"new\",\n  \"key2\": {\n    \"nestedKey\": 2\n  },\n  \"key3\": \"value3\"\n}\n"
+   }
+  },
+  "real tldr jq: all array values": {
+   "script": "5be75b5e19590201",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"key1\":\"value1\",\"key2\":\"value2\"}\n{\"key1\":\"value1\",\"key2\":\"x\"}\n{\"key1\":\"y\",\"key2\":\"value2\"}\n"
+   }
+  },
+  "real tldr jq: all object values": {
+   "script": "6ffe90b0f9b8bc9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"value1\"\n{\n  \"nestedKey\": 2\n}\n"
+   }
+  },
+  "real tldr jq: array items out of range": {
+   "script": "721b03d62f52e8d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\n{\"key1\":\"y\",\"key2\":\"value2\"}\n"
+   }
+  },
+  "real tldr jq: ascii output": {
+   "script": "049480a750fb87b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"caf\\u00e9 \\ud83d\\ude00\"\n"
+   }
+  },
+  "real tldr jq: compact a compact object": {
+   "script": "b763278580b5d185",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":1,\"b\":[true,false,null]}\n"
+   }
+  },
+  "real tldr jq: compact a top-level string": {
+   "script": "ee79194013db58a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"just text\"\n"
+   }
+  },
+  "real tldr jq: compact an empty input": {
+   "script": "9f9c333cff3a6922",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr jq: compact an object": {
+   "script": "ebbb03a790b4f04c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"key1\":\"value1\",\"key2\":{\"nestedKey\":2},\"list\":[1,2,3]}\n"
+   }
+  },
+  "real tldr jq: compact control characters": {
+   "script": "01986a35e2a3fe3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"s\":\"tab\\there\\nnew \\u0001 \\u007f \\\\ \\\"q\\\"\"}\n"
+   }
+  },
+  "real tldr jq: compact deep nesting": {
+   "script": "9ce9e96b8230e474",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[[[[[[[[[1]]]]]]]]]]\n"
+   }
+  },
+  "real tldr jq: compact duplicate keys": {
+   "script": "a524ca6dc265b8c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":2}\n"
+   }
+  },
+  "real tldr jq: compact floats": {
+   "script": "cdd58047fb74b5da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1.0,1.5,-2.25,0.1,1E+3,0.001,1.5E+300,3.0]\n"
+   }
+  },
+  "real tldr jq: compact huge numbers": {
+   "script": "74db193b717aac8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1E+1000,-1E+1000,1E-400]\n"
+   }
+  },
+  "real tldr jq: compact integers": {
+   "script": "3eda37e826727abd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0,-0,1,-1,123456789012,9007199254740993,100000000000000000000]\n"
+   }
+  },
+  "real tldr jq: compact nested empties": {
+   "script": "1804eba1b07f58ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":{},\"b\":[],\"c\":[[]],\"d\":{\"e\":{}}}\n"
+   }
+  },
+  "real tldr jq: compact only whitespace": {
+   "script": "32c147d2fa5c37a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr jq: compact several documents": {
+   "script": "c6b60794a17dd97f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n\"two\"\n[3]\n{\"four\":4}\n"
+   }
+  },
+  "real tldr jq: compact unicode strings": {
+   "script": "f568e5b0eb8f7505",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"s\":\"café 日本\",\"e\":\"😀\",\"raw\":\"日本\"}\n"
+   }
+  },
+  "real tldr jq: execute a missing script file": {
+   "script": "e3380dfd91ee3c9c",
+   "status": 0,
+   "stderr": {
+    "text": "jq: Could not open nosuch.jq: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr jq: execute a script file": {
+   "script": "6459ca406e39feaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20\n"
+   }
+  },
+  "real tldr jq: execute a script file (long)": {
+   "script": "8fc0d4b744533b29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"k\": \"value1\"\n}\n"
+   }
+  },
+  "real tldr jq: exit status": {
+   "script": "9bd7f6702a8419b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "null\nstatus=1\nfalse\nstatus=1\n"
+   }
+  },
+  "real tldr jq: indent 1": {
+   "script": "88c7e937d3756a56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n \"a\": [\n  1\n ]\n}\n"
+   }
+  },
+  "real tldr jq: join output": {
+   "script": "d21c4c9060d74799",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "real tldr jq: new object from several files": {
+   "script": "af8b3293f19110da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"newKey1\": 1,\n  \"newKey2\": \"a\"\n}\n{\n  \"newKey1\": 2,\n  \"newKey2\": null\n}\n"
+   }
+  },
+  "real tldr jq: null input": {
+   "script": "3a98ecddad1a7956",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "real tldr jq: pass named arguments": {
+   "script": "86b91f6bdcc165c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"key1\": \"value1\",\n  \"key2\": {\n    \"nestedKey\": 2\n  },\n  \"name1\": \"value1\",\n  \"name2\": \"value2\"\n}\n"
+   }
+  },
+  "real tldr jq: pass named arguments with json": {
+   "script": "ecf96973f2742be6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"n\":5,\"s\":\"5\"}\n"
+   }
+  },
+  "real tldr jq: pass positional arguments": {
+   "script": "4c4847148ae2b964",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"positional\":[\"a\",\"b\"],\"named\":{}}\n"
+   }
+  },
+  "real tldr jq: pretty print a compact object": {
+   "script": "4311fef6c3a02529",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"a\": 1,\n  \"b\": [\n    true,\n    false,\n    null\n  ]\n}\n"
+   }
+  },
+  "real tldr jq: pretty print a top-level string": {
+   "script": "128d8543eb411b37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"just text\"\n"
+   }
+  },
+  "real tldr jq: pretty print an empty input": {
+   "script": "b36f0d071d385a0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr jq: pretty print an object": {
+   "script": "9844bd9c6ec1859b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"key1\": \"value1\",\n  \"key2\": {\n    \"nestedKey\": 2\n  },\n  \"list\": [\n    1,\n    2,\n    3\n  ]\n}\n"
+   }
+  },
+  "real tldr jq: pretty print control characters": {
+   "script": "4e9f7b4ed4d7048c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"s\": \"tab\\there\\nnew \\u0001 \\u007f \\\\ \\\"q\\\"\"\n}\n"
+   }
+  },
+  "real tldr jq: pretty print deep nesting": {
+   "script": "42d0b97c1bb32a8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\n  [\n    [\n      [\n        [\n          [\n            [\n              [\n                [\n                  [\n                    1\n                  ]\n                ]\n              ]\n            ]\n          ]\n        ]\n      ]\n    ]\n  ]\n]\n"
+   }
+  },
+  "real tldr jq: pretty print duplicate keys": {
+   "script": "812938bf3ed6ff05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"a\": 2\n}\n"
+   }
+  },
+  "real tldr jq: pretty print floats": {
+   "script": "87c33496f4be3051",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\n  1.0,\n  1.5,\n  -2.25,\n  0.1,\n  1E+3,\n  0.001,\n  1.5E+300,\n  3.0\n]\n"
+   }
+  },
+  "real tldr jq: pretty print huge numbers": {
+   "script": "d806104c24735a3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\n  1E+1000,\n  -1E+1000,\n  1E-400\n]\n"
+   }
+  },
+  "real tldr jq: pretty print integers": {
+   "script": "d87e29d5a14363eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\n  0,\n  -0,\n  1,\n  -1,\n  123456789012,\n  9007199254740993,\n  100000000000000000000\n]\n"
+   }
+  },
+  "real tldr jq: pretty print nested empties": {
+   "script": "5dfe2eb0f7817254",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"a\": {},\n  \"b\": [],\n  \"c\": [\n    []\n  ],\n  \"d\": {\n    \"e\": {}\n  }\n}\n"
+   }
+  },
+  "real tldr jq: pretty print only whitespace": {
+   "script": "bacaf958b5930539",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr jq: pretty print several documents": {
+   "script": "076af40e106ba6ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n\"two\"\n[\n  3\n]\n{\n  \"four\": 4\n}\n"
+   }
+  },
+  "real tldr jq: pretty print unicode strings": {
+   "script": "9227369efc4a09d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"s\": \"café 日本\",\n  \"e\": \"😀\",\n  \"raw\": \"日本\"\n}\n"
+   }
+  },
+  "real tldr jq: raw output": {
+   "script": "152c62e74aab7bff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "value1\nvalue1\ny\n"
+   }
+  },
+  "real tldr jq: remove array elements": {
+   "script": "f899357009491d23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,3]\n"
+   }
+  },
+  "real tldr jq: remove keys with del": {
+   "script": "cf958efc3428553b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"key2\":{\"nestedKey\":2}}\n"
+   }
+  },
+  "real tldr jq: sort keys": {
+   "script": "13d751e010509f2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"a\": {\n    \"c\": 3,\n    \"d\": 2\n  },\n  \"b\": 1\n}\n"
+   }
+  },
+  "real tldr jq: specific array items": {
+   "script": "baf40ee09db310ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"key1\": \"value1\",\n  \"key2\": \"value2\"\n}\n{\n  \"key1\": \"y\",\n  \"key2\": \"value2\"\n}\n"
+   }
+  },
+  "real tldr jq: tab indentation": {
+   "script": "6a3293d859271c4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n\t\"a\": [\n\t\t1\n\t]\n}\n"
+   }
+  },
+  "real tldr jq: two-condition filter": {
+   "script": "178b5ff1b3d06d23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\n  \"key1\": \"value1\",\n  \"key2\": \"value2\"\n}\n"
+   }
+  },
+  "real tldr jq: two-condition filter with or": {
+   "script": "bee197b0b54fe634",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"key1\":\"value1\",\"key2\":\"x\"}\n{\"key1\":\"y\",\"key2\":\"value2\"}\n"
+   }
+  },
+  "real tldr numfmt: field with a header to iec": {
+   "script": "ba9d2c5be5178fd0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name size\na    1.0M\nb 2.0K\nc 1.5K\n"
+   }
+  },
+  "real tldr numfmt: field with a header to iec from a listing": {
+   "script": "4931bc5d2356d06d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "h1 h2 h3 h4 SIZE name\n- 1 u g 4.0K d\n- 1 u g      118M f\n"
+   }
+  },
+  "real tldr numfmt: from auto 1.5": {
+   "script": "fdf599858e3db379",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.5\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: from auto 1.5K": {
+   "script": "b36fe532a00b1525",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1500\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: from auto 1.5Ki": {
+   "script": "0877c6a961b350b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1536\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: from auto 2Mi": {
+   "script": "0ad8ab2b709a36a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2097152\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: from iec 1.5K": {
+   "script": "3336f192e31a8a05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1536\n"
+   }
+  },
+  "real tldr numfmt: from iec 1K": {
+   "script": "478f709b3032e23e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1024\n"
+   }
+  },
+  "real tldr numfmt: from iec 3G": {
+   "script": "a14db1508bae6d7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3221225472\n"
+   }
+  },
+  "real tldr numfmt: from si 1.5": {
+   "script": "c1d8239c0d5ce405",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.5\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: from si 1.5K": {
+   "script": "f218c2afd99bffaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1500\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: from si 1.5M": {
+   "script": "f1cbb3428fa21e81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1500000\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: from si 1K": {
+   "script": "218ac25dd626881c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1000\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: from si 999": {
+   "script": "2dde7511f6249bb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "999\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: invalid field": {
+   "script": "9e47e8f2c9158a12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\nstatus=0\n"
+   }
+  },
+  "real tldr numfmt: left aligned padded format": {
+   "script": "5e826f287ddbddbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2.0K  a\n1.5M  b\n12    c\n"
+   }
+  },
+  "real tldr numfmt: padding": {
+   "script": "c8f91b1094693c57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    1.0M\n       1\n"
+   }
+  },
+  "real tldr numfmt: suffix": {
+   "script": "8115a5606f00adca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.5kB\n"
+   }
+  },
+  "real tldr numfmt: to si -1500": {
+   "script": "17edf6a8dbb2cd7b",
+   "status": 1,
+   "stderr": {
+    "text": "numfmt: invalid option -- '1'\nTry 'numfmt --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr numfmt: to si 0": {
+   "script": "5b6fbf35cd8665b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "real tldr numfmt: to si 1.5": {
+   "script": "731ed2c67f56e6a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "real tldr numfmt: to si 1000": {
+   "script": "99b5d01ef8fc2e4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0k\n"
+   }
+  },
+  "real tldr numfmt: to si 1001": {
+   "script": "e43bd9059dc1100c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.1k\n"
+   }
+  },
+  "real tldr numfmt: to si 1234567": {
+   "script": "f72f8c828397b5a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.3M\n"
+   }
+  },
+  "real tldr numfmt: to si 1500": {
+   "script": "796efb0ff3d8cdfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.5k\n"
+   }
+  },
+  "real tldr numfmt: to si 999": {
+   "script": "d5d609604202d1a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "999\n"
+   }
+  },
+  "real tldr printf: environment variables": {
+   "script": "e276de3f9f15e326",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "var1: one\tvar2: two words\n"
+   }
+  },
+  "real tldr printf: environment variables one missing": {
+   "script": "515aa646466bf664",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "var1: one\tvar2: \n"
+   }
+  },
+  "real tldr printf: environment variables unset": {
+   "script": "88a7947d11dea228",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "var1: \tvar2: \n"
+   }
+  },
+  "real tldr printf: float with the euro sign -1": {
+   "script": "efb56b90fcb5afb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "€ -1.00\n"
+   }
+  },
+  "real tldr printf: float with the euro sign 0.005": {
+   "script": "e0126117553f315a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "€ 0.01\n"
+   }
+  },
+  "real tldr printf: float with the euro sign 1,5": {
+   "script": "e44d742c67a160d3",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 2: printf: 1,5: invalid number\n"
+   },
+   "stdout": {
+    "text": "€ 1.00\n"
+   }
+  },
+  "real tldr printf: float with the euro sign 123.4": {
+   "script": "44ba604ad34ea18b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "€ 123.40\n"
+   }
+  },
+  "real tldr printf: float with the euro sign 1e3": {
+   "script": "280ef7a3fb65e880",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "€ 1000.00\n"
+   }
+  },
+  "real tldr printf: float with the euro sign 2.675": {
+   "script": "5da3f03692056a01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "€ 2.67\n"
+   }
+  },
+  "real tldr printf: float with the euro sign abc": {
+   "script": "aa7a08ea0fe197e9",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 2: printf: abc: invalid number\n"
+   },
+   "stdout": {
+    "text": "€ 0.00\n"
+   }
+  },
+  "real tldr printf: hex octal scientific 'A' '\"B' -0": {
+   "script": "c3e6e2132f7f8d66",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 2: printf: A: invalid number\n"
+   },
+   "stdout": {
+    "text": "hex=0 octal=102 scientific=-0.000000e+00\n"
+   }
+  },
+  "real tldr printf: hex octal scientific -1 8 0.000123": {
+   "script": "d72b35da9015d98e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hex=ffffffffffffffff octal=10 scientific=1.230000e-04\n"
+   }
+  },
+  "real tldr printf: hex octal scientific 0x7fffffffffffffff 0 1e300": {
+   "script": "89582a4c83dbeece",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hex=7fffffffffffffff octal=0 scientific=1.000000e+300\n"
+   }
+  },
+  "real tldr printf: hex octal scientific 0xFF 0377 100000": {
+   "script": "4d007b8e7b2ed428",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hex=ff octal=377 scientific=1.000000e+05\n"
+   }
+  },
+  "real tldr printf: hex octal scientific 255 255 1": {
+   "script": "769c2b98d97b1b90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hex=ff octal=377 scientific=1.000000e+00\n"
+   }
+  },
+  "real tldr printf: integer in bold blue -5": {
+   "script": "57d558032eb06590",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[1;34m-005\u001b[0m\n"
+   }
+  },
+  "real tldr printf: integer in bold blue 010": {
+   "script": "bf95bcf17dcbf664",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[1;34m008\u001b[0m\n"
+   }
+  },
+  "real tldr printf: integer in bold blue 0x1F": {
+   "script": "6b147253f902f0fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[1;34m031\u001b[0m\n"
+   }
+  },
+  "real tldr printf: integer in bold blue 1234": {
+   "script": "c9e95935338d0aed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[1;34m1234\u001b[0m\n"
+   }
+  },
+  "real tldr printf: integer in bold blue 42": {
+   "script": "18b1e6ab72693345",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[1;34m042\u001b[0m\n"
+   }
+  },
+  "real tldr printf: integer in bold blue 7": {
+   "script": "2196f234b5884d88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[1;34m007\u001b[0m\n"
+   }
+  },
+  "real tldr printf: integer in bold blue x": {
+   "script": "d4d6f52393a9d1c9",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 2: printf: x: invalid number\n"
+   },
+   "stdout": {
+    "text": "\u001b[1;34m000\u001b[0m\n"
+   }
+  },
+  "real tldr printf: percent literal and character": {
+   "script": "9320c68d62ce3c12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100% h\n"
+   }
+  },
+  "real tldr printf: shell-quoted and escaped": {
+   "script": "c9d5871caa1d7385",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\ b\\'c x\ty\n"
+   }
+  },
+  "real tldr printf: store in a variable": {
+   "script": "740b97608f504a07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[This is a year = 2016\n]"
+   }
+  },
+  "real tldr printf: store in a variable with a bad number": {
+   "script": "d3a5c3423ec9c2d9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: printf: 20x16: invalid number\n"
+   },
+   "stdout": {
+    "text": "status=1\n[This is a year = 20\n]"
+   }
+  },
+  "real tldr printf: store in an array element": {
+   "script": "bdc6326858bfc6bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a arr=([2]=\"a-b\")\n"
+   }
+  },
+  "real tldr printf: store in an invalid name": {
+   "script": "3638bc66b9f1d7db",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 2: printf: `1bad': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr printf: text message": {
+   "script": "9158a665902f77f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Hello world\n"
+   }
+  },
+  "real tldr printf: text message with a multibyte argument": {
+   "script": "c742e623f876d64f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "héllo 日本\n"
+   }
+  },
+  "real tldr printf: text message with an argument with a backslash": {
+   "script": "a4aa6ea6df931e15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\nb\n"
+   }
+  },
+  "real tldr printf: text message with an empty argument": {
+   "script": "bfd498987991d2e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "real tldr printf: text message with no argument": {
+   "script": "e5e7666994b67181",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "real tldr printf: text message with several arguments reuse the format": {
+   "script": "e3e687d1c6bbda0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb c\nd\n"
+   }
+  },
+  "real tldr printf: width and precision from arguments": {
+   "script": "1808aaece5293110",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[   ab][c   ][3.14]\n"
+   }
+  },
+  "real tldr seq: empty separator": {
+   "script": "331bbb01589f3fef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12345\n"
+   }
+  },
+  "real tldr seq: equal width --equal-width": {
+   "script": "992559c2dbc44393",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "05\n08\n11\n14\n17\n20\n"
+   }
+  },
+  "real tldr seq: equal width -w": {
+   "script": "180d19407221ddea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "05\n08\n11\n14\n17\n20\n"
+   }
+  },
+  "real tldr seq: equal width with decimals": {
+   "script": "b70c367f345f461c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0.5\n1.0\n1.5\n2.0\n"
+   }
+  },
+  "real tldr seq: equal width with negatives": {
+   "script": "288bc6600b82810a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-5\n00\n05\n10\n"
+   }
+  },
+  "real tldr seq: format --format": {
+   "script": "b7f6ad9d4900f6de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0005\n0008\n0011\n0014\n0017\n0020\n"
+   }
+  },
+  "real tldr seq: format -f": {
+   "script": "045fd8dc2c8d6918",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0005\n0008\n0011\n0014\n0017\n0020\n"
+   }
+  },
+  "real tldr seq: format with a float": {
+   "script": "2d38d3f1cc4d333a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0.00\n0.25\n0.50\n0.75\n1.00\n"
+   }
+  },
+  "real tldr seq: format without a directive": {
+   "script": "4f7095515a7907fd",
+   "status": 1,
+   "stderr": {
+    "text": "seq: format ‘x’ has no % directive\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr seq: no operands": {
+   "script": "f88351521d9c7217",
+   "status": 1,
+   "stderr": {
+    "text": "seq: missing operand\nTry 'seq --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr seq: separator --separator": {
+   "script": "29dbe18832e41835",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 8 11 14 17 20\n"
+   }
+  },
+  "real tldr seq: separator -s": {
+   "script": "726ce8eda5eb7f30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 8 11 14 17 20\n"
+   }
+  },
+  "real tldr seq: sequence -3 -1": {
+   "script": "2ba1a12f15f914cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-3\n-2\n-1\n"
+   }
+  },
+  "real tldr seq: sequence 0 0.5 2": {
+   "script": "31ee024e9838aaa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0.0\n0.5\n1.0\n1.5\n2.0\n"
+   }
+  },
+  "real tldr seq: sequence 1 0.1 1.3": {
+   "script": "f76103aa2fd2cc72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1.0\n1.1\n1.2\n1.3\n"
+   }
+  },
+  "real tldr seq: sequence 10": {
+   "script": "e398bad64d06d8c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
+   }
+  },
+  "real tldr seq: sequence 10 20": {
+   "script": "4d418a52d43ba591",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"
+   }
+  },
+  "real tldr seq: sequence 1e2 1e2": {
+   "script": "ba7285ceeeefa251",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100\n"
+   }
+  },
+  "real tldr seq: sequence 3 x": {
+   "script": "9c1a5da57e45a9c3",
+   "status": 1,
+   "stderr": {
+    "text": "seq: invalid floating point argument: ‘x’\nTry 'seq --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr seq: sequence 5 -1 1": {
+   "script": "68fd0f7e793c0853",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n4\n3\n2\n1\n"
+   }
+  },
+  "real tldr seq: sequence 5 1": {
+   "script": "b8e46f4922725133",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr seq: sequence 5 3 20": {
+   "script": "ee016136135d1735",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n8\n11\n14\n17\n20\n"
+   }
+  },
+  "real tldr seq: zero increment": {
+   "script": "7c00984062cad214",
+   "status": 1,
+   "stderr": {
+    "text": "seq: invalid Zero increment value: ‘0’\nTry 'seq --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr sh: execute a command": {
+   "script": "c8a68e0f783ce61e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello from sh\n"
+   }
+  },
+  "real tldr sh: execute a command that fails": {
+   "script": "33319db9f27121ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=3\n"
+   }
+  },
+  "real tldr sh: execute a command with a syntax error": {
+   "script": "1077d54bda33cd51",
+   "status": 0,
+   "stderr": {
+    "text": "sh: -c: line 1: syntax error near unexpected token `then'\nsh: -c: line 1: `if then'\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr sh: execute a command with arguments": {
+   "script": "61a5cc8fbf846383",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name one 2\n"
+   }
+  },
+  "real tldr sh: execute a command with no command string": {
+   "script": "ade17418116cae18",
+   "status": 0,
+   "stderr": {
+    "text": "sh: -c: option requires an argument\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr sh: read commands from stdin": {
+   "script": "eb5e38bfc325dab0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "from stdin\n"
+   }
+  },
+  "real tldr sh: read commands from stdin with arguments": {
+   "script": "8ba168c6ce176cc0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a-b\n"
+   }
+  },
+  "real tldr sh: read commands from stdin with no -s": {
+   "script": "82029785fbfbb699",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\n"
+   }
+  },
+  "real tldr sleep: delay .05": {
+   "script": "75301e7683821ffb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr sleep: delay 0": {
+   "script": "2ad99b5aab24a406",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr sleep: delay 0.000001d": {
+   "script": "f5d3609b901a6cdd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr sleep: delay 0.00001h": {
+   "script": "cb87209beef9faa5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr sleep: delay 0.001m": {
+   "script": "17df3f7672fa78be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr sleep: delay 0.01 0.02": {
+   "script": "4a91c28bad56da91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr sleep: delay 0.05s": {
+   "script": "3d120a6da8c707fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr sleep: delay 0.1": {
+   "script": "ac9054cd38efc29d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr sleep: delay 1e-2": {
+   "script": "5af3502ec32196c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "real tldr sleep: invalid delay ''": {
+   "script": "c67282a53b377285",
+   "status": 0,
+   "stderr": {
+    "text": "sleep: missing operand\nTry 'sleep --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr sleep: invalid delay '-1'": {
+   "script": "6d40aebae21465c2",
+   "status": 0,
+   "stderr": {
+    "text": "sleep: invalid option -- '1'\nTry 'sleep --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr sleep: then a command": {
+   "script": "2ccbfc4ce25664cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after delay\n"
+   }
+  },
+  "real tldr tee: append": {
+   "script": "14c1c1240777ef60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "example\nold\nexample\n"
+   }
+  },
+  "real tldr tee: append (long)": {
+   "script": "9d50f5a5cc8bd579",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "old\nexample\n"
+   }
+  },
+  "real tldr tee: copy stdin to a file and stdout": {
+   "script": "21ccbb6c9cb4de27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "example\nexample\n"
+   }
+  },
+  "real tldr tee: copy stdin to several files": {
+   "script": "422f5df4895d8b2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "example\nexample\n"
+   }
+  },
+  "real tldr tee: empty input": {
+   "script": "a6a0234eca051f99",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 f\n"
+   }
+  },
+  "real tldr tee: into a directory": {
+   "script": "8048a86ee62b0181",
+   "status": 0,
+   "stderr": {
+    "text": "tee: d: Is a directory\n"
+   },
+   "stdout": {
+    "text": "example\nstatus=1\n"
+   }
+  },
+  "real tldr tee: into a missing directory": {
+   "script": "433be2e2459a665e",
+   "status": 0,
+   "stderr": {
+    "text": "tee: nodir/f: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "example\nstatus=1\n"
+   }
+  },
+  "real tldr tee: overwrite an existing file": {
+   "script": "cf291dbb8273e868",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "example\nexample\n"
+   }
+  },
+  "real tldr tee: to process substitutions": {
+   "script": "2d3abbac4d32f7ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\nexample\nexample\n"
+   }
+  },
+  "real tldr tee: to stderr and another program": {
+   "script": "be060bd4b0f1baeb",
+   "status": 0,
+   "stderr": {
+    "text": "example\n"
+   },
+   "stdout": {
+    "text": "[example]"
+   }
+  },
+  "real tldr xargs: a command that exits 255": {
+   "script": "b3b71b55a7b146ef",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: sh: exited with status 255; aborting\n"
+   },
+   "stdout": {
+    "text": "status=124\n"
+   }
+  },
+  "real tldr xargs: a command that fails": {
+   "script": "48b65f4c2589946d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=123\n"
+   }
+  },
+  "real tldr xargs: a command that is missing": {
+   "script": "dc43187570a11004",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: nosuchcmd: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "real tldr xargs: chained commands in sh -c": {
+   "script": "fa17926347cee8e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "start\nA B\n"
+   }
+  },
+  "real tldr xargs: chained commands in sh -c with a placeholder name": {
+   "script": "eb14db2a62765b03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "_|a b\n"
+   }
+  },
+  "real tldr xargs: default command": {
+   "script": "8bff13cae7f04ba5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "real tldr xargs: delimiter": {
+   "script": "e39d77f91f28816e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "real tldr xargs: lines at a time": {
+   "script": "1dd210d7f98a3977",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\nd e\n"
+   }
+  },
+  "real tldr xargs: max chars": {
+   "script": "707a28812cac950d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aa bb\ncc dd\n"
+   }
+  },
+  "real tldr xargs: no run if empty": {
+   "script": "329258919fc433ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr xargs: null-delimited input": {
+   "script": "2c36614004c2b848",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\n"
+   }
+  },
+  "real tldr xargs: one argument per command (long)": {
+   "script": "12c3807c417129da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "real tldr xargs: one argument per command with an escaped space": {
+   "script": "9498d9d93c9f8cae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: one argument per command with an unmatched quote": {
+   "script": "ee0e59debdf98f5d",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: unmatched single quote; by default quotes are special to xargs unless you use the -0 option\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr xargs: one argument per command with blank lines and spaces": {
+   "script": "860b57cdecb14d4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: one argument per command with empty input": {
+   "script": "5193ba95100d25d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: one argument per command with quoted input": {
+   "script": "fb8163695aef0bba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x y\nz\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: one argument per command with words": {
+   "script": "2891068a00192928",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: parallel": {
+   "script": "485e7f353f2cac91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n"
+   }
+  },
+  "real tldr xargs: parallel (long)": {
+   "script": "acc0ef822b271121",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n"
+   }
+  },
+  "real tldr xargs: parallel with failures": {
+   "script": "c4e22b6d9e11e729",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=123\n"
+   }
+  },
+  "real tldr xargs: placeholder several times": {
+   "script": "627529143413efa6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a-a\nb-b\n"
+   }
+  },
+  "real tldr xargs: placeholder with an escaped space": {
+   "script": "c2a0a5b4d79e39e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a b c] extra\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: placeholder with an unmatched quote": {
+   "script": "9a80c4b28af679df",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: unmatched single quote; by default quotes are special to xargs unless you use the -0 option\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr xargs: placeholder with blank lines and spaces": {
+   "script": "fc58edf40313be98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[one] extra\n[two  ] extra\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: placeholder with empty input": {
+   "script": "90acb679f972abe1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr xargs: placeholder with quoted input": {
+   "script": "4fe6a73116acf09f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[x y z] extra\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: placeholder with words": {
+   "script": "0f5260d274ee55fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a b] extra\n[c] extra\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: read arguments from a file": {
+   "script": "3474aa6d9c7b3a89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1 f2\n"
+   }
+  },
+  "real tldr xargs: read arguments from a file (long)": {
+   "script": "7699163c867effe0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "got f1 f2\n"
+   }
+  },
+  "real tldr xargs: read arguments from a missing file": {
+   "script": "2b4f43885dd08091",
+   "status": 1,
+   "stderr": {
+    "text": "xargs: Cannot open input file ‘nosuchlist’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr xargs: trace commands": {
+   "script": "3ab7133b2a088584",
+   "status": 0,
+   "stderr": {
+    "text": "echo a b\n"
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "real tldr xargs: two arguments per command": {
+   "script": "4fffd9e9d4aff064",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nc\n"
+   }
+  },
+  "real tldr xargs: use input as arguments with an escaped space": {
+   "script": "48676d63a93fc3a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: use input as arguments with an unmatched quote": {
+   "script": "93c437709394bdf1",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: unmatched single quote; by default quotes are special to xargs unless you use the -0 option\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr xargs: use input as arguments with blank lines and spaces": {
+   "script": "59c7ec79c2c0a27b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one two\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: use input as arguments with empty input": {
+   "script": "04b35480f112caf9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: use input as arguments with quoted input": {
+   "script": "b81c95a775fd18cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x y z\nstatus=0\n"
+   }
+  },
+  "real tldr xargs: use input as arguments with words": {
+   "script": "304f885d96804dac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\nstatus=0\n"
+   }
+  },
+  "real tldr yes: accept prompts of a reader": {
+   "script": "3e112a54ec57ae06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yy\n"
+   }
+  },
+  "real tldr yes: bytes": {
+   "script": "9e5931c083a15fbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc\nabc\nab"
+   }
+  },
+  "real tldr yes: repeat a value": {
+   "script": "5e6b6db263279045",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "value\nvalue\n"
+   }
+  },
+  "real tldr yes: repeat an empty line": {
+   "script": "ba76ad7cb3c47777",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000  \\n  \\n  \\n\n0000003\n"
+   }
+  },
+  "real tldr yes: repeat several words": {
+   "script": "6e0b1926bbb1dc7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\na b\n"
+   }
+  },
+  "real tldr yes: repeat y": {
+   "script": "4f9d4e72139f3488",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\ny\ny\n"
+   }
+  },
+  "real tldr yes: status in a pipeline": {
+   "script": "6cacea52a2e17758",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y\n141 0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

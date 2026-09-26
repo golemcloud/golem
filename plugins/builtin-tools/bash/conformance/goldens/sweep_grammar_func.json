@@ -1,0 +1,4518 @@
+{
+ "cases": {
+  "gram func BASH_LINENO": {
+   "script": "2589308b3e2fa6a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n4\n"
+   }
+  },
+  "gram func FUNCNAME at top level": {
+   "script": "a2bd93a7c9e07e2b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\n"
+   }
+  },
+  "gram func FUNCNAME stack": {
+   "script": "c77fc4ec3f1b9ae2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b a\n"
+   }
+  },
+  "gram func FUNCNEST limit": {
+   "script": "c3b4b45ee6ee9308",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: r: maximum function nesting level exceeded (3)\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func LINENO in a function": {
+   "script": "4111488dabd0a59d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram func RETURN trap per function": {
+   "script": "82b094a5932d46a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\nret-f\nin-f\nret-f\n"
+   }
+  },
+  "gram func assignment prefix persists in posix mode": {
+   "script": "6582b216ffbb9208",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram func builtin with a non-builtin": {
+   "script": "a15cd37544b3146a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: builtin: nosuch: not a shell builtin\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram func callee assignment hits caller local": {
+   "script": "ee779c4ec4ecc9c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "changed\ng\n"
+   }
+  },
+  "gram func caller": {
+   "script": "68ab0ec4915f91ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 bash\n1 g bash\n"
+   }
+  },
+  "gram func command -V function": {
+   "script": "246c03f1646d3bd8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f is a function\nf () \n{ \n    echo x\n}\n"
+   }
+  },
+  "gram func command -v kinds": {
+   "script": "84a7ed2138bc0bdc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\nif\necho\n"
+   }
+  },
+  "gram func command skips functions": {
+   "script": "de9d848deddd3cb1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cmd\n"
+   }
+  },
+  "gram func cond -ef same file": {
+   "script": "0ddbc58cdc361426",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "same\n"
+   }
+  },
+  "gram func cond -eq with a bad expression": {
+   "script": "dd0e8a31da095f28",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [[: a+: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram func cond -nt missing file": {
+   "script": "ebe42324b84ab578",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "newer\nolder\n"
+   }
+  },
+  "gram func cond -v on arrays": {
+   "script": "b44cb1884ca46c73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\na0\nmk\nm-no-zero\n"
+   }
+  },
+  "gram func cond -v positional": {
+   "script": "b4a644b5050df5d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nno-two\n"
+   }
+  },
+  "gram func cond and or precedence": {
+   "script": "47e8c5194ae0b83c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram func cond arithmetic operands": {
+   "script": "59b21c061b85e18e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\nt2\n"
+   }
+  },
+  "gram func cond as a command argument": {
+   "script": "4ae1a9036a277d4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[ a ]]\n"
+   }
+  },
+  "gram func cond bad unary": {
+   "script": "2989fee8955ac485",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected token `x', conditional binary operator expected\nbash: -c: line 1: syntax error near `x'\nbash: -c: line 1: `[[ -Q x ]]'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func cond empty operands": {
+   "script": "86505974a35a4ae3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty-false\nword-true\n"
+   }
+  },
+  "gram func cond file tests with dev paths": {
+   "script": "fdbb52f8011c4932",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\nc\nnot-f\n"
+   }
+  },
+  "gram func cond negation of a group": {
+   "script": "c7aeefc6b532d62a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram func cond newlines inside": {
+   "script": "5c98ec16317d74f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram func cond no globbing": {
+   "script": "fd2139f634cc7830",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\npat\n"
+   }
+  },
+  "gram func cond no word splitting": {
+   "script": "0470a6840ffaa518",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram func cond numeric strings compare as strings": {
+   "script": "b975638fad28023b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "string-order\n"
+   }
+  },
+  "gram func cond parentheses": {
+   "script": "c4ff22c36e7d9791",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram func cond quoted right side is literal": {
+   "script": "bc7e8926b9d4c3f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "literal\neq\n"
+   }
+  },
+  "gram func cond regex BASH_REMATCH readonly": {
+   "script": "807ee5e5a6e39896",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 x\n"
+   }
+  },
+  "gram func cond regex alternation": {
+   "script": "ea16b7021efc6dcc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dog\n"
+   }
+  },
+  "gram func cond regex anchors and classes": {
+   "script": "ab2c824d50173c1f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram func cond regex backreference": {
+   "script": "3fea97d55c4f36f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram func cond regex bracket with paren": {
+   "script": "fabd810fdbf9e311",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected EOF while looking for matching `)'\nbash: -c: line 2: unexpected argument to conditional binary operator\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func cond regex from a variable": {
+   "script": "ad7304dd50aa7b64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram func cond regex invalid": {
+   "script": "e1759b63a1c99d39",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected EOF while looking for matching `)'\nbash: -c: line 2: unexpected argument to conditional binary operator\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func cond regex match": {
+   "script": "6993f1ce9c401b38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc123 abc 123\n"
+   }
+  },
+  "gram func cond regex no match clears": {
+   "script": "c2a3c4a3a6a05fd7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram func cond regex nocasematch": {
+   "script": "010b4eceb05a0f14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ci\n"
+   }
+  },
+  "gram func cond regex optional group": {
+   "script": "82d0bfe3758b4a68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 2\n"
+   }
+  },
+  "gram func cond regex partial quoting": {
+   "script": "6379bc106740e2bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\nlit-dot\n"
+   }
+  },
+  "gram func cond regex quoted is literal": {
+   "script": "628bce706fe4c426",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\nlit\n"
+   }
+  },
+  "gram func cond regex quoted nocasematch": {
+   "script": "41c1e9f5215bb95b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 B\n"
+   }
+  },
+  "gram func cond regex quoted sets BASH_REMATCH": {
+   "script": "b7ebc3670bffbc50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 b 1\n0 1\n"
+   }
+  },
+  "gram func cond regex quoted then unquoted": {
+   "script": "04a6d1d26824f4bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 abc\n0 b\n0 []\n"
+   }
+  },
+  "gram func cond regex unicode": {
+   "script": "381f0272ea213d26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one-char\n"
+   }
+  },
+  "gram func cond regex with spaces": {
+   "script": "2a9e4e2d08d22e6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\nt2\n"
+   }
+  },
+  "gram func cond regex xtrace shows the pattern": {
+   "script": "8fc37ee5cb7b69ef",
+   "status": 0,
+   "stderr": {
+    "text": "+ [[ abc =~ a\\.c ]]\n+ x=b\n+ [[ abc =~ b ]]\n+ [[ abc =~ a.c ]]\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func cond single equals": {
+   "script": "dca7200ea2c400a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\n"
+   }
+  },
+  "gram func cond status in a pipeline": {
+   "script": "4d47ce855767e482",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram func cond string less than": {
+   "script": "16d8f7db8a102ed9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lt\nupper-first\n"
+   }
+  },
+  "gram func cond syntax error": {
+   "script": "4fa196e57ee172d7",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected argument `]]' to conditional binary operator\nbash: -c: line 1: syntax error near `]]'\nbash: -c: line 1: `[[ a == ]]'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func cond unset variable": {
+   "script": "f5ce0eba84456234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\nz\n"
+   }
+  },
+  "gram func cond variable pattern": {
+   "script": "92556141e68707f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "glob\nlit\n"
+   }
+  },
+  "gram func cond with set -x": {
+   "script": "f46cc4c1d2f382a9",
+   "status": 0,
+   "stderr": {
+    "text": "+ [[ a == a ]]\n+ [[ -n x ]]\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func declare -A assoc compound": {
+   "script": "8f580d01ad8faa94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A v=([k]=\"v\" )\ndeclare -A v=([0]=\"Next\" [k]=\"v\" )\n"
+   }
+  },
+  "gram func declare -A compound": {
+   "script": "4799577ed5b014e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A v=([1]=\"2\" )\ndeclare -A v=([1]=\"2\" [0]=\"Next\" )\n"
+   }
+  },
+  "gram func declare -A none": {
+   "script": "581e78f74ef5b3b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A v\ndeclare -A v=([0]=\"Next\" )\n"
+   }
+  },
+  "gram func declare -A text": {
+   "script": "b124fd63433db0f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -A v=([0]=\"MiXed\" )\ndeclare -A v=([0]=\"Next\" )\n"
+   }
+  },
+  "gram func declare -Al number expression": {
+   "script": "d0749d219f792a0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -Al v=([0]=\"3+4\" )\ndeclare -Al v=([0]=\"next\" )\n"
+   }
+  },
+  "gram func declare -F": {
+   "script": "e4cd6f57c29bcf61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -f f\ndeclare -f g\nf\n"
+   }
+  },
+  "gram func declare -a assoc compound": {
+   "script": "e49dc091953df867",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -a v=([0]=\"v\")\ndeclare -a v=([0]=\"Next\")\n"
+   }
+  },
+  "gram func declare -a compound": {
+   "script": "cb1cef892e4b46d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -a v=([0]=\"1\" [1]=\"2\")\ndeclare -a v=([0]=\"Next\" [1]=\"2\")\n"
+   }
+  },
+  "gram func declare -a none": {
+   "script": "8a954ab7f08a4d3e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -a v\ndeclare -a v=([0]=\"Next\")\n"
+   }
+  },
+  "gram func declare -a text": {
+   "script": "0dfe2b853369863f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -a v=([0]=\"MiXed\")\ndeclare -a v=([0]=\"Next\")\n"
+   }
+  },
+  "gram func declare -ai number expression": {
+   "script": "de7f6c653c83311e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -ai v=([0]=\"7\")\ndeclare -ai v=([0]=\"0\")\n"
+   }
+  },
+  "gram func declare -f of a missing function": {
+   "script": "1c4541558c04892d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram func declare -f of several": {
+   "script": "5d83282ae29662d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a1 () \n{ \n    echo 1\n}\na2 () \n{ \n    echo 2\n}\n"
+   }
+  },
+  "gram func declare -g in a function": {
+   "script": "e06b8766a3698226",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "global\n"
+   }
+  },
+  "gram func declare -i assoc compound": {
+   "script": "3b46c552d82e34a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -ai v=([0]=\"0\")\ndeclare -ai v=([0]=\"0\")\n"
+   }
+  },
+  "gram func declare -i compound": {
+   "script": "0d5a737856599b3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -ai v=([0]=\"1\" [1]=\"2\")\ndeclare -ai v=([0]=\"0\" [1]=\"2\")\n"
+   }
+  },
+  "gram func declare -i none": {
+   "script": "bc991d6bc1329179",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -i v\ndeclare -i v=\"0\"\n"
+   }
+  },
+  "gram func declare -i text": {
+   "script": "4dd9df181cb78c7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -i v=\"0\"\ndeclare -i v=\"0\"\n"
+   }
+  },
+  "gram func declare -il number expression": {
+   "script": "4a8920eb61b69000",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -il v=\"7\"\ndeclare -il v=\"0\"\n"
+   }
+  },
+  "gram func declare -l assoc compound": {
+   "script": "ac5d2dfcf9ca85d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -al v=([0]=\"v\")\ndeclare -al v=([0]=\"next\")\n"
+   }
+  },
+  "gram func declare -l compound": {
+   "script": "f8b42e545d6f5668",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -al v=([0]=\"1\" [1]=\"2\")\ndeclare -al v=([0]=\"next\" [1]=\"2\")\n"
+   }
+  },
+  "gram func declare -l none": {
+   "script": "b46baac308691e7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -l v\ndeclare -l v=\"next\"\n"
+   }
+  },
+  "gram func declare -l text": {
+   "script": "8f0c85b7caeaa4b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -l v=\"mixed\"\ndeclare -l v=\"next\"\n"
+   }
+  },
+  "gram func declare -n assoc compound": {
+   "script": "3c0bb14f9931adb4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: v: reference variable cannot be an array\n"
+   },
+   "stdout": {
+    "text": "status=1\ndeclare -a v=([0]=\"v\")\ndeclare -a v=([0]=\"Next\")\n"
+   }
+  },
+  "gram func declare -n compound": {
+   "script": "e3ad64c454ea3edd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: v: reference variable cannot be an array\n"
+   },
+   "stdout": {
+    "text": "status=1\ndeclare -a v=([0]=\"1\" [1]=\"2\")\ndeclare -a v=([0]=\"Next\" [1]=\"2\")\n"
+   }
+  },
+  "gram func declare -n none": {
+   "script": "12879c6efd982efd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -n v\ndeclare -n v=\"Next\"\n"
+   }
+  },
+  "gram func declare -n text": {
+   "script": "962264f31fb7bd2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -n v=\"MiXed\"\ndeclare -n v=\"MiXed\"\n"
+   }
+  },
+  "gram func declare -r assoc compound": {
+   "script": "e0ec7cf4e8c77ba1",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: v: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -ar v=([0]=\"v\")\n"
+   }
+  },
+  "gram func declare -r compound": {
+   "script": "83fc71c117892976",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: v: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -ar v=([0]=\"1\" [1]=\"2\")\n"
+   }
+  },
+  "gram func declare -r none": {
+   "script": "00c4be928295b91e",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: v: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -r v\n"
+   }
+  },
+  "gram func declare -r text": {
+   "script": "913d720165634327",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: v: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -r v=\"MiXed\"\n"
+   }
+  },
+  "gram func declare -ri number expression": {
+   "script": "6acb11449dd73f7e",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: v: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -ir v=\"7\"\n"
+   }
+  },
+  "gram func declare -t assoc compound": {
+   "script": "57bc8d27c1eaa20f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -at v=([0]=\"v\")\ndeclare -at v=([0]=\"Next\")\n"
+   }
+  },
+  "gram func declare -t compound": {
+   "script": "0239c3eefd91e507",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -at v=([0]=\"1\" [1]=\"2\")\ndeclare -at v=([0]=\"Next\" [1]=\"2\")\n"
+   }
+  },
+  "gram func declare -t none": {
+   "script": "521aefc1c45b167a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -t v\ndeclare -t v=\"Next\"\n"
+   }
+  },
+  "gram func declare -t text": {
+   "script": "27443eb4df8129be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -t v=\"MiXed\"\ndeclare -t v=\"Next\"\n"
+   }
+  },
+  "gram func declare -u assoc compound": {
+   "script": "2d8e8bd65bf11049",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -au v=([0]=\"V\")\ndeclare -au v=([0]=\"NEXT\")\n"
+   }
+  },
+  "gram func declare -u compound": {
+   "script": "1e07fe50a6b635c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -au v=([0]=\"1\" [1]=\"2\")\ndeclare -au v=([0]=\"NEXT\" [1]=\"2\")\n"
+   }
+  },
+  "gram func declare -u none": {
+   "script": "1ae8fe4fda629fed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -u v\ndeclare -u v=\"NEXT\"\n"
+   }
+  },
+  "gram func declare -u text": {
+   "script": "3061af301d9b2e73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -u v=\"MIXED\"\ndeclare -u v=\"NEXT\"\n"
+   }
+  },
+  "gram func declare -ux number expression": {
+   "script": "927066fd2c40b668",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -xu v=\"3+4\"\ndeclare -xu v=\"NEXT\"\n"
+   }
+  },
+  "gram func declare -x assoc compound": {
+   "script": "1f4e571263b82ba1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -ax v=([0]=\"v\")\ndeclare -ax v=([0]=\"Next\")\n"
+   }
+  },
+  "gram func declare -x compound": {
+   "script": "dc2496ef4a9363b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -ax v=([0]=\"1\" [1]=\"2\")\ndeclare -ax v=([0]=\"Next\" [1]=\"2\")\n"
+   }
+  },
+  "gram func declare -x none": {
+   "script": "806d70dfd7fd45c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -x v\ndeclare -x v=\"Next\"\n"
+   }
+  },
+  "gram func declare -x text": {
+   "script": "8a023c5b69724721",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\ndeclare -x v=\"MiXed\"\ndeclare -x v=\"Next\"\n"
+   }
+  },
+  "gram func declare declare += on array": {
+   "script": "75d457bd7005125f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n"
+   }
+  },
+  "gram func declare declare +x": {
+   "script": "1e4932c0ca658f26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- e=\"1\"\n"
+   }
+  },
+  "gram func declare declare -g at top level": {
+   "script": "4be5217fe8ac61a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram func declare declare -l -u together": {
+   "script": "2dfb34d3b9630410",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "MiX\n"
+   }
+  },
+  "gram func declare declare -p after unset element": {
+   "script": "0c75638d06b3ab4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([0]=\"1\" [2]=\"3\")\n"
+   }
+  },
+  "gram func declare declare -p declared without value": {
+   "script": "90c2d0c8c87c81f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- d\ndeclare -a e\n"
+   }
+  },
+  "gram func declare declare -p of several kinds": {
+   "script": "393dc96e5e9e3a0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- a=\"1\"\ndeclare -a b=([0]=\"x\" [1]=\"y z\")\ndeclare -A c=([k]=\"v w\" )\ndeclare -i d=\"3\"\n"
+   }
+  },
+  "gram func declare declare -p quoting": {
+   "script": "3c758bc71621c442",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- v=$'it\\'s \"q\" $x \\\\ \\t'\n"
+   }
+  },
+  "gram func declare declare -p unset": {
+   "script": "3db48ec4badea68d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: nosuch: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram func declare declare -r then assignment": {
+   "script": "39272879683bd5ed",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: r: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func declare declare -t": {
+   "script": "b427d4258e9bc443",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -t tv=\"1\"\n"
+   }
+  },
+  "gram func declare declare -u then -l": {
+   "script": "7c7cf2d2b4603121",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xyz\n"
+   }
+  },
+  "gram func declare declare -x reaches child": {
+   "script": "2b54fc247c7c09f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram func declare declare assignment splitting": {
+   "script": "b9b4eb91295846a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a arr=([0]=\"1\" [1]=\"2\")\n"
+   }
+  },
+  "gram func declare declare conflicting options": {
+   "script": "2e6ad24a0f478cf7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: -a: invalid option\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram func declare declare in a subshell": {
+   "script": "a5497ab90aeb3cb7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram func declare declare invalid option": {
+   "script": "cf59bc419da27547",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: declare: -Z: invalid option\ndeclare: usage: declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram func declare declare name with subscript and value": {
+   "script": "268d8afa9cb749c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -a a=([2]=\"x\")\n"
+   }
+  },
+  "gram func declare declare with += on integer": {
+   "script": "ca767d0181b7e08b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "gram func declare export -n": {
+   "script": "6cb4de32a2a159aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram func declare export an invalid name": {
+   "script": "f23aefa3b4ab60e7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: export: `a-b=1': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram func declare export listing": {
+   "script": "3439887d23dfcce0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -x ex1=\"v\"\n"
+   }
+  },
+  "gram func declare export without value": {
+   "script": "7b04c62e6d66f179",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -x ev\n[unset]\n"
+   }
+  },
+  "gram func declare in a function is local": {
+   "script": "bc7e246249e861f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram func declare readonly array": {
+   "script": "26cf7514c6d3bf1d",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ra: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func declare readonly listing": {
+   "script": "14ca83ac527bb5ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -r r1=\"1\"\n"
+   }
+  },
+  "gram func declare readonly unset": {
+   "script": "55c50f9528fb988d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: unset: r: cannot unset: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram func declare readonly without value": {
+   "script": "989a285ae317008e",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: rv: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func declare typeset -p": {
+   "script": "75bcff2bf9ff6a00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -i t=\"4\"\n"
+   }
+  },
+  "gram func declare unset -v": {
+   "script": "c94096589ae87e33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram func declare unset IFS default": {
+   "script": "9976dd828dfc3b82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram func declare unset PATH is fine": {
+   "script": "67642ad384bc1094",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "still\nstatus=0\n"
+   }
+  },
+  "gram func declare unset a special parameter": {
+   "script": "596d8b93762f95d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=0\n"
+   }
+  },
+  "gram func declare unset an invalid name": {
+   "script": "d3dbfe91fa826906",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram func declare unset several": {
+   "script": "5742f843d5e5b042",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[uu] 0\n"
+   }
+  },
+  "gram func define function keyword parens with brace group": {
+   "script": "a3bc00ed577a8355",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body a\nstatus=0\nbody \nstatus=0\n"
+   }
+  },
+  "gram func define function keyword parens with conditional": {
+   "script": "971fefb21a458dbc",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "gram func define function keyword parens with if": {
+   "script": "0c4e4fc10249c6be",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\nstatus=0\nno\nstatus=0\n"
+   }
+  },
+  "gram func define function keyword parens with subshell": {
+   "script": "9f8ad3f343750c67",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub a\nstatus=0\nsub \nstatus=0\n"
+   }
+  },
+  "gram func define function keyword with brace group": {
+   "script": "0e345f9bd722714e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body a\nstatus=0\nbody \nstatus=0\n"
+   }
+  },
+  "gram func define function keyword with conditional": {
+   "script": "2d26e7754d5297b8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "gram func define function keyword with if": {
+   "script": "2dfcf6f4367c012d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\nstatus=0\nno\nstatus=0\n"
+   }
+  },
+  "gram func define function keyword with subshell": {
+   "script": "4a013ee296dcc9cb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub a\nstatus=0\nsub \nstatus=0\n"
+   }
+  },
+  "gram func define parens with arith for": {
+   "script": "631fbd4c81e292a2",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\nstatus=0\n0\n1\nstatus=0\n"
+   }
+  },
+  "gram func define parens with arithmetic": {
+   "script": "cd144df205f893de",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "gram func define parens with brace group": {
+   "script": "0525674a36da9177",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body a\nstatus=0\nbody \nstatus=0\n"
+   }
+  },
+  "gram func define parens with case": {
+   "script": "7288bdab65eb0060",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A\nstatus=0\nother\nstatus=0\n"
+   }
+  },
+  "gram func define parens with conditional": {
+   "script": "9c8140fd0146469d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "gram func define parens with for": {
+   "script": "a971bacaffa35005",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a>\nstatus=0\nstatus=0\n"
+   }
+  },
+  "gram func define parens with group with redirect": {
+   "script": "760a7dac0b3cd065",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=0\nredirected\n"
+   }
+  },
+  "gram func define parens with if": {
+   "script": "3f503d524c2525a0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\nstatus=0\nno\nstatus=0\n"
+   }
+  },
+  "gram func define parens with multi-line group": {
+   "script": "b42e1009e6a3eedc",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nstatus=0\none\ntwo\nstatus=0\n"
+   }
+  },
+  "gram func define parens with select": {
+   "script": "fe02c8e43d366f8c",
+   "status": 1,
+   "stderr": {
+    "text": "1) x\n#? 1) x\n#? "
+   },
+   "stdout": {
+    "text": "x\nstatus=0\nx\nstatus=0\n"
+   }
+  },
+  "gram func define parens with subshell": {
+   "script": "ce953ead1b9446d6",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub a\nstatus=0\nsub \nstatus=0\n"
+   }
+  },
+  "gram func define parens with while": {
+   "script": "5085148b3fa675f8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nstatus=0\nstatus=0\n"
+   }
+  },
+  "gram func define spaced parens with brace group": {
+   "script": "4adac62dce767192",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body a\nstatus=0\nbody \nstatus=0\n"
+   }
+  },
+  "gram func define spaced parens with conditional": {
+   "script": "b1f75247abc72c18",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "gram func define spaced parens with if": {
+   "script": "0e2003801369a7f7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\nstatus=0\nno\nstatus=0\n"
+   }
+  },
+  "gram func define spaced parens with subshell": {
+   "script": "2b015255bddc7143",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub a\nstatus=0\nsub \nstatus=0\n"
+   }
+  },
+  "gram func dollar at and star in a function": {
+   "script": "b33ccb2747fe3435",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1-2-3 1 2 3\n"
+   }
+  },
+  "gram func dollar zero in a function": {
+   "script": "a8bd86743f45b9fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bash\n"
+   }
+  },
+  "gram func dynamic scope reaches callees": {
+   "script": "e2ab31dbac7aa5ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\ng\n"
+   }
+  },
+  "gram func export -f listing": {
+   "script": "9a56236bf4770327",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -fx f\n"
+   }
+  },
+  "gram func export -f reaches bash -c": {
+   "script": "1ab99a057f8d3669",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exported\n"
+   }
+  },
+  "gram func function arguments with spaces": {
+   "script": "2b4eb806db2f1783",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n<a b>\n<>\n<c>\n"
+   }
+  },
+  "gram func function call with assignment prefix": {
+   "script": "7596ced08b2f967d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "temp\nglobal\n"
+   }
+  },
+  "gram func function defined in a condition": {
+   "script": "99d7fd056e5613c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cond\n"
+   }
+  },
+  "gram func function defined in a loop": {
+   "script": "f23802774fb7072d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "gram func function in a pipeline": {
+   "script": "33af17fbbe1f8aa4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<piped>\n"
+   }
+  },
+  "gram func function name numeric": {
+   "script": "dda56df134da2275",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "num\n"
+   }
+  },
+  "gram func function name with slash": {
+   "script": "d415d7cbc8411172",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram func function named like a builtin": {
+   "script": "8d785160775acfde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[hi]\nplain\n"
+   }
+  },
+  "gram func function named like a keyword": {
+   "script": "f0b0d42f38e55ae0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kw\nstatus=0\n"
+   }
+  },
+  "gram func function output captured": {
+   "script": "5680c0c72f8eb791",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cap\n"
+   }
+  },
+  "gram func function redirect each call": {
+   "script": "7f87cbcc3a8b1728",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "call\ncall\n"
+   }
+  },
+  "gram func function redirect with expansion": {
+   "script": "b62110267b4b6dc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f1 /tmp/f2\n"
+   }
+  },
+  "gram func function status is last command": {
+   "script": "1572812581283d98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram func function with a here-string": {
+   "script": "6a1e6bfd0e19c988",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hs\n"
+   }
+  },
+  "gram func function with dashes and dots": {
+   "script": "aa397fd5c0957260",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "odd\n"
+   }
+  },
+  "gram func function with redirect prints it": {
+   "script": "5201196ae7e6cc26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo r\n} > /tmp/fo\n"
+   }
+  },
+  "gram func getopts ':a' -": {
+   "script": "2feaf3c6d17fdc7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end 0 OPTIND=1 rest=-\n"
+   }
+  },
+  "gram func getopts ':a' -a -- -b x": {
+   "script": "166464d183f91ffd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=2\nend 0 OPTIND=3 rest=-a -- -b x\n"
+   }
+  },
+  "gram func getopts ':a' -a file -c": {
+   "script": "bd6f3c4596448c0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-a file -c\n"
+   }
+  },
+  "gram func getopts ':a' -a-b": {
+   "script": "21b7047ccd5f8979",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=1\no=? OPTARG=- OPTIND=1\no=? OPTARG=b OPTIND=2\nend 0 OPTIND=2 rest=-a-b\n"
+   }
+  },
+  "gram func getopts ':a' -aaa": {
+   "script": "e1f2dbbb2787f771",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=1\no=a OPTARG=unset OPTIND=1\no=a OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-aaa\n"
+   }
+  },
+  "gram func getopts ':a' -ab val": {
+   "script": "86099fe6453d8ef2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=1\no=? OPTARG=b OPTIND=2\nend 0 OPTIND=2 rest=-ab val\n"
+   }
+  },
+  "gram func getopts ':ab:c' -": {
+   "script": "ad27f5c6afe7fdd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end 0 OPTIND=1 rest=-\n"
+   }
+  },
+  "gram func getopts ':ab:c' -a -- -b x": {
+   "script": "68b080f481876239",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=2\nend 0 OPTIND=3 rest=-a -- -b x\n"
+   }
+  },
+  "gram func getopts ':ab:c' -a file -c": {
+   "script": "d796326e379e5590",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-a file -c\n"
+   }
+  },
+  "gram func getopts ':ab:c' -a-b": {
+   "script": "94080248143fbac9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=1\no=? OPTARG=- OPTIND=1\no=: OPTARG=b OPTIND=2\nend 0 OPTIND=2 rest=-a-b\n"
+   }
+  },
+  "gram func getopts ':ab:c' -aaa": {
+   "script": "6cb8c916fefc5a07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=1\no=a OPTARG=unset OPTIND=1\no=a OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-aaa\n"
+   }
+  },
+  "gram func getopts ':ab:c' -ab val": {
+   "script": "bba9748dbe5a468b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=a OPTARG=unset OPTIND=1\no=b OPTARG=val OPTIND=3\nend 0 OPTIND=3 rest=-ab val\n"
+   }
+  },
+  "gram func getopts 'a' --": {
+   "script": "1b03d6306a261338",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end 0 OPTIND=2 rest=--\n"
+   }
+  },
+  "gram func getopts 'a' -b": {
+   "script": "40fbfd0395f9ed6c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- b\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-b\n"
+   }
+  },
+  "gram func getopts 'a' -b -a": {
+   "script": "fcf9126b9aad2196",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- b\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\no=a OPTARG=unset OPTIND=3\nend 0 OPTIND=3 rest=-b -a\n"
+   }
+  },
+  "gram func getopts 'a' -c -a": {
+   "script": "791de598f1185e49",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- c\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\no=a OPTARG=unset OPTIND=3\nend 0 OPTIND=3 rest=-c -a\n"
+   }
+  },
+  "gram func getopts 'a' -y": {
+   "script": "85b882700e1f51e3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- y\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-y\n"
+   }
+  },
+  "gram func getopts 'a' -z": {
+   "script": "b2a91d8c8a91cd88",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- z\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-z\n"
+   }
+  },
+  "gram func getopts 'ab::' --": {
+   "script": "c1498f76eeeec88f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end 0 OPTIND=2 rest=--\n"
+   }
+  },
+  "gram func getopts 'ab::' -b": {
+   "script": "bb8ec6e26dc836dd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: option requires an argument -- b\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-b\n"
+   }
+  },
+  "gram func getopts 'ab::' -b -a": {
+   "script": "63f90e27ee5306b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=b OPTARG=-a OPTIND=3\nend 0 OPTIND=3 rest=-b -a\n"
+   }
+  },
+  "gram func getopts 'ab::' -c -a": {
+   "script": "4ad05d03e94a7604",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- c\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\no=a OPTARG=unset OPTIND=3\nend 0 OPTIND=3 rest=-c -a\n"
+   }
+  },
+  "gram func getopts 'ab::' -y": {
+   "script": "1ee16bf47e7b1b10",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- y\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-y\n"
+   }
+  },
+  "gram func getopts 'ab::' -z": {
+   "script": "572aaf3495fd8bca",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- z\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-z\n"
+   }
+  },
+  "gram func getopts 'ab:c' --": {
+   "script": "5c52795e6ba66d87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end 0 OPTIND=2 rest=--\n"
+   }
+  },
+  "gram func getopts 'ab:c' -b": {
+   "script": "e1784e6d8223f115",
+   "status": 0,
+   "stderr": {
+    "text": "bash: option requires an argument -- b\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-b\n"
+   }
+  },
+  "gram func getopts 'ab:c' -b -a": {
+   "script": "d2a1560297ff08b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=b OPTARG=-a OPTIND=3\nend 0 OPTIND=3 rest=-b -a\n"
+   }
+  },
+  "gram func getopts 'ab:c' -c -a": {
+   "script": "2d8a68c408caa206",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "o=c OPTARG=unset OPTIND=2\no=a OPTARG=unset OPTIND=3\nend 0 OPTIND=3 rest=-c -a\n"
+   }
+  },
+  "gram func getopts 'ab:c' -y": {
+   "script": "9ea2da1a1236dcfd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- y\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-y\n"
+   }
+  },
+  "gram func getopts 'ab:c' -z": {
+   "script": "83f7edd468e79d1f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- z\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-z\n"
+   }
+  },
+  "gram func getopts 'x:y:' --": {
+   "script": "b4a12ceca138e13c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end 0 OPTIND=2 rest=--\n"
+   }
+  },
+  "gram func getopts 'x:y:' -b": {
+   "script": "a5295328b59d531d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- b\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-b\n"
+   }
+  },
+  "gram func getopts 'x:y:' -b -a": {
+   "script": "a063f04ca2047b95",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- b\nbash: illegal option -- a\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\no=? OPTARG=unset OPTIND=3\nend 0 OPTIND=3 rest=-b -a\n"
+   }
+  },
+  "gram func getopts 'x:y:' -c -a": {
+   "script": "fb2d30d3a20f6cf4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- c\nbash: illegal option -- a\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\no=? OPTARG=unset OPTIND=3\nend 0 OPTIND=3 rest=-c -a\n"
+   }
+  },
+  "gram func getopts 'x:y:' -y": {
+   "script": "55485d13f64b0ae4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: option requires an argument -- y\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-y\n"
+   }
+  },
+  "gram func getopts 'x:y:' -z": {
+   "script": "b48b5d8010bc772c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- z\n"
+   },
+   "stdout": {
+    "text": "o=? OPTARG=unset OPTIND=2\nend 0 OPTIND=2 rest=-z\n"
+   }
+  },
+  "gram func getopts OPTERR zero": {
+   "script": "b5c5a8d605581d1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "? unset\n"
+   }
+  },
+  "gram func getopts colon option": {
+   "script": "a5bdaba707463b86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "? :\n"
+   }
+  },
+  "gram func getopts digits as options": {
+   "script": "9e2f1db497e52658",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "gram func getopts explicit arguments": {
+   "script": "1fc6a02d6d08f2a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a one\n3\n"
+   }
+  },
+  "gram func getopts in a function": {
+   "script": "778bcb7b4a059bc7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "flag v\nflag v\n"
+   }
+  },
+  "gram func getopts invalid variable name": {
+   "script": "942fc4a4361f89fb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: getopts: `1bad': not a valid identifier\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram func getopts no spec": {
+   "script": "3536eaf148cbf192",
+   "status": 0,
+   "stderr": {
+    "text": "getopts: usage: getopts optstring name [arg ...]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram func getopts question mark option": {
+   "script": "72aecd9e5f56f68e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: illegal option -- ?\n"
+   },
+   "stdout": {
+    "text": "? unset\n"
+   }
+  },
+  "gram func getopts reset OPTIND": {
+   "script": "57fc06b6f7961173",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a 2\na 2\n"
+   }
+  },
+  "gram func local -": {
+   "script": "b2227738ce0cc4fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner\nouter\nstill-u\n"
+   }
+  },
+  "gram func local -a and -A": {
+   "script": "37be6a46befa27c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 v\n[]\n"
+   }
+  },
+  "gram func local -i": {
+   "script": "57262214e3fb6975",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "gram func local -n": {
+   "script": "c9d45e158cdea198",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "set-by-ref\n"
+   }
+  },
+  "gram func local -r": {
+   "script": "bc5239bdd66aeecf",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: c: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func local -x reaches children": {
+   "script": "8f9424b5dac7620e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "child\nunset\n"
+   }
+  },
+  "gram func local assignment splitting": {
+   "script": "3d9ebceae63ad49a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "gram func local inherits with -I": {
+   "script": "216b22222a77ef82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[g]\n"
+   }
+  },
+  "gram func local of an array": {
+   "script": "b319461c25ce6560",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n1 2\n"
+   }
+  },
+  "gram func local shadows a global": {
+   "script": "05e1c61aa5b86646",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "l\ng\n"
+   }
+  },
+  "gram func local twice": {
+   "script": "6f634838675d760b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram func local with array syntax": {
+   "script": "4f31522e622250ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- arr=\"(1 2)\"\n"
+   }
+  },
+  "gram func local with command substitution status": {
+   "script": "7d074899f8554fa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n"
+   }
+  },
+  "gram func local without value": {
+   "script": "818d6891810fd3f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\ng\n"
+   }
+  },
+  "gram func positional parameters are per call": {
+   "script": "aec0963f60a19364",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 in\nouter\n"
+   }
+  },
+  "gram func print body 10: echo bg & wait": {
+   "script": "c76c2b56ec96af03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo bg & wait\n}\n"
+   }
+  },
+  "gram func print body 11: if true; then echo t; elif false; then echo e; els": {
+   "script": "846db37df37da081",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    if true; then\n        echo t;\n    else\n        if false; then\n            echo e;\n        else\n            echo f;\n        fi;\n    fi\n}\n"
+   }
+  },
+  "gram func print body 12: while false; do :; done": {
+   "script": "7fc7a7c5edc42bfa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    while false; do\n        :;\n    done\n}\n"
+   }
+  },
+  "gram func print body 13: until true; do :; done": {
+   "script": "52a9ad4a92dce1f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    until true; do\n        :;\n    done\n}\n"
+   }
+  },
+  "gram func print body 14: for i in 1 2; do echo $i; done": {
+   "script": "ec2cad2e16a2f3a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    for i in 1 2;\n    do\n        echo $i;\n    done\n}\n"
+   }
+  },
+  "gram func print body 15: for ((i=0; i<1; i++)); do :; done": {
+   "script": "0434519a88369af2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    for ((i=0; i<1; i++))\n    do\n        :;\n    done\n}\n"
+   }
+  },
+  "gram func print body 16: case $1 in a|b) echo ab ;; c) echo c ;& d) echo d ": {
+   "script": "c2046e84b66a3552",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    case $1 in \n        a | b)\n            echo ab\n        ;;\n        c)\n            echo c\n        ;&\n        d)\n            echo d\n        ;;&\n        *)\n\n        ;;\n    esac\n}\n"
+   }
+  },
+  "gram func print body 17: [[ -n $1 && $1 == x* ]]": {
+   "script": "ee48018e454e88ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    [[ -n $1 && $1 == x* ]]\n}\n"
+   }
+  },
+  "gram func print body 18: (( x = 1 + 2 ))": {
+   "script": "c2ae77c11482b1c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    (( x = 1 + 2 ))\n}\n"
+   }
+  },
+  "gram func print body 19: echo > /tmp/o 2>&1 < /dev/null": {
+   "script": "3e3781f31c6b315d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo > /tmp/o 2>&1 < /dev/null\n}\n"
+   }
+  },
+  "gram func print body 1: echo a; echo b": {
+   "script": "1c2b5038d6214f54",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo a;\n    echo b\n}\n"
+   }
+  },
+  "gram func print body 20: cat <<EOF": {
+   "script": "1177a6b4d7c56bc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    cat <<EOF\nhere $1\nEOF\n\n}\n"
+   }
+  },
+  "gram func print body 21: cat <<'EOF'": {
+   "script": "80df790a49c31f8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    cat <<'EOF'\nraw $1\nEOF\n\n}\n"
+   }
+  },
+  "gram func print body 22: cat <<< \"str\"": {
+   "script": "e8ac4721ef132d4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    cat <<< \"str\"\n}\n"
+   }
+  },
+  "gram func print body 23: exec 3>&-": {
+   "script": "fc5489473d89a3c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    exec 3>&-\n}\n"
+   }
+  },
+  "gram func print body 24: echo $(echo sub) `echo back`": {
+   "script": "20f96a24ba678da3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo $(echo sub) `echo back`\n}\n"
+   }
+  },
+  "gram func print body 25: echo $((1+2))": {
+   "script": "29a82abf140b0c10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo $((1+2))\n}\n"
+   }
+  },
+  "gram func print body 26: local l=1; declare -g g=2": {
+   "script": "abdde3b20a7f987a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    local l=1;\n    declare -g g=2\n}\n"
+   }
+  },
+  "gram func print body 27: a=(1 2 3); a[4]=x": {
+   "script": "137006e2c78917ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    a=(1 2 3);\n    a[4]=x\n}\n"
+   }
+  },
+  "gram func print body 28: declare -A m=([k]=v)": {
+   "script": "d6082c6fc407a19b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    declare -A m=([k]=v)\n}\n"
+   }
+  },
+  "gram func print body 29: echo ${v:-d} ${#v} ${v//a/b}": {
+   "script": "4aad90140683ff46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo ${v:-d} ${#v} ${v//a/b}\n}\n"
+   }
+  },
+  "gram func print body 2: a=1 b=2": {
+   "script": "fd747bf3874454ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    a=1 b=2\n}\n"
+   }
+  },
+  "gram func print body 30: echo {a,b} ~ *": {
+   "script": "b39a393f728cba1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo {a,b} ~ *\n}\n"
+   }
+  },
+  "gram func print body 31: time true": {
+   "script": "ecaece54d3a1352d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    time true\n}\n"
+   }
+  },
+  "gram func print body 32: coproc_free=1": {
+   "script": "4f78885459b84fff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    coproc_free=1\n}\n"
+   }
+  },
+  "gram func print body 33: echo 'it'\\''s'": {
+   "script": "144c268a66df7d75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo 'it'\\''s'\n}\n"
+   }
+  },
+  "gram func print body 34: echo \"a\\\"b\"": {
+   "script": "16e899def32d2d39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo \"a\\\"b\"\n}\n"
+   }
+  },
+  "gram func print body 35: echo a # comment": {
+   "script": "be5b1f6b699cc08b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo a\n}\n"
+   }
+  },
+  "gram func print body 36: f2() { echo nested; }": {
+   "script": "a8b82aca51e1d3f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    function f2 () \n    { \n        echo nested\n    }\n}\n"
+   }
+  },
+  "gram func print body 37: select s in a; do break; done": {
+   "script": "ef0308ae7405d355",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    select s in a;\n    do\n        break;\n    done\n}\n"
+   }
+  },
+  "gram func print body 38: echo <(true) >(true)": {
+   "script": "a330c8d2b2feb819",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo <(true) >(true)\n}\n"
+   }
+  },
+  "gram func print body 39: { echo x; } | { cat; }": {
+   "script": "5aac0354b955c554",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    { \n        echo x\n    } | { \n        cat\n    }\n}\n"
+   }
+  },
+  "gram func print body 3: x=1 echo y": {
+   "script": "8098b58e724d5706",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    x=1 echo y\n}\n"
+   }
+  },
+  "gram func print body 40: echo \\$ \\\\": {
+   "script": "fe3c03b4f6c4ee83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo \\$ \\\\\n}\n"
+   }
+  },
+  "gram func print body 41: return 3": {
+   "script": "a2d6f1b4b9e4002c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    return 3\n}\n"
+   }
+  },
+  "gram func print body 42: echo a; # trailing comment": {
+   "script": "6d6f26cd96f7959e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo a;\n    echo b\n}\n"
+   }
+  },
+  "gram func print body 43: [[ a =~ ^a(.)$ ]]": {
+   "script": "d0ffaf4286b10756",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    [[ a =~ ^a(.)$ ]]\n}\n"
+   }
+  },
+  "gram func print body 44: test -n x && [ -z '' ]": {
+   "script": "1330150218e8e88d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    test -n x && [ -z '' ]\n}\n"
+   }
+  },
+  "gram func print body 45: echo $@ $* $# $? $$ $!": {
+   "script": "29dd812bdce92aa0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo $@ $* $# $? $$ $!\n}\n"
+   }
+  },
+  "gram func print body 46: printf -v out '%s' x": {
+   "script": "e08c3309f0409c20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    printf -v out '%s' x\n}\n"
+   }
+  },
+  "gram func print body 47: trap 'echo t' EXIT": {
+   "script": "8bc1890bcdd9b081",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    trap 'echo t' EXIT\n}\n"
+   }
+  },
+  "gram func print body 4: echo \"$1\" '$2' $'\\t'": {
+   "script": "aaf31f3690af979c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo \"$1\" '$2' '\t'\n}\n"
+   }
+  },
+  "gram func print body 5: echo a | cat | cat": {
+   "script": "e1778b5939a4f36e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo a | cat | cat\n}\n"
+   }
+  },
+  "gram func print body 6: echo a && echo b || echo c": {
+   "script": "d8881c79a8019cb4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo a && echo b || echo c\n}\n"
+   }
+  },
+  "gram func print body 7: ! true": {
+   "script": "4c7597f93d153a76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    ! true\n}\n"
+   }
+  },
+  "gram func print body 8: ( echo sub )": {
+   "script": "9f945cd09c175b83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    ( echo sub )\n}\n"
+   }
+  },
+  "gram func print body 9: { echo grp; }": {
+   "script": "e6a51463e08ce8ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    { \n        echo grp\n    }\n}\n"
+   }
+  },
+  "gram func print function keyword parens with brace group": {
+   "script": "42d1204c038ad9ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo \"body $1\"\n}\n"
+   }
+  },
+  "gram func print function keyword parens with conditional": {
+   "script": "0e94a347da6684e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    [[ -n $1 ]]\n}\n"
+   }
+  },
+  "gram func print function keyword parens with if": {
+   "script": "0a1945b0d2eb6c06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    if [[ -n $1 ]]; then\n        echo yes;\n    else\n        echo no;\n    fi\n}\n"
+   }
+  },
+  "gram func print function keyword parens with subshell": {
+   "script": "4bdda34a6d549e15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    ( echo \"sub $1\" )\n}\n"
+   }
+  },
+  "gram func print function keyword with brace group": {
+   "script": "3809319846d23977",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo \"body $1\"\n}\n"
+   }
+  },
+  "gram func print function keyword with conditional": {
+   "script": "c4f885d17322bf92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    [[ -n $1 ]]\n}\n"
+   }
+  },
+  "gram func print function keyword with if": {
+   "script": "bb57635e61c808af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    if [[ -n $1 ]]; then\n        echo yes;\n    else\n        echo no;\n    fi\n}\n"
+   }
+  },
+  "gram func print function keyword with subshell": {
+   "script": "e7cadd9993f065fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    ( echo \"sub $1\" )\n}\n"
+   }
+  },
+  "gram func print parens with arith for": {
+   "script": "7eec3a2b7abe3834",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    for ((i=0; i<2; i++))\n    do\n        echo $i;\n    done\n}\n"
+   }
+  },
+  "gram func print parens with arithmetic": {
+   "script": "c66f03efeef1da91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    (( $# > 0 ))\n}\n"
+   }
+  },
+  "gram func print parens with brace group": {
+   "script": "b02824cfc5867405",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo \"body $1\"\n}\n"
+   }
+  },
+  "gram func print parens with case": {
+   "script": "4ec50f6667873ed7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    case $1 in \n        a)\n            echo A\n        ;;\n        *)\n            echo other\n        ;;\n    esac\n}\n"
+   }
+  },
+  "gram func print parens with conditional": {
+   "script": "ce225dd23bf245a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    [[ -n $1 ]]\n}\n"
+   }
+  },
+  "gram func print parens with for": {
+   "script": "736414257fc2ffd0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    for a in \"$@\";\n    do\n        echo \"<$a>\";\n    done\n}\n"
+   }
+  },
+  "gram func print parens with group with redirect": {
+   "script": "a83bed5fb5e68b68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo redirected\n} > /tmp/fr\n"
+   }
+  },
+  "gram func print parens with if": {
+   "script": "c6ee10e92ee4bcf9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    if [[ -n $1 ]]; then\n        echo yes;\n    else\n        echo no;\n    fi\n}\n"
+   }
+  },
+  "gram func print parens with multi-line group": {
+   "script": "386b4fa743933894",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo one;\n    echo two\n}\n"
+   }
+  },
+  "gram func print parens with select": {
+   "script": "b2eea6f4f7014a0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    select s in x;\n    do\n        echo \"$s\";\n        break;\n    done <<< 1\n}\n"
+   }
+  },
+  "gram func print parens with subshell": {
+   "script": "bc224228da228b3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    ( echo \"sub $1\" )\n}\n"
+   }
+  },
+  "gram func print parens with while": {
+   "script": "7f2a54524de544a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    while (( $# )); do\n        echo \"$1\";\n        shift;\n    done\n}\n"
+   }
+  },
+  "gram func print spaced parens with brace group": {
+   "script": "cc8fba4117c86187",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    echo \"body $1\"\n}\n"
+   }
+  },
+  "gram func print spaced parens with conditional": {
+   "script": "408b505e15df602d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    [[ -n $1 ]]\n}\n"
+   }
+  },
+  "gram func print spaced parens with if": {
+   "script": "7f7dc1d9ef676717",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    if [[ -n $1 ]]; then\n        echo yes;\n    else\n        echo no;\n    fi\n}\n"
+   }
+  },
+  "gram func print spaced parens with subshell": {
+   "script": "db2d46c81a9715e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    ( echo \"sub $1\" )\n}\n"
+   }
+  },
+  "gram func printed function reloads": {
+   "script": "fae04b50fada3353",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[re]\n"
+   }
+  },
+  "gram func readonly function": {
+   "script": "f052c5ecf58a111f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: readonly function\n"
+   },
+   "stdout": {
+    "text": "status=1\nro\n"
+   }
+  },
+  "gram func recursion depth 200": {
+   "script": "c2421637101bd18b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bottom\n"
+   }
+  },
+  "gram func recursion factorial": {
+   "script": "d7d62517f166719d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3628800\n"
+   }
+  },
+  "gram func recursion with locals": {
+   "script": "1eb48f783e51f46c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "610\n"
+   }
+  },
+  "gram func recursive definition inside": {
+   "script": "41f100338486559c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\ninner\n"
+   }
+  },
+  "gram func redefinition": {
+   "script": "36d0687c73622c41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram func return 256": {
+   "script": "f2439ab2c1568ef5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram func return from a nested function": {
+   "script": "b29971d4689e0867",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "g=2\n1\n"
+   }
+  },
+  "gram func return in a loop": {
+   "script": "59f185e6689a5695",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram func return in a pipeline": {
+   "script": "9371fdf329b1d652",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after 5\n"
+   }
+  },
+  "gram func return in a subshell of a function": {
+   "script": "a11d8a8c90bb41a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after 4\n"
+   }
+  },
+  "gram func return negative": {
+   "script": "c564bee735dd2f69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "255\n"
+   }
+  },
+  "gram func return non-numeric": {
+   "script": "d69cebc58b27e450",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: abc: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram func return too many arguments": {
+   "script": "c30fec3b19b2b681",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: return: too many arguments\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram func return value": {
+   "script": "7db691eba0581270",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "gram func return without value": {
+   "script": "11532d19f800cd45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram func shift in a function": {
+   "script": "0f337e6cd3766e7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nstatus=1\n"
+   }
+  },
+  "gram func test -L option name": {
+   "script": "8369af56defa8503",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -R option name": {
+   "script": "532d7774ccdc2728",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -S option name": {
+   "script": "c0b292a7ad03f3da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -a option name": {
+   "script": "975f91bb22a7785e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -b option name": {
+   "script": "1d2419f74c7e2c66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -c option name": {
+   "script": "710f361070d51af1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -d option name": {
+   "script": "b7d1e97a37a70a61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -e array elem": {
+   "script": "69fc55066a90a3c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -e devnull": {
+   "script": "a0fd907216672203",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -e dir": {
+   "script": "ee797d600a7ad4dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -e empty": {
+   "script": "b7fd511f3b7a84f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -e empty file": {
+   "script": "1aae6635a4228a2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -e fd": {
+   "script": "9e443b6199046c18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -e file": {
+   "script": "38d2d2dcda19e637",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -e link": {
+   "script": "6cc2e32cd4f23965",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -e missing": {
+   "script": "db1c594b7e09a699",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -e option name": {
+   "script": "8aee4e67a0411f58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -e set var": {
+   "script": "7ed8ae8023b483f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -e word": {
+   "script": "67cb88232df97c90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -f option name": {
+   "script": "e5ea19c6feda8747",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -h option name": {
+   "script": "133966088cdfe774",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -n array elem": {
+   "script": "e5fc347390705607",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n devnull": {
+   "script": "627612a37fa2b072",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n dir": {
+   "script": "f6c279608c747ef8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n empty": {
+   "script": "60a3a0b6918afa25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -n empty file": {
+   "script": "d737806ee40fdd88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n fd": {
+   "script": "efd5376ff7ba58b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n file": {
+   "script": "4147b4dd9ab9870f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n link": {
+   "script": "882556dae2a21966",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n missing": {
+   "script": "0d7391e840e6d588",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n option name": {
+   "script": "17773fce5ea61a85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n set var": {
+   "script": "0554d24e7498e81e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -n word": {
+   "script": "1519b49a19baa311",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\ncond=0\n"
+   }
+  },
+  "gram func test -o option name": {
+   "script": "1e08e76ddb7813a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -p option name": {
+   "script": "052399f1cb1e11f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -s option name": {
+   "script": "f7588c78f173e24e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -t option name": {
+   "script": "2f2e9a59e1f6dc58",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: errexit: integer expected\nbash: line 1: [: errexit: integer expected\nbash: line 1: [[: errexit: integer expected\n"
+   },
+   "stdout": {
+    "text": "test=2\nbracket=2\ncond=2\n"
+   }
+  },
+  "gram func test -v option name": {
+   "script": "ae4851977fda30f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test -z option name": {
+   "script": "e3694b0a8c17aa9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary != equal words": {
+   "script": "83e5d0de0d1f325b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary != numbers": {
+   "script": "59381b529de6754d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=0\ncond=0\n"
+   }
+  },
+  "gram func test binary -ef equal words": {
+   "script": "40b3678d533fb9a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -ef non-numeric": {
+   "script": "00f20b14e8dfd871",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -ef numbers": {
+   "script": "d08366713e6201b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -eq equal words": {
+   "script": "041510c3e1d1fafc",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: abc: integer expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=0\n"
+   }
+  },
+  "gram func test binary -eq non-numeric": {
+   "script": "b2050dea920a2d4e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: a: integer expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary -eq numbers": {
+   "script": "9762b0b5fb58552a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -ge equal words": {
+   "script": "bbf550a771e02965",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: abc: integer expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=0\n"
+   }
+  },
+  "gram func test binary -ge numbers": {
+   "script": "b62ceebc196c25a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=0\ncond=0\n"
+   }
+  },
+  "gram func test binary -gt case": {
+   "script": "8c4372761bf96402",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: B: integer expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary -gt different words": {
+   "script": "a123230940f0a9f1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: abc: integer expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary -gt equal words": {
+   "script": "1681920d3e9c3b35",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: abc: integer expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary -gt numbers": {
+   "script": "169606e133c1700c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=0\ncond=0\n"
+   }
+  },
+  "gram func test binary -le equal words": {
+   "script": "146b8aafcfd41fa8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: abc: integer expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=0\n"
+   }
+  },
+  "gram func test binary -le glob right": {
+   "script": "688be19c8caa39d2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: abc: integer expected\nbash: line 1: [[: a*: arithmetic syntax error: operand expected (error token is \"*\")\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary -le numbers": {
+   "script": "7b05c85a0b515170",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -lt equal words": {
+   "script": "a77b887afbc29233",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: abc: integer expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary -lt files": {
+   "script": "f4c1c99e2c035607",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: /tmp/t/file: integer expected\nbash: line 1: [[: /tmp/t/file: arithmetic syntax error: operand expected (error token is \"/tmp/t/file\")\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary -lt numbers": {
+   "script": "8a2940f005ae868b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -ne equal words": {
+   "script": "b01812dd29ea32dd",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: abc: integer expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary -ne numbers": {
+   "script": "8969e3e86409a49f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=0\ncond=0\n"
+   }
+  },
+  "gram func test binary -ne spaces in number": {
+   "script": "b18c8364726cadc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -nt equal words": {
+   "script": "b995ebadf4ec7a55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -nt negative numbers": {
+   "script": "295ed40c25966408",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -nt numbers": {
+   "script": "d5d1ebc5d24638b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -ot empty left": {
+   "script": "0dd7abf346f1d97b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -ot equal words": {
+   "script": "4182b7dfba71582e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary -ot numbers": {
+   "script": "a173089cadaafd50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary < equal words": {
+   "script": "6071ecbd53b657c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary < negative numbers": {
+   "script": "49f0116fdb016ac1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary < numbers": {
+   "script": "de1f4ecb26bf8745",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=0\ncond=0\n"
+   }
+  },
+  "gram func test binary = equal words": {
+   "script": "2955673b15b5785f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=0\ncond=0\n"
+   }
+  },
+  "gram func test binary = glob right": {
+   "script": "28075925a204ce27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary = numbers": {
+   "script": "edd15e177dfb4b0e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary == case": {
+   "script": "c9a4a8e7009a739d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary == different words": {
+   "script": "52784fdd555bf0ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary == equal words": {
+   "script": "6f8a9c88455cce24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=0\ncond=0\n"
+   }
+  },
+  "gram func test binary == numbers": {
+   "script": "47170c2761d54fea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary =~ equal words": {
+   "script": "9c4e75475a923e05",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: =~: binary operator expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=0\n"
+   }
+  },
+  "gram func test binary =~ numbers": {
+   "script": "e9b417a8b16776ac",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: =~: binary operator expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary =~ spaces in number": {
+   "script": "7802b68597c7dcde",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: =~: binary operator expected\n"
+   },
+   "stdout": {
+    "text": "bracket=2\ncond=1\n"
+   }
+  },
+  "gram func test binary > empty left": {
+   "script": "b41cee4d4b3647aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary > equal words": {
+   "script": "1c524dd9d86f2642",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test binary > numbers": {
+   "script": "524a1ea56bdb0489",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bracket=1\ncond=1\n"
+   }
+  },
+  "gram func test forms -R not nameref": {
+   "script": "8dd42a27bee2e039",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\n"
+   }
+  },
+  "gram func test forms -a as unary": {
+   "script": "28c16eb1f0cc8e59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms -o option": {
+   "script": "6ae82c2ff4d707e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\n"
+   }
+  },
+  "gram func test forms -o unknown option": {
+   "script": "742ddd7765c35f8d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\n"
+   }
+  },
+  "gram func test forms -v array": {
+   "script": "02f20b6d1087db4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms -v missing element": {
+   "script": "50206a8b889fdc39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\n"
+   }
+  },
+  "gram func test forms bang": {
+   "script": "b67a761d75e860a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms bang bang": {
+   "script": "6a82887003574ac2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms bang empty": {
+   "script": "61eadfd3e2b964cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms bang word": {
+   "script": "464c6a6b06fccb01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\n"
+   }
+  },
+  "gram func test forms dash n alone": {
+   "script": "3a28f253ea80580a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms dash z alone": {
+   "script": "4c1ada0a23dfd4e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms equals as operand": {
+   "script": "0fd85fb99e6f9e8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms five args": {
+   "script": "49a62cddadbe6ed5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms four args": {
+   "script": "95bfa79159156e3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms integer error": {
+   "script": "dcc72b5c1ca5f313",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: a: integer expected\nbash: line 1: [: a: integer expected\n"
+   },
+   "stdout": {
+    "text": "test=2\nbracket=2\n"
+   }
+  },
+  "gram func test forms missing bracket": {
+   "script": "4cfa82a38d477da9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: missing `]'\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram func test forms no arguments": {
+   "script": "d37ab667d114da4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\n"
+   }
+  },
+  "gram func test forms one dash": {
+   "script": "be5f9a99cafd839b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms one empty": {
+   "script": "5f0cb6884f3919b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\n"
+   }
+  },
+  "gram func test forms one word": {
+   "script": "b7efde83472c70b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms parens": {
+   "script": "e0f46d165b904ea2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms parens with op": {
+   "script": "ae70d145366c692c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms precedence and or": {
+   "script": "1e8f5684ee8e9689",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms three words and": {
+   "script": "ac814e180c7a22b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=1\nbracket=1\n"
+   }
+  },
+  "gram func test forms three words or": {
+   "script": "8751cb6558ce572b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "test=0\nbracket=0\n"
+   }
+  },
+  "gram func test forms too many": {
+   "script": "0338d918514f139b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: too many arguments\nbash: line 1: [: too many arguments\n"
+   },
+   "stdout": {
+    "text": "test=2\nbracket=2\n"
+   }
+  },
+  "gram func test forms two words": {
+   "script": "8349c927d0b2a609",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: a: unary operator expected\nbash: line 1: [: a: unary operator expected\n"
+   },
+   "stdout": {
+    "text": "test=2\nbracket=2\n"
+   }
+  },
+  "gram func test forms unknown binary": {
+   "script": "057bc04baebd5821",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: test: -xx: binary operator expected\nbash: line 1: [: -xx: binary operator expected\n"
+   },
+   "stdout": {
+    "text": "test=2\nbracket=2\n"
+   }
+  },
+  "gram func type -t kinds": {
+   "script": "102015c689512c36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "function\nkeyword\nbuiltin\nstatus=1\n"
+   }
+  },
+  "gram func type of a function": {
+   "script": "eb2d6acaa61e4feb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f is a function\nf () \n{ \n    echo x\n}\n"
+   }
+  },
+  "gram func typeset is declare": {
+   "script": "ddb85631d8d08342",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in\n[unset]\n"
+   }
+  },
+  "gram func unset -f": {
+   "script": "d90fd510b5ff3f30",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: f: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "gram func unset caller local from callee": {
+   "script": "a122422ed3ba0c11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f sees [g]\n"
+   }
+  },
+  "gram func unset local reveals global": {
+   "script": "ab5d544341cf9769",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "gram func unset prefers variable": {
+   "script": "2770fa82af797d1a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "func\n[unset]\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

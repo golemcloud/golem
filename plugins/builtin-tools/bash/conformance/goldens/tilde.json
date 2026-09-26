@@ -1,0 +1,128 @@
+{
+ "cases": {
+  "tilde: HOME set": {
+   "script": "8f2fc35510b326c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/h/d\n/tmp/h /tmp/h/x\n/tmp/h\n/tmp/h /tmp/h/d\n"
+   }
+  },
+  "tilde: POSIX mode keeps arguments literal": {
+   "script": "4178bd54c478c0cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x=~/y\n/tmp/h/z\n"
+   }
+  },
+  "tilde: arguments that are not assignment-like stay literal": {
+   "script": "65608f4b45446da2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--prefix=~/x 1x=~ x-y=~ x=~ x=~ x=a~ x=a:~ x=~ y\n"
+   }
+  },
+  "tilde: assignment-like arguments": {
+   "script": "88e2a6b7820a100c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x=/tmp/h/y x=/tmp/h x+=/tmp/h a[1]=/tmp/h/z x=a:/tmp/h/b:/tmp/h y=x=~\n"
+   }
+  },
+  "tilde: assignment-like for, case and test words": {
+   "script": "39cf3bf2a869e134",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x=/tmp/h\ny=/tmp/h/z\ncase-matched\ndouble\nsingle\nx=/tmp/h\nx=//child\n"
+   }
+  },
+  "tilde: assignment-like redirect target": {
+   "script": "390ab090bf25953b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "tilde: cd with no HOME fails and the script continues": {
+   "script": "a17b06eb10c4d2fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 /tmp\n"
+   }
+  },
+  "tilde: empty HOME": {
+   "script": "2e47cb9059bae0c1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] [~/x]\n[/y]\n"
+   }
+  },
+  "tilde: no home directory expands to /": {
+   "script": "6bc7f2801a50f5f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/ //x ~\n//y\na:/:b\ncd=0 /\nunset\n"
+   }
+  },
+  "tilde: quoted and mid-word tildes stay literal": {
+   "script": "a0b4061c2b91636f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "~ ~ a~ ~/x\n"
+   }
+  },
+  "tilde: unknown user stays literal": {
+   "script": "ff6861ab5fee402d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "~nosuchuser ~nosuchuser/x\n"
+   }
+  },
+  "tilde: values, array elements, parameter words and here-strings": {
+   "script": "9a8e1c4b71a317c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x=~:/tmp/h\nx=~\nx=~\nx=~\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

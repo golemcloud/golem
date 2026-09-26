@@ -1,0 +1,678 @@
+{
+ "cases": {
+  "find: and binds tighter than or": {
+   "script": "855d7c14f60067c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib/mod.rs\n./src/main.rs\n"
+   }
+  },
+  "find: comma operator": {
+   "script": "5f47fd9216091717",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A ./src\nB ./docs\n"
+   }
+  },
+  "find: default start": {
+   "script": "4366b9a9ad2ad5b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src\n"
+   }
+  },
+  "find: delete": {
+   "script": "0715674b778d3ac2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./Upper.TXT\n./big.bin\n./docs/README.md\n./src/lib/mod.rs\n./src/main.rs\n"
+   }
+  },
+  "find: delete nonempty directory": {
+   "script": "340272750bfc2625",
+   "status": 0,
+   "stderr": {
+    "text": "find: cannot delete ‘./docs’: Directory not empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "find: delete with prune": {
+   "script": "63bd35c59dadde41",
+   "status": 0,
+   "stderr": {
+    "text": "find: The -delete action automatically turns on -depth, but -prune does nothing when -depth is in effect.  If you want to carry on anyway, just explicitly use the -depth option.\n"
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "find: depth limits": {
+   "script": "35152836a6f59b49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./Upper.TXT\n./big.bin\n./docs\n./empty\n./src\n./src/lib/mod.rs\n"
+   }
+  },
+  "find: depth order": {
+   "script": "db4de485a20e1249",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/d/a/b/c/leaf\n/tmp/d/a/b/c\n/tmp/d/a/b\n/tmp/d/a\n/tmp/d\n/tmp/d/a/b/c/leaf\n/tmp/d/a/b/c\n/tmp/d/a/b\n"
+   }
+  },
+  "find: empty": {
+   "script": "acaa00a4286a8cb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./empty\n./src/blank.txt\n"
+   }
+  },
+  "find: exec awkward names": {
+   "script": "7e1b04ba83cdd8fd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/q/$x\n/tmp/q/a b\n/tmp/q/it's\n"
+   }
+  },
+  "find: exec batch": {
+   "script": "766292bf99ac4fd9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src/lib/mod.rs\nsrc/main.rs\n"
+   }
+  },
+  "find: exec command not found": {
+   "script": "b69acc13ab3d44b8",
+   "status": 0,
+   "stderr": {
+    "text": "find: ‘nosuchcmd’: No such file or directory\nfind: ‘nosuchcmd’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=0\nstatus=1\n"
+   }
+  },
+  "find: exec failure in batch": {
+   "script": "e2f768e36d637738",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=0\n"
+   }
+  },
+  "find: exec per file": {
+   "script": "cdeb1839c3651fc0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "found ./src/lib/mod.rs\nfound ./src/main.rs\n"
+   }
+  },
+  "find: exec plus errors": {
+   "script": "2b7f2e6e96e5590c",
+   "status": 0,
+   "stderr": {
+    "text": "find: Only one instance of {} is supported with -exec ... +\nfind: In ‘-exec ... {} +’ the ‘{}’ must appear by itself, but you specified ‘{}x’\n"
+   },
+   "stdout": {
+    "text": "1\n1\n"
+   }
+  },
+  "find: exec status is the test": {
+   "script": "bc542acecd4224e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/main.rs\n"
+   }
+  },
+  "find: exec substitutes inside words": {
+   "script": "36a8cce8babfab62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/main.rs.bak\n"
+   }
+  },
+  "find: execdir": {
+   "script": "0a7333e945de42b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./main.rs\n./mod.rs\n./main.rs\n./mod.rs\n"
+   }
+  },
+  "find: explicit and": {
+   "script": "e6a3d5ac67db54e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib/mod.rs\n./src/main.rs\n"
+   }
+  },
+  "find: fprint": {
+   "script": "beaece7b66305d34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib/mod.rs\n./src/main.rs\n.\n"
+   }
+  },
+  "find: head of a large tree": {
+   "script": "961d88ee2d8b3bf7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n3\n"
+   }
+  },
+  "find: iname": {
+   "script": "444e7048b0c0c54d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./Upper.TXT\n./docs/notes.txt\n./src/blank.txt\n"
+   }
+  },
+  "find: ipath and wholename": {
+   "script": "7769fec761d0c4f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs\n./docs/README.md\n./docs/notes.txt\n./docs/notes.txt\n"
+   }
+  },
+  "find: iregex": {
+   "script": "92cc27b8ab76c66a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs/README.md\n"
+   }
+  },
+  "find: maxdepth zero with several starts": {
+   "script": "b848a86df0ce5493",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\nsrc\ndocs/\n"
+   }
+  },
+  "find: missing argument": {
+   "script": "c956308997ed0972",
+   "status": 0,
+   "stderr": {
+    "text": "find: missing argument to `-name'\nfind: missing argument to `-exec'\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "find: missing start point": {
+   "script": "b20d0843fcd35536",
+   "status": 0,
+   "stderr": {
+    "text": "find: ‘/tmp/nope’: No such file or directory\nfind: ‘’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ".\nstatus=1\nstatus=1\n"
+   }
+  },
+  "find: mtime and mmin": {
+   "script": "8ba95eaea8899f98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./mid\n./old\n./new\n./new\n./new\n"
+   }
+  },
+  "find: name bracket and escape": {
+   "script": "53c3da88855d82a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "find: name glob": {
+   "script": "32226e4f9dea4cc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs/notes.txt\n./src/blank.txt\n"
+   }
+  },
+  "find: negation": {
+   "script": "a3527ecc45c74f08",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./Upper.TXT\n./big.bin\n./docs/README.md\n./docs/notes.txt\n./src/blank.txt\nsrc/blank.txt\nsrc/lib/mod.rs\nsrc/main.rs\n"
+   }
+  },
+  "find: newer": {
+   "script": "d0e0ca5e76650591",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./new\n./mid\n./new\n"
+   }
+  },
+  "find: newermt": {
+   "script": "a9be11fa6801eaa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./mid\n./new\n./mid\n./old\n"
+   }
+  },
+  "find: newermt other date forms": {
+   "script": "31590e8dc2caa92c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./mid\n./new\n./mid\n./new\n./mid\n./new\n./mid\n./new\n"
+   }
+  },
+  "find: newermt relative dates": {
+   "script": "2925628267a50231",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./new\n./new\nend\n"
+   }
+  },
+  "find: newermt unreadable date": {
+   "script": "8b9a4c51c5d51630",
+   "status": 0,
+   "stderr": {
+    "text": "find: I cannot figure out how to interpret ‘xyz’ as a date or time\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "find: numeric argument errors": {
+   "script": "e43a3ff86227d651",
+   "status": 0,
+   "stderr": {
+    "text": "find: invalid -size type `q'\nfind: invalid argument `x' to `-mtime'\nfind: Expected a positive decimal integer argument to -maxdepth, but got ‘-1’\n"
+   },
+   "stdout": {
+    "text": "1\n1\n1\n"
+   }
+  },
+  "find: operator errors": {
+   "script": "38fa8b3d3a7dced3",
+   "status": 0,
+   "stderr": {
+    "text": "find: invalid expression; you have used a binary operator '-o' with nothing before it.\nfind: expected an expression after '-o'\nfind: expected an expression after '!'\nfind: invalid expression; empty parentheses are not allowed.\nfind: you have too many ')'\nfind: invalid expression; I was expecting to find a ')' somewhere but did not see one.\n"
+   },
+   "stdout": {
+    "text": "1\n1\n1\n1\n1\n1\n"
+   }
+  },
+  "find: or with parentheses": {
+   "script": "77b0bdc4f2a9f588",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs/README.md\n./src/lib/mod.rs\n./src/main.rs\n"
+   }
+  },
+  "find: path glob": {
+   "script": "c3940ad80c404aff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib/mod.rs\n./src/main.rs\n"
+   }
+  },
+  "find: paths must precede expression": {
+   "script": "6f06c894b3d609bc",
+   "status": 0,
+   "stderr": {
+    "text": "find: paths must precede expression: `/tmp'\nfind: possible unquoted pattern after predicate `-type'?\nfind: paths must precede expression: `/tmp'\nfind: possible unquoted pattern after predicate `-print'?\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "find: preorder": {
+   "script": "aff12afce19d040e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/d\n/tmp/d/a\n/tmp/d/a/b\n/tmp/d/a/b/c\n/tmp/d/a/b/c/leaf\n"
+   }
+  },
+  "find: print0": {
+   "script": "3b416fdae76ae423",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib/mod.rs\n./src/main.rs\n"
+   }
+  },
+  "find: printf escapes": {
+   "script": "ff800863a328d351",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\tb\\A\nx\n"
+   }
+  },
+  "find: printf path directives": {
+   "script": "26dbebac79d97e7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./Upper.TXT|Upper.TXT|.|Upper.TXT|.|1|f\n./big.bin|big.bin|.|big.bin|.|1|f\n./docs|docs|.|docs|.|1|d\n./empty|empty|.|empty|.|1|d\n./src|src|.|src|.|1|d\n.|.|.||.|0|d\nsrc/|src/|\n"
+   }
+  },
+  "find: printf percent at end": {
+   "script": "9a7193ce824499d5",
+   "status": 0,
+   "stderr": {
+    "text": "find: error: % at end of format string\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "find: printf time": {
+   "script": "8560b06b986a1c82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Wed Mar  4 05:06:07.0000000000 2020|2020-03-04 05:06:07.0000000000|1583298367.0000000000|Wed Mar  4 05:06:07 2020|03/04/20|064|Wed Mar  4|1583298367|2020-03-04+05:06:07.0000000000\n"
+   }
+  },
+  "find: printf unknown directive warns": {
+   "script": "4e42d422ae144079",
+   "status": 0,
+   "stderr": {
+    "text": "find: warning: unrecognized format directive `%z'\nfind: warning: unrecognized escape `\\q'\n"
+   },
+   "stdout": {
+    "text": "%z|\\q\nstatus=0\n"
+   }
+  },
+  "find: printf widths": {
+   "script": "9fea7e698b1e0579",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[    0] [blank.txt ] [bla]\n[    6] [Upper.TXT ] [Upp]\n[    6] [notes.txt ] [not]\n[    8] [README.md ] [REA]\n[   13] [main.rs   ] [mai]\n[   14] [mod.rs    ] [mod]\n[ 1500] [big.bin   ] [big]\n"
+   }
+  },
+  "find: prune": {
+   "script": "41ea7dc6e9ba46a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./Upper.TXT\n./big.bin\n./docs/README.md\n./docs/notes.txt\n"
+   }
+  },
+  "find: prune is ignored with depth": {
+   "script": "de2c3cead6fb3b23",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib\n"
+   }
+  },
+  "find: quit": {
+   "script": "8ce36a881bb3f496",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/d/a/b\nstatus=0\n"
+   }
+  },
+  "find: refuses owner printf": {
+   "script": "da98e64005f8eb12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1000\n1000\n1000\n1000\n1000\n1000\n1000\n1000\n1000\n1000\n1000\n1000\nstatus=0\n"
+   }
+  },
+  "find: refuses perm": {
+   "script": "a9555691b2824d8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/main.rs\n./src/lib/mod.rs\n./src/blank.txt\n./big.bin\n./docs/notes.txt\n./docs/README.md\n./Upper.TXT\nstatus=0\n"
+   }
+  },
+  "find: regex default dialect": {
+   "script": "2f4e268f457ba995",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib/mod.rs\n./src/main.rs\n./docs/README.md\n./docs/notes.txt\n./src/blank.txt\n"
+   }
+  },
+  "find: regex errors": {
+   "script": "49ada27923ca6364",
+   "status": 0,
+   "stderr": {
+    "text": "find: failed to compile regular expression 'a\\(b': Unmatched ( or \\(\nfind: Unknown regular expression type ‘nope’; valid types are ‘findutils-default’, ‘ed’, ‘emacs’, ‘gnu-awk’, ‘grep’, ‘posix-awk’, ‘awk’, ‘posix-basic’, ‘posix-egrep’, ‘egrep’, ‘posix-extended’, ‘posix-minimal-basic’, ‘sed’.\n"
+   },
+   "stdout": {
+    "text": "1\n1\n"
+   }
+  },
+  "find: regex literal operators": {
+   "script": "186aa4deca45fe60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src\n"
+   }
+  },
+  "find: regextype posix-extended": {
+   "script": "719439ecb4802e86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs/README.md\n./docs/notes.txt\n./src/blank.txt\n"
+   }
+  },
+  "find: size below one unit": {
+   "script": "e21d491781b33c62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/blank.txt\n./Upper.TXT\n./docs/README.md\n./docs/notes.txt\n./src/blank.txt\n./src/lib/mod.rs\n./src/main.rs\n"
+   }
+  },
+  "find: size units round up": {
+   "script": "dc041c2e9b5501fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./big.bin\n./big.bin\n./big.bin\n./big.bin\n"
+   }
+  },
+  "find: trailing slash start": {
+   "script": "938aa6acd0ee7119",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/f/src/main.rs\n"
+   }
+  },
+  "find: true and false": {
+   "script": "1ff79abf0acdeda7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n"
+   }
+  },
+  "find: type errors": {
+   "script": "3010be4a018d4cb1",
+   "status": 0,
+   "stderr": {
+    "text": "find: Unknown argument to -type: x\nfind: Must separate multiple arguments to -type using: ','\nfind: Last file type in list argument to -type is missing, i.e., list is ending on: ','\n"
+   },
+   "stdout": {
+    "text": "1\n1\n1\n"
+   }
+  },
+  "find: type f and d": {
+   "script": "a23dcd3e844cb4c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./docs\n./empty\n./src\n./src/lib\n./Upper.TXT\n./big.bin\n./docs/README.md\n./docs/notes.txt\n./src/blank.txt\n./src/lib/mod.rs\n./src/main.rs\n"
+   }
+  },
+  "find: type list": {
+   "script": "4ec8c9213ab1f1f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src\nsrc/blank.txt\nsrc/lib\nsrc/lib/mod.rs\nsrc/main.rs\n"
+   }
+  },
+  "find: unknown predicate": {
+   "script": "3d60db9b8c1833a4",
+   "status": 0,
+   "stderr": {
+    "text": "find: unknown predicate `-foo'\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "find: whole tree": {
+   "script": "1a037c8e78227f12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./Upper.TXT\n./big.bin\n./docs\n./docs/README.md\n./docs/notes.txt\n./empty\n./src\n./src/blank.txt\n./src/lib\n./src/lib/mod.rs\n./src/main.rs\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

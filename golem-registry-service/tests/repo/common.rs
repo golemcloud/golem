@@ -5308,6 +5308,24 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         Some(component_name.as_str())
     );
     assert_eq!(read.release.source_kind, TOOL_RELEASE_SOURCE_COMPONENT);
+    // Only a protected system release is superseded by a newer built-in version.
+    assert!(
+        !deps
+            .tool_release_repo
+            .supersede_system_release(component_release_id, actor.0)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        deps.tool_release_repo
+            .get_by_id(component_release_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .lifecycle,
+        TOOL_RELEASE_LIFECYCLE_PUBLISHED
+    );
 
     let protected_component_record = ToolReleaseRecord::from_system_provision(
         actor,

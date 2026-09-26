@@ -1,10 +1,21 @@
 # Built-in tools
 
 Built-in tools are tool components shipped as bytes in the registry-service binary and provisioned
-at registry startup. There are currently no production descriptors or user-facing built-in tools;
-`BUILTIN_TOOLS` in `golem-registry-service/src/services/builtin_tool_provisioner.rs` is empty. The
-`test-components/tool-streaming` application is the representative component used to verify the
-build path until a production source is added.
+at registry startup. The Bash tool is built from `plugins/builtin-tools/bash`, committed as
+`plugins/builtin-tools/bash.wasm`, and published as the protected system release `bash@0.2.0` owned
+by `builtin-tool-owner@golem.cloud`, from its own component (`golem:bash-0-2-0`) in the
+`golem-system/builtin-tools` environment. A new version replaces the previous one there and
+supersedes its release; grants of the previous release keep working.
+
+Build and validate the embedded artifact from the repository root:
+
+```shell
+cargo make build-builtin-tools
+```
+
+The task builds the component reproducibly in a pinned container
+(`plugins/builtin-tools/bash/build-bash-wasm.sh`), writes it to the path embedded by the registry
+service, and validates it with `wasm-tools`.
 
 ## Adding a component-implemented built-in tool
 
@@ -14,9 +25,8 @@ build path until a production source is added.
    depends on a filesystem path.
 3. Set `component_name`, `tool_name`, and `release_version` to the artifact's exported metadata.
    Provisioning validates these values before writing anything.
-4. Run `cargo make build-builtin-tools`, validate the resulting WASM, and run the registry
-   provisioning tests. The task currently builds `test-components/tool-streaming`; switch it to
-   descriptor-listed production source directories when the first production descriptor is added.
+4. Add the source directory to `cargo make build-builtin-tools`, validate the resulting WASM, and
+   run the registry provisioning tests.
 5. Commit the source, manifest, descriptor, and rebuilt WASM together.
 
 Provisioning is idempotent for identical bytes and an identical exact version. A published system
@@ -29,3 +39,22 @@ manifest must select the exact release under `tools.<name>.release` **and** bind
 under `agents.<agent>.tools`. Native tools compiled into the host use separate registry/executor
 startup inventories and are ambient, so they have no top-level release declaration. See
 `golem-native-tool/README.md` for that path.
+
+For Bash, the release declaration has this shape:
+
+```yaml
+tools:
+  bash:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: bash
+      version: 0.1.0
+
+agents:
+  MyAgent:
+    tools:
+      bash: {}
+```
+
+Use `bash: { filesystemAccess: allowed }` for shell access to the owner's filesystem. Release
+availability does not grant that access. See [Bash's contract and examples](bash/README.md).
