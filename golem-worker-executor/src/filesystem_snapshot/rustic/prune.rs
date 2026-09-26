@@ -585,11 +585,13 @@ pub(super) async fn release_claim(
     .await;
 }
 
-/// Gives the claim directory of each listed path below the directory of all claims, other than the
-/// directory to keep.
-pub(super) fn claim_directories_except(
+/// Gives the claim directory of each listed path below the directory of all claims whose ledger is
+/// older than the ledger of `ended`: the directory `none`, and each directory whose time is before
+/// `ended`. A newer directory can hold a live claim of a later prune, and a directory whose name is
+/// not a time is not a directory of claims, so both stay.
+pub(super) fn old_claim_directories(
     listed: impl IntoIterator<Item = impl AsRef<Path>>,
-    keep: &Path,
+    ended: Timestamp,
 ) -> Box<[Box<Path>]> {
     let claims = Path::new(CLAIMS_PATH);
     let mut directories = listed
@@ -600,22 +602,28 @@ pub(super) fn claim_directories_except(
                 .strip_prefix(claims)
                 .ok()?
                 .components()
-                .next()?;
-            Some(claims.join(generation).into_boxed_path())
+                .next()?
+                .as_os_str()
+                .to_str()?
+                .to_owned();
+            let old = generation == "none"
+                || generation
+                    .parse::<u64>()
+                    .is_ok_and(|millis| millis < ended.to_millis());
+            old.then(|| claims.join(generation).into_boxed_path())
         })
-        .filter(|directory| **directory != *keep)
         .collect::<Vec<_>>();
     directories.sort();
     directories.dedup();
     directories.into_boxed_slice()
 }
 
-/// Deletes each claim directory other than the directory of the new ledger. A listing of the
+/// Deletes each claim directory of a ledger older than the ledger of `ended`. A listing of the
 /// directories finds an empty claim directory, and a listing of the blobs finds a claim directory
-/// that the storage keeps no entry for. It never deletes the directory of all claims, so a live
-/// claim of the new ledger stays. A failure gives a warning, because a claim only delays a prune
-/// until its hold passed.
-pub(super) async fn remove_old_claims(files: &SnapshotFiles, keep: &Path) {
+/// that the storage keeps no entry for. It never deletes the directory of all claims or a newer
+/// directory, so a live claim of a later ledger stays. A failure gives a warning, because a claim
+/// only delays a prune until its hold passed.
+pub(super) async fn remove_old_claims(files: &SnapshotFiles, ended: Timestamp) {
     let claims = Path::new(CLAIMS_PATH);
     let listed = async {
         let directories = files.list_dir("list_claim_directories", claims).await?;
@@ -636,7 +644,7 @@ pub(super) async fn remove_old_claims(files: &SnapshotFiles, keep: &Path) {
         .iter()
         .map(AsRef::as_ref)
         .chain(blobs.iter().map(|blob| blob.path.as_ref()));
-    stream::iter(claim_directories_except(listed, keep))
+    stream::iter(old_claim_directories(listed, ended))
         .for_each(|directory| async move {
             if let Err(error) = files.delete_dir("delete_claims", &directory).await {
                 warn!(
@@ -653,9 +661,9 @@ mod tests {
     use super::super::files::SnapshotFiles;
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
-        FreedRecords, LEDGERS_PATH, Percent, PruneLedger, claim_directories_except, claim_hold,
-        claims_directory, keep_claim_fresh, list_claims, list_freed, needs_repository_size,
-        newest_ledger, next_claim, older_entries, parse_claim_entry, parse_freed,
+        FreedRecords, LEDGERS_PATH, Percent, PruneLedger, claim_hold, claims_directory,
+        keep_claim_fresh, list_claims, list_freed, needs_repository_size, newest_ledger,
+        next_claim, old_claim_directories, older_entries, parse_claim_entry, parse_freed,
         parse_ledger_entry, parse_record, prune_due, read_ledger, record_content, record_freed,
         settle, take_claim, write_ledger,
     };
@@ -966,13 +974,13 @@ mod tests {
     }
 
     #[test]
-    fn each_claim_directory_other_than_the_new_one_is_old() {
+    fn a_claim_directory_is_old_when_it_is_none_or_its_time_is_before_the_new_ledger() {
         let claim =
             |directory: &str, number: &str| Path::new(CLAIMS_PATH).join(directory).join(number);
         let directory = |name: &str| Path::new(CLAIMS_PATH).join(name);
 
         assert_eq!(
-            claim_directories_except(
+            old_claim_directories(
                 [
                     claim("none", "0"),
                     claim("100", "0"),
@@ -982,10 +990,13 @@ mod tests {
                     claim("260", "made/below"),
                     claim("300", "0"),
                     directory("300"),
+                    claim("301", "0"),
+                    directory("400"),
+                    claim("x1", "0"),
                     Path::new(LEDGERS_PATH).join("5-0-a"),
                     PathBuf::from(CLAIMS_PATH),
                 ],
-                &directory("300")
+                Timestamp::from(300)
             )
             .to_vec(),
             ["100", "200", "250", "260", "none"].map(|name| directory(name).into_boxed_path())

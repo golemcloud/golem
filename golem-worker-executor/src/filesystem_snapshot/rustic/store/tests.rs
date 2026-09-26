@@ -1368,6 +1368,44 @@ async fn a_prune_deletes_the_claims_of_old_ledgers() {
 
 #[test]
 #[timeout("60s")]
+async fn a_prune_keeps_the_claims_of_a_newer_ledger() {
+    // A newer claim directory can hold a live claim of a later prune, so the cleanup of a prune
+    // leaves it. Its time is far after the end of this prune.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let newer = "golem/prune-claims/99999999999999/0";
+    let not_a_time = "golem/prune-claims/later/0";
+    futures::stream::iter(["golem/prune-claims/100/0", newer, not_a_time])
+        .for_each(|path| {
+            let storage = storage.clone();
+            let scope = scope.clone();
+            async move {
+                storage
+                    .put_raw("test", "test", scope.0.clone(), Path::new(path), b"")
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
+
+    store.delete(&scope, &name("p-1")).await.unwrap();
+
+    assert_eq!(
+        (
+            ledger(&storage, &scope).await.last_prune.is_some(),
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, vec![newer.to_string(), not_a_time.to_string()])
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_prune_deletes_an_empty_claim_directory_of_an_old_ledger() {
     // A listing of the blobs does not find an empty directory, so only a listing of the
     // directories finds it.

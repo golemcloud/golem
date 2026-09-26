@@ -27,7 +27,7 @@ use super::fault::{
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
-    ClaimChoice, Percent, PruneLedger, claims_directory, keep_claim_fresh, list_claims, list_freed,
+    ClaimChoice, Percent, claims_directory, keep_claim_fresh, list_claims, list_freed,
     needs_repository_size, next_claim, prune_due, read_ledger, record_freed, refresh_period,
     release_claim, remove_freed, remove_old_claims, remove_older_ledgers, repository_bytes,
     take_claim, write_ledger, write_marker,
@@ -433,11 +433,7 @@ impl RusticSnapshotStore {
             .map_err(storage_failure)?;
         remove_older_ledgers(&files, ended).await;
         remove_freed(&files, &records).await;
-        let new_claims = claims_directory(&PruneLedger {
-            last_prune: Some(ended),
-            awaiting_removal: marked_packs,
-        });
-        remove_old_claims(&files, &new_claims).await;
+        remove_old_claims(&files, ended).await;
         Ok(())
     }
 
