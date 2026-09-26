@@ -27,7 +27,9 @@ use golem_service_base::storage::blob::{
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 /// What the storage does with one call.
@@ -46,6 +48,9 @@ pub(super) enum Script {
     /// Gives no blob to a read of a whole blob, as a delete after a listing does. Each other call
     /// passes.
     Vanish,
+    /// Waits until the test gives the storage one step, and then passes the call, or refuses it
+    /// when `refuse` is true.
+    Step { refuse: bool },
 }
 
 /// A rule that gives the script of a call from its operation label and its path.
@@ -58,6 +63,12 @@ pub(super) struct ScriptedBlobStorage {
     rule: Rule,
     calls: Mutex<Vec<(&'static str, Box<Path>)>>,
     gate: CancellationToken,
+    /// The steps that the test gave and that no call took yet.
+    steps: Semaphore,
+    /// The calls that wait for a step.
+    waiting: AtomicUsize,
+    /// The calls that took a step and ended.
+    stepped: AtomicUsize,
 }
 
 impl ScriptedBlobStorage {
@@ -70,12 +81,30 @@ impl ScriptedBlobStorage {
             rule: Box::new(rule),
             calls: Mutex::new(Vec::new()),
             gate: CancellationToken::new(),
+            steps: Semaphore::new(0),
+            waiting: AtomicUsize::new(0),
+            stepped: AtomicUsize::new(0),
         })
     }
 
     /// Lets each call that waits for the gate, and each later such call, go on.
     pub(super) fn open_gate(&self) {
         self.gate.cancel();
+    }
+
+    /// Lets one call that waits for a step, now or later, go on.
+    pub(super) fn step(&self) {
+        self.steps.add_permits(1);
+    }
+
+    /// Gives the number of calls that wait for a step.
+    pub(super) fn waiting_steps(&self) -> usize {
+        self.waiting.load(Ordering::SeqCst)
+    }
+
+    /// Gives the number of calls that took a step and ended.
+    pub(super) fn stepped(&self) -> usize {
+        self.stepped.load(Ordering::SeqCst)
     }
 
     /// Gives the operation label and the path of each call, in the order of the calls.
@@ -130,6 +159,21 @@ impl ScriptedBlobStorage {
                 call.await
             }
             Script::Vanish => call.await,
+            Script::Step { refuse } => {
+                self.waiting.fetch_add(1, Ordering::SeqCst);
+                let permit = self.steps.acquire().await;
+                self.waiting.fetch_sub(1, Ordering::SeqCst);
+                if let Ok(permit) = permit {
+                    permit.forget();
+                }
+                let answer = if refuse {
+                    Err(anyhow::anyhow!("the storage refused the call"))
+                } else {
+                    call.await
+                };
+                self.stepped.fetch_add(1, Ordering::SeqCst);
+                answer
+            }
         }
     }
 }

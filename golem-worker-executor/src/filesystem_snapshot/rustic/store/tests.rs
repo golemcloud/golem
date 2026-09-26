@@ -37,7 +37,7 @@ use crate::filesystem_snapshot::{
     SnapshotStoreError,
 };
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use pretty_assertions::assert_eq;
@@ -3104,4 +3104,96 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
         global.iter().all(|nice| *nice == process_nice),
         "{global:?}"
     );
+}
+
+mod sweep;
+
+/// The largest number of steps of one turn. A delete takes at most 13 steps of the protocol, so a
+/// turn of 14 steps runs a delete to its end.
+const SWEEP_TURN: usize = 14;
+
+/// The number of random orders that the property test tries.
+const SWEEP_CASES: u32 = 1000;
+
+/// Saves the two snapshots that each case deletes, in a scope that each case copies.
+async fn prepared_scope() -> (Arc<InMemoryBlobStorage>, SnapshotScope) {
+    let shared = Arc::new(InMemoryBlobStorage::new());
+    let prepared = new_scope();
+    save_each(
+        &store(shared.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO)),
+        &prepared,
+        &["p-1", "p-2"],
+    )
+    .await;
+    (shared, prepared)
+}
+
+#[test]
+#[timeout("60s")]
+async fn two_deletes_make_at_most_one_prune_in_each_order_with_up_to_two_switches() {
+    // Each order where one delete runs some steps, the other runs some steps, and then each runs
+    // to its end. This holds each pause of one delete while the other runs.
+    let (shared, prepared) = prepared_scope().await;
+    let schedules = (0..2).flat_map(|first| {
+        (0..=SWEEP_TURN).flat_map(move |one| {
+            (0..=SWEEP_TURN).map(move |two| sweep::Schedule {
+                first,
+                turns: vec![one, two],
+                fail: None,
+            })
+        })
+    });
+    let started = std::time::Instant::now();
+
+    let cases = futures::stream::iter(schedules)
+        .then(|schedule| {
+            let (shared, prepared) = (&shared, &prepared);
+            async move { sweep::run_case(shared, prepared, &schedule).await }
+        })
+        .try_fold(0usize, |cases, _| async move { Ok(cases + 1) })
+        .await;
+
+    println!("{cases:?} orders in {:?}", started.elapsed());
+    assert!(cases.is_ok(), "{cases:?}");
+}
+
+#[test]
+#[timeout("60s")]
+async fn two_deletes_make_at_most_one_prune_in_random_orders_with_a_failed_call() {
+    // The test generates the order of the steps and a call that fails, and shrinks a failing case
+    // to the shortest order. The seed is fixed, and no file keeps a failing case.
+    use proptest::prelude::{Strategy, prop};
+    use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+    let (shared, prepared) = prepared_scope().await;
+    let runtime = tokio::runtime::Handle::current();
+    let strategy = (
+        0usize..2,
+        prop::collection::vec(0usize..=SWEEP_TURN, 0..=8),
+        prop::option::of((0usize..2, 0usize..SWEEP_TURN)),
+    )
+        .prop_map(|(first, turns, fail)| sweep::Schedule { first, turns, fail });
+    let started = std::time::Instant::now();
+
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut runner = TestRunner::new_with_rng(
+            Config {
+                cases: SWEEP_CASES,
+                failure_persistence: None,
+                ..Config::default()
+            },
+            TestRng::deterministic_rng(RngAlgorithm::ChaCha),
+        );
+        runner
+            .run(&strategy, |schedule| {
+                runtime
+                    .block_on(sweep::run_case(&shared, &prepared, &schedule))
+                    .map(|_| ())
+                    .map_err(proptest::test_runner::TestCaseError::fail)
+            })
+            .map_err(|error| error.to_string())
+    })
+    .await;
+
+    println!("{SWEEP_CASES} random orders in {:?}", started.elapsed());
+    assert!(matches!(outcome, Ok(Ok(()))), "{outcome:?}");
 }
