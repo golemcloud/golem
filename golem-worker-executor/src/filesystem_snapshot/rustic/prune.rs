@@ -372,11 +372,37 @@ pub(super) async fn remove_freed(files: &SnapshotFiles, records: &FreedRecords) 
         .await;
 }
 
-/// A claim of a prune that a listing found: its number, and its time when its content parses.
+/// An entry of a claim directory that a listing found: a claim `<n>`, or a marker
+/// `<n>@<ms>-<random>` with the time at which a delete wrote it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ListedClaim {
-    pub(super) number: u64,
-    pub(super) claimed_at: Option<Timestamp>,
+pub(super) enum ClaimEntry {
+    Claim(u64),
+    Marker(u64, Timestamp),
+}
+
+impl ClaimEntry {
+    fn number(self) -> u64 {
+        match self {
+            Self::Claim(number) | Self::Marker(number, _) => number,
+        }
+    }
+}
+
+/// Reads the name of an entry of a claim directory.
+pub(super) fn parse_claim_entry(name: &str) -> Option<ClaimEntry> {
+    match name.split_once('@') {
+        None => name.parse().ok().map(ClaimEntry::Claim),
+        Some((number, rest)) => {
+            let (millis, unique) = rest.split_once('-')?;
+            if unique.is_empty() {
+                return None;
+            }
+            Some(ClaimEntry::Marker(
+                number.parse().ok()?,
+                Timestamp::from(millis.parse::<u64>().ok()?),
+            ))
+        }
+    }
 }
 
 /// What a delete whose prune is due does with the claims of its ledger.
@@ -388,23 +414,34 @@ pub(super) enum ClaimChoice {
     Held,
 }
 
-/// Chooses the claim of a delete from the claims of its ledger. The newest claim holds the ledger
-/// until the grace period and the margin for clock skew passed since its time. A claim whose
-/// content does not parse, or whose time is more than the margin after `now`, is old.
-pub(super) fn next_claim(claims: &[ListedClaim], now: Timestamp, grace: Duration) -> ClaimChoice {
-    let held_until = grace.saturating_add(CLOCK_SKEW_MARGIN);
-    match claims.iter().max_by_key(|claim| claim.number) {
-        None => ClaimChoice::Claim(0),
-        Some(newest)
-            if newest
-                .claimed_at
-                .filter(|at| !beyond_margin(*at, now))
-                .is_some_and(|at| !passed_since(at, now, held_until)) =>
-        {
-            ClaimChoice::Held
-        }
-        Some(newest) => ClaimChoice::Claim(newest.number.saturating_add(1)),
+/// Gives how long a marker holds the claims of its ledger: the grace period, but at least the time
+/// between two refreshes and two margins for clock skew, and then one more margin.
+pub(super) fn claim_hold(grace: Duration) -> Duration {
+    grace
+        .max(refresh_period(grace).saturating_add(CLOCK_SKEW_MARGIN.saturating_mul(2)))
+        .saturating_add(CLOCK_SKEW_MARGIN)
+}
+
+/// Chooses the claim of a delete from the entries of the claim directory of its ledger. Any marker
+/// younger than the hold holds the ledger, whatever its number. A marker whose time is more than
+/// the margin after `now` counts as missing, and a claim without a young marker is old. Otherwise
+/// the delete takes the number after the largest one, or 0.
+pub(super) fn next_claim(entries: &[ClaimEntry], now: Timestamp, grace: Duration) -> ClaimChoice {
+    let hold = claim_hold(grace);
+    let held = entries.iter().any(|entry| match entry {
+        ClaimEntry::Marker(_, at) => !beyond_margin(*at, now) && !passed_since(*at, now, hold),
+        ClaimEntry::Claim(_) => false,
+    });
+    if held {
+        return ClaimChoice::Held;
     }
+    entries
+        .iter()
+        .map(|entry| entry.number())
+        .max()
+        .map_or(ClaimChoice::Claim(0), |largest| {
+            ClaimChoice::Claim(largest.saturating_add(1))
+        })
 }
 
 /// Gives the directory of the claims of the ledger: the time of its last prune in milliseconds, or
@@ -416,53 +453,64 @@ pub(super) fn claims_directory(ledger: &PruneLedger) -> PathBuf {
     Path::new(CLAIMS_PATH).join(generation)
 }
 
-/// Lists the claims in the directory. A name that is not a number is not a claim, and a claim
-/// that a delete removed after the listing counts as old.
+/// Lists the claims and the markers in the directory, from their names. A name that does not
+/// parse is left out.
 pub(super) async fn list_claims(
     files: &SnapshotFiles,
     directory: &Path,
-) -> anyhow::Result<Box<[ListedClaim]>> {
-    let listed = files.list_below("list_claims", directory).await?;
-    let numbered = listed
+) -> anyhow::Result<Box<[ClaimEntry]>> {
+    Ok(files
+        .list_below("list_claims", directory)
+        .await?
         .iter()
-        .filter_map(|blob| {
-            let number = blob.path.file_name()?.to_str()?.parse::<u64>().ok()?;
-            Some((number, &blob.path))
-        })
-        .collect::<Box<[_]>>();
-    stream::iter(numbered.iter())
-        .then(|(number, path)| async move {
-            let content = files.get("read_claim", path).await?;
-            Ok::<_, anyhow::Error>(ListedClaim {
-                number: *number,
-                claimed_at: content.as_deref().and_then(parse_claim),
-            })
-        })
-        .try_collect::<Vec<_>>()
-        .await
-        .map(Vec::into_boxed_slice)
+        .filter_map(|blob| parse_claim_entry(blob.path.file_name()?.to_str()?))
+        .collect())
 }
 
-/// Writes the claim with the number, and tells whether this call wrote it.
+/// Writes a marker of the claim with the number, with the time, and gives its path. The name is
+/// unique, so `AlreadyExists` means that an earlier try of this call wrote it.
+pub(super) async fn write_marker(
+    files: &SnapshotFiles,
+    op_label: &'static str,
+    directory: &Path,
+    number: u64,
+    time: Timestamp,
+) -> anyhow::Result<PathBuf> {
+    let path = directory.join(format!(
+        "{number}@{}-{}",
+        time.to_millis(),
+        uuid::Uuid::new_v4()
+    ));
+    let _: PutIfAbsent = files.put_if_absent(op_label, &path, &[]).await?;
+    Ok(path)
+}
+
+/// Writes the first marker of the claim with the number, then takes the claim, and tells whether
+/// this delete holds it. A delete that loses the claim deletes its marker.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
     now: Timestamp,
 ) -> anyhow::Result<bool> {
-    let content = now.to_millis().to_string();
+    let marker = write_marker(files, "write_marker", directory, number, now).await?;
     let written = files
-        .put_if_absent(
-            "write_claim",
-            &directory.join(number.to_string()),
-            content.as_bytes(),
-        )
+        .put_if_absent("write_claim", &directory.join(number.to_string()), &[])
         .await?;
-    Ok(written == PutIfAbsent::Written)
+    if written == PutIfAbsent::Written {
+        return Ok(true);
+    }
+    if let Err(error) = files.delete("delete_marker", &marker).await {
+        warn!(
+            error = %format!("{error:#}"),
+            "Failed to delete the marker of a prune claim that a filesystem snapshot delete lost"
+        );
+    }
+    Ok(false)
 }
 
-/// Gives the time between two writes of a live claim: a fourth of the grace period, or a fourth of
-/// the margin for clock skew when the grace period is zero.
+/// Gives the time between two markers of a live claim: a fourth of the grace period, or a fourth
+/// of the margin for clock skew when the grace period is zero.
 pub(super) fn refresh_period(grace: Duration) -> Duration {
     if grace.is_zero() {
         CLOCK_SKEW_MARGIN / 4
@@ -471,41 +519,56 @@ pub(super) fn refresh_period(grace: Duration) -> Duration {
     }
 }
 
-/// Writes the claim with the number again, with the current time, at each period, until the
-/// caller drops the future or the operation of the files is cancelled. A failed write gives a
-/// warning.
+/// Writes a new marker of the claim with the number at each period, until the caller drops the
+/// future or the operation of the files is cancelled. A failed write gives a warning.
 pub(super) async fn keep_claim_fresh(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
     period: Duration,
 ) {
-    let path = directory.join(number.to_string());
     stream::repeat(())
         .then(|()| tokio::time::sleep(period))
         .take_until(files.cancel.cancelled())
-        .for_each(|()| {
-            let path = &path;
-            async move {
-                let content = Timestamp::now_utc().to_millis().to_string();
-                if let Err(error) = files.put("refresh_claim", path, content.as_bytes()).await {
-                    warn!(
-                        error = %format!("{error:#}"),
-                        "Failed to write the prune claim of a filesystem snapshot scope again"
-                    );
-                }
+        .for_each(|()| async move {
+            let written = write_marker(
+                files,
+                "refresh_claim",
+                directory,
+                number,
+                Timestamp::now_utc(),
+            )
+            .await;
+            if let Err(error) = written {
+                warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to write a new marker of the prune claim of a filesystem snapshot scope"
+                );
             }
         })
         .await;
 }
 
-/// Deletes the claim with the number. A failure gives a warning, because a claim only delays a
-/// prune until its grace period passed.
+/// Deletes the claim with the number, and then its markers. A failure gives a warning, because a
+/// claim only delays a prune until its hold passed.
 pub(super) async fn release_claim(files: &SnapshotFiles, directory: &Path, number: u64) {
-    if let Err(error) = files
-        .delete("delete_claim", &directory.join(number.to_string()))
+    let released = async {
+        files
+            .delete("delete_claim", &directory.join(number.to_string()))
+            .await?;
+        let listed = files.list_below("list_claims", directory).await?;
+        stream::iter(listed.iter().filter(|blob| {
+            blob.path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(parse_claim_entry)
+                .is_some_and(|entry| matches!(entry, ClaimEntry::Marker(own, _) if own == number))
+        }))
+        .map(Ok)
+        .try_for_each(|blob| files.delete("delete_marker", &blob.path))
         .await
-    {
+    };
+    if let Err(error) = released.await {
         warn!(
             error = %format!("{error:#}"),
             "Failed to delete the prune claim of a filesystem snapshot scope"
@@ -554,25 +617,16 @@ pub(super) async fn remove_old_claims(files: &SnapshotFiles, keep: &Path) {
         .await;
 }
 
-/// Reads the time of a claim, in milliseconds.
-fn parse_claim(content: &[u8]) -> Option<Timestamp> {
-    std::str::from_utf8(content)
-        .ok()?
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .map(Timestamp::from)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::files::SnapshotFiles;
     use super::{
-        CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, FREED_PATH, FreedRecord, FreedRecords,
-        LEDGERS_PATH, ListedClaim, Percent, PruneLedger, claim_directories_except,
+        CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
+        FreedRecords, LEDGERS_PATH, Percent, PruneLedger, claim_directories_except, claim_hold,
         claims_directory, keep_claim_fresh, list_claims, list_freed, needs_repository_size,
-        newest_ledger, next_claim, older_entries, parse_freed, parse_ledger_entry, parse_record,
-        prune_due, read_ledger, record_content, record_freed, settle, take_claim, write_ledger,
+        newest_ledger, next_claim, older_entries, parse_claim_entry, parse_freed,
+        parse_ledger_entry, parse_record, prune_due, read_ledger, record_content, record_freed,
+        settle, take_claim, write_ledger,
     };
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
@@ -725,10 +779,7 @@ mod tests {
         let due = |last| prune_due(&ledger(Some(last), false), 1, at(now), 0, Percent(0), GRACE);
         let claim = |claimed_at| {
             next_claim(
-                &[ListedClaim {
-                    number: 0,
-                    claimed_at: Some(at(claimed_at)),
-                }],
+                &[ClaimEntry::Claim(0), ClaimEntry::Marker(0, at(claimed_at))],
                 at(now),
                 GRACE,
             )
@@ -764,28 +815,68 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_claim_holds_a_ledger_until_the_grace_period_passed_since_its_time() {
+    fn any_young_marker_holds_a_ledger_and_a_claim_without_a_marker_is_old() {
         let now = 10_000_000;
-        let claim = |number, claimed_at: Option<u64>| ListedClaim {
-            number,
-            claimed_at: claimed_at.map(Timestamp::from),
-        };
-        let choose = |claims: &[ListedClaim]| next_claim(claims, at(now), GRACE);
+        let claim = ClaimEntry::Claim;
+        let marker = |number, millis| ClaimEntry::Marker(number, at(millis));
+        let choose = |entries: &[ClaimEntry]| next_claim(entries, at(now), GRACE);
 
         assert_eq!(
             [
                 choose(&[]),
-                choose(&[claim(0, Some(now - HELD_MILLIS)), claim(1, Some(now - 1))]),
-                choose(&[claim(1, Some(now)), claim(2, Some(now - HELD_MILLIS))]),
-                choose(&[claim(4, None)]),
-                choose(&[claim(0, Some(now - 1)), claim(3, None)]),
+                choose(&[claim(0), claim(1), marker(0, now - 1)]),
+                choose(&[claim(0), claim(1), marker(1, now - HELD_MILLIS)]),
+                choose(&[claim(4)]),
+                choose(&[marker(2, now - 1)]),
+                choose(&[claim(0), claim(3), marker(0, now - HELD_MILLIS)]),
             ],
             [
                 ClaimChoice::Claim(0),
                 ClaimChoice::Held,
-                ClaimChoice::Claim(3),
+                ClaimChoice::Claim(2),
                 ClaimChoice::Claim(5),
+                ClaimChoice::Held,
                 ClaimChoice::Claim(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_hold_is_at_least_the_refresh_period_and_two_margins_and_then_one_margin() {
+        let margin = CLOCK_SKEW_MARGIN;
+
+        assert_eq!(
+            [
+                claim_hold(GRACE),
+                claim_hold(Duration::from_secs(60)),
+                claim_hold(Duration::ZERO),
+            ],
+            [
+                GRACE + margin,
+                Duration::from_secs(15) + margin * 3,
+                margin / 4 + margin * 3,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_claim_entry_name_is_a_number_or_a_number_with_a_time_and_a_unique_part() {
+        assert_eq!(
+            [
+                parse_claim_entry("3"),
+                parse_claim_entry("3@42-a"),
+                parse_claim_entry("3@42-a-b"),
+                parse_claim_entry("3@42-"),
+                parse_claim_entry("3@x-a"),
+                parse_claim_entry("x"),
+            ],
+            [
+                Some(ClaimEntry::Claim(3)),
+                Some(ClaimEntry::Marker(3, at(42))),
+                Some(ClaimEntry::Marker(3, at(42))),
+                None,
+                None,
+                None,
             ]
         );
     }
@@ -811,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    async fn a_claim_is_taken_one_time_and_listed_with_its_time() {
+    async fn a_claim_is_taken_after_its_marker_and_a_loser_deletes_its_marker() {
         let files = new_files();
         let directory = claims_directory(&ledger(Some(42), false));
         let now = at(10_000_000);
@@ -827,16 +918,17 @@ mod tests {
                 directory.display().to_string(),
                 first,
                 again,
-                listed.to_vec()
+                listed.len(),
+                listed.contains(&ClaimEntry::Claim(0)),
+                listed.contains(&ClaimEntry::Marker(0, now)),
             ),
             (
                 "golem/prune-claims/42".to_string(),
                 true,
                 false,
-                vec![ListedClaim {
-                    number: 0,
-                    claimed_at: Some(now)
-                }]
+                2,
+                true,
+                true
             )
         );
     }

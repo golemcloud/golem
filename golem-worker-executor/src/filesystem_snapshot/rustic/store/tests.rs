@@ -19,7 +19,8 @@
 
 use super::super::files::SnapshotFiles;
 use super::super::prune::{
-    CLOCK_SKEW_MARGIN, LEDGERS_PATH, Percent, PruneLedger, parse_freed, read_ledger,
+    CLOCK_SKEW_MARGIN, ClaimEntry, LEDGERS_PATH, Percent, PruneLedger, parse_claim_entry,
+    parse_freed, read_ledger,
 };
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
@@ -1204,17 +1205,63 @@ async fn a_prune_deletes_the_older_ledger_entries_and_keeps_a_newer_one() {
     );
 }
 
-/// Gives the time in the one claim of the scope, when the scope has one claim that parses.
+/// Gives the time of the newest marker of the claims of the scope.
 async fn claim_time(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> Option<u64> {
-    let claims = blobs(storage, &scope.0, "golem/prune-claims/").await;
-    let [claim] = claims.as_slice() else {
-        return None;
-    };
-    let content = storage
-        .get_raw("test", "test", scope.0.clone(), Path::new(claim))
+    blobs(storage, &scope.0, "golem/prune-claims/")
         .await
-        .ok()??;
-    std::str::from_utf8(&content).ok()?.parse().ok()
+        .iter()
+        .filter_map(
+            |path| match parse_claim_entry(Path::new(path).file_name()?.to_str()?)? {
+                ClaimEntry::Marker(_, at) => Some(at.to_millis()),
+                ClaimEntry::Claim(_) => None,
+            },
+        )
+        .max()
+}
+
+/// Moves each marker of the claims of the scope back by two hours and the margin, so no marker
+/// holds its ledger.
+async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) {
+    let stale = golem_common::model::Timestamp::now_utc()
+        .to_millis()
+        .saturating_sub(2 * 3_600_000 + 2 * 60_000);
+    let markers = storage
+        .list_blobs_below(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new("golem/prune-claims"),
+        )
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|blob| {
+            let entry = parse_claim_entry(blob.path.file_name()?.to_str()?)?;
+            match entry {
+                ClaimEntry::Marker(number, _) => Some((blob.path.clone(), number)),
+                ClaimEntry::Claim(_) => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    futures::stream::iter(markers)
+        .for_each(|(path, number)| {
+            let (storage, scope) = (storage.clone(), scope.clone());
+            async move {
+                storage
+                    .delete("test", "test", scope.0.clone(), &path)
+                    .await
+                    .unwrap();
+                let aged = path
+                    .parent()
+                    .unwrap_or(Path::new(""))
+                    .join(format!("{number}@{stale}-aged"));
+                storage
+                    .put_raw("test", "test", scope.0.clone(), &aged, b"")
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
 }
 
 #[test]
@@ -1347,26 +1394,7 @@ async fn a_failed_ledger_write_after_a_prune_keeps_the_claim_so_no_second_prune_
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
     let second = store.delete(&scope, &name("p-2")).await;
     let prunes_after_second = prunes(&storage.calls());
-    let stale = golem_common::model::Timestamp::now_utc()
-        .to_millis()
-        .saturating_sub(3_600_000 + 2 * 60_000 + 1);
-    futures::stream::iter(&claims_after_failure)
-        .for_each(|claim| {
-            let (storage, scope) = (&storage, &scope);
-            async move {
-                storage
-                    .put_raw(
-                        "test",
-                        "test",
-                        scope.0.clone(),
-                        Path::new(claim),
-                        stale.to_string().as_bytes(),
-                    )
-                    .await
-                    .unwrap();
-            }
-        })
-        .await;
+    age_claims(&storage, &scope).await;
     let third = store.delete(&scope, &name("p-3")).await;
 
     assert!(
@@ -1377,7 +1405,10 @@ async fn a_failed_ledger_write_after_a_prune_keeps_the_claim_so_no_second_prune_
     assert!(third.is_ok(), "{third:?}");
     assert_eq!(
         (
-            claims_after_failure.len(),
+            claims_after_failure
+                .iter()
+                .filter(|path| !path.contains('@'))
+                .count(),
             prunes_after_second,
             prunes(&storage.calls()),
             ledger(&storage, &scope).await.last_prune.is_some(),
@@ -1689,6 +1720,118 @@ async fn a_record_write_that_answers_already_exists_counts_as_written() {
 
 #[test]
 #[timeout("60s")]
+async fn a_delete_sees_the_marker_of_a_claim_that_is_not_taken_yet_and_does_not_prune() {
+    // The gate holds the second of the two writes of the first delete: its marker and its claim.
+    // The second delete runs meanwhile.
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let writes = Arc::new(AtomicUsize::new(0));
+    let first = ScriptedBlobStorage::new(inner.clone(), {
+        let writes = writes.clone();
+        move |op_label, _| {
+            if matches!(op_label, "write_marker" | "write_claim")
+                && writes.fetch_add(1, Ordering::SeqCst) == 1
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let second = ScriptedBlobStorage::new(inner.clone(), |_, _| Script::Pass);
+    let grace = Duration::from_secs(3600);
+    let scope = new_scope();
+    save_each(
+        &store(inner.clone(), policy(LONG_DEADLINE, NEVER, grace)),
+        &scope,
+        &["p-1", "p-2"],
+    )
+    .await;
+    let holding = tokio::spawn({
+        let deleting = store(first.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
+        let scope = scope.clone();
+        async move { deleting.delete(&scope, &name("p-1")).await }
+    });
+    let held = eventually(|| writes.load(Ordering::SeqCst) >= 2).await;
+
+    let seen = store(second.clone(), policy(LONG_DEADLINE, ALWAYS, grace))
+        .delete(&scope, &name("p-2"))
+        .await;
+    first.open_gate();
+    let holding = tokio::time::timeout(LIMIT, holding).await;
+
+    assert!(seen.is_ok(), "{seen:?}");
+    assert!(matches!(holding, Ok(Ok(Ok(())))), "{holding:?}");
+    assert_eq!(
+        (held, prunes(&second.calls()), prunes(&first.calls())),
+        (true, 0, 1)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_claim_without_a_marker_does_not_unblock_a_live_holder() {
+    // The first delete holds claim 0 and waits at the start of its prune. A claim 1 without a
+    // marker is in the same directory.
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let claimed = Arc::new(AtomicBool::new(false));
+    let first = ScriptedBlobStorage::new(inner.clone(), {
+        let claimed = claimed.clone();
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "list" && path == Path::new("data") && claimed.load(Ordering::SeqCst) {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let second = ScriptedBlobStorage::new(inner.clone(), |_, _| Script::Pass);
+    let grace = Duration::from_secs(3600);
+    let scope = new_scope();
+    save_each(
+        &store(inner.clone(), policy(LONG_DEADLINE, NEVER, grace)),
+        &scope,
+        &["p-1", "p-2"],
+    )
+    .await;
+    let holding = tokio::spawn({
+        let deleting = store(first.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
+        let scope = scope.clone();
+        async move { deleting.delete(&scope, &name("p-1")).await }
+    });
+    let held = eventually(|| {
+        first
+            .calls()
+            .iter()
+            .any(|(op_label, path)| *op_label == "list" && path == "data")
+    })
+    .await;
+    inner
+        .put_raw(
+            "test",
+            "test",
+            scope.0.clone(),
+            Path::new("golem/prune-claims/none/1"),
+            b"",
+        )
+        .await
+        .unwrap();
+
+    let seen = store(second.clone(), policy(LONG_DEADLINE, ALWAYS, grace))
+        .delete(&scope, &name("p-2"))
+        .await;
+    first.open_gate();
+    let holding = tokio::time::timeout(LIMIT, holding).await;
+
+    assert!(seen.is_ok(), "{seen:?}");
+    assert!(matches!(holding, Ok(Ok(Ok(())))), "{holding:?}");
+    assert_eq!((held, prunes(&second.calls())), (true, 0));
+}
+
+#[test]
+#[timeout("60s")]
 async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
     // The first read after the first claim is the start of the first prune. The gate holds it,
     // so the second delete reads the ledger that the first delete read.
@@ -1834,9 +1977,11 @@ async fn a_failed_second_read_of_the_ledger_deletes_the_claim_and_a_retry_of_the
 
 #[test]
 #[timeout("60s")]
-async fn a_prune_that_fails_deletes_its_claim_and_a_retry_of_the_delete_prunes() {
+async fn a_prune_that_fails_keeps_its_claim_so_no_second_prune_runs_within_the_hold() {
     // The first listing of the packs by a prune after the first claim fails. Only a prune lists
-    // the packs with that call, so the second read of the ledger passes and the prune fails.
+    // the packs with that call, so the second read of the ledger passes and the prune fails after
+    // it started. Its claim stays, so a retry within the hold does not prune, and a retry after it
+    // does.
     let claimed = Arc::new(AtomicBool::new(false));
     let refused = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
@@ -1866,6 +2011,9 @@ async fn a_prune_that_fails_deletes_its_claim_and_a_retry_of_the_delete_prunes()
     let failed = store.delete(&scope, &name("p-1")).await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
     let retried = store.delete(&scope, &name("p-1")).await;
+    let after_retry = ledger(&storage, &scope).await;
+    age_claims(&storage, &scope).await;
+    let later = store.delete(&scope, &name("p-1")).await;
     let after = ledger(&storage, &scope).await;
 
     assert!(
@@ -1873,13 +2021,18 @@ async fn a_prune_that_fails_deletes_its_claim_and_a_retry_of_the_delete_prunes()
         "{failed:?}"
     );
     assert!(retried.is_ok(), "{retried:?}");
+    assert!(later.is_ok(), "{later:?}");
     assert_eq!(
         (
-            claims_after_failure,
+            claims_after_failure
+                .iter()
+                .filter(|path| !path.contains('@'))
+                .count(),
             refused.load(Ordering::SeqCst),
+            after_retry.last_prune,
             after.last_prune.is_some()
         ),
-        (Vec::<String>::new(), true, true)
+        (1, true, None, true)
     );
 }
 
@@ -2040,6 +2193,8 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
     let after_failure = ledger(&storage, &scope).await;
     let after_failure_freed = freed(&storage, &scope).await;
     refuse.store(false, Ordering::SeqCst);
+    // The prune started, so its claim stays until the hold passed.
+    age_claims(&storage, &scope).await;
     let retried = store.delete(&scope, &name("p-deleted")).await;
     let after_retry = ledger(&storage, &scope).await;
     let after_retry_freed = freed(&storage, &scope).await;
@@ -3464,8 +3619,10 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
                 "write_ledger",
                 "list_data",
                 "list_claims",
-                "read_claim",
+                "write_marker",
                 "write_claim",
+                "final_marker",
+                "delete_marker",
                 "delete_claims",
                 "write_freed",
                 "list_freed",

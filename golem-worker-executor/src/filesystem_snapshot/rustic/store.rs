@@ -28,7 +28,7 @@ use super::prune::{
     ClaimChoice, Percent, PruneLedger, claims_directory, keep_claim_fresh, list_claims, list_freed,
     needs_repository_size, next_claim, prune_due, read_ledger, record_freed, refresh_period,
     release_claim, remove_freed, remove_old_claims, remove_older_ledgers, repository_bytes,
-    take_claim, write_ledger,
+    take_claim, write_ledger, write_marker,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -63,6 +63,7 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
+use tracing::warn;
 
 /// The share of the size of the repository that deleted snapshots must free before a delete prunes
 /// the scope. The threshold is 10% of the size, rounded down to a whole byte, so about 10%.
@@ -185,14 +186,6 @@ pub(super) struct PublishGate {
 struct Claim<'a> {
     directory: &'a Path,
     number: u64,
-}
-
-/// How the work of a delete that holds a claim ended without an error.
-enum ClaimOutcome {
-    /// The prune ran, and it marked packs or not.
-    Pruned { marked_packs: bool },
-    /// Another prune ended after the claim, so this delete did not prune.
-    Superseded,
 }
 
 /// The error of an operation of a store that is shut down.
@@ -374,19 +367,33 @@ impl RusticSnapshotStore {
             directory: &claims,
             number,
         };
-        let outcome = self
-            .prune_with_claim(scope, token, &files, &claim, grace)
-            .await;
-        // The claim is released unless the prune ran, so a retry of the delete prunes again. After
-        // a prune, the claim stays also when the ledger write fails, so no second prune runs close
-        // to the first one.
-        let marked_packs = match outcome {
-            Ok(ClaimOutcome::Pruned { marked_packs }) => marked_packs,
+        // Only an error before the prune starts releases the claim, so a retry of the delete
+        // prunes again. A prune that started can have marked packs, so its claim stays.
+        let backend = match self.prepare_prune(scope, token, &files, &claim).await {
+            Ok(Some(backend)) => backend,
             other => {
                 release_claim(&files, claim.directory, claim.number).await;
                 return other.map(|_| ());
             }
         };
+        let pruned = self.run_prune(backend, &files, &claim, grace).await;
+        // The final marker holds the claim for the grace period from the end of this prune, also
+        // when the prune or its ledger write fails.
+        if let Err(error) = write_marker(
+            &files,
+            "final_marker",
+            claim.directory,
+            claim.number,
+            Timestamp::now_utc(),
+        )
+        .await
+        {
+            warn!(
+                error = %format!("{error:#}"),
+                "Failed to write the final marker of the prune claim of a filesystem snapshot scope"
+            );
+        }
+        let marked_packs = pruned?;
         let ended = Timestamp::now_utc();
         write_ledger(&files, ended, marked_packs)
             .await
@@ -401,31 +408,41 @@ impl RusticSnapshotStore {
         Ok(())
     }
 
-    /// Prunes while the delete holds the claim. It gives `Superseded` when another prune ended after
-    /// the claim, and an error when no prune ran.
-    async fn prune_with_claim(
+    /// Checks the ledger again and builds the backend of the prune. It gives `None` when another
+    /// prune ended after the claim.
+    async fn prepare_prune(
         &self,
         scope: &SnapshotScope,
         token: &CancellationToken,
         files: &SnapshotFiles,
         claim: &Claim<'_>,
-        grace: Duration,
-    ) -> Result<ClaimOutcome, SnapshotStoreError> {
+    ) -> Result<Option<Arc<BlobBackend>>, SnapshotStoreError> {
         // A prune writes its ledger before it deletes the claims, so a delete that claims in a
         // directory that such a prune removed sees the new ledger here.
         let again = read_ledger(files).await.map_err(storage_failure)?;
         if claims_directory(&again) != claim.directory {
-            return Ok(ClaimOutcome::Superseded);
+            return Ok(None);
         }
-        let backend = Arc::new(self.backend(scope, token)?);
+        Ok(Some(Arc::new(self.backend(scope, token)?)))
+    }
+
+    /// Runs the prune with a new marker of the claim at each refresh period, and tells whether the
+    /// prune leaves marked packs.
+    async fn run_prune(
+        &self,
+        backend: Arc<BlobBackend>,
+        files: &SnapshotFiles,
+        claim: &Claim<'_>,
+        grace: Duration,
+    ) -> Result<bool, SnapshotStoreError> {
         let key = self.key.clone();
         let settings = self.policy.prune;
         let low_priority = self.low_priority;
         let pruning = self.blocking(Operation::Prune, move || {
             low_priority.run("fs-snap-prune", move || prune(backend, &key, &settings))
         });
-        // The claim is written again while the prune runs, so a prune slower than the grace
-        // period keeps its claim. The writes stop when the prune ends or the operation is
+        // The claim gets a new marker while the prune runs, so a prune slower than the grace
+        // period keeps its claim. The markers stop when the prune ends or the operation is
         // cancelled. The tracker counts the whole step, so no timer of it runs after a shut down.
         let refreshing =
             keep_claim_fresh(files, claim.directory, claim.number, refresh_period(grace));
@@ -438,9 +455,7 @@ impl RusticSnapshotStore {
                 }
             })
             .await?;
-        Ok(ClaimOutcome::Pruned {
-            marked_packs: report.as_ref().is_some_and(leaves_marked_packs),
-        })
+        Ok(report.as_ref().is_some_and(leaves_marked_packs))
     }
 }
 
