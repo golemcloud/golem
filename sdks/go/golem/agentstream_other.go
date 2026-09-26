@@ -17,25 +17,90 @@
 package golem
 
 import (
+	"sync"
+
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// Off the wasm target there is no host to stream through. The stream logic
-// itself is target-independent and tested directly against fakes; only these
-// three constructors are not, because binding a generated stream resource to an
+// Off the wasm target there is no host to stream through, so a stream pair is an
+// in-memory pipe: what the writer sends, the reader receives, and a read waits
+// until there is something to read or the writer is gone. That lets code which
+// produces and consumes streams run in native unit tests. Only the constructors
+// here are target-specific, because binding a generated stream resource to an
 // interface pulls its //go:wasmimport methods into a native link.
 
 func newStreamPair() (treeSink, treeSource) {
+	p := &memoryPipe{}
+	p.ready = sync.NewCond(&p.mu)
 	return treeSink{
-		write:         func([]types.SchemaValueTree) uint32 { return 0 },
-		readerDropped: func() bool { return true },
-		drop:          func() {},
+		write:         p.write,
+		readerDropped: p.isReaderGone,
+		drop:          p.dropWriter,
 	}, treeSource{
-		read:          func([]types.SchemaValueTree) uint32 { return 0 },
-		writerDropped: func() bool { return true },
-		drop:          func() {},
+		read:          p.read,
+		writerDropped: p.isWriterGone,
+		drop:          p.dropReader,
 	}
+}
+
+// memoryPipe is the native stand-in for a host stream. Like the host's, it has
+// a single end state: the writer dropping it is end of input.
+type memoryPipe struct {
+	mu         sync.Mutex
+	ready      *sync.Cond
+	items      []types.SchemaValueTree
+	writerGone bool
+	readerGone bool
+}
+
+func (p *memoryPipe) write(items []types.SchemaValueTree) uint32 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.readerGone {
+		return 0
+	}
+	p.items = append(p.items, items...)
+	p.ready.Broadcast()
+	return uint32(len(items))
+}
+
+func (p *memoryPipe) read(dst []types.SchemaValueTree) uint32 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for len(p.items) == 0 && !p.writerGone && !p.readerGone {
+		p.ready.Wait()
+	}
+	n := copy(dst, p.items)
+	p.items = p.items[n:]
+	return uint32(n)
+}
+
+func (p *memoryPipe) isWriterGone() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.writerGone && len(p.items) == 0
+}
+
+func (p *memoryPipe) isReaderGone() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.readerGone
+}
+
+func (p *memoryPipe) dropWriter() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.writerGone = true
+	p.ready.Broadcast()
+}
+
+func (p *memoryPipe) dropReader() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.readerGone = true
+	p.items = nil
+	p.ready.Broadcast()
 }
 
 func streamSourceFromNode(types.SchemaValueNode) (treeSource, bool) {
