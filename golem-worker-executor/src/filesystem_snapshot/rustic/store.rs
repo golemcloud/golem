@@ -339,13 +339,16 @@ impl RusticSnapshotStore {
     }
 
     /// Prunes the repository when a prune is due. The records of freed bytes stay until a prune
-    /// succeeds, so a delete that runs again after a failed prune prunes again. It lists the packs only when their size can make a prune due.
+    /// succeeds, so a later prune counts them again. It lists the packs only when their size can
+    /// make a prune due.
     /// A due prune runs only after the delete takes a claim of its ledger, and only when the ledger
     /// did not change after the claim. After an error before the prune ran, the claim is deleted,
     /// so a retry of the delete prunes again, and a claim write that the storage completes after
-    /// that delete can delay that prune by up to the grace period. After a prune whose ledger write
-    /// failed, the claim stays, so the next prune waits up to the grace period. A prune that
-    /// succeeds deletes each claim of its ledger.
+    /// that delete can delay that prune by up to the grace period. A prune that found a snapshot
+    /// file gone at each attempt changed nothing, so it counts as an error before the prune ran.
+    /// After a prune that started, the claim stays on each outcome, also when the prune or its
+    /// ledger write fails, so the next prune waits the grace period from the end of this one. A
+    /// prune that succeeds deletes each claim of its ledger.
     async fn prune_when_due(
         &self,
         scope: &SnapshotScope,
