@@ -425,13 +425,19 @@ impl RusticSnapshotStore {
             low_priority.run("fs-snap-prune", move || prune(backend, &key, &settings))
         });
         // The claim is written again while the prune runs, so a prune slower than the grace
-        // period keeps its claim. The writes stop when the prune ends.
+        // period keeps its claim. The writes stop when the prune ends or the operation is
+        // cancelled. The tracker counts the whole step, so no timer of it runs after a shut down.
         let refreshing =
             keep_claim_fresh(files, claim.directory, claim.number, refresh_period(grace));
-        let report = match future::select(pin!(pruning), pin!(refreshing)).await {
-            Either::Left((pruned, _)) => pruned,
-            Either::Right(((), pruning)) => pruning.await,
-        }?;
+        let report = self
+            .tracker
+            .track_future(async {
+                match future::select(pin!(pruning), pin!(refreshing)).await {
+                    Either::Left((pruned, _)) => pruned,
+                    Either::Right(((), pruning)) => pruning.await,
+                }
+            })
+            .await?;
         Ok(ClaimOutcome::Pruned {
             marked_packs: report.as_ref().is_some_and(leaves_marked_packs),
         })

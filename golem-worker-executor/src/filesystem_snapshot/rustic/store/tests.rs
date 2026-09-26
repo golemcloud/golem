@@ -2014,6 +2014,80 @@ async fn shut_down_waits_for_a_blob_call_of_the_store_that_is_not_polled() {
 
 #[test]
 #[timeout("60s")]
+async fn shut_down_waits_for_the_step_of_a_prune_and_its_refresh_that_is_not_polled() {
+    // The test drives the delete until its prune waits at the gate and its refresh runs, and then
+    // does not poll it. Only the tracker of the step makes the shut down wait for it.
+    let grace = Duration::from_millis(400);
+    let claimed = Arc::new(AtomicBool::new(false));
+    let held = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let (claimed, held) = (claimed.clone(), held.clone());
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "list"
+                && path == Path::new("data")
+                && claimed.load(Ordering::SeqCst)
+                && !held.swap(true, Ordering::SeqCst)
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(storage.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let deleted_name = name("p-1");
+    let deleting = store.delete(&scope, &deleted_name);
+    tokio::pin!(deleting);
+    let reached = tokio::select! {
+        biased;
+        () = async {
+            eventually(|| held.load(Ordering::SeqCst)).await;
+        } => true,
+        _ = &mut deleting => false,
+    };
+
+    let shutting = store.shut_down();
+    tokio::pin!(shutting);
+    let waited = tokio::time::timeout(Duration::from_millis(200), &mut shutting)
+        .await
+        .is_err();
+    let deleted = tokio::time::timeout(LIMIT, &mut deleting).await;
+    // A finished future must not be polled again, so the second wait runs only after a first wait
+    // that timed out.
+    let stopped = !waited || tokio::time::timeout(LIMIT, &mut shutting).await.is_ok();
+    let refreshes = |calls: &[(&'static str, String)]| {
+        calls
+            .iter()
+            .filter(|(op_label, _)| *op_label == "refresh_claim")
+            .count()
+    };
+    let at_stop = refreshes(&storage.calls());
+    tokio::time::sleep(grace).await;
+    storage.open_gate();
+
+    assert!(
+        matches!(&deleted, Ok(Err(error)) if is_storage(error, true)),
+        "{deleted:?}"
+    );
+    assert_eq!(
+        (
+            reached,
+            waited,
+            stopped,
+            store.work_in_flight(),
+            refreshes(&storage.calls()) - at_stop,
+        ),
+        (true, true, true, 0, 0)
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_call() {
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
         if op_label == "copy_list" {

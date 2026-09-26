@@ -399,7 +399,8 @@ pub(super) fn refresh_period(grace: Duration) -> Duration {
 }
 
 /// Writes the claim with the number again, with the current time, at each period, until the
-/// caller drops the future. A failed write gives a warning.
+/// caller drops the future or the operation of the files is cancelled. A failed write gives a
+/// warning.
 pub(super) async fn keep_claim_fresh(
     files: &SnapshotFiles,
     directory: &Path,
@@ -409,6 +410,7 @@ pub(super) async fn keep_claim_fresh(
     let path = directory.join(number.to_string());
     stream::repeat(())
         .then(|()| tokio::time::sleep(period))
+        .take_until(files.cancel.cancelled())
         .for_each(|()| {
             let path = &path;
             async move {
@@ -494,9 +496,9 @@ mod tests {
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, FREED_PATH, FreedRecords, LEDGERS_PATH,
         ListedClaim, Percent, PruneLedger, claim_directories_except, claims_directory, count_freed,
-        list_claims, list_freed, needs_repository_size, newest_ledger, next_claim, older_entries,
-        parse_freed, parse_ledger_entry, prune_due, read_ledger, record_freed, take_claim,
-        write_ledger,
+        keep_claim_fresh, list_claims, list_freed, needs_repository_size, newest_ledger,
+        next_claim, older_entries, parse_freed, parse_ledger_entry, prune_due, read_ledger,
+        record_freed, take_claim, write_ledger,
     };
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
@@ -712,6 +714,26 @@ mod tests {
                 ClaimChoice::Claim(4),
             ]
         );
+    }
+
+    #[test]
+    async fn the_refresh_of_a_claim_ends_when_its_operation_is_cancelled() {
+        let files = new_files();
+        files.cancel.cancel();
+
+        let ended = tokio::time::timeout(
+            Duration::from_secs(10),
+            keep_claim_fresh(
+                &files,
+                &claims_directory(&ledger(None, false)),
+                0,
+                Duration::from_secs(3600),
+            ),
+        )
+        .await
+        .is_ok();
+
+        assert!(ended);
     }
 
     #[test]
