@@ -24,6 +24,7 @@
 //! ledger make one prune. The claims of a ledger are in one directory, named by the time of the last
 //! prune in that ledger.
 
+use super::backend::Lease;
 use super::files::SnapshotFiles;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::model::Timestamp;
@@ -31,7 +32,7 @@ use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 /// The directory of the ledger entries, relative to the root of the namespace of the scope.
@@ -415,20 +416,28 @@ pub(super) enum ClaimChoice {
     Held,
 }
 
-/// Gives how long a marker holds the claims of its ledger: the grace period, but at least the time
-/// between two refreshes and two margins for clock skew, and then one more margin.
-pub(super) fn claim_hold(grace: Duration) -> Duration {
-    grace
-        .max(refresh_period(grace).saturating_add(CLOCK_SKEW_MARGIN.saturating_mul(2)))
+/// Gives how long a marker write that succeeds lets the prune of its claim go on: the grace period
+/// less one storage call deadline, but at least one deadline, so the lease is above zero for each
+/// deadline above zero.
+pub(super) fn lease_span(grace: Duration, deadline: Duration) -> Duration {
+    grace.saturating_sub(deadline).max(deadline)
+}
+
+/// Gives how long a marker holds the claims of its ledger: the lease, then one margin for clock
+/// skew, then one storage call deadline. A marker write that the storage received can still land up
+/// to one deadline after the call gave up, and another delete sees the marker time with up to one
+/// margin of skew. So a prune whose lease ran out stops before another delete can take its claim.
+pub(super) fn claim_hold(grace: Duration, deadline: Duration) -> Duration {
+    lease_span(grace, deadline)
         .saturating_add(CLOCK_SKEW_MARGIN)
+        .saturating_add(deadline)
 }
 
 /// Chooses the claim of a delete from the entries of the claim directory of its ledger. Any marker
 /// younger than the hold holds the ledger, whatever its number. A marker whose time is more than
 /// the margin after `now` counts as missing, and a claim without a young marker is old. Otherwise
 /// the delete takes the number after the largest one, or 0.
-pub(super) fn next_claim(entries: &[ClaimEntry], now: Timestamp, grace: Duration) -> ClaimChoice {
-    let hold = claim_hold(grace);
+pub(super) fn next_claim(entries: &[ClaimEntry], now: Timestamp, hold: Duration) -> ClaimChoice {
     let held = entries.iter().any(|entry| match entry {
         ClaimEntry::Marker(_, at) => !beyond_margin(*at, now) && !passed_since(*at, now, hold),
         ClaimEntry::Claim(_) => false,
@@ -486,16 +495,33 @@ pub(super) async fn write_marker(
     Ok(path.into_boxed_path())
 }
 
+/// Writes a marker of the claim with the number, and moves the end of the lease to `span` after
+/// the start of the write when the write succeeds.
+async fn write_leased_marker(
+    files: &SnapshotFiles,
+    op_label: &'static str,
+    directory: &Path,
+    number: u64,
+    lease: &Lease,
+    span: Duration,
+) -> anyhow::Result<Box<Path>> {
+    let started = Instant::now();
+    let marker = write_marker(files, op_label, directory, number, Timestamp::now_utc()).await?;
+    lease.extend_to(started + span);
+    Ok(marker)
+}
+
 /// Writes the first marker of the claim with the number, then takes the claim, and gives the path
 /// of that marker when this delete holds the claim. A delete that loses the claim deletes its
-/// marker.
+/// marker. The marker write moves the end of the lease.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
-    now: Timestamp,
+    lease: &Lease,
+    span: Duration,
 ) -> anyhow::Result<Option<Box<Path>>> {
-    let marker = write_marker(files, "write_marker", directory, number, now).await?;
+    let marker = write_leased_marker(files, "write_marker", directory, number, lease, span).await?;
     let written = files
         .put_if_absent("write_claim", &directory.join(number.to_string()), &[])
         .await?;
@@ -512,37 +538,36 @@ pub(super) async fn take_claim(
 }
 
 /// Gives the time between two markers of a live claim: a fourth of the grace period, or a fourth
-/// of the margin for clock skew when the grace period is zero.
-pub(super) fn refresh_period(grace: Duration) -> Duration {
-    if grace.is_zero() {
-        CLOCK_SKEW_MARGIN / 4
+/// of the margin for clock skew when the grace period is zero, but at most a fourth of the lease, so
+/// each lease has at least two refreshes.
+pub(super) fn refresh_period(grace: Duration, deadline: Duration) -> Duration {
+    let base = if grace.is_zero() {
+        CLOCK_SKEW_MARGIN
     } else {
-        grace / 4
-    }
+        grace
+    };
+    (base / 4).min(lease_span(grace, deadline) / 4)
 }
 
 /// Writes a new marker of the claim with the number at each period, until the caller drops the
 /// future or the operation of the files is cancelled, and adds the path of each written marker to
-/// `written`. A failed write gives a warning.
+/// `written`. Each write that succeeds moves the end of the lease to `span` after its start. A
+/// failed write gives a warning, and the next period tries again.
 pub(super) async fn keep_claim_fresh(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
     period: Duration,
     written: &Mutex<Vec<Box<Path>>>,
+    lease: &Lease,
+    span: Duration,
 ) {
     stream::repeat(())
         .then(|()| tokio::time::sleep(period))
         .take_until(files.cancel.cancelled())
         .for_each(|()| async move {
-            let marker = write_marker(
-                files,
-                "refresh_claim",
-                directory,
-                number,
-                Timestamp::now_utc(),
-            )
-            .await;
+            let marker =
+                write_leased_marker(files, "refresh_claim", directory, number, lease, span).await;
             match marker {
                 Ok(path) => written
                     .lock()
@@ -659,16 +684,19 @@ pub(super) async fn remove_old_claims(files: &SnapshotFiles, ended: Timestamp) {
 #[cfg(test)]
 mod tests {
     use super::super::files::SnapshotFiles;
+    use super::super::scripted::{Script, ScriptedBlobStorage};
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
-        FreedRecords, LEDGERS_PATH, Percent, PruneLedger, claim_hold, claims_directory,
-        keep_claim_fresh, list_claims, list_freed, needs_repository_size, newest_ledger,
-        next_claim, old_claim_directories, older_entries, parse_claim_entry, parse_freed,
-        parse_ledger_entry, parse_record, prune_due, read_ledger, record_content, record_freed,
-        settle, take_claim, write_ledger,
+        FreedRecords, LEDGERS_PATH, Lease, Percent, PruneLedger, claim_hold, claims_directory,
+        keep_claim_fresh, lease_span, list_claims, list_freed, needs_repository_size,
+        newest_ledger, next_claim, old_claim_directories, older_entries, parse_claim_entry,
+        parse_freed, parse_ledger_entry, parse_record, prune_due, read_ledger, record_content,
+        record_freed, refresh_period, settle, take_claim, write_ledger,
     };
+    use futures::StreamExt;
     use golem_common::model::Timestamp;
     use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::storage::blob::BlobStorage;
     use golem_service_base::storage::blob::BlobStorageNamespace;
     use golem_service_base::storage::blob::ListedBlob;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -676,7 +704,8 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
-    use test_r::test;
+    use std::time::Instant;
+    use test_r::{test, timeout};
     use uuid::Uuid;
 
     const TEN_PERCENT: Percent = Percent(10);
@@ -697,8 +726,12 @@ mod tests {
     }
 
     fn new_files() -> SnapshotFiles {
+        files_over(Arc::new(InMemoryBlobStorage::new()))
+    }
+
+    fn files_over(storage: Arc<dyn BlobStorage>) -> SnapshotFiles {
         SnapshotFiles {
-            storage: Arc::new(InMemoryBlobStorage::new()),
+            storage,
             namespace: BlobStorageNamespace::InitialAgentFiles {
                 environment_id: EnvironmentId(Uuid::new_v4()),
             },
@@ -820,7 +853,7 @@ mod tests {
             next_claim(
                 &[ClaimEntry::Claim(0), ClaimEntry::Marker(0, at(claimed_at))],
                 at(now),
-                GRACE,
+                claim_hold(GRACE, DEADLINE),
             )
         };
 
@@ -858,7 +891,8 @@ mod tests {
         let now = 10_000_000;
         let claim = ClaimEntry::Claim;
         let marker = |number, millis| ClaimEntry::Marker(number, at(millis));
-        let choose = |entries: &[ClaimEntry]| next_claim(entries, at(now), GRACE);
+        let choose =
+            |entries: &[ClaimEntry]| next_claim(entries, at(now), claim_hold(GRACE, DEADLINE));
 
         assert_eq!(
             [
@@ -881,21 +915,70 @@ mod tests {
     }
 
     #[test]
-    fn the_hold_is_at_least_the_refresh_period_and_two_margins_and_then_one_margin() {
-        let margin = CLOCK_SKEW_MARGIN;
+    fn the_lease_is_the_grace_period_less_one_deadline_and_at_least_one_deadline() {
+        let second = Duration::from_secs(1);
+        let minute = Duration::from_secs(60);
 
         assert_eq!(
             [
-                claim_hold(GRACE),
-                claim_hold(Duration::from_secs(60)),
-                claim_hold(Duration::ZERO),
+                lease_span(GRACE, minute),
+                lease_span(2 * minute, minute),
+                lease_span(2 * minute - second, minute),
+                lease_span(Duration::ZERO, minute),
+                lease_span(minute, Duration::ZERO),
+                lease_span(Duration::ZERO, second),
+            ],
+            [GRACE - minute, minute, minute, minute, minute, second]
+        );
+    }
+
+    #[test]
+    fn the_hold_is_the_lease_then_one_margin_then_one_deadline() {
+        let margin = CLOCK_SKEW_MARGIN;
+        let minute = Duration::from_secs(60);
+
+        assert_eq!(
+            [
+                claim_hold(GRACE, minute),
+                claim_hold(GRACE, DEADLINE),
+                claim_hold(Duration::ZERO, minute),
+                claim_hold(Duration::ZERO, Duration::from_millis(1)),
             ],
             [
                 GRACE + margin,
-                Duration::from_secs(15) + margin * 3,
-                margin / 4 + margin * 3,
+                GRACE + margin,
+                minute + margin + minute,
+                Duration::from_millis(1) + margin + Duration::from_millis(1),
             ]
         );
+    }
+
+    #[test]
+    fn each_lease_has_at_least_two_refreshes() {
+        let minute = Duration::from_secs(60);
+        let cases = [
+            (GRACE, minute),
+            (GRACE, DEADLINE),
+            (Duration::ZERO, minute),
+            (Duration::ZERO, Duration::from_millis(1)),
+            (Duration::from_millis(16), minute),
+            (Duration::from_secs(2), Duration::from_secs(1)),
+        ];
+
+        assert_eq!(
+            cases.map(|(grace, deadline)| refresh_period(grace, deadline)),
+            [
+                (GRACE - minute) / 4,
+                (GRACE - DEADLINE) / 4,
+                minute / 4,
+                Duration::from_micros(250),
+                Duration::from_millis(4),
+                Duration::from_millis(250),
+            ]
+        );
+        assert!(cases.iter().all(|(grace, deadline)| {
+            refresh_period(*grace, *deadline) * 2 <= lease_span(*grace, *deadline)
+        }));
     }
 
     #[test]
@@ -933,6 +1016,8 @@ mod tests {
                 0,
                 Duration::from_secs(3600),
                 &std::sync::Mutex::default(),
+                &Lease::until(Instant::now()),
+                GRACE,
             ),
         )
         .await
@@ -942,13 +1027,70 @@ mod tests {
     }
 
     #[test]
+    #[timeout("60s")]
+    async fn a_refresh_that_ends_late_moves_the_lease_only_to_its_start_plus_the_span() {
+        // Each refresh write takes the delay. A lease from the end of the write would be later
+        // than a lease from its start by the delay.
+        let delay = Duration::from_millis(300);
+        let span = Duration::from_secs(1);
+        let storage =
+            ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), move |op_label, _| {
+                if op_label == "refresh_claim" {
+                    Script::Delay(delay)
+                } else {
+                    Script::Pass
+                }
+            });
+        let files = files_over(storage);
+        let lease = Lease::until(Instant::now());
+        let written = std::sync::Mutex::default();
+        let directory = claims_directory(&ledger(None, false));
+        let started = Instant::now();
+
+        let ended = tokio::select! {
+            () = keep_claim_fresh(
+                &files,
+                &directory,
+                0,
+                Duration::from_millis(10),
+                &written,
+                &lease,
+                span,
+            ) => None,
+            ended = async {
+                futures::stream::repeat(())
+                    .then(|()| tokio::time::sleep(Duration::from_millis(5)))
+                    .take_while(|()| {
+                        std::future::ready(
+                            written.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty(),
+                        )
+                    })
+                    .for_each(|()| std::future::ready(()))
+                    .await;
+                Instant::now()
+            } => Some(ended),
+        };
+
+        let ended = ended.unwrap();
+        let expiry = lease.expiry();
+        assert!(expiry >= started + span, "the lease did not move");
+        assert!(
+            expiry + delay / 2 < ended + span,
+            "the lease moved to the end of the write"
+        );
+    }
+
+    #[test]
     async fn a_claim_is_taken_after_its_marker_and_a_loser_deletes_its_marker() {
         let files = new_files();
         let directory = claims_directory(&ledger(Some(42), false));
-        let now = at(10_000_000);
+        let started = Instant::now();
 
-        let first = take_claim(&files, &directory, 0, now).await.unwrap();
-        let again = take_claim(&files, &directory, 0, at(20_000_000))
+        let lease = Lease::until(started);
+        let first = take_claim(&files, &directory, 0, &lease, GRACE)
+            .await
+            .unwrap();
+        let again = take_claim(&files, &directory, 0, &lease, GRACE)
             .await
             .unwrap();
         let listed = list_claims(&files, &directory).await.unwrap();
@@ -960,13 +1102,17 @@ mod tests {
                 again.is_some(),
                 listed.len(),
                 listed.contains(&ClaimEntry::Claim(0)),
-                listed.contains(&ClaimEntry::Marker(0, now)),
+                listed
+                    .iter()
+                    .any(|entry| matches!(entry, ClaimEntry::Marker(0, _))),
+                lease.expiry() >= started + GRACE,
             ),
             (
                 "golem/prune-claims/42".to_string(),
                 true,
                 false,
                 2,
+                true,
                 true,
                 true
             )

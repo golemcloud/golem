@@ -45,6 +45,8 @@ pub(super) enum Script {
     NeverAnswer,
     /// Waits until the test opens the gate of the storage, and then passes the call.
     WaitForGate,
+    /// Waits for the time, and then passes the call.
+    Delay(std::time::Duration),
     /// Gives no blob to a read of a whole blob, as a delete after a listing does. Each other call
     /// passes.
     Vanish,
@@ -232,6 +234,10 @@ impl ScriptedBlobStorage {
                 call.await
             }
             Script::Vanish | Script::AnswerAlreadyExists => call.await,
+            Script::Delay(time) => {
+                tokio::time::sleep(time).await;
+                call.await
+            }
             Script::Step { refuse, .. } => {
                 let _stepped = self.wait_for_step(op_label, path).await;
                 if refuse {

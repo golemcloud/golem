@@ -17,10 +17,11 @@
 //! The contract suite runs on the store with the policy of the configuration. The other tests
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
+use super::super::fault::is_lease_expired;
 use super::super::files::SnapshotFiles;
 use super::super::prune::{
-    CLOCK_SKEW_MARGIN, ClaimEntry, LEDGERS_PATH, Percent, PruneLedger, parse_claim_entry,
-    parse_freed, read_ledger,
+    CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, LEDGERS_PATH, Percent, PruneLedger, claim_hold,
+    next_claim, parse_claim_entry, parse_freed, read_ledger,
 };
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
@@ -1329,6 +1330,137 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
             blobs(&*storage, &scope.0, "golem/prune-claims/").await,
         ),
         (true, true, 1, 1, Vec::<String>::new())
+    );
+}
+
+/// Tells whether the operation label is a call of a rustic backend.
+fn is_backend_call(op_label: &str) -> bool {
+    matches!(
+        op_label,
+        "stat" | "list" | "read" | "read_range" | "write" | "delete"
+    )
+}
+
+/// Gives the entries of the claims of the scope.
+async fn claim_entries(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> Vec<ClaimEntry> {
+    blobs(storage, &scope.0, "golem/prune-claims/")
+        .await
+        .iter()
+        .filter_map(|path| parse_claim_entry(Path::new(path).file_name()?.to_str()?))
+        .collect()
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_whose_refreshes_fail_stops_when_its_lease_runs_out_and_keeps_its_claim() {
+    // A zero grace period and a deadline of 200 ms give a lease of 200 ms. The claim write and the
+    // second read of the ledger each take 150 ms, so the lease has run out when the prune makes its
+    // first call. Each refresh fails.
+    let deadline = Duration::from_millis(200);
+    let slow = Duration::from_millis(150);
+    let claimed = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let claimed = claimed.clone();
+        move |op_label, _| match op_label {
+            "write_claim" => {
+                claimed.store(true, Ordering::SeqCst);
+                Script::Delay(slow)
+            }
+            "read_ledger" if claimed.load(Ordering::SeqCst) => Script::Delay(slow),
+            "refresh_claim" => Script::Refuse,
+            _ => Script::Pass,
+        }
+    });
+    let store = store(storage.clone(), policy(deadline, ALWAYS, Duration::ZERO));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+    let calls = storage.calls();
+    let backend_calls_after_claim = calls
+        .iter()
+        .position(|(op_label, _)| *op_label == "write_claim")
+        .map(|claimed_at| {
+            calls[claimed_at..]
+                .iter()
+                .filter(|(op_label, _)| is_backend_call(op_label))
+                .count()
+        });
+    let entries = claim_entries(&storage, &scope).await;
+    let hold = claim_hold(Duration::ZERO, deadline);
+    let now = golem_common::model::Timestamp::now_utc();
+    let after_hold = golem_common::model::Timestamp::from(
+        now.to_millis() + u64::try_from((hold + Duration::from_secs(1)).as_millis()).unwrap(),
+    );
+
+    assert!(
+        matches!(
+            &deleted,
+            Err(error @ SnapshotStoreError::Storage { source, .. })
+                if is_storage(error, true) && is_lease_expired(source.as_ref())
+        ),
+        "{deleted:?}"
+    );
+    assert_eq!(
+        (
+            backend_calls_after_claim,
+            entries.contains(&ClaimEntry::Claim(0)),
+            next_claim(&entries, now, hold),
+            next_claim(&entries, after_hold, hold),
+        ),
+        (Some(0), true, ClaimChoice::Held, ClaimChoice::Claim(1))
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_prune_goes_on_after_one_failed_refresh_when_the_later_refreshes_succeed() {
+    // A zero grace period and a deadline of 200 ms give a lease of 200 ms and a refresh each 50 ms.
+    // Each call of the prune takes 40 ms, so the prune runs for more than one lease. The first
+    // refresh fails, and the later ones succeed.
+    let deadline = Duration::from_millis(200);
+    let claimed = Arc::new(AtomicBool::new(false));
+    let refused = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let (claimed, refused) = (claimed.clone(), refused.clone());
+        move |op_label, _| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "refresh_claim" && !refused.swap(true, Ordering::SeqCst) {
+                Script::Refuse
+            } else if is_backend_call(op_label) && claimed.load(Ordering::SeqCst) {
+                Script::Delay(Duration::from_millis(40))
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(storage.clone(), policy(deadline, ALWAYS, Duration::ZERO));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+    let calls = storage.calls();
+    let backend_calls_after_claim = calls
+        .iter()
+        .position(|(op_label, _)| *op_label == "write_claim")
+        .map_or(0, |claimed_at| {
+            calls[claimed_at..]
+                .iter()
+                .filter(|(op_label, _)| is_backend_call(op_label))
+                .count()
+        });
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (
+            refused.load(Ordering::SeqCst),
+            backend_calls_after_claim * 40 > 200,
+            prunes(&calls),
+            ledger(&storage, &scope).await.last_prune.is_some(),
+        ),
+        (true, true, 1, true)
     );
 }
 

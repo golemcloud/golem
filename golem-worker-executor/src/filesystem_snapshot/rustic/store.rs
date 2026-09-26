@@ -20,17 +20,17 @@
 //! next storage call. The store counts each blocking task and each backend in a task tracker, and
 //! [`RusticSnapshotStore::shut_down`] waits for them.
 
-use super::backend::BlobBackend;
+use super::backend::{BlobBackend, Lease};
 use super::fault::{
     Operation, classify, is_file_missing, is_snapshot_missing, is_storage_failure, storage_failure,
 };
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
-    ClaimChoice, Percent, claims_directory, keep_claim_fresh, list_claims, list_freed,
-    needs_repository_size, next_claim, prune_due, read_ledger, record_freed, refresh_period,
-    release_claim, remove_freed, remove_old_claims, remove_older_ledgers, repository_bytes,
-    take_claim, write_ledger, write_marker,
+    ClaimChoice, Percent, claim_hold, claims_directory, keep_claim_fresh, lease_span, list_claims,
+    list_freed, needs_repository_size, next_claim, prune_due, read_ledger, record_freed,
+    refresh_period, release_claim, remove_freed, remove_old_claims, remove_older_ledgers,
+    repository_bytes, take_claim, write_ledger, write_marker,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -62,7 +62,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::pin::pin;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
@@ -189,6 +189,10 @@ pub(super) struct PublishGate {
 struct Claim<'a> {
     directory: &'a Path,
     number: u64,
+    /// The lease of the prune. Each marker write that succeeds moves its end.
+    lease: Arc<Lease>,
+    /// The time that a marker write that succeeds adds to the lease.
+    span: Duration,
     /// The markers of the claim that this delete wrote: the first marker, and each new marker
     /// while the prune runs.
     markers: Mutex<Vec<Box<Path>>>,
@@ -378,10 +382,14 @@ impl RusticSnapshotStore {
         let listed = list_claims(&files, &claims)
             .await
             .map_err(storage_failure)?;
-        let ClaimChoice::Claim(number) = next_claim(&listed, now, grace) else {
+        let deadline = self.policy.deadline;
+        let ClaimChoice::Claim(number) = next_claim(&listed, now, claim_hold(grace, deadline))
+        else {
             return Ok(());
         };
-        let Some(marker) = take_claim(&files, &claims, number, now)
+        let lease = Arc::new(Lease::until(Instant::now()));
+        let span = lease_span(grace, deadline);
+        let Some(marker) = take_claim(&files, &claims, number, &lease, span)
             .await
             .map_err(storage_failure)?
         else {
@@ -390,6 +398,8 @@ impl RusticSnapshotStore {
         let claim = Claim {
             directory: &claims,
             number,
+            lease,
+            span,
             markers: Mutex::new(vec![marker]),
         };
         // Only an error before the prune starts releases the claim, so a retry of the delete
@@ -477,7 +487,9 @@ impl RusticSnapshotStore {
         if *claims_directory(&again) != *claim.directory {
             return Ok(None);
         }
-        Ok(Some(Arc::new(self.backend(scope, token)?)))
+        Ok(Some(Arc::new(
+            self.backend(scope, token)?.leased_by(claim.lease.clone()),
+        )))
     }
 
     /// Runs the prune with a new marker of the claim at each refresh period, and tells whether the
@@ -515,8 +527,10 @@ impl RusticSnapshotStore {
             files,
             claim.directory,
             claim.number,
-            refresh_period(grace),
+            refresh_period(grace, self.policy.deadline),
             &claim.markers,
+            &claim.lease,
+            claim.span,
         );
         let attempts = self
             .tracker

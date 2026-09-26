@@ -62,6 +62,24 @@ impl Display for OperationCancelled {
 
 impl Error for OperationCancelled {}
 
+/// The lease of the prune ran out, so the backend made no more calls. Another delete can then take
+/// the claim of the prune, so the prune must not change the repository any more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct LeaseExpired;
+
+impl Display for LeaseExpired {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the lease of the prune claim ran out")
+    }
+}
+
+impl Error for LeaseExpired {}
+
+/// Tells whether an error in the chain is [`LeaseExpired`].
+pub(super) fn is_lease_expired(error: &(dyn Error + 'static)) -> bool {
+    chain(error).any(|error| error.is::<LeaseExpired>())
+}
+
 /// Another writer made the config file of the repository first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ConfigExists;
