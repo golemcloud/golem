@@ -22,8 +22,8 @@ use crate::services::oplog::reader::{
 };
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogCloseCompletion, OplogService, OrderedOplogStart, PendingUpload, ReservedRawStartBuilder,
-    downcast_oplog,
+    OplogCloseCompletion, OplogError, OplogService, OrderedOplogStart, PendingUpload,
+    ReservedRawStartBuilder, downcast_oplog,
 };
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -800,18 +800,18 @@ impl Oplog for EphemeralOplog {
         }
         let owned_agent_id = self.owned_agent_id.clone();
         Box::pin(async move {
-            done_rx.await.unwrap_or_else(|_| {
+            Ok(done_rx.await.unwrap_or_else(|_| {
                 panic!(
                     "Ephemeral oplog actor for {owned_agent_id:?} dropped an add request without replying"
                 )
-            })
+            }))
         })
     }
 
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
         record_oplog_call("add_durable_stream_batch");
         Ok(self
             .run_job(|done| EphemeralJob::AddDurableStreamBatch { make_batch, done })
@@ -822,21 +822,22 @@ impl Oplog for EphemeralOplog {
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         record_oplog_call("add_pair");
-        self.run_job(|done| EphemeralJob::AddPair {
-            start,
-            make_second,
-            done,
-        })
-        .await
+        Ok(self
+            .run_job(|done| EphemeralJob::AddPair {
+                start,
+                make_second,
+                done,
+            })
+            .await)
     }
 
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         record_oplog_call("add_start_with_reserved_raw_payload");
         // Ephemeral oplogs are never replayed, so cross-call `Start` ordering need not be
         // deterministic and there is no deferred-upload/commit-barrier machinery here. Upload the
@@ -860,13 +861,14 @@ impl Oplog for EphemeralOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         record_oplog_call("add_start_with_indexed_reserved_raw_payload");
         self.run_job(|done| EphemeralJob::AddIndexedStart {
             build_request,
             done,
         })
         .await
+        .map_err(OplogError::from)
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -878,24 +880,25 @@ impl Oplog for EphemeralOplog {
         dropped
     }
 
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         record_oplog_call("commit");
         match level {
-            CommitLevel::Always => {
-                self.run_job(|done| EphemeralJob::Commit {
+            CommitLevel::Always => Ok(self
+                .run_job(|done| EphemeralJob::Commit {
                     wait_for_storage: true,
                     done,
                 })
-                .await
-            }
-            CommitLevel::Deferred => {
-                self.run_job(|done| EphemeralJob::Commit {
+                .await),
+            CommitLevel::Deferred => Ok(self
+                .run_job(|done| EphemeralJob::Commit {
                     wait_for_storage: false,
                     done,
                 })
-                .await
-            }
-            CommitLevel::DurableOnly => BTreeMap::new(),
+                .await),
+            CommitLevel::DurableOnly => Ok(BTreeMap::new()),
         }
     }
 
@@ -954,10 +957,14 @@ impl Oplog for EphemeralOplog {
             .await
     }
 
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
+    async fn wait_for_replicas(
+        &self,
+        _replicas: u8,
+        _timeout: Duration,
+    ) -> Result<bool, OplogError> {
         record_oplog_call("wait_for_replicas");
         // Not supported
-        false
+        Ok(false)
     }
 
     async fn read_exact(

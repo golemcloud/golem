@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Worker;
+use super::{RetirementReason, Worker};
 use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
@@ -203,7 +203,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             InterruptDecision::Ignore => unreachable!(),
         };
         if decision == InterruptDecision::Interrupt {
-            worker.interrupt_and_retire(interrupt_kind).await?;
+            worker
+                .interrupt_and_retire(interrupt_kind, RetirementReason::Requested)
+                .await?;
         } else if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await {
             await_interruption.recv().await.unwrap();
         }

@@ -24,13 +24,14 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
 use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource, fail_stop};
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
-    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogLifecycleGuard, OplogService,
-    OrderedOplogStart, ReservedRawStartBuilder, decode_scan_cursor, downcast_oplog,
+    OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogLifecycleGuard,
+    OplogService, OrderedOplogStart, ReservedRawStartBuilder, decode_scan_cursor, downcast_oplog,
     first_scan_cursor,
 };
 use crate::storage::indexed::IndexedStorageMetaNamespace;
 use async_trait::async_trait;
 use futures::FutureExt;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
@@ -423,6 +424,7 @@ struct CreateOplogConstructor {
     initial_worker_metadata: AgentMetadata,
     last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+    shard_epoch: Option<ShardEpoch>,
 }
 
 impl CreateOplogConstructor {
@@ -438,6 +440,7 @@ impl CreateOplogConstructor {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Self {
         Self {
             owned_agent_id,
@@ -450,12 +453,17 @@ impl CreateOplogConstructor {
             initial_worker_metadata,
             last_known_status,
             execution_status,
+            shard_epoch,
         }
     }
 }
 
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        self.shard_epoch
+    }
+
     async fn create_oplog(
         self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -487,6 +495,7 @@ impl OplogConstructor for CreateOplogConstructor {
                                 self.initial_worker_metadata,
                                 self.last_known_status,
                                 self.execution_status,
+                                self.shard_epoch,
                             )
                             .await
                     } else {
@@ -499,6 +508,7 @@ impl OplogConstructor for CreateOplogConstructor {
                                 self.initial_worker_metadata,
                                 self.last_known_status,
                                 self.execution_status,
+                                self.shard_epoch,
                             )
                             .await
                     }
@@ -512,6 +522,7 @@ impl OplogConstructor for CreateOplogConstructor {
                             self.initial_worker_metadata,
                             self.last_known_status,
                             self.execution_status,
+                            self.shard_epoch,
                         )
                         .await
                 };
@@ -653,6 +664,7 @@ impl OplogService for MultiLayerOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -669,6 +681,7 @@ impl OplogService for MultiLayerOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    shard_epoch,
                 ),
             )
             .await
@@ -683,6 +696,7 @@ impl OplogService for MultiLayerOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -699,6 +713,7 @@ impl OplogService for MultiLayerOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    shard_epoch,
                 ),
             )
             .await
@@ -713,6 +728,7 @@ impl OplogService for MultiLayerOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -729,6 +745,7 @@ impl OplogService for MultiLayerOplogService {
                     initial_worker_metadata,
                     last_known_status,
                     execution_status,
+                    shard_epoch,
                 ),
             )
             .await
@@ -755,20 +772,35 @@ impl OplogService for MultiLayerOplogService {
         result
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.primary
+            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+            .await
+    }
+
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) {
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         self.abort_transfer(&owned_agent_id.agent_id).await;
+        // The primary decides: the archive layers carry no epoch of their own, and a refused
+        // delete means they now hold the new owner's history.
         self.primary
-            .delete(lifecycle, owned_agent_id, agent_mode)
-            .await;
+            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+            .await?;
         for layer in &self.lower {
             layer.delete(owned_agent_id, agent_mode).await
         }
+        Ok(())
     }
 
     async fn read_exact(
@@ -1261,7 +1293,7 @@ impl Oplog for MultiLayerOplog {
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
         self.primary.add_durable_stream_batch(make_batch).await
     }
 
@@ -1271,8 +1303,11 @@ impl Oplog for MultiLayerOplog {
         dropped_entries
     }
 
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        let result = self.primary.commit(level).await;
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
+        let result = self.primary.commit(level).await?;
 
         if let Some(index) = result.keys().next_back() {
             self.last_reported_commit_index.max(*index);
@@ -1292,7 +1327,7 @@ impl Oplog for MultiLayerOplog {
             });
             self.last_transfer_point.max(last_committed_idx);
         }
-        result
+        Ok(result)
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -1312,7 +1347,7 @@ impl Oplog for MultiLayerOplog {
         self.primary.last_added_non_hint_entry().await
     }
 
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError> {
         self.primary.wait_for_replicas(replicas, timeout).await
     }
 
@@ -1362,7 +1397,7 @@ impl Oplog for MultiLayerOplog {
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         self.primary.add_pair(start, make_second).await
     }
 
@@ -1370,7 +1405,7 @@ impl Oplog for MultiLayerOplog {
         &self,
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         self.primary
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
             .await
@@ -1379,7 +1414,7 @@ impl Oplog for MultiLayerOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         self.primary
             .add_start_with_indexed_reserved_raw_payload(build_request)
             .await
@@ -1750,6 +1785,7 @@ mod transfer_lifecycle_tests {
                 metadata.clone(),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await;
         let entries = (1..=archived + 10)
@@ -1768,9 +1804,9 @@ mod transfer_lifecycle_tests {
             .collect::<Vec<_>>();
         let captured = archived + 2;
         for entry in &entries[..captured as usize] {
-            writer.add(entry.clone()).await;
+            writer.add(entry.clone()).await.unwrap();
         }
-        writer.commit(CommitLevel::Always).await;
+        writer.commit(CommitLevel::Always).await.unwrap();
         let deep_archive = deepest.open(&owned, AgentMode::Durable).await;
         if archived > 0 {
             let prefix = entries[..archived as usize]
@@ -1790,6 +1826,7 @@ mod transfer_lifecycle_tests {
                 metadata,
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
+                None,
             )
             .await;
         assert_eq!(
@@ -1797,9 +1834,9 @@ mod transfer_lifecycle_tests {
             OplogIndex::from_u64(captured)
         );
         for entry in &entries[captured as usize..] {
-            writer.add(entry.clone()).await;
+            writer.add(entry.clone()).await.unwrap();
         }
-        writer.commit(CommitLevel::Always).await;
+        writer.commit(CommitLevel::Always).await.unwrap();
         assert_eq!(observer.length().await, 10);
 
         let service = MultiLayerOplogService::new(observer_service, nev![first, deepest], 100, 100);

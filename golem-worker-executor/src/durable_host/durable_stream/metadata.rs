@@ -2133,6 +2133,7 @@ mod tests {
                             timestamp: Timestamp::now_utc(),
                         },
                     ))),
+                    None,
                 )
                 .await;
             Self {
@@ -2149,9 +2150,12 @@ mod tests {
             let commit: DurableStreamCommit = Arc::new(move |published| {
                 let oplog = oplog.clone();
                 Box::pin(async move {
-                    oplog.commit(CommitLevel::Always).await;
+                    oplog
+                        .commit(CommitLevel::Always)
+                        .await
+                        .expect("oplog write");
                     if let Some(published) = published {
-                        let _ = published.send(());
+                        let _ = published.send(Ok(()));
                     }
                 })
             });
@@ -2202,7 +2206,10 @@ mod tests {
 
         async fn persist(&self) {
             let owner = OwnedAgentId::new(self.identity.environment_id, &self.identity.agent_id);
-            self.oplog.commit(CommitLevel::Always).await;
+            self.oplog
+                .commit(CommitLevel::Always)
+                .await
+                .expect("oplog write");
             self.service
                 .lookup_durable_stream_producer_metadata(
                     &owner,
@@ -2755,7 +2762,11 @@ mod tests {
             offsets.push(outcome.value[0]);
         }
         for _ in 0..2100 {
-            fixture.oplog.add(OplogEntry::interrupted()).await;
+            fixture
+                .oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         fixture.persist().await;
         drop(producer);
@@ -3090,7 +3101,11 @@ mod tests {
             .unwrap()
             .value;
         for _ in 0..1021 {
-            fixture.oplog.add(OplogEntry::interrupted()).await;
+            fixture
+                .oplog
+                .add(OplogEntry::interrupted())
+                .await
+                .expect("oplog write");
         }
         assert_eq!(fixture.oplog.current_oplog_index().await.as_u64(), 1023);
         let nested = registration(
@@ -3115,7 +3130,11 @@ mod tests {
             .await
             .unwrap();
         let nested_handles = producer.nested_handles(handle.stream_id, 0).await.unwrap();
-        fixture.oplog.commit(CommitLevel::Always).await;
+        fixture
+            .oplog
+            .commit(CommitLevel::Always)
+            .await
+            .expect("oplog write");
         MultiLayerOplog::try_archive_blocking(&fixture.oplog)
             .await
             .expect("archive layer");
@@ -3399,7 +3418,7 @@ mod tests {
                 vec![40, 41],
             ),
         ] {
-            fixture.oplog.add(entry).await;
+            fixture.oplog.add(entry).await.unwrap();
         }
         fixture.persist().await;
         let owner = OwnedAgentId::new(fixture.identity.environment_id, &fixture.identity.agent_id);
@@ -3572,7 +3591,8 @@ mod tests {
                     ),
                 ))),
             })
-            .await;
+            .await
+            .unwrap();
         let producer = fixture.producer().await;
         let original = producer
             .register(None, fixture.registration(0))
@@ -3605,7 +3625,8 @@ mod tests {
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
             })
-            .await;
+            .await
+            .unwrap();
         fixture.persist().await;
         let cold = fixture.producer().await;
         let events = cold.read_segment(&continuation, None, None).await.unwrap();
@@ -3638,7 +3659,8 @@ mod tests {
         let oplog = Arc::new(TestOplog::default());
         oplog
             .add(fixture.oplog.read(OplogIndex::INITIAL).await)
-            .await;
+            .await
+            .unwrap();
         let producer = DurableStreamStore::load(
             oplog.clone(),
             source.environment_id,
@@ -3754,7 +3776,7 @@ mod tests {
             )
             .await
         {
-            copied.add(entry).await;
+            copied.add(entry).await.unwrap();
         }
         let mut cut = fork(Some(root_local_id), copied.current_oplog_index().await);
         cut.creation_fingerprint = target.fingerprint;
@@ -3765,7 +3787,8 @@ mod tests {
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
             })
-            .await;
+            .await
+            .unwrap();
         let oplog = copied;
         for (_, entry) in oplog
             .read_exact(
@@ -3774,7 +3797,7 @@ mod tests {
             )
             .await
         {
-            fixture.oplog.add(entry).await;
+            fixture.oplog.add(entry).await.unwrap();
         }
         fixture.persist().await;
         let raw_producer = DurableStreamStore::load(
@@ -3928,7 +3951,8 @@ mod tests {
                         entity_parent_start_index: None,
                         record: OplogPayload::Inline(Box::new(record)),
                     })
-                    .await;
+                    .await
+                    .unwrap();
                 if prepared {
                     assert!(
                         fixture
@@ -4126,7 +4150,8 @@ mod tests {
                             }),
                         )),
                     })
-                    .await;
+                    .await
+                    .unwrap();
                 fixture.persist().await;
                 assert_eq!(
                     fixture
@@ -4338,8 +4363,13 @@ mod tests {
         fixture
             .oplog
             .add(OplogEntry::stream_session(None, record))
-            .await;
-        fixture.oplog.commit(CommitLevel::Always).await;
+            .await
+            .expect("oplog write");
+        fixture
+            .oplog
+            .commit(CommitLevel::Always)
+            .await
+            .expect("oplog write");
         let horizon = fixture.oplog.current_oplog_index().await;
         let (started, release) = fixture.blobs.pause_next_read();
         let mut query = Box::pin(producer.persisted_control_metadata(&session));

@@ -380,6 +380,31 @@ async fn renew_lease_rejects_stale_epoch() {
 }
 
 #[test]
+// `epoch` is a client-supplied argument straight off the wire (`grpc.rs` builds it as
+// `LeaseEpoch(request.epoch)` with no validation), and `LeaseEpoch::next()` panics on overflow.
+// A `u64::MAX` claim must be rejected as an ordinary stale epoch rather than aborting the
+// process.
+async fn renew_lease_rejects_u64_max_epoch_instead_of_panicking() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
+    let pod = test_pod();
+
+    svc.acquire_lease(env, ResourceName("tokens".into()), pod)
+        .await
+        .unwrap();
+
+    let result = svc
+        .renew_lease(id, pod, LeaseEpoch(u64::MAX), 0, vec![])
+        .await;
+    assert!(matches!(result, Err(QuotaError::StaleEpoch { .. })));
+}
+
+#[test]
 async fn renew_lease_fails_for_unknown_pod() {
     let fetcher = Arc::new(InMemoryFetcher::new());
     let env = env_id();
@@ -563,6 +588,27 @@ async fn release_lease_rejects_stale_epoch() {
     assert!(matches!(result, Err(QuotaError::StaleEpoch { .. })));
 
     svc.release_lease(id, pod, l2.epoch(), 0).await.unwrap();
+}
+
+#[test]
+// Same defect class as `renew_lease_rejects_u64_max_epoch_instead_of_panicking`, on the release
+// path's own `epoch.next()` comparison.
+async fn release_lease_rejects_u64_max_epoch_instead_of_panicking() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let def = make_definition(env, "tokens");
+    let id = def.id;
+    fetcher.put(def).await;
+
+    let svc = QuotaService::new(test_config(), fetcher, test_repo());
+    let pod = test_pod();
+
+    svc.acquire_lease(env, ResourceName("tokens".into()), pod)
+        .await
+        .unwrap();
+
+    let result = svc.release_lease(id, pod, LeaseEpoch(u64::MAX), 0).await;
+    assert!(matches!(result, Err(QuotaError::StaleEpoch { .. })));
 }
 
 #[test]

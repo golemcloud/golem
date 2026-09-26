@@ -117,7 +117,7 @@ impl DroppedCall {
             start_index: self.start_idx,
             partial,
         };
-        oplog.add(cancelled).await;
+        oplog.add(cancelled).await?;
         Ok(())
     }
 }
@@ -409,11 +409,9 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
         DropEvent::CancelDroppedDurableInput { cancellation } => {
             let result = async {
                 if !ctx.is_live() {
-                    if cancellation
-                        .is_recorded()
-                        .await
-                        .map_err(WorkerExecutorError::runtime)?
-                    {
+                    if cancellation.is_recorded().await.map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })? {
                         return Ok(());
                     }
                     if ctx.rejects_live_continuation_at_replay_tail() {
@@ -442,7 +440,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 cancellation
                     .cancel()
                     .await
-                    .map_err(WorkerExecutorError::runtime)
+                    .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
             }
             .await;
             result.map_err(|error| TerminalCallError::new(error, ambient_trap_context(ctx)))?;
@@ -474,7 +472,7 @@ where
         if cancellation
             .is_recorded()
             .await
-            .map_err(WorkerExecutorError::runtime)?
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
         {
             return Ok(());
         }
@@ -510,7 +508,7 @@ where
     cancellation
         .cancel()
         .await
-        .map_err(WorkerExecutorError::runtime)
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
 }
 
 /// Accessor-window variant of [`drain_queued_dropped_call_events`]. It drains the queue from a short

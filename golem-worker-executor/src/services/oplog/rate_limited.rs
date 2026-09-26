@@ -16,12 +16,13 @@ use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogCloseCompletion, OplogLifecycleGuard, OplogService, OrderedOplogStart,
+    OplogCloseCompletion, OplogError, OplogLifecycleGuard, OplogService, OrderedOplogStart,
     ReservedRawStartBuilder,
 };
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
@@ -200,26 +201,29 @@ impl Oplog for RateLimitedOplog {
         let account_id = self.account_id;
         let environment_id = self.environment_id;
         Box::pin(async move {
-            let idx = pending.await;
+            let idx = pending.await?;
             Self::apply_rate_limit_for(&resource_entry, &state, &account_id, &environment_id).await;
-            idx
+            Ok(idx)
         })
     }
 
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
-        let result = self.inner.add_durable_stream_batch(make_batch).await;
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
+        let result = self.inner.add_durable_stream_batch(make_batch).await?;
         self.apply_rate_limit().await;
-        result
+        Ok(result)
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.inner.drop_prefix(last_dropped_id).await
     }
 
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         self.inner.commit(level).await
     }
 
@@ -240,7 +244,7 @@ impl Oplog for RateLimitedOplog {
         self.inner.last_added_non_hint_entry().await
     }
 
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError> {
         self.inner.wait_for_replicas(replicas, timeout).await
     }
 
@@ -284,18 +288,18 @@ impl Oplog for RateLimitedOplog {
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         // Assign the indices first, then throttle once for the pair: see `apply_rate_limit`.
-        let indices = self.inner.add_pair(start, make_second).await;
+        let indices = self.inner.add_pair(start, make_second).await?;
         self.apply_rate_limit().await;
-        indices
+        Ok(indices)
     }
 
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         // Order the `Start` first (the inner oplog assigns its index), then throttle. Applying
         // back-pressure before delegating would reorder concurrent calls' `Start` entries relative
         // to initiation order; see `apply_rate_limit`.
@@ -310,7 +314,7 @@ impl Oplog for RateLimitedOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, OplogError> {
         let ordered = self
             .inner
             .add_start_with_indexed_reserved_raw_payload(build_request)
@@ -450,6 +454,7 @@ impl OplogService for RateLimitedOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         let account_id = initial_worker_metadata.created_by;
         let environment_id = owned_agent_id.environment_id;
@@ -464,6 +469,7 @@ impl OplogService for RateLimitedOplogService {
                 initial_worker_metadata,
                 last_known_status,
                 execution_status,
+                shard_epoch,
             )
             .await;
         Arc::new(RateLimitedOplog::new(
@@ -483,6 +489,7 @@ impl OplogService for RateLimitedOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         let account_id = initial_worker_metadata.created_by;
         let environment_id = owned_agent_id.environment_id;
@@ -497,6 +504,7 @@ impl OplogService for RateLimitedOplogService {
                 initial_worker_metadata,
                 last_known_status,
                 execution_status,
+                shard_epoch,
             )
             .await;
         Arc::new(RateLimitedOplog::new(
@@ -516,6 +524,7 @@ impl OplogService for RateLimitedOplogService {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog> {
         let account_id = initial_worker_metadata.created_by;
         let environment_id = owned_agent_id.environment_id;
@@ -530,6 +539,7 @@ impl OplogService for RateLimitedOplogService {
                 initial_worker_metadata,
                 last_known_status,
                 execution_status,
+                shard_epoch,
             )
             .await;
         Arc::new(RateLimitedOplog::new(
@@ -548,14 +558,26 @@ impl OplogService for RateLimitedOplogService {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError> {
+        self.inner
+            .assert_owning_epoch(owned_agent_id, agent_mode, expected_epoch)
+            .await
+    }
+
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) {
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
         self.inner
-            .delete(lifecycle, owned_agent_id, agent_mode)
+            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
             .await
     }
 
@@ -759,6 +781,7 @@ mod tests {
                 make_agent_metadata(agent_id, account_id, env_id),
                 last_known_status,
                 execution_status,
+                None,
             )
             .await
     }
@@ -783,7 +806,7 @@ mod tests {
 
         let start = Instant::now();
         for _ in 0..15 {
-            oplog.add(dummy_entry()).await;
+            oplog.add(dummy_entry()).await.unwrap();
         }
         let elapsed = start.elapsed();
 
@@ -804,7 +827,7 @@ mod tests {
 
         let start = Instant::now();
         for _ in 0..100 {
-            oplog.add(dummy_entry()).await;
+            oplog.add(dummy_entry()).await.unwrap();
         }
         let elapsed = start.elapsed();
 
@@ -822,7 +845,7 @@ mod tests {
 
         let start = Instant::now();
         for _ in 0..100 {
-            oplog.add(dummy_entry()).await;
+            oplog.add(dummy_entry()).await.unwrap();
         }
         let elapsed = start.elapsed();
 
@@ -842,7 +865,7 @@ mod tests {
         // Unlimited — should be fast.
         let start = Instant::now();
         for _ in 0..20 {
-            oplog.add(dummy_entry()).await;
+            oplog.add(dummy_entry()).await.unwrap();
         }
         let fast_elapsed = start.elapsed();
         assert!(
@@ -856,7 +879,7 @@ mod tests {
         // 15 writes at 5/sec (burst=5) must take >= 1.5 s.
         let start = Instant::now();
         for _ in 0..15 {
-            oplog.add(dummy_entry()).await;
+            oplog.add(dummy_entry()).await.unwrap();
         }
         let slow_elapsed = start.elapsed();
         assert!(
@@ -875,7 +898,7 @@ mod tests {
         // 15 writes at 5/sec — must be slow.
         let start = Instant::now();
         for _ in 0..15 {
-            oplog.add(dummy_entry()).await;
+            oplog.add(dummy_entry()).await.unwrap();
         }
         let slow_elapsed = start.elapsed();
         assert!(
@@ -889,7 +912,7 @@ mod tests {
         // 100 writes at unlimited — should be fast.
         let start = Instant::now();
         for _ in 0..100 {
-            oplog.add(dummy_entry()).await;
+            oplog.add(dummy_entry()).await.unwrap();
         }
         let fast_elapsed = start.elapsed();
         assert!(
@@ -955,7 +978,7 @@ mod tests {
         // An inline payload is already durable.
         small_pending.wait().await.unwrap();
 
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
 
         // Read back from storage (no in-memory cache) and confirm the large request is external and
         // its deferred blob upload became durable via the commit barrier.

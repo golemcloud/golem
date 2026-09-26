@@ -19,10 +19,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
-use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
+use golem_common::model::{AgentId, ShardEpoch};
 use golem_common::serialization::{deserialize, serialize};
-use golem_service_base::repo::is_transient_sqlx_error;
+use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 
 pub mod memory;
 pub mod multi_sqlite;
@@ -46,6 +46,12 @@ pub enum IndexedStorageError {
     InvalidResume(String),
     /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
+    /// The write was refused because the epoch it asserted is not the one recorded for the key.
+    Fenced {
+        key: String,
+        expected: ShardEpoch,
+        actual: Option<ShardEpoch>,
+    },
 }
 
 impl IndexedStorageError {
@@ -79,6 +85,22 @@ impl Display for IndexedStorageError {
             IndexedStorageError::Conflict(msg) => write!(f, "Storage conflict: {msg}"),
             IndexedStorageError::InvalidResume(msg) => write!(f, "Invalid scan resume: {msg}"),
             IndexedStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
+            IndexedStorageError::Fenced {
+                key,
+                expected,
+                actual,
+            } => match actual {
+                Some(actual) => write!(
+                    f,
+                    "Write fenced for key {key}: asserted epoch {expected}, \
+                     the stored epoch is {actual}"
+                ),
+                None => write!(
+                    f,
+                    "Write fenced for key {key}: asserted epoch {expected}, \
+                     but no epoch is stored for it"
+                ),
+            },
         }
     }
 }
@@ -88,6 +110,71 @@ impl std::error::Error for IndexedStorageError {}
 impl From<String> for IndexedStorageError {
     fn from(s: String) -> Self {
         IndexedStorageError::Other(s)
+    }
+}
+
+/// Carries a fence rejection out of a transaction closure.
+#[derive(Debug)]
+pub(crate) enum FencedTxError {
+    Repo(RepoError),
+    Fenced {
+        key: String,
+        expected: ShardEpoch,
+        actual: Option<ShardEpoch>,
+    },
+    /// A stored value the schema should have made impossible - a negative epoch, say. Not a fence:
+    /// nobody took the key over, the row itself cannot be trusted.
+    Corrupt(String),
+}
+
+impl From<RepoError> for FencedTxError {
+    fn from(err: RepoError) -> Self {
+        FencedTxError::Repo(err)
+    }
+}
+
+impl FencedTxError {
+    pub(crate) fn check_record(
+        key: &str,
+        expected: ShardEpoch,
+        stored: Option<i64>,
+        negative_epoch_message: fn(i64, &str) -> String,
+    ) -> Result<(), FencedTxError> {
+        let actual = stored
+            .map(|epoch| {
+                u64::try_from(epoch)
+                    .map(ShardEpoch)
+                    .map_err(|_| FencedTxError::Corrupt(negative_epoch_message(epoch, key)))
+            })
+            .transpose()?;
+        if actual != Some(expected) {
+            return Err(FencedTxError::Fenced {
+                key: key.to_string(),
+                expected,
+                actual,
+            });
+        }
+        Ok(())
+    }
+
+    /// `classify` is the backend's own `RepoError` classifier.
+    pub(crate) fn into_indexed_storage_error(
+        self,
+        classify: fn(RepoError) -> IndexedStorageError,
+    ) -> IndexedStorageError {
+        match self {
+            FencedTxError::Repo(err) => classify(err),
+            FencedTxError::Fenced {
+                key,
+                expected,
+                actual,
+            } => IndexedStorageError::Fenced {
+                key,
+                expected,
+                actual,
+            },
+            FencedTxError::Corrupt(msg) => IndexedStorageError::Other(msg),
+        }
     }
 }
 
@@ -233,7 +320,8 @@ pub trait IndexedStorage: Debug + Sync {
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError>;
 
-    /// Appends an entry to the given key with the given id
+    /// Appends an entry to the given key with the given id. `expected_epoch` is checked as in
+    /// [`Self::append_many`].
     async fn append(
         &self,
         svc_name: &'static str,
@@ -243,9 +331,10 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError>;
 
-    /// Appends multiple entries to the given key with the given id
+    /// Appends multiple entries to the given key with the given ids, all or nothing.
     async fn append_many(
         &self,
         svc_name: &'static str,
@@ -254,21 +343,8 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
-    ) -> Result<(), IndexedStorageError> {
-        for (id, value) in pairs.iter() {
-            self.append(
-                svc_name,
-                api_name,
-                entity_name,
-                (*namespace).clone(),
-                key,
-                *id,
-                value.to_vec(),
-            )
-            .await?;
-        }
-        Ok(())
-    }
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError>;
 
     /// Atomically moves a stopped source index to a previously absent target index. The source
     /// must contain exactly ids 1..=expected_last_id. Returns false without mutation if the target
@@ -372,6 +448,29 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+    ) -> Result<(), IndexedStorageError>;
+
+    /// Records the writer generation for the given key. A monotonic compare-and-set - accepted when
+    /// `epoch` is at least the stored one, and refused with [`IndexedStorageError::Fenced`]
+    /// otherwise. Inserts the record if the key has none.
+    async fn set_key_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError>;
+
+    /// Deletes the index of the given key, as [`Self::delete`] does, together with the writer
+    /// generation recorded for it, in one step.
+    async fn delete_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError>;
 }
 
@@ -581,6 +680,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
         value: &V,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.record("append");
         self.storage
@@ -592,6 +692,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
                 id,
                 serialize(value).map_err(IndexedStorageError::Other)?,
+                expected_epoch,
             )
             .await
     }
@@ -603,6 +704,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.record("append");
         self.storage
@@ -614,6 +716,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
                 id,
                 value,
+                expected_epoch,
             )
             .await
     }
@@ -625,6 +728,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: &[(u64, &V)],
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<u64, IndexedStorageError> {
         let mut serialized_pairs = Vec::with_capacity(pairs.len());
         let mut total_bytes = 0u64;
@@ -633,7 +737,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             total_bytes += bytes.len() as u64;
             serialized_pairs.push((*id, Bytes::from(bytes)));
         }
-        self.append_many_raw(namespace, key, serialized_pairs.into())
+        self.append_many_raw(namespace, key, serialized_pairs.into(), expected_epoch)
             .await?;
         Ok(total_bytes)
     }
@@ -644,6 +748,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.record("append_many");
         self.storage
@@ -654,6 +759,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 namespace,
                 key,
                 pairs,
+                expected_epoch,
             )
             .await
     }

@@ -979,6 +979,16 @@ mod tests {
 
     const EPHEMERAL_L1: RouteId = RouteId { source_level: 1 };
 
+    /// The manager process behind every shard delivery in these tests.
+    const MANAGER: Uuid = Uuid::from_u128(0x5eed);
+
+    fn revision_of(incarnation: Uuid, number: u64) -> ShardLeaseRevision {
+        ShardLeaseRevision {
+            incarnation,
+            number,
+        }
+    }
+
     fn agent(name: &str, component_id: ComponentId) -> AgentId {
         AgentId {
             component_id,
@@ -1493,9 +1503,68 @@ mod tests {
             key: &str,
             id: u64,
             value: Vec<u8>,
+            expected_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), IndexedStorageError> {
             self.inner
-                .append(svc_name, api_name, entity_name, namespace, key, id, value)
+                .append(
+                    svc_name,
+                    api_name,
+                    entity_name,
+                    namespace,
+                    key,
+                    id,
+                    value,
+                    expected_epoch,
+                )
+                .await
+        }
+
+        async fn append_many(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: &IndexedStorageNamespace,
+            key: &str,
+            pairs: Arc<[(u64, bytes::Bytes)]>,
+            expected_epoch: Option<golem_common::model::ShardEpoch>,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .append_many(
+                    svc_name,
+                    api_name,
+                    entity_name,
+                    namespace,
+                    key,
+                    pairs,
+                    expected_epoch,
+                )
+                .await
+        }
+
+        async fn set_key_epoch(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            epoch: golem_common::model::ShardEpoch,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .set_key_epoch(svc_name, api_name, namespace, key, epoch)
+                .await
+        }
+
+        async fn delete_with_epoch(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            expected_epoch: Option<ShardEpoch>,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
                 .await
         }
 
@@ -1862,6 +1931,7 @@ mod tests {
                     metadata(&owned_agent_id.agent_id, owned_agent_id.environment_id),
                     status_lock(),
                     execution_lock(),
+                    None,
                 )
                 .await;
             Ok(match MultiLayerOplog::try_archive_blocking(&oplog).await {
@@ -1908,7 +1978,7 @@ mod tests {
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             None,
-            ShardLeaseRevision(0),
+            revision_of(MANAGER, 0),
         );
         shard_service
     }
@@ -1987,11 +2057,12 @@ mod tests {
                 metadata(agent_id, environment_id),
                 status_lock(),
                 execution_lock(),
+                None,
             )
             .await;
-        oplog.add(OplogEntry::suspend()).await;
-        oplog.add(OplogEntry::exited()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(OplogEntry::suspend()).await.unwrap();
+        oplog.add(OplogEntry::exited()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
     }
 
@@ -2834,11 +2905,12 @@ mod tests {
                 metadata(&agent_id, environment_id),
                 status_lock(),
                 execution_lock(),
+                None,
             )
             .await;
-        oplog.add(OplogEntry::suspend()).await;
-        oplog.add(OplogEntry::exited()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(OplogEntry::suspend()).await.unwrap();
+        oplog.add(OplogEntry::exited()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
 
         let stranded = layers.archives[0]
@@ -3117,10 +3189,11 @@ mod tests {
                 metadata(agent_id, environment_id),
                 status_lock(),
                 execution_lock(),
+                None,
             )
             .await;
-        oplog.add(OplogEntry::suspend()).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.add(OplogEntry::suspend()).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         drop(oplog);
     }
 
@@ -3187,7 +3260,7 @@ mod tests {
         stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
         let shards = Arc::new(ShardServiceDefault::new());
-        shards.register(4, &HashMap::new(), None, ShardLeaseRevision(0));
+        shards.register(4, &HashMap::new(), None, revision_of(MANAGER, 0));
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
         sweeper.sweep_once(&CancellationToken::new()).await;
@@ -3218,7 +3291,7 @@ mod tests {
 
         // The shard moves to another executor before the agent ever went quiet for us.
         shards
-            .assign_shards(4, &HashMap::new(), ShardLeaseRevision(1))
+            .assign_shards(4, &HashMap::new(), revision_of(MANAGER, 1))
             .expect("assignment");
         sweeper.sweep_once(&CancellationToken::new()).await;
 
@@ -3853,7 +3926,7 @@ mod tests {
             0,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             None,
-            ShardLeaseRevision(0),
+            revision_of(MANAGER, 0),
         );
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
@@ -3878,7 +3951,7 @@ mod tests {
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             Some(Instant::now()),
-            ShardLeaseRevision(0),
+            revision_of(MANAGER, 0),
         );
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 

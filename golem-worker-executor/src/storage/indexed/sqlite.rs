@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanResume,
+    FencedTxError, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace, ScanResume,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -22,6 +22,7 @@ use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
+use golem_common::model::ShardEpoch;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -115,6 +116,26 @@ impl SqliteIndexedStorage {
                 format!("{mode}-worker-c{level}-oplog")
             }
         }
+    }
+
+    /// sqlx has no `Encode<Sqlite>` for `u64`, so a value that must stay integer-bound (rather
+    /// than go through `Json`, which encodes as TEXT - see [`Self::set_key_epoch`]) has to
+    /// cross to `i64` first. Checked, like Postgres's own `to_i64`: an unchecked `as i64` on a
+    /// value above `i64::MAX` wraps to negative, and reading that back `as u64` produces a
+    /// spuriously huge epoch instead of failing loudly.
+    fn to_i64(value: u64, field_name: &'static str) -> Result<i64, IndexedStorageError> {
+        i64::try_from(value).map_err(|_| {
+            IndexedStorageError::Other(format!(
+                "SQLite indexed storage cannot represent {field_name}={value} as i64"
+            ))
+        })
+    }
+
+    /// A stored epoch that will not fit a `u64` is corruption, not a fence: `to_i64` refuses to
+    /// write one, so a negative column value came from outside this code, and reading it back as
+    /// `u64` would wrap it into a spuriously huge epoch.
+    fn negative_epoch_message(value: i64, key: &str) -> String {
+        format!("SQLite indexed storage read a negative epoch {value} for key '{key}'")
     }
 
     fn classify_repo_error(err: RepoError) -> IndexedStorageError {
@@ -228,6 +249,8 @@ impl IndexedStorage for SqliteIndexedStorage {
         Ok((super::last_key_resume(&keys, count), keys))
     }
 
+    /// Delegates to [`Self::append_many`] so there is exactly one fenced write path: the epoch
+    /// check has to happen in the same transaction as the insert.
     async fn append(
         &self,
         svc_name: &'static str,
@@ -237,34 +260,18 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
-        let primary_oplog_insert = matches!(
+        self.append_many(
+            svc_name,
+            api_name,
+            entity_name,
             &namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
-        );
-        let query = sqlx::query(
-            r#"
-                    INSERT INTO index_storage (namespace, key, id, value) VALUES (?,?,?,?);
-                    "#,
+            key,
+            vec![(id, Bytes::from(value))].into(),
+            expected_epoch,
         )
-        .bind(Self::namespace(namespace))
-        .bind(key)
-        .bind(sqlx::types::Json(id))
-        .bind(value);
-
-        self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
-            .await
-            .map(|_| ())
-            .map_err(|err| {
-                if primary_oplog_insert {
-                    Self::classify_repo_error_primary_oplog_insert(err)
-                } else {
-                    Self::classify_repo_error(err)
-                }
-            })
+        .await
     }
 
     async fn append_many(
@@ -275,6 +282,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
@@ -291,8 +299,36 @@ impl IndexedStorage for SqliteIndexedStorage {
         }
 
         self.pool
-            .with_tx(svc_name, api_name, |tx| {
-                async move {
+            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+                Box::pin(async move {
+                    // SQLite has no `SELECT ... FOR UPDATE`, and it does not need one here: the
+                    // write pool is capped at a single connection (golem-service-base
+                    // db/sqlite.rs:46-50), so this transaction holds the only writer and the
+                    // check cannot be interleaved. Raising that cap means switching this to
+                    // `BEGIN IMMEDIATE`.
+                    //
+                    // That holds within one process. Two processes on one SQLite file would rely
+                    // on SQLite's own lock upgrade, which surfaces a loser as `SQLITE_BUSY` - a
+                    // storage error, not a fence - so a SQLite file shared between executors is
+                    // not supported; give each its own file, or use PostgreSQL.
+                    if let Some(expected) = expected_epoch {
+                        let stored: Option<(i64,)> = tx
+                            .fetch_optional_as(
+                                sqlx::query_as(
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(key.clone()),
+                            )
+                            .await?;
+                        FencedTxError::check_record(
+                            &key,
+                            expected,
+                            stored.map(|(epoch,)| epoch),
+                            Self::negative_epoch_message,
+                        )?;
+                    }
+
                     for (id, value) in pairs.iter() {
                         tx.execute(
                             sqlx::query(
@@ -307,17 +343,152 @@ impl IndexedStorage for SqliteIndexedStorage {
                     }
 
                     Ok(())
-                }
-                .boxed()
+                })
             })
             .await
             .map_err(|err| {
-                if primary_oplog_insert {
-                    Self::classify_repo_error_primary_oplog_insert(err)
+                err.into_indexed_storage_error(if primary_oplog_insert {
+                    Self::classify_repo_error_primary_oplog_insert
                 } else {
-                    Self::classify_repo_error(err)
-                }
+                    Self::classify_repo_error
+                })
             })
+    }
+
+    /// SQLite's half of [`IndexedStorage::set_key_epoch`], which states the rule this
+    /// enforces. The unqualified `epoch` in the `WHERE` is the existing row's, and `excluded` is
+    /// the row being written.
+    async fn set_key_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        new_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        let namespace = Self::namespace(namespace);
+        // `i64`, not `u64`: sqlx has no `Encode<Sqlite>` for `u64`, which is why ids elsewhere in
+        // this file go through `Json`. That encodes as TEXT, and comparison affinity is applied
+        // per operand, so this column stays integer-bound everywhere. Checked (see `to_i64`)
+        // rather than `as i64`, which would silently wrap an out-of-range epoch to negative.
+        let epoch = Self::to_i64(new_epoch.0, "epoch")?;
+
+        let mut api = self.pool.with_rw(svc_name, api_name);
+        let result = api
+            .execute(
+                sqlx::query(
+                    r#"INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?)
+                       ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch
+                       WHERE epoch <= excluded.epoch;"#,
+                )
+                .bind(namespace.clone())
+                .bind(key)
+                .bind(epoch),
+            )
+            .await
+            .map_err(Self::classify_repo_error)?;
+
+        if result.rows_affected() == 0 {
+            let stored: Option<(i64,)> = api
+                .fetch_optional_as(
+                    sqlx::query_as(
+                        "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                    )
+                    .bind(namespace)
+                    .bind(key),
+                )
+                .await
+                .map_err(Self::classify_repo_error)?;
+            let actual = stored
+                .map(|(epoch,)| {
+                    u64::try_from(epoch).map(ShardEpoch).map_err(|_| {
+                        IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
+                    })
+                })
+                .transpose()?;
+            return Err(IndexedStorageError::Fenced {
+                key: key.to_string(),
+                expected: new_epoch,
+                actual,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn delete_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        let namespace = Self::namespace(namespace);
+        let key = key.to_string();
+        self.pool
+            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+                Box::pin(async move {
+                    // The single-connection write pool makes the check and the deletes one
+                    // step, as it does for an append (see `append_many`).
+                    if let Some(expected) = expected_epoch {
+                        let stored: Option<(i64,)> = tx
+                            .fetch_optional_as(
+                                sqlx::query_as(
+                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(key.clone()),
+                            )
+                            .await?;
+                        // Neither a record nor entries: the key is already gone, most often taken
+                        // by an earlier attempt of this same deletion whose later steps failed, and
+                        // a writer that lost the key has nothing here to destroy. Refusing would
+                        // leave that deletion unable to finish.
+                        if stored.is_none() {
+                            let (has_entries,): (bool,) = tx
+                                .fetch_one_as(
+                                    sqlx::query_as(
+                                        "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN (?, ?) AND key = ?);",
+                                    )
+                                    .bind(format!("{namespace}-present"))
+                                    .bind(namespace.clone())
+                                    .bind(key.clone()),
+                                )
+                                .await?;
+                            if !has_entries {
+                                return Ok(());
+                            }
+                        }
+                        FencedTxError::check_record(
+                            &key,
+                            expected,
+                            stored.map(|(epoch,)| epoch),
+                            Self::negative_epoch_message,
+                        )?;
+                    }
+                    tx.execute(
+                        sqlx::query(
+                            "DELETE FROM index_storage WHERE namespace IN (?, ?) AND key = ?;",
+                        )
+                        .bind(format!("{namespace}-present"))
+                        .bind(namespace.clone())
+                        .bind(key.clone()),
+                    )
+                    .await?;
+                    tx.execute(
+                        sqlx::query(
+                            "DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                        )
+                        .bind(namespace)
+                        .bind(key),
+                    )
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
     }
 
     async fn move_if_absent(
@@ -655,6 +826,7 @@ mod tests {
                         &stage,
                         1,
                         vec![index as u8],
+                        None,
                     )
                     .await
                     .unwrap();
@@ -725,6 +897,7 @@ mod tests {
                     (2, Bytes::from_static(b"second")),
                 ]
                 .into(),
+                None,
             )
             .await
             .unwrap();
@@ -762,6 +935,7 @@ mod tests {
                 "oplog",
                 2,
                 b"existing".to_vec(),
+                None,
             )
             .await
             .unwrap();
@@ -778,6 +952,7 @@ mod tests {
                     (2, Bytes::from_static(b"conflict")),
                 ]
                 .into(),
+                None,
             )
             .await;
 
@@ -789,6 +964,65 @@ mod tests {
                 .unwrap(),
             vec![(2, b"existing".to_vec())]
         );
+    }
+
+    #[test]
+    // The column is `i64`-bound (see `to_i64`'s doc). An epoch that does not fit it must be
+    // rejected here rather than silently wrapped to a negative value that a later `epoch as u64`
+    // read turns into a spuriously huge one.
+    async fn set_key_epoch_rejects_an_epoch_that_does_not_fit_i64() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(
+            tempdir
+                .path()
+                .join("indexed.db")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .await;
+        let namespace = oplog_namespace("sqlite-epoch-overflow");
+
+        let result = storage
+            .set_key_epoch(
+                "test",
+                "set_key_epoch",
+                namespace,
+                "oplog",
+                ShardEpoch(u64::MAX),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(IndexedStorageError::Other(_))),
+            "an epoch above i64::MAX must be a rejected write, not a wrapped negative one, got {result:?}"
+        );
+    }
+
+    #[test]
+    // The largest value that does fit is the boundary right below the rejected one, and must
+    // still succeed - a regression here would mean the checked conversion rejects valid input.
+    async fn set_key_epoch_accepts_the_largest_epoch_that_fits_i64() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(
+            tempdir
+                .path()
+                .join("indexed.db")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .await;
+        let namespace = oplog_namespace("sqlite-epoch-boundary");
+
+        storage
+            .set_key_epoch(
+                "test",
+                "set_key_epoch",
+                namespace,
+                "oplog",
+                ShardEpoch(i64::MAX as u64),
+            )
+            .await
+            .unwrap();
     }
 
     #[test]

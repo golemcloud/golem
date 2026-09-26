@@ -119,10 +119,11 @@ pub struct AgentStatusFlusher {
     /// Set once the worker starts deleting; prevents a concurrent background flush from resurrecting
     /// the blob after `remove_cached_status` has deleted it.
     delete_started: AtomicBool,
+    owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
 }
 
 impl AgentStatusFlusher {
-    pub fn new(
+    pub(super) fn new(
         owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
         is_ephemeral: bool,
@@ -132,6 +133,7 @@ impl AgentStatusFlusher {
         persisted_status: Option<AgentStatusRecord>,
         current_status: Arc<ArcSwap<AgentStatusRecord>>,
         detached: Arc<AtomicBool>,
+        owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
     ) -> Arc<Self> {
         let base_known = persisted_status.is_some();
         let last_flushed = persisted_status.unwrap_or_default();
@@ -152,7 +154,17 @@ impl AgentStatusFlusher {
             }),
             dirty: AtomicBool::new(false),
             delete_started: AtomicBool::new(false),
+            owner_retirement,
         })
+    }
+
+    /// Whether deletion or shard loss prevents this generation from writing status.
+    fn writes_stopped(&self) -> bool {
+        self.delete_started.load(Ordering::Acquire)
+            || self
+                .owner_retirement
+                .get()
+                .is_some_and(|retirement| retirement.lost_shard.get().is_some())
     }
 
     /// Called from the hot path whenever the in-memory status changed. Updates the recovery index
@@ -164,7 +176,7 @@ impl AgentStatusFlusher {
         previous_status: &AgentStatusRecord,
         new_status: &AgentStatusRecord,
     ) {
-        if self.is_ephemeral {
+        if self.is_ephemeral || self.writes_stopped() {
             return;
         }
 
@@ -243,7 +255,7 @@ impl AgentStatusFlusher {
         let mut baseline = self.baseline.lock().await;
 
         // Authoritative early-outs under the lock.
-        if self.delete_started.load(Ordering::Acquire) {
+        if self.writes_stopped() {
             self.dirty.store(false, Ordering::Release);
             return Ok(());
         }
@@ -293,7 +305,7 @@ impl AgentStatusFlusher {
                 crate::metrics::workers::record_agent_status_flush_failed(reason.as_str());
                 // Restore the dirty flag and re-enqueue so the sweeper retries.
                 self.dirty.store(true, Ordering::Release);
-                if !self.delete_started.load(Ordering::Acquire) {
+                if !self.writes_stopped() {
                     self.queue.enqueue(self.queue_id, self.self_weak.clone());
                 }
                 Err(err)
@@ -513,6 +525,7 @@ mod tests {
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
             _fingerprint: AgentFingerprint,
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
@@ -627,6 +640,7 @@ mod tests {
             None,
             current.clone(),
             detached.clone(),
+            Arc::default(),
         );
         (flusher, current, detached)
     }
@@ -709,6 +723,7 @@ mod tests {
             Some(persisted),
             current.clone(),
             detached,
+            Arc::default(),
         );
 
         current.store(Arc::new(status(AgentStatus::Running, 8)));
@@ -818,6 +833,79 @@ mod tests {
 
         assert_eq!(ws.write_count(), 0);
         assert!(!flusher.dirty.load(Ordering::Acquire));
+    }
+
+    // The blob is the shard's new owner's once this generation is given up: neither a forced flush
+    // nor a background sweep of a flush queued before the give-up may write it.
+    #[test]
+    async fn a_given_up_flusher_never_writes_the_status_blob() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+
+        current.store(Arc::new(status(AgentStatus::Running, 1)));
+        flusher.mark_dirty();
+
+        assert!(
+            flusher
+                .owner_retirement
+                .set(super::super::OwnerRetirement {
+                    kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
+                    lost_shard: std::sync::OnceLock::from(
+                        super::super::RetirementReason::ShardRevoked
+                    ),
+                    stop: tokio::sync::OnceCell::new(),
+                })
+                .is_ok()
+        );
+        let _ = flusher.flush(FlushReason::Forced).await;
+        current.store(Arc::new(status(AgentStatus::Idle, 2)));
+        flusher.mark_dirty();
+        queue.sweep().await;
+
+        assert_eq!(
+            ws.write_count(),
+            0,
+            "a given-up generation wrote its status blob"
+        );
+        assert!(!flusher.dirty.load(Ordering::Acquire));
+    }
+
+    // Nor the recovery-index row: a stale generation dropping it would hide the agent from the new
+    // owner's crash recovery. Inline flushing is exercised too, as background flushing is off.
+    #[test]
+    async fn a_given_up_flusher_leaves_the_recovery_index_alone() {
+        let ws = MockWorkerService::arc();
+        let queue = test_queue();
+        let (flusher, _current, _) = make_flusher(false, false, ws.clone(), queue.clone());
+
+        assert!(
+            flusher
+                .owner_retirement
+                .set(super::super::OwnerRetirement {
+                    kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
+                    lost_shard: std::sync::OnceLock::from(
+                        super::super::RetirementReason::ShardRevoked
+                    ),
+                    stop: tokio::sync::OnceCell::new(),
+                })
+                .is_ok()
+        );
+        flusher
+            .on_status_changed(
+                &status(AgentStatus::Idle, 0),
+                &status(AgentStatus::Running, 1),
+            )
+            .await;
+        flusher
+            .on_status_changed(
+                &status(AgentStatus::Running, 1),
+                &status(AgentStatus::Idle, 2),
+            )
+            .await;
+
+        assert_eq!(ws.tracking_count(), 0);
+        assert_eq!(ws.write_count(), 0);
     }
 
     #[test]

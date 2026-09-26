@@ -183,6 +183,8 @@ message RevokeShardsRequest {
   // The revision of the shard manager's persisted state the shards were moved
   // away in; see golem.shardmanager.v1.RegisterSuccess.revision.
   uint64 revision = 2;
+  // See golem.shardmanager.v1.RegisterSuccess.incarnation_id.
+  string incarnation_id = 3;
 }
 
 message RevokeShardsResponse {
@@ -206,6 +208,8 @@ message AssignShardsRequest {
   // The revision of the shard manager's persisted state this set was read
   // from; see golem.shardmanager.v1.RegisterSuccess.revision.
   uint64 revision = 4;
+  // See golem.shardmanager.v1.RegisterSuccess.incarnation_id.
+  string incarnation_id = 5;
 }
 
 message AssignShardsResponse {

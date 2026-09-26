@@ -27,7 +27,7 @@ use crate::model::ExecutionStatus;
 use crate::preview2::golem::durability::durability;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::linear_memory::LinearMemoryTracker;
-use crate::services::oplog::OplogOps;
+use crate::services::oplog::{OplogError, OplogOps};
 use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
@@ -203,7 +203,7 @@ type CustomBeginCoordinator =
     tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>;
 
 pub struct CustomBeginLifecycle {
-    start_result: Mutex<Option<Result<OplogIndex, String>>>,
+    start_result: Mutex<Option<Result<OplogIndex, WorkerExecutorError>>>,
     start_ready: Notify,
     verdict: std::sync::Mutex<Option<oneshot::Sender<CustomBeginVerdict>>>,
     coordinator: std::sync::Mutex<Option<CustomBeginCoordinator>>,
@@ -241,12 +241,12 @@ impl CustomBeginLifecycle {
         *self.coordinator.lock().unwrap() = Some(coordinator);
     }
 
-    async fn complete_start(&self, result: Result<OplogIndex, String>) {
+    async fn complete_start(&self, result: Result<OplogIndex, WorkerExecutorError>) {
         *self.start_result.lock().await = Some(result);
         self.start_ready.notify_waiters();
     }
 
-    async fn wait_start(&self) -> Result<OplogIndex, String> {
+    async fn wait_start(&self) -> Result<OplogIndex, WorkerExecutorError> {
         loop {
             let notified = self.start_ready.notified();
             if let Some(result) = self.start_result.lock().await.clone() {
@@ -775,12 +775,14 @@ pub trait InFunctionRetryHost {
     }
 
     /// Writes an `OplogEntry::Error` entry for an in-function retry attempt, and commits.
+    ///
+    /// A refusal is returned: the retry must not run again for an attempt that was never recorded.
     async fn append_retry_error_entry(
         &mut self,
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
-    );
+    ) -> Result<(), OplogError>;
 }
 
 pub(crate) fn collect_named_retry_policies(
@@ -1116,8 +1118,15 @@ impl InFunctionRetryState {
         }
 
         let inside_atomic_region = ctx.retry_context_atomic_region_had_side_effects();
-        ctx.append_retry_error_entry(retry_point, inside_atomic_region, retry_policy_state)
-            .await;
+        // Refused, the shard has a new owner: the failure is returned instead of retried, and the
+        // trap it becomes is classified as the lost shard.
+        if ctx
+            .append_retry_error_entry(retry_point, inside_atomic_region, retry_policy_state)
+            .await
+            .is_err()
+        {
+            return AsyncRetryDecision::FallBackToTrap(None);
+        }
         self.retry_count += 1;
 
         debug!(
@@ -1647,7 +1656,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostLiveCustomDurableInvocat
                 response: Some(response),
                 forced_commit,
             })
-            .await;
+            .await?;
         let checkpoint = accessor.with(|mut access| {
             let ctx = access.get();
             ctx.state.active_custom_invocations.remove(&start_index);
@@ -1872,30 +1881,37 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let start_function_type = function_type.clone();
             let start_invocation_id = invocation_id;
             let start = tokio::spawn(async move {
-                let persisted_request = oplog
-                    .upload_payload_owned(request)
+                let persisted_request =
+                    oplog.upload_payload_owned(request).await.map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed to store durable function request: {err}"
+                        ))
+                    })?;
+                // A refused `Start` fails the begin: the guest must not perform a side effect the
+                // shard's new owner, finding no `Start`, would perform again.
+                worker
+                    .add_and_commit_oplog(OplogEntry::Start {
+                        timestamp: Timestamp::now_utc(),
+                        parent_start_index,
+                        function_name,
+                        invocation_id: Some(start_invocation_id),
+                        observational_owner: None,
+                        request: Some(persisted_request),
+                        durable_function_type: start_function_type,
+                    })
                     .await
-                    .map_err(|err| format!("Failed to store durable function request: {err}"))?;
-                Ok::<_, String>(
-                    worker
-                        .add_and_commit_oplog(OplogEntry::Start {
-                            timestamp: Timestamp::now_utc(),
-                            parent_start_index,
-                            function_name,
-                            invocation_id: Some(start_invocation_id),
-                            observational_owner: None,
-                            request: Some(persisted_request),
-                            durable_function_type: start_function_type,
-                        })
-                        .await,
-                )
+                    .map_err(WorkerExecutorError::from)
             });
             let cancellation_worker =
                 accessor.with(|mut access| access.get().public_state.worker());
             let coordinator = tokio::spawn(async move {
                 let start_result = start
                     .await
-                    .map_err(|err| format!("custom invocation Start recorder task failed: {err}"))
+                    .map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "custom invocation Start recorder task failed: {err}"
+                        ))
+                    })
                     .and_then(|result| result);
                 coordinator_lifecycle
                     .complete_start(start_result.clone())
@@ -1909,12 +1925,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                                 start_index,
                                 partial: None,
                             })
-                            .await;
+                            .await?;
                         Ok(Some(start_index))
                     }
-                    (_, Err(err)) if matches!(verdict, CustomBeginVerdict::Cancelled) => {
-                        Err(WorkerExecutorError::runtime(err))
-                    }
+                    (_, Err(err)) if matches!(verdict, CustomBeginVerdict::Cancelled) => Err(err),
                     _ => Ok(None),
                 }
             });
@@ -1929,7 +1943,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
                 .map_err(|err| {
                     anyhow::anyhow!("failed to observe custom invocation begin delivery: {err}")
                 })?;
-            let start_index = lifecycle.wait_start().await.map_err(anyhow::Error::msg)?;
+            let start_index = lifecycle.wait_start().await?;
             accessor.with(|mut access| {
                 access.get().state.active_custom_invocations.insert(
                     start_index,
@@ -2072,9 +2086,9 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
-    ) {
+    ) -> Result<(), OplogError> {
         if self.state.durability_is_suppressed() {
-            return;
+            return Ok(());
         }
 
         use golem_common::model::oplog::AgentError;
@@ -2086,7 +2100,11 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             inside_atomic_region,
             retry_policy_state,
         );
-        self.public_state.worker().add_and_commit_oplog(entry).await;
+        self.public_state
+            .worker()
+            .add_and_commit_oplog(entry)
+            .await?;
+        Ok(())
     }
 }
 
@@ -2598,7 +2616,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
         retry_from: OplogIndex,
         inside_atomic_region: bool,
         retry_policy_state: Option<RetryPolicyState>,
-    ) {
+    ) -> Result<(), OplogError> {
         use golem_common::model::oplog::AgentError;
         let entry = OplogEntry::error(
             self.entity_parent_start_index,
@@ -2608,9 +2626,10 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
             inside_atomic_region,
             retry_policy_state.clone(),
         );
-        self.worker.add_and_commit_oplog(entry).await;
+        self.worker.add_and_commit_oplog(entry).await?;
 
         self.current_retry_policy_state = retry_policy_state;
+        Ok(())
     }
 }
 
@@ -2907,9 +2926,10 @@ mod tests {
             _retry_from: OplogIndex,
             _inside_atomic_region: bool,
             retry_policy_state: Option<RetryPolicyState>,
-        ) {
+        ) -> Result<(), OplogError> {
             self.retry_entries_appended += 1;
             self.current_retry_policy_state = retry_policy_state;
+            Ok(())
         }
     }
 

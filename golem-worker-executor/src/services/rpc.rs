@@ -234,9 +234,10 @@ impl<E> DurableStreamReadError<E> {
         map: impl FnOnce(String) -> E,
     ) -> Self {
         match error {
-            crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired => {
-                Self::Unavailable
-            }
+            // A fenced store is as unavailable here as one awaiting recovery: the stream lives on
+            // with the shard's new owner.
+            crate::durable_host::durable_stream::StreamStoreError::RecoveryRequired
+            | crate::durable_host::durable_stream::StreamStoreError::Fenced(_) => Self::Unavailable,
             error => Self::Other(map(error.to_string())),
         }
     }
@@ -1778,14 +1779,18 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .streams
             .recover_nested_input_mappings()
             .await
-            .map_err(|details| RpcError::RemoteInternalError { details })?;
+            .map_err(|error| RpcError::RemoteInternalError {
+                details: error.to_string(),
+            })?;
         let result = acceptance.streams.wait_persisted_result();
         let completion = worker.await_enqueued_invocation(idempotency_key);
         tokio::pin!(result);
         tokio::pin!(completion);
         let result = tokio::select! {
             result = &mut result => result
-                .map_err(|details| RpcError::RemoteInternalError { details })?,
+                .map_err(|error| RpcError::RemoteInternalError {
+                details: error.to_string(),
+            })?,
             output = &mut completion => {
                 let output = output?;
                 if !matches!(output.result, AgentInvocationResult::AgentMethod { .. }) {
@@ -1797,7 +1802,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     .streams
                     .persisted_result()
                     .await
-                    .map_err(|details| RpcError::RemoteInternalError { details })?
+                    .map_err(|error| RpcError::RemoteInternalError {
+                details: error.to_string(),
+            })?
                     .ok_or_else(|| RpcError::RemoteInternalError {
                         details: "durable streaming invocation completed without a persisted result".to_string(),
                     })?

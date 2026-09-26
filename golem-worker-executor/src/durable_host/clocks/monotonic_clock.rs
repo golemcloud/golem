@@ -138,7 +138,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         let worker = accessor.with(|mut access| access.get().public_state.worker().clone());
         worker
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-            .await;
+            .await?;
         let when = now.nanos.saturating_add(duration_in_nanos);
         Ok(accessor.with(|mut access| {
             let mut view = access.get().as_wasi_view();
