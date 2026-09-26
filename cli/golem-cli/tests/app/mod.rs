@@ -19,6 +19,7 @@ mod agents;
 mod app;
 
 mod build_and_deploy_all;
+mod builtin_bash;
 mod cards;
 mod directory_source_ifs;
 mod effect_http_router;
@@ -52,6 +53,7 @@ tag_suite!(agents, agents);
 // The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
+tag_suite!(builtin_bash, deploy);
 tag_suite!(cards, deploy);
 tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_http_router, deploy);

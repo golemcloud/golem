@@ -582,22 +582,32 @@ async fn deployment_without_oauth_consent_succeeds_with_discovery_warning() {
         .await
         .unwrap();
     let mut db = fixture.pool.with_rw("mcp-deploy-test", "undeploy");
-    db.execute(sqlx::query("DELETE FROM deployment_mcp_imports"))
-        .await
-        .unwrap();
-    db.execute(sqlx::query(
-        "DELETE FROM deployment_tool_middleware_bindings",
-    ))
+    // Only this fixture's environment: the registry deploys its built-in tools into an
+    // environment of their own at every boot, and those deployment rows must stay.
+    db.execute(
+        sqlx::query("DELETE FROM deployment_mcp_imports WHERE environment_id=$1")
+            .bind(fixture.source.environment_id.0),
+    )
     .await
     .unwrap();
-    db.execute(sqlx::query(
-        "DELETE FROM deployment_tool_middleware_snapshots",
-    ))
+    db.execute(
+        sqlx::query("DELETE FROM deployment_tool_middleware_bindings WHERE environment_id=$1")
+            .bind(fixture.source.environment_id.0),
+    )
     .await
     .unwrap();
-    db.execute(sqlx::query("DELETE FROM deployment_revisions"))
-        .await
-        .unwrap();
+    db.execute(
+        sqlx::query("DELETE FROM deployment_tool_middleware_snapshots WHERE environment_id=$1")
+            .bind(fixture.source.environment_id.0),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        sqlx::query("DELETE FROM deployment_revisions WHERE environment_id=$1")
+            .bind(fixture.source.environment_id.0),
+    )
+    .await
+    .unwrap();
     drop(db);
     let imports = vec![McpImportDeployment {
         security_scheme: Some(golem_common::model::security_scheme::SecuritySchemeName(
@@ -687,22 +697,32 @@ async fn preview_before_deployment_paginates_merges_and_does_not_cache() {
     let upstream = Upstream::new().await;
     let fixture = Fixture::new(&upstream).await;
     let mut db = fixture.pool.with_rw("mcp-preview-test", "undeploy");
-    db.execute(sqlx::query("DELETE FROM deployment_mcp_imports"))
-        .await
-        .unwrap();
-    db.execute(sqlx::query(
-        "DELETE FROM deployment_tool_middleware_bindings",
-    ))
+    // Only this fixture's environment: the registry deploys its built-in tools into an
+    // environment of their own at every boot, and those deployment rows must stay.
+    db.execute(
+        sqlx::query("DELETE FROM deployment_mcp_imports WHERE environment_id=$1")
+            .bind(fixture.source.environment_id.0),
+    )
     .await
     .unwrap();
-    db.execute(sqlx::query(
-        "DELETE FROM deployment_tool_middleware_snapshots",
-    ))
+    db.execute(
+        sqlx::query("DELETE FROM deployment_tool_middleware_bindings WHERE environment_id=$1")
+            .bind(fixture.source.environment_id.0),
+    )
     .await
     .unwrap();
-    db.execute(sqlx::query("DELETE FROM deployment_revisions"))
-        .await
-        .unwrap();
+    db.execute(
+        sqlx::query("DELETE FROM deployment_tool_middleware_snapshots WHERE environment_id=$1")
+            .bind(fixture.source.environment_id.0),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        sqlx::query("DELETE FROM deployment_revisions WHERE environment_id=$1")
+            .bind(fixture.source.environment_id.0),
+    )
+    .await
+    .unwrap();
     drop(db);
     let resolver = fixture.resolver(Default::default());
     let import = McpImportDeployment {

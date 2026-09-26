@@ -12,18 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
-use golem_common::schema::tool::constraints::validate_tool_constraints;
-use golem_common::schema::tool::{
+//! Shared command-line parsing and help for schema-described tools.
+//!
+//! Arguments are decoded into the canonical input record and checked against tool constraints.
+//! Metadata never reads the caller's environment; callers supply explicit argument values.
+
+use crate::schema::tool::canonical::CanonicalSurfaceRef;
+use crate::schema::tool::constraints::validate_tool_constraints;
+use crate::schema::tool::{
     DuplicateKeyPolicy, FlagShape, FlagSpec, OptionShape, OptionSpec, Repetition, Tool,
 };
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use std::collections::HashMap;
 
-pub(super) enum ParsedToolArguments {
+/// A request for command help or a validated tool invocation.
+pub enum ParsedToolArguments {
+    /// Help text for the selected command.
     Help(String),
+    /// Canonical command identity and input, ready for a tool transport.
     Invoke {
+        /// Canonical subcommand names, excluding the root tool name.
         command_path: Vec<String>,
+        /// Input encoded according to the command's canonical input model.
         input: Box<TypedSchemaValue>,
     },
 }
@@ -163,7 +173,15 @@ impl ParseCursor {
     }
 }
 
-pub(super) fn parse(tool: &Tool, args: &[String]) -> Result<ParsedToolArguments, String> {
+/// Parses arguments using a validated tool definition's command-line surface.
+///
+/// `args` excludes the tool name. Options, subcommands, aliases, positionals, defaults,
+/// help, and constraints follow the same rules for native CLI and guest callers.
+/// Environment-variable metadata is descriptive and never reads process environment values.
+///
+/// # Errors
+/// Returns a diagnostic for an invalid command line or a value that fails canonical validation.
+pub fn parse(tool: &Tool, args: &[String]) -> Result<ParsedToolArguments, String> {
     if tool.commands.nodes.is_empty() {
         return Err("tool metadata has no root command".into());
     }
@@ -291,7 +309,7 @@ pub(super) fn parse(tool: &Tool, args: &[String]) -> Result<ParsedToolArguments,
         .decode_record(record.clone())
         .map_err(|e| e.to_string())?;
     validate_tool_constraints(tool, node_index, &body.constraints, &surfaces, &decoded)?;
-    golem_common::schema::validation::validate_value(
+    crate::schema::validation::validate_value(
         &model.record_schema,
         &model.record_schema.root,
         &record,
@@ -601,7 +619,7 @@ fn decode(graph: &SchemaGraph, ty: &SchemaType, raw: &str) -> Result<SchemaValue
         }
         _ => serde_json::from_str(raw).map_err(|e| format!("invalid value {raw:?}: {e}"))?,
     };
-    golem_schema::render::from_untrusted_json_value(graph, ty, &json)
+    crate::schema::render::from_untrusted_json_value(graph, ty, &json)
         .map_err(|e| format!("invalid value {raw:?}: {e}"))
 }
 
@@ -761,3 +779,6 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests;
