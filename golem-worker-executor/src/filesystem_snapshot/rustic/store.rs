@@ -171,19 +171,24 @@ pub(crate) struct RusticSnapshotStore {
     low_priority: LowPriority,
     /// Holds a save after its blocking work and before its publish, when a test sets it.
     #[cfg(test)]
-    pub(super) publish_gate: Option<Arc<PublishGate>>,
+    pub(super) publish_gate: Option<Arc<StepGate>>,
+    /// Holds a delete after it chose its claim and before it builds its claim guard, when a test
+    /// sets it.
+    #[cfg(test)]
+    pub(super) claim_gate: Option<Arc<StepGate>>,
     /// Makes each backend build fail while a test sets it.
     #[cfg(test)]
     pub(super) refuse_backends: Arc<std::sync::atomic::AtomicBool>,
 }
 
-/// A gate that holds a save after its blocking work and before its publish.
+/// A gate that holds an operation at one point, for example a save after its blocking work and
+/// before its publish.
 #[cfg(test)]
 #[derive(Debug, Default)]
-pub(super) struct PublishGate {
-    /// Notified when a save reaches the gate.
+pub(super) struct StepGate {
+    /// Notified when the operation reaches the gate.
     pub(super) reached: tokio::sync::Notify,
-    /// Lets the save go on.
+    /// Lets the operation go on.
     pub(super) open: tokio::sync::Notify,
 }
 
@@ -392,6 +397,8 @@ impl RusticSnapshotStore {
             #[cfg(test)]
             publish_gate: None,
             #[cfg(test)]
+            claim_gate: None,
+            #[cfg(test)]
             refuse_backends: Arc::default(),
         }
     }
@@ -527,18 +534,24 @@ impl RusticSnapshotStore {
         else {
             return Ok(());
         };
+        #[cfg(test)]
+        if let Some(gate) = &self.claim_gate {
+            gate.reached.notify_one();
+            gate.open.notified().await;
+        }
+        // The token of the tracker comes before the check of the cancel, so either the delete sees
+        // a shut down and makes no more storage calls, or `shut_down` waits for the guard and for
+        // each call that the guard makes.
+        let tracked = self.tracker.token();
+        if self.root.is_cancelled() {
+            return Err(shut_down_error());
+        }
         let span = lease_span(grace, deadline);
         let (started, time) = marker_time();
         let marker = marker_path(&claims, number, time);
         // The guard exists before the marker write, so a drop of the delete from here until the
         // prune starts releases the claim.
-        let guard = ClaimGuard::new(
-            &files,
-            &claims,
-            number,
-            marker.clone(),
-            self.tracker.token(),
-        );
+        let guard = ClaimGuard::new(&files, &claims, number, marker.clone(), tracked);
         let lease = take_claim(&files, &claims, number, &marker, started, span)
             .await
             .map_err(storage_failure)?;

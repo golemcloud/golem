@@ -27,7 +27,7 @@ use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{copy_flat_tree, entries, three_file_tree, wait_past_change_times};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
 use super::{
-    PublishGate, RusticSnapshotStore, StorePolicy, leaves_marked_packs, scope_snapshots,
+    RusticSnapshotStore, StepGate, StorePolicy, leaves_marked_packs, scope_snapshots,
     store_backup_options, store_restore_options, whole_millis_from,
 };
 use crate::filesystem_snapshot::contract_tests::fixture::{
@@ -3315,11 +3315,57 @@ async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_end
 
 #[test]
 #[timeout("60s")]
+async fn a_shut_down_between_the_claim_listing_and_the_claim_guard_makes_no_storage_call_after_it_returns()
+ {
+    // The gate holds the delete after it listed the claims and before it builds its claim guard,
+    // so the tracker is empty and `shut_down` returns while the delete waits.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let gate = Arc::new(StepGate::default());
+    let store = Arc::new(RusticSnapshotStore {
+        claim_gate: Some(gate.clone()),
+        ..RusticSnapshotStore::with_policy(
+            storage.clone(),
+            key(),
+            policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+        )
+    });
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let reached = tokio::time::timeout(LIMIT, gate.reached.notified())
+        .await
+        .is_ok();
+
+    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
+    let calls_at_shut_down = storage.calls();
+    gate.open.notify_one();
+    let deleted = tokio::time::timeout(LIMIT, deleting).await;
+    let ended = eventually(|| store.work_in_flight() == 0).await;
+
+    assert!(
+        matches!(
+            &deleted,
+            Ok(Ok(Err(error))) if is_storage(error, false)
+        ),
+        "{deleted:?}"
+    );
+    assert_eq!(
+        (reached, stopped, ended, storage.calls()),
+        (true, true, true, calls_at_shut_down)
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {
     // The gate holds the save after its blocking work, so the tracker is empty and `shut_down`
     // returns before the publish starts.
     let storage = Arc::new(InMemoryBlobStorage::new());
-    let gate = Arc::new(PublishGate::default());
+    let gate = Arc::new(StepGate::default());
     let store = Arc::new(RusticSnapshotStore {
         publish_gate: Some(gate.clone()),
         ..RusticSnapshotStore::with_policy(
