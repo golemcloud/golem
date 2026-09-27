@@ -3664,6 +3664,64 @@ async fn a_shut_down_between_the_claim_listing_and_the_claim_guard_makes_no_stor
 
 #[test]
 #[timeout("60s")]
+async fn a_save_that_loses_the_creation_of_the_repository_after_its_first_config_check_saves_into_the_winner()
+ {
+    // The gate holds the second check of the config by the losing save, which the init of rustic
+    // makes before its config write. The winning save creates the repository meanwhile, so that
+    // check finds the config.
+    let shared = Arc::new(InMemoryBlobStorage::new());
+    let checks = Arc::new(AtomicUsize::new(0));
+    let losing = ScriptedBlobStorage::new(shared.clone(), {
+        let checks = checks.clone();
+        move |op_label, path| {
+            if op_label == "stat"
+                && path == Path::new("config")
+                && checks.fetch_add(1, Ordering::SeqCst) == 1
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let winner = store(shared.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO));
+    let loser = store(losing.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO));
+    let scope = new_scope();
+    let (won_tree, lost_tree) = (one_file_tree("winner"), one_file_tree("loser"));
+    let losing_save = tokio::spawn({
+        let (loser, scope, path) = (loser.clone(), scope.clone(), lost_tree.path().to_path_buf());
+        async move { loser.save(&scope, &name("p-loser"), &path, None).await }
+    });
+    let held = eventually(|| checks.load(Ordering::SeqCst) >= 2).await;
+
+    let won = winner
+        .save(&scope, &name("p-winner"), won_tree.path(), None)
+        .await;
+    losing.open_gate();
+    let lost = tokio::time::timeout(LIMIT, losing_save).await;
+
+    assert!(won.is_ok(), "{won:?}");
+    assert!(matches!(lost, Ok(Ok(Ok(_)))), "{lost:?}");
+    assert_eq!(
+        (
+            held,
+            restored_listing(&winner, &scope, &name("p-loser"))
+                .await
+                .ok(),
+            restored_listing(&loser, &scope, &name("p-winner"))
+                .await
+                .ok(),
+        ),
+        (
+            true,
+            Some(listing(lost_tree.path())),
+            Some(listing(won_tree.path())),
+        )
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {
     // The gate holds the save after its blocking work, so the tracker is empty and `shut_down`
     // returns before the publish starts.

@@ -1097,7 +1097,13 @@ fn stage_save(
     tree: &Path,
     parent: Option<(SnapshotName, ChangeDetection)>,
 ) -> anyhow::Result<Option<(StagedSnapshot, SnapshotInfo)>> {
-    let (repository, _) = open_or_create(backend, key, &policy.repository)?;
+    // The init of the fork checks the config a second time before its write, so a save that loses
+    // the race to create the repository can fail at that check with an error that is not
+    // `ConfigExists`. A config that is there after the error is the repository of the winner.
+    let repository = match open_or_create(backend.clone(), key, &policy.repository) {
+        Ok((repository, _)) => repository,
+        Err(error) => open_existing(backend, key).ok().flatten().ok_or(error)?,
+    };
     let before = scope_snapshots(&repository)?;
     if has_name(&before, name) {
         return Ok(None);
