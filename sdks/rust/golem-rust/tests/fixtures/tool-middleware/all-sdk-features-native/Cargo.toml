@@ -13,8 +13,6 @@ golem-rust = { path = "../../../..", default-features = false, features = [
     "default",
     "durability",
     "export_golem_agentic",
-    "export_golem_agentic_tool_middleware",
-    "export_golem_tool_middleware",
     "export_load_snapshot",
     "export_oplog_processor",
     "export_save_snapshot",

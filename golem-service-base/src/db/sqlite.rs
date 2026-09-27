@@ -52,6 +52,13 @@ impl SqlitePool {
         Ok(Self::new(read_pool, write_pool))
     }
 
+    /// Pins a read connection for SQLite incremental BLOB I/O.
+    pub(crate) async fn acquire_blob_reader(
+        &self,
+    ) -> Result<sqlx::pool::PoolConnection<Sqlite>, Error> {
+        self.read_pool.acquire().await
+    }
+
     pub fn with_ro(&self, svc_name: &'static str, api_name: &'static str) -> SqliteLabelledApi {
         SqliteLabelledApi {
             svc_name,

@@ -31,6 +31,7 @@ pub mod environment_plugin_grant;
 pub mod environment_tool_grant;
 pub mod environment_tool_middleware_grant;
 pub mod error;
+pub mod filesystem;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod invocation_session_public;
@@ -75,10 +76,14 @@ use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
 use crate::model::card::{CardId, ScopeCard, StoredCard};
 use crate::model::invocation_context::InvocationContextStack;
+use crate::model::oplog::payload::types::{
+    SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+};
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
 use crate::model::regions::DeletedRegions;
-use crate::schema::{ResultValuePayload, SchemaValue};
+use crate::model::tool::{ToolActivationSnapshot, ToolName};
+use crate::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
 use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
@@ -100,7 +105,9 @@ use url::Url;
 use uuid::Uuid;
 
 /// Status of an idempotency key lookup on a worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Enum)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub enum InvocationStatus {
     /// The idempotency key is not known (never seen or expired).
     Unknown,
@@ -388,6 +395,13 @@ pub enum ScheduledAction {
         parent: Option<AgentId>,
         creation_principal: Box<Principal>,
     },
+    ExpireDurableStreamSession {
+        owned_agent_id: OwnedAgentId,
+        target_agent_fingerprint: AgentFingerprint,
+        public_session_id: String,
+        session_key: IdempotencyKey,
+        expected_deadline_millis: u64,
+    },
 }
 
 impl ScheduledAction {
@@ -400,7 +414,10 @@ impl ScheduledAction {
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
             ScheduledAction::Invoke { owned_agent_id, .. }
-            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => owned_agent_id.clone(),
+            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. }
+            | ScheduledAction::ExpireDurableStreamSession { owned_agent_id, .. } => {
+                owned_agent_id.clone()
+            }
             ScheduledAction::Resume { owned_agent_id, .. } => owned_agent_id.clone(),
         }
     }
@@ -419,6 +436,14 @@ impl Display for ScheduledAction {
             | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => {
                 write!(f, "invoke[{owned_agent_id}]")
             }
+            ScheduledAction::ExpireDurableStreamSession {
+                owned_agent_id,
+                public_session_id,
+                ..
+            } => write!(
+                f,
+                "expire-stream-session[{owned_agent_id}/{public_session_id}]"
+            ),
             ScheduledAction::Resume { owned_agent_id, .. } => write!(f, "resume[{owned_agent_id}]"),
         }
     }
@@ -580,8 +605,7 @@ pub struct ShardAssignment {
     /// or renewal - and the grant is anchored where that request was sent, so
     /// the shard manager's copy of the lease is never earlier than this one.
     /// A push carries no lease. `None` means the lease never expires
-    /// (single-shard mode, the debugging service, and the pre-registration
-    /// placeholder).
+    /// (single-shard mode and the pre-registration placeholder).
     pub expires_at: Option<Instant>,
     /// The revision of the delivery this set came from. A delivery older than
     /// this is ignored; see [`ShardLeaseRevision`].
@@ -789,6 +813,7 @@ impl Display for ShardAssignment {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
+    pub owner_kind: crate::model::agent::OwnerKind,
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
@@ -1249,6 +1274,7 @@ pub struct AgentStatusRecord {
     pub invocation_results: InvocationResultMembership,
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
+    pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
     pub pending_durable_stream_cancellations:
         HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
@@ -1303,6 +1329,7 @@ impl Default for AgentStatusRecord {
             invocation_results: InvocationResultMembership::default(),
             received_card_transfers: ReceivedCardTransferIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
+            export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
             pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
@@ -1327,6 +1354,22 @@ impl Default for AgentStatusRecord {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, BinaryCodec)]
+pub struct ExportForkAdmissions {
+    pub owner_fingerprint: Option<AgentFingerprint>,
+    pub reservations: HashMap<AgentId, ExportForkReservation>,
+    pub session_counts: HashMap<String, u32>,
+    pub updated_millis: u64,
+    pub credit_millis: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct ExportForkReservation {
+    pub oplog_index: OplogIndex,
+    pub request_hash: Vec<u8>,
+    pub session: String,
+}
+
 /// The durable target-side identity associated with a permission-card transfer ID.
 ///
 /// This is stored behind an `Arc` in [`ReceivedCardTransferIndex`]. Boxing the common `Received`
@@ -1335,7 +1378,7 @@ impl Default for AgentStatusRecord {
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 pub enum ReceivedCardTransferState {
     Received {
-        source_card_id: Option<CardId>,
+        source_card_id: CardId,
         card: StoredCard,
     },
     Conflict,
@@ -1408,7 +1451,7 @@ pub struct DurableStreamSessionStatus {
     pub prepared: Option<OplogIndex>,
     pub invocation_result: Option<OplogIndex>,
     pub finished: Option<OplogIndex>,
-    pub session_key: Option<crate::model::durable_stream::StreamSessionKey>,
+    pub session_key: Option<IdempotencyKey>,
     pub prepared_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub initial_attachment_epoch: Option<u64>,
     pub initial_attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
@@ -1421,6 +1464,12 @@ pub struct DurableStreamSessionStatus {
     pub lifecycle_error: Option<String>,
     pub tombstoned_slots: HashSet<String>,
     pub cancellation_requested: bool,
+    pub public_session_id: Option<String>,
+    pub expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
+    pub expiry_deadline_millis: Option<u64>,
+    pub expired: bool,
+    pub export_fork_initialized: bool,
+    pub export_source_invocation: Option<crate::model::durable_stream::StreamInvocationId>,
 }
 
 impl DurableStreamSessionStatus {
@@ -1461,7 +1510,7 @@ impl DurableStreamSessionStatus {
             || self
                 .session_key
                 .as_ref()
-                .is_none_or(|key| &key.idempotency_key != idempotency_key)
+                .is_none_or(|key| key != idempotency_key)
             || self
                 .prepared
                 .is_none_or(|prepared_idx| oplog_idx <= prepared_idx)
@@ -1482,11 +1531,33 @@ impl DurableStreamSessionStatus {
     ) {
         use crate::model::durable_stream::StreamSessionRecord;
 
-        let record_key = match record {
-            StreamSessionRecord::Prepared(v) => Some(&v.attempt.session_key),
+        if let StreamSessionRecord::ForkCut(cut) = record {
+            self.attachment_epoch = Some(cut.epoch_floor);
+            self.attachment_attached = Some(false);
+            if cut.revert.is_none() {
+                // Concrete Prepared invocation identities remain valid continuations on an
+                // ordinary fork. A target-only export identity is replaced on initialization.
+                if self.first_prepared.is_none() {
+                    self.public_session_id = None;
+                }
+                self.expiry_policy = crate::model::durable_stream::StreamSessionExpiryPolicy::None;
+                self.expiry_deadline_millis = None;
+                self.expired = false;
+            }
+            return;
+        }
+
+        let local_record_key = match record {
+            StreamSessionRecord::Prepared(v) => Some(&v.session_key),
+            StreamSessionRecord::ExpiryRefreshed(v) => Some(&v.session_key),
+            StreamSessionRecord::Expired(v) => Some(&v.session_key),
+            StreamSessionRecord::ExportForkInitialized(v) => Some(&v.session_key),
             StreamSessionRecord::Attached(v) => Some(&v.session_key),
-            StreamSessionRecord::ResumeAttempt(v) => Some(&v.attempt.session_key),
+            StreamSessionRecord::ResumeAttempt(v) => Some(&v.session_key),
             StreamSessionRecord::Detached(v) => Some(&v.session_key),
+            _ => None,
+        };
+        let relative_record_key = match record {
             StreamSessionRecord::InvocationResult(v) => Some(&v.session_key),
             StreamSessionRecord::Finished(v) => Some(&v.session_key),
             StreamSessionRecord::Tombstoned(v) => Some(&v.session_key),
@@ -1494,15 +1565,28 @@ impl DurableStreamSessionStatus {
             StreamSessionRecord::ConsumerCancelApplied(v) => Some(&v.intent.session_key),
             _ => None,
         };
-        let Some(record_key) = record_key else { return };
-        if self
-            .session_key
-            .as_ref()
-            .is_some_and(|key| key != record_key)
-        {
+        if let Some(record_key) = local_record_key {
+            if self
+                .session_key
+                .as_ref()
+                .is_some_and(|key| key != record_key)
+            {
+                return;
+            }
+            self.session_key.get_or_insert_with(|| record_key.clone());
+        } else if let Some(record_key) = relative_record_key {
+            let Some(key) = self.session_key.as_ref() else {
+                return;
+            };
+            if !matches!(record_key,
+                crate::model::durable_stream::StreamRegistrationInvocation::Local(local)
+                    if local == key)
+            {
+                return;
+            }
+        } else {
             return;
         }
-        self.session_key.get_or_insert_with(|| record_key.clone());
         if self.lifecycle_error.is_some() {
             return;
         }
@@ -1520,7 +1604,36 @@ impl DurableStreamSessionStatus {
                     self.first_prepared = Some(oplog_idx);
                     self.prepared = Some(oplog_idx);
                     self.prepared_attempt_id = Some(v.attempt.attempt_id);
+                    self.public_session_id = Some(v.public_session_id.clone());
+                    self.expiry_policy = v.expiry_policy;
+                    self.expiry_deadline_millis = v.expiry_deadline_millis;
                 }
+            }
+            StreamSessionRecord::ExpiryRefreshed(v)
+                if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
+                    && matches!(
+                        self.expiry_policy,
+                        crate::model::durable_stream::StreamSessionExpiryPolicy::Sliding { .. }
+                    )
+                    && !self.expired =>
+            {
+                self.expiry_deadline_millis = Some(v.deadline_millis);
+            }
+            StreamSessionRecord::Expired(v)
+                if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
+                    && !self.expired =>
+            {
+                self.expired = true;
+            }
+            StreamSessionRecord::ExportForkInitialized(v) if self.public_session_id.is_none() => {
+                self.public_session_id = Some(v.public_session_id.clone());
+                self.expiry_policy = v.expiry_policy;
+                self.expiry_deadline_millis = v.expiry_deadline_millis;
+                self.expired = false;
+                self.export_fork_initialized = true;
+                self.export_source_invocation = Some(v.source_invocation.clone());
             }
             StreamSessionRecord::Attached(v) => {
                 if self.initial_attachment_epoch.is_some() {
@@ -1590,6 +1703,95 @@ impl DurableStreamSessionStatus {
 }
 
 pub const DURABLE_STREAM_SESSION_RECENT_CAPACITY: usize = 128;
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum DurableStreamPublicBinding {
+    Live {
+        session_key: IdempotencyKey,
+        expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
+        expiry_deadline_millis: Option<u64>,
+    },
+    Retired {
+        session_key: IdempotencyKey,
+    },
+}
+
+impl DurableStreamPublicBinding {
+    pub fn fold(
+        current: Option<&Self>,
+        record: &crate::model::durable_stream::StreamSessionRecord,
+    ) -> Option<Self> {
+        use crate::model::durable_stream::StreamSessionRecord;
+
+        match record {
+            StreamSessionRecord::Prepared(record) => match current {
+                None => Some(Self::Live {
+                    session_key: record.session_key.clone(),
+                    expiry_policy: record.expiry_policy,
+                    expiry_deadline_millis: record.expiry_deadline_millis,
+                }),
+                Some(Self::Retired { session_key }) if session_key != &record.session_key => {
+                    Some(Self::Live {
+                        session_key: record.session_key.clone(),
+                        expiry_policy: record.expiry_policy,
+                        expiry_deadline_millis: record.expiry_deadline_millis,
+                    })
+                }
+                Some(current) => Some(current.clone()),
+            },
+            StreamSessionRecord::ExportForkInitialized(record) => match current {
+                None => Some(Self::Live {
+                    session_key: record.session_key.clone(),
+                    expiry_policy: record.expiry_policy,
+                    expiry_deadline_millis: record.expiry_deadline_millis,
+                }),
+                Some(Self::Retired { session_key }) if session_key != &record.session_key => {
+                    Some(Self::Live {
+                        session_key: record.session_key.clone(),
+                        expiry_policy: record.expiry_policy,
+                        expiry_deadline_millis: record.expiry_deadline_millis,
+                    })
+                }
+                Some(current) => Some(current.clone()),
+            },
+            StreamSessionRecord::ExpiryRefreshed(record) => match current {
+                Some(Self::Live {
+                    session_key,
+                    expiry_policy,
+                    expiry_deadline_millis: Some(deadline),
+                }) if session_key == &record.session_key
+                    && *deadline == record.expected_deadline_millis
+                    && matches!(
+                        expiry_policy,
+                        crate::model::durable_stream::StreamSessionExpiryPolicy::Sliding { .. }
+                    ) =>
+                {
+                    Some(Self::Live {
+                        session_key: record.session_key.clone(),
+                        expiry_policy: *expiry_policy,
+                        expiry_deadline_millis: Some(record.deadline_millis),
+                    })
+                }
+                _ => current.cloned(),
+            },
+            StreamSessionRecord::Expired(record) => match current {
+                Some(Self::Live {
+                    session_key,
+                    expiry_deadline_millis: Some(deadline),
+                    ..
+                }) if session_key == &record.session_key
+                    && *deadline == record.expected_deadline_millis =>
+                {
+                    Some(Self::Retired {
+                        session_key: record.session_key.clone(),
+                    })
+                }
+                _ => current.cloned(),
+            },
+            _ => current.cloned(),
+        }
+    }
+}
 
 /// An oplog-derived index of unfinished sessions and a bounded set of recent completions.
 /// Values contain only oplog indices; canonical invocation and result payloads remain in the oplog.
@@ -1667,21 +1869,30 @@ impl DurableStreamSessionIndex {
     ) {
         use crate::model::durable_stream::StreamSessionRecord;
 
-        let key = match record {
-            StreamSessionRecord::Prepared(v) => &v.attempt.session_key.idempotency_key,
-            StreamSessionRecord::Attached(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::ResumeAttempt(v) => &v.attempt.session_key.idempotency_key,
-            StreamSessionRecord::Detached(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::InvocationResult(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::Finished(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::Tombstoned(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::CancelRequested(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::ConsumerCancelApplied(v) => &v.intent.session_key.idempotency_key,
-            _ => return,
+        if matches!(record, StreamSessionRecord::ForkCut(_)) {
+            let retained: Vec<_> = self
+                .iter()
+                .map(|(key, status)| (key, status.clone()))
+                .collect();
+            for (key, mut status) in retained {
+                status.apply_record(index, record);
+                self.insert(key, status);
+            }
+            return;
+        }
+
+        let Some(key) = record.local_session_key() else {
+            return;
         };
         let mut status = match self.get(key) {
             Some(status) => status.clone(),
-            None if matches!(record, StreamSessionRecord::Prepared(_)) => Default::default(),
+            None if matches!(
+                record,
+                StreamSessionRecord::Prepared(_) | StreamSessionRecord::ExportForkInitialized(_)
+            ) =>
+            {
+                Default::default()
+            }
             // Caller-side results have no local Prepared/Finished lifecycle.
             None => return,
         };
@@ -1786,6 +1997,7 @@ pub enum AgentInvocationKind {
     LoadSnapshot,
     SaveSnapshot,
     ProcessOplogEntries,
+    ExternalTool,
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -1804,6 +2016,18 @@ pub enum AgentInvocation {
         idempotency_key: IdempotencyKey,
         method_name: String,
         input: SchemaValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<ScopeCard>,
+    },
+    ExternalTool {
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        activation: Box<ToolActivationSnapshot>,
         invocation_context: InvocationContextStack,
         principal: Principal,
         scope_card: Option<ScopeCard>,
@@ -1842,6 +2066,16 @@ pub enum AgentInvocationPayload {
         principal: Principal,
         scope_card: Option<ScopeCard>,
     },
+    ExternalTool {
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        activation: Box<ToolActivationSnapshot>,
+        principal: Principal,
+        scope_card: Option<ScopeCard>,
+    },
     LoadSnapshot {
         snapshot: RawSnapshotData,
     },
@@ -1859,11 +2093,22 @@ pub enum AgentInvocationPayload {
 #[desert(evolution())]
 pub enum AgentInvocationResult {
     AgentInitialization,
-    AgentMethod { output: SchemaValue },
+    AgentMethod {
+        output: SchemaValue,
+    },
     ManualUpdate,
-    LoadSnapshot { error: Option<String> },
-    SaveSnapshot { snapshot: RawSnapshotData },
-    ProcessOplogEntries { error: Option<String> },
+    LoadSnapshot {
+        error: Option<String>,
+    },
+    SaveSnapshot {
+        snapshot: RawSnapshotData,
+    },
+    ProcessOplogEntries {
+        error: Option<String>,
+    },
+    ExternalTool {
+        result: Result<SerializableToolInvocationResult, SerializableToolRpcError>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1968,6 +2213,35 @@ impl AgentInvocationResult {
                 AgentInvocationResult::ProcessOplogEntries { error: a },
                 AgentInvocationResult::ProcessOplogEntries { error: b },
             ) => a == b,
+            (
+                AgentInvocationResult::ExternalTool { result: a },
+                AgentInvocationResult::ExternalTool { result: b },
+            ) => match (a, b) {
+                (Ok(a), Ok(b)) => match (&a.result, &b.result) {
+                    (Some(a), Some(b)) => {
+                        a.graph() == b.graph()
+                            && schema_value_replay_equivalent(a.value(), b.value())
+                    }
+                    (None, None) => true,
+                    _ => false,
+                },
+                (
+                    Err(SerializableToolRpcError::RemoteToolError(a)),
+                    Err(SerializableToolRpcError::RemoteToolError(b)),
+                ) => match (a.as_ref(), b.as_ref()) {
+                    (
+                        SerializableToolError::CustomError(a),
+                        SerializableToolError::CustomError(b),
+                    ) => {
+                        a.name == b.name
+                            && a.payload.graph() == b.payload.graph()
+                            && schema_value_replay_equivalent(a.payload.value(), b.payload.value())
+                    }
+                    _ => a == b,
+                },
+                (Err(a), Err(b)) => a == b,
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -1994,6 +2268,37 @@ impl std::fmt::Debug for RedactedAgentInvocationResult<'_> {
                     &crate::schema::redacted_schema_value_debug(output),
                 )
                 .finish(),
+            AgentInvocationResult::ExternalTool { result } => {
+                let mut debug = f.debug_struct("ExternalTool");
+                match result {
+                    Ok(result) => match &result.result {
+                        Some(value) => debug.field(
+                            "result",
+                            &format_args!(
+                                "Ok({:?})",
+                                crate::schema::redact_host_managed_typed_value((**value).clone())
+                            ),
+                        ),
+                        None => debug.field("result", &"Ok(None)"),
+                    },
+                    Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
+                        crate::base_model::tool::SerializableToolError::CustomError(value) => debug
+                            .field(
+                                "result",
+                                &format_args!(
+                                    "Err(RemoteToolError(CustomError {{ name: {:?}, payload: {:?} }}))",
+                                    value.name,
+                                    crate::schema::redact_host_managed_typed_value(value.payload.clone())
+                                ),
+                            ),
+                        error => {
+                            debug.field("result", &format_args!("Err(RemoteToolError({error:?}))"))
+                        }
+                    },
+                    Err(error) => debug.field("result", &format_args!("Err({error:?})")),
+                };
+                debug.finish()
+            }
             other => std::fmt::Debug::fmt(other, f),
         }
     }
@@ -2026,6 +2331,27 @@ impl AgentInvocation {
                 idempotency_key,
                 method_name,
                 input,
+                invocation_context,
+                principal,
+                scope_card,
+            },
+            AgentInvocationPayload::ExternalTool {
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                activation,
+                principal,
+                scope_card,
+            } => Self::ExternalTool {
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                activation,
                 invocation_context,
                 principal,
                 scope_card,
@@ -2092,6 +2418,32 @@ impl AgentInvocation {
                 },
                 invocation_context,
             ),
+            Self::ExternalTool {
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                activation,
+                invocation_context,
+                principal,
+                scope_card,
+                ..
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::ExternalTool {
+                    tool_name,
+                    command_path,
+                    input,
+                    stdin,
+                    stdout,
+                    activation,
+                    principal,
+                    scope_card,
+                },
+                invocation_context,
+            ),
             Self::LoadSnapshot {
                 idempotency_key,
                 snapshot,
@@ -2135,6 +2487,9 @@ impl AgentInvocation {
             Self::AgentMethod {
                 idempotency_key, ..
             } => Some(idempotency_key),
+            Self::ExternalTool {
+                idempotency_key, ..
+            } => Some(idempotency_key),
             Self::AgentInitialization {
                 idempotency_key, ..
             } => Some(idempotency_key),
@@ -2157,6 +2512,9 @@ impl AgentInvocation {
             Self::AgentMethod {
                 invocation_context, ..
             } => invocation_context.clone(),
+            Self::ExternalTool {
+                invocation_context, ..
+            } => invocation_context.clone(),
             _ => InvocationContextStack::fresh(),
         }
     }
@@ -2166,6 +2524,7 @@ impl AgentInvocation {
             Self::ManualUpdate { .. } => AgentInvocationKind::ManualUpdate,
             Self::AgentInitialization { .. } => AgentInvocationKind::AgentInitialization,
             Self::AgentMethod { .. } => AgentInvocationKind::AgentMethod,
+            Self::ExternalTool { .. } => AgentInvocationKind::ExternalTool,
             Self::LoadSnapshot { .. } => AgentInvocationKind::LoadSnapshot,
             Self::SaveSnapshot { .. } => AgentInvocationKind::SaveSnapshot,
             Self::ProcessOplogEntries { .. } => AgentInvocationKind::ProcessOplogEntries,
@@ -2177,9 +2536,32 @@ impl AgentInvocation {
             Self::ManualUpdate { .. } => String::new(),
             Self::AgentInitialization { .. } => "initialize".to_string(),
             Self::AgentMethod { method_name, .. } => method_name.clone(),
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                ..
+            } => format!("{tool_name}:{}", command_path.join("/")),
             Self::LoadSnapshot { .. } => "load-snapshot".to_string(),
             Self::SaveSnapshot { .. } => "save-snapshot".to_string(),
             Self::ProcessOplogEntries { .. } => "process-oplog-entries".to_string(),
+        }
+    }
+
+    pub fn principal(&self) -> Option<&Principal> {
+        match self {
+            Self::AgentInitialization { principal, .. }
+            | Self::AgentMethod { principal, .. }
+            | Self::ExternalTool { principal, .. } => Some(principal),
+            _ => None,
+        }
+    }
+
+    pub fn scope_card(&self) -> Option<&ScopeCard> {
+        match self {
+            Self::AgentMethod { scope_card, .. } | Self::ExternalTool { scope_card, .. } => {
+                scope_card.as_ref()
+            }
+            _ => None,
         }
     }
 }
@@ -2783,8 +3165,8 @@ mod shard_assignment_tests {
         assert!(!assignment.lease_is_live(now + Duration::from_secs(1)));
     }
 
-    /// The single-shard implementations and the debugging service run with no
-    /// expiry at all and must never fence themselves.
+    /// The single-shard implementations run with no expiry at all and must
+    /// never fence themselves.
     #[test]
     fn a_lease_without_an_expiry_is_always_live() {
         let assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);

@@ -25,12 +25,13 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::SafeDisplay;
-use golem_common::model::AgentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Error returned by every [`KeyValueStorage`] operation.
 ///
@@ -148,6 +149,19 @@ pub trait KeyValueStorage: Debug {
         value: &[u8],
     ) -> Result<(), KeyValueStorageError>;
 
+    /// Unconditionally sets one value and establishes or refreshes the namespace expiry.
+    /// Backends without expiry support apply the set atomically and ignore `expiry`.
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> Result<(), KeyValueStorageError>;
+
     async fn set_many(
         &self,
         svc_name: &'static str,
@@ -157,7 +171,8 @@ pub trait KeyValueStorage: Debug {
         pairs: &[(&str, &[u8])],
     ) -> Result<(), KeyValueStorageError>;
 
-    /// Atomically compares `key` with `expected` and writes every pair only on a match.
+    /// Atomically compares `key` with `expected`, deletes fields, then writes every pair only on a
+    /// match. Pair writes win when a field is also listed in `deletes`.
     /// `None` requires absence, not an empty value. A mismatch changes nothing.
     /// Redis supports this operation only for namespaces stored as a single hash.
     async fn compare_and_set_many(
@@ -168,7 +183,27 @@ pub trait KeyValueStorage: Debug {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
+    ) -> Result<bool, KeyValueStorageError>;
+
+    /// On a matching field value, atomically applies all sets and deletions and refreshes expiry.
+    /// `None` matches only an absent field. Backends without expiry support ignore `expiry`.
+    ///
+    /// When accessed through the retry decorator, `false` reports that the final attempt did not
+    /// match. An earlier attempt may already have applied before its response was lost, so callers
+    /// must not interpret `false` as proof that no mutation occurred.
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
     ) -> Result<bool, KeyValueStorageError>;
 
     async fn set_if_not_exists(
@@ -364,6 +399,13 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
     }
 
     pub async fn del(&self, namespace: KeyValueStorageNamespace, key: &str) -> Result<(), String> {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            "delete",
+            self.svc_name,
+            self.api_name,
+            "",
+        );
         self.storage
             .del(self.svc_name, self.api_name, namespace, key)
             .await
@@ -375,6 +417,13 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         keys: Arc<[String]>,
     ) -> Result<(), String> {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            "delete_many",
+            self.svc_name,
+            self.api_name,
+            "",
+        );
         self.storage
             .del_many(self.svc_name, self.api_name, namespace, keys)
             .await
@@ -386,6 +435,13 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            "exists",
+            self.svc_name,
+            self.api_name,
+            "",
+        );
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
             .await
@@ -393,6 +449,13 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledKeyValueStorage<'a, S> {
     }
 
     pub async fn keys(&self, namespace: KeyValueStorageNamespace) -> Result<Vec<String>, String> {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            "keys",
+            self.svc_name,
+            self.api_name,
+            "",
+        );
         self.storage
             .keys(self.svc_name, self.api_name, namespace)
             .await
@@ -408,6 +471,16 @@ pub struct LabelledEntityKeyValueStorage<'a, S: KeyValueStorage + ?Sized> {
 }
 
 impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
+    fn record(&self, operation: &'static str) {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "keyvalue",
+            operation,
+            self.svc_name,
+            self.api_name,
+            self.entity_name,
+        );
+    }
+
     pub fn new(
         svc_name: &'static str,
         api_name: &'static str,
@@ -428,6 +501,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &V,
     ) -> Result<(), String> {
+        self.record("set");
         let serialized = serialize(value)?;
 
         self.storage
@@ -449,6 +523,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
+        self.record("set");
         self.storage
             .set(
                 self.svc_name,
@@ -462,12 +537,34 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .map_err(Into::into)
     }
 
+    pub async fn set_raw_with_expiry(
+        &self,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> Result<(), String> {
+        self.storage
+            .set_with_expiry(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                value,
+                expiry,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
     pub async fn set_if_not_exists<V: BinarySerializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &V,
     ) -> Result<bool, String> {
+        self.record("set_if_not_exists");
         let serialized = serialize(value)?;
         self.storage
             .set_if_not_exists(
@@ -487,6 +584,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &V)],
     ) -> Result<(), String> {
+        self.record("set_many");
         let pairs = pairs
             .iter()
             .map(|(k, v)| serialize(v).map(|v| (k.to_string(), v.to_vec())))
@@ -512,6 +610,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
     ) -> Result<(), String> {
+        self.record("set_many");
         self.storage
             .set_many(
                 self.svc_name,
@@ -529,8 +628,10 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, String> {
+        self.record("compare_and_set_many");
         self.storage
             .compare_and_set_many(
                 self.svc_name,
@@ -539,7 +640,33 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 namespace,
                 key,
                 expected,
+                deletes,
                 pairs,
+            )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn compare_and_mutate_many_raw(
+        &self,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
+    ) -> Result<bool, String> {
+        self.storage
+            .compare_and_mutate_many(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+                expected,
+                sets,
+                deletions,
+                expiry,
             )
             .await
             .map_err(Into::into)
@@ -561,6 +688,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Result<V, String>>, String> {
+        self.record("get");
         let maybe_bytes = self
             .storage
             .get(
@@ -584,6 +712,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Bytes>, String> {
+        self.record("get");
         self.storage
             .get(
                 self.svc_name,
@@ -601,6 +730,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         keys: Arc<[String]>,
     ) -> Result<Vec<Option<V>>, String> {
+        self.record("get_many");
         let maybe_bytes = self
             .storage
             .get_many(
@@ -628,6 +758,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         keys: Arc<[String]>,
     ) -> Result<Vec<Option<Bytes>>, String> {
+        self.record("get_many");
         self.storage
             .get_many(
                 self.svc_name,
@@ -644,6 +775,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         &self,
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<(String, Bytes)>, String> {
+        self.record("get_all");
         self.storage
             .get_all(self.svc_name, self.api_name, self.entity_name, namespace)
             .await
@@ -656,6 +788,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &V,
     ) -> Result<(), String> {
+        self.record("add_to_set");
         let serialized = serialize(value)?;
         self.storage
             .add_to_set(
@@ -676,6 +809,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &V,
     ) -> Result<(), String> {
+        self.record("remove_from_set");
         let serialized = serialize(value)?;
         self.storage
             .remove_from_set(
@@ -695,6 +829,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<V>, String> {
+        self.record("members_of_set");
         let maybe_bytes = self
             .storage
             .members_of_set(
@@ -720,6 +855,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         score: f64,
         value: &V,
     ) -> Result<(), String> {
+        self.record("add_to_sorted_set");
         let serialized = serialize(value)?;
         self.storage
             .add_to_sorted_set(
@@ -741,6 +877,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         key: &str,
         value: &V,
     ) -> Result<(), String> {
+        self.record("remove_from_sorted_set");
         let serialized = serialize(value)?;
         self.storage
             .remove_from_sorted_set(
@@ -760,6 +897,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<(f64, V)>, String> {
+        self.record("get_sorted_set");
         let maybe_bytes = self
             .storage
             .get_sorted_set(
@@ -785,6 +923,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         min: f64,
         max: f64,
     ) -> Result<Vec<(f64, V)>, String> {
+        self.record("query_sorted_set");
         let maybe_bytes = self
             .storage
             .query_sorted_set(
@@ -821,11 +960,13 @@ pub enum KeyValueStorageNamespace {
     /// `keys`/`del_many`).
     AgentStatus {
         agent_id: Arc<AgentId>,
+        fingerprint: AgentFingerprint,
     },
-    /// Per-agent invocation result index. Uses the same hash-style layout and cache routing as
-    /// [`Self::AgentStatus`], but has an independent physical namespace.
+    /// Per-incarnation invocation result index. Uses the same hash-style layout and cache routing
+    /// as [`Self::AgentStatus`], but has an independent fingerprint-scoped physical namespace.
     AgentInvocationResultIndex {
         agent_id: AgentId,
+        fingerprint: AgentFingerprint,
     },
     /// Per-agent *clean* cached status checkpoint. Same physical layout as [`Self::AgentStatus`]
     /// (one structure-per-agent split into `core` / `membership` / `regions` / `updates` and
@@ -836,10 +977,12 @@ pub enum KeyValueStorageNamespace {
     /// index 1.
     AgentStatusCheckpoint {
         agent_id: Arc<AgentId>,
+        fingerprint: AgentFingerprint,
     },
     /// Complete oplog-derived durable stream-session summaries and their coverage watermark.
     AgentDurableStreamSessionIndex {
         agent_id: AgentId,
+        fingerprint: AgentFingerprint,
     },
     /// Per-agent periodic snapshot rejection watermarks, with one hash field per agent
     /// incarnation fingerprint.

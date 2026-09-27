@@ -14,7 +14,7 @@
 
 mod invocation;
 mod invocation_session;
-mod stream_slots;
+pub(crate) mod stream_slots;
 
 pub(crate) use invocation::{CanStartWorker, from_proto_invocation_context};
 pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
@@ -24,7 +24,7 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::{LastError, LookupResult, ReadFileResult};
+use crate::model::{LastError, LookupResult};
 use crate::services::events::Event;
 use crate::services::rpc::DurableStreamReadError;
 use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
@@ -53,8 +53,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ConnectWorkerRequest, DeactivatePluginRequest, DeactivatePluginResponse, DeleteWorkerRequest,
     DeliverCardTransferRequest, DeliverCardTransferResponse, DurableStreamAttachmentControlRequest,
     DurableStreamAttachmentControlResponse, DurableStreamSegmentReadRequest,
-    DurableStreamSegmentReadResponse, ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest,
-    GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
+    DurableStreamSegmentReadResponse, ForkStreamSlotRequest, ForkStreamSlotResponse,
+    ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest, GetAgentWalletResponse,
+    GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
     GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
     GetWorkersMetadataResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
@@ -76,6 +77,7 @@ use golem_common::model::agent::{
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
@@ -94,6 +96,7 @@ use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
     proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
 };
+use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
@@ -707,8 +710,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn create_stream_session_internal(
         &self,
-        request: golem::worker::InvocationStart,
+        request: golem::workerexecutor::v1::CreateStreamSessionRequest,
     ) -> Result<golem::workerexecutor::v1::CreateStreamSessionSuccess, WorkerExecutorError> {
+        let public_session_id = request.public_session_id;
+        golem_common::model::invocation_session_public::validate_durable_stream_session_id(
+            &public_session_id,
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
+        let expiry_policy = stream_slots::expiry_policy_from_proto(request.expiry_policy)?;
+        let creation_intent = stream_slots::creation_intent_from_proto(request.creation_intent)?;
+        let mut request = request
+            .invocation
+            .ok_or_else(|| WorkerExecutorError::invalid_request("invocation not found"))?;
         let auth: AuthCtx = request
             .auth_ctx
             .clone()
@@ -717,15 +730,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(WorkerExecutorError::invalid_request)?;
         auth.authorize_system_only("create authorized Durable Streams session")
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-        let key: IdempotencyKey = request
-            .idempotency_key
-            .clone()
-            .ok_or_else(|| WorkerExecutorError::invalid_request("session id not found"))?
-            .into();
-        golem_common::model::invocation_session_public::validate_durable_stream_session_id(
-            &key.value,
-        )
-        .map_err(WorkerExecutorError::invalid_request)?;
         let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&id)?;
         let (worker, _response_lease) =
@@ -739,6 +743,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?
                 }
             };
+        let admission = worker
+            .begin_stream_session_creation(public_session_id, expiry_policy, creation_intent)
+            .await?;
+        let key = admission.invocation_key().clone();
+        request.idempotency_key = Some(key.clone().into());
         let revision = worker.stream_session_revision(&key).await?;
         let component = worker
             .component_service()
@@ -767,7 +776,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 "Durable Streams requires a streaming method",
             ));
         }
-        let mut request = request;
         request.attempt_id = Some(uuid::Uuid::new_v4().into());
         request.expected_callee_fingerprint =
             Some(worker.get_initial_worker_metadata().fingerprint.0.into());
@@ -800,7 +808,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .live_stream_event_broadcast_capacity
                 .get(),
         )?;
-        let result = worker.create_stream_session(domain_request).await?;
+        let result = worker
+            .create_stream_session(domain_request, admission)
+            .await?;
         Ok(result.into())
     }
 
@@ -1044,6 +1054,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+        let agent_id = request.agent_id()?;
+        if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
+            self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+            let worker = Worker::get_exact_existing_suspended(
+                self,
+                &OwnedAgentId::new(request.environment_id()?, &agent_id),
+                request.principal(),
+            )
+            .await?;
+            Worker::start_if_needed(worker.clone()).await?;
+            return Ok(worker);
+        }
         self.get_or_create_with_freshness(request, InvocationFreshnessDisposition::MayExist)
             .await
     }
@@ -1076,6 +1098,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     > {
         let agent_id = request.agent_id()?;
         let environment_id = request.environment_id()?;
+        if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
+            self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+            let owner = OwnedAgentId::new(environment_id, &agent_id);
+            if Worker::<Ctx>::get_latest_metadata(self, &owner)
+                .await?
+                .is_none()
+            {
+                return Ok(None);
+            }
+            return Worker::get_exact_existing_suspended_for_response(
+                self,
+                &owner,
+                request.principal(),
+            )
+            .await
+            .map(Some);
+        }
 
         let owned_agent_id = self
             .canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, &agent_id))
@@ -1386,13 +1425,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &environment_id,
                 &component_id,
                 filter,
-                request
-                    .cursor
-                    .map(|cursor| ScanCursor {
-                        cursor: cursor.cursor,
-                        layer: cursor.layer as usize,
-                    })
-                    .unwrap_or_default(),
+                request.cursor.map(ScanCursor::from).unwrap_or_default(),
                 request.count,
                 request.precise,
             )
@@ -1414,13 +1447,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             result.push(metadata);
         }
 
-        Ok((
-            new_cursor.map(|cursor| Cursor {
-                layer: cursor.layer as u64,
-                cursor: cursor.cursor,
-            }),
-            result,
-        ))
+        Ok((new_cursor.map(Cursor::from), result))
     }
 
     async fn update_worker_internal(
@@ -1523,15 +1550,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
-        let agent_mode = self
+        let identity = self
             .worker_service()
-            .get_agent_mode(&owned_agent_id)
+            .resolve_agent_identity(&owned_agent_id)
             .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
                 ))
             })?;
+        let agent_mode = identity.agent_mode;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1627,15 +1655,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
-        let agent_mode = self
+        let identity = self
             .worker_service()
-            .get_agent_mode(&owned_agent_id)
+            .resolve_agent_identity(&owned_agent_id)
             .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
                 ))
             })?;
+        let agent_mode = identity.agent_mode;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1791,80 +1820,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_file_contents_internal(
         &self,
         request: GetFileContentsRequest,
-    ) -> Result<<Self as WorkerExecutor>::GetFileContentsStream, WorkerExecutorError> {
+    ) -> Result<Result<FileReadResponse, FileReadError>, WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
-
-        let path = CanonicalFilePath::from_abs_str(&request.file_path)
-            .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid path: {e}")))?;
-
-        let worker = self.get_or_create(&request).await?;
-
-        let result = worker.read_file(path).await?;
-
-        let response: <Self as WorkerExecutor>::GetFileContentsStream = match result {
-            ReadFileResult::NotFound => {
-                let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotFound(golem::common::Empty {})),
-                };
-                let header_chunk = GetFileContentsResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
-                            header,
-                        ),
-                    ),
-                };
-                Box::pin(tokio_stream::iter(vec![Ok(header_chunk)]))
-            }
-            ReadFileResult::NotAFile => {
-                let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(golem::common::Empty {})),
-                };
-                let header_chunk = GetFileContentsResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
-                            header,
-                        ),
-                    ),
-                };
-                Box::pin(tokio_stream::iter(vec![Ok(header_chunk)]))
-            }
-            ReadFileResult::Ok(stream) => {
-                let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::Success(golem::common::Empty {})),
-                };
-                let header_chunk = GetFileContentsResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
-                            header,
-                        ),
-                    ),
-                };
-                let header_stream = tokio_stream::iter(vec![Ok(header_chunk)]);
-
-                let content_stream = stream
-                    .map(|item| {
-                        let transformed = match item {
-                            Ok(data) => {
-                                GetFileContentsResponse {
-                                    result: Some(
-                                        golem::workerexecutor::v1::get_file_contents_response::Result::Success(data.into())
-                                    )
-                                }
-                            }
-                            Err(e) => {
-                                GetFileContentsResponse {
-                                    result: Some(
-                                        golem::workerexecutor::v1::get_file_contents_response::Result::Failure(e.into())
-                                    )
-                                }
-                            }
-                        };
-                        Ok(transformed)
-                    });
-                Box::pin(header_stream.chain(content_stream))
+        let path = validate_file_read_path(&request.file_path).and_then(|()| {
+            CanonicalFilePath::from_abs_str(&request.file_path)
+                .map_err(|_| FileReadError::InvalidTarget)
+        });
+        let selection = request
+            .selection
+            .ok_or(FileReadError::InvalidSelection)
+            .and_then(FileByteSelection::try_from);
+        let (path, selection) = match (path, selection) {
+            (Ok(path), Ok(selection)) => (path, selection),
+            (Err(error), _) | (_, Err(error)) => {
+                return Ok(Err(error));
             }
         };
-        Ok(response)
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        let worker = self.get_or_create(&request).await?;
+        Ok(worker.read_file(path, selection).await)
     }
 
     async fn activate_plugin_internal(
@@ -2061,12 +2038,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
 
-        let (worker, _response_lease) = self
-            .get_or_create_pending_with_freshness(
-                &request,
-                InvocationFreshnessDisposition::MayExist,
-            )
-            .await?;
+        let (worker, _response_lease) =
+            if golem_common::model::agent::OwnerKind::is_reserved_instance_name(
+                &owned_agent_id.agent_id.agent_id,
+            ) {
+                Worker::get_exact_existing_suspended_for_response(
+                    self,
+                    &owned_agent_id,
+                    request.principal(),
+                )
+                .await?
+            } else {
+                self.get_or_create_pending_with_freshness(
+                    &request,
+                    InvocationFreshnessDisposition::MayExist,
+                )
+                .await?
+            };
         worker
             .receive_card_transfer(transfer_id, source_card_id, card)
             .await
@@ -2133,6 +2121,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         Ok(golem::worker::AgentMetadata {
             agent_id: Some(metadata.agent_id.into()),
+            owner_kind: metadata.owner_kind.into(),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             config: metadata
@@ -2972,7 +2961,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "get_file_contents",
             agent_id = proto_agent_id_string(&request.agent_id),
-            path = request.file_path,
         );
 
         let result = self
@@ -2980,8 +2968,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await;
 
+        use golem::workerexecutor::v1::get_file_contents_response::Result as Frame;
         let stream: Self::GetFileContentsStream = match result {
-            Ok(stream) => record.succeed(stream),
+            Ok(Ok(response)) => {
+                let head = futures::stream::iter([Ok(GetFileContentsResponse {
+                    result: Some(Frame::Header(response.head.into())),
+                })]);
+                let body = response.body.map(|item| {
+                    Ok(GetFileContentsResponse {
+                        result: Some(match item {
+                            Ok(bytes) => Frame::Success(bytes.into()),
+                            Err(error) => {
+                                Frame::ReadFailure(golem::worker::FileReadError::from(error) as i32)
+                            }
+                        }),
+                    })
+                });
+                record.succeed(Box::pin(head.chain(body)))
+            }
+            Ok(Err(mut error)) => {
+                let stream: Self::GetFileContentsStream =
+                    Box::pin(futures::stream::iter([Ok(GetFileContentsResponse {
+                        result: Some(Frame::ReadFailure(
+                            golem::worker::FileReadError::from(error) as i32,
+                        )),
+                    })]));
+                record.fail(stream, &mut error)
+            }
             Err(mut err) => {
                 let res = GetFileContentsResponse {
                     result: Some(
@@ -3152,7 +3165,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn create_stream_session(
         &self,
-        request: Request<golem::worker::InvocationStart>,
+        request: Request<golem::workerexecutor::v1::CreateStreamSessionRequest>,
     ) -> ResponseResult<golem::workerexecutor::v1::CreateStreamSessionResponse> {
         use golem::workerexecutor::v1::create_stream_session_response::Result as Outcome;
         let result = self
@@ -3229,8 +3242,35 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         error.into(),
                     ),
                 ),
+                invocation_key: None,
+                expiry_policy: None,
+                expiry_deadline_millis: None,
+                stream_head_offset: Vec::new(),
+                stream_closed: None,
             }
         })))
+    }
+
+    async fn fork_stream_slot(
+        &self,
+        request: Request<ForkStreamSlotRequest>,
+    ) -> ResponseResult<ForkStreamSlotResponse> {
+        let request = request.into_inner();
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| Status::permission_denied("fork stream slot is system-only"))?
+            .try_into()
+            .map_err(Status::permission_denied)?;
+        if auth_ctx != AuthCtx::System {
+            return Err(Status::permission_denied("fork stream slot is system-only"));
+        }
+        Ok(Response::new(
+            self.services
+                .worker_fork_service()
+                .fork_stream_slot(request)
+                .await,
+        ))
     }
 
     async fn process_oplog_entries(

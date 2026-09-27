@@ -30,6 +30,42 @@ pub struct McpDeploymentAgentOptionsDiff {
     pub security_scheme_changed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDeploymentToolOptions {
+    pub owner_component: String,
+    pub security_scheme: Option<String>,
+    pub include: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpDeploymentToolOptionsDiff {
+    pub owner_component_changed: bool,
+    pub security_scheme_changed: bool,
+    pub include_changed: bool,
+    pub exclude_changed: bool,
+}
+
+impl Diffable for McpDeploymentToolOptions {
+    type DiffResult = McpDeploymentToolOptionsDiff;
+
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        let diff = McpDeploymentToolOptionsDiff {
+            owner_component_changed: new.owner_component != current.owner_component,
+            security_scheme_changed: new.security_scheme != current.security_scheme,
+            include_changed: new.include != current.include,
+            exclude_changed: new.exclude != current.exclude,
+        };
+        Ok((diff.owner_component_changed
+            || diff.security_scheme_changed
+            || diff.include_changed
+            || diff.exclude_changed)
+            .then_some(diff))
+    }
+}
+
 impl Diffable for McpDeploymentAgentOptions {
     type DiffResult = McpDeploymentAgentOptionsDiff;
 
@@ -48,6 +84,7 @@ impl Diffable for McpDeploymentAgentOptions {
 #[serde(rename_all = "camelCase")]
 pub struct McpDeployment {
     pub agents: BTreeMap<String, McpDeploymentAgentOptions>,
+    pub tools: BTreeMap<String, McpDeploymentToolOptions>,
 }
 
 impl Hashable for McpDeployment {
@@ -61,6 +98,8 @@ impl Hashable for McpDeployment {
 pub struct McpDeploymentDiff {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub agents_changes: BTreeMapDiff<String, McpDeploymentAgentOptions>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools_changes: BTreeMapDiff<String, McpDeploymentToolOptions>,
 }
 
 impl Diffable for McpDeployment {
@@ -71,9 +110,16 @@ impl Diffable for McpDeployment {
             .agents
             .diff_with_current(&current.agents)?
             .unwrap_or_default();
+        let tools_changes = new
+            .tools
+            .diff_with_current(&current.tools)?
+            .unwrap_or_default();
 
-        Ok(if !agents_changes.is_empty() {
-            Some(Self::DiffResult { agents_changes })
+        Ok(if !agents_changes.is_empty() || !tools_changes.is_empty() {
+            Some(Self::DiffResult {
+                agents_changes,
+                tools_changes,
+            })
         } else {
             None
         })

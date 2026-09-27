@@ -76,6 +76,7 @@ pub(crate) fn synthetic_agent_type(
         }
     }
     Ok(AgentTypeSchema {
+        kind: golem_common::schema::agent::AgentTypeKind::Regular,
         type_name: AgentTypeName(tool_name.to_upper_camel_case()),
         description: root_doc,
         source_language: String::new(),

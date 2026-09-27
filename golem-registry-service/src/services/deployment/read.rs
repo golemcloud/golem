@@ -435,6 +435,7 @@ impl DeploymentService {
             .deployment_repo
             .get_tool_deployment_state(environment_id.0, deployment_revision.into())
             .await?
+            .ok_or(DeploymentError::DeploymentNotFound(deployment_revision))?
             .try_into()?;
         Ok(state.registered_tool_middlewares.into_values().collect())
     }
@@ -451,14 +452,27 @@ impl DeploymentService {
             .map_err(Into::into)
     }
 
-    pub async fn get_latest_tool_deployment_state_by_component_revision(
+    pub async fn get_tool_deployment_state_at_revision(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
+        self.deployment_repo
+            .get_tool_deployment_state(environment_id.0, deployment_revision.into())
+            .await?
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    pub async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
         self.deployment_repo
-            .get_latest_tool_deployment_state_by_component_revision(
+            .get_active_tool_deployment_state_by_component_revision(
                 &environment_id.0,
                 &component_id.0,
                 component_revision.into(),

@@ -202,6 +202,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             "test:monotonic_clock::now",
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        runtime_teardown: Arc::new(|| false),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: Some(sink),
@@ -245,6 +246,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
             "test:monotonic_clock::now",
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        runtime_teardown: Arc::new(|| false),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: None,
@@ -884,12 +886,12 @@ async fn marker_gated_preparation_keeps_tail_activity_until_delivery() {
         1,
         "recorded delivery must not be parked"
     );
-    let (index, _) = replay_state.get_oplog_entry().await.unwrap();
+    let (index, _) = replay_state.get_oplog_entry(None).await.unwrap();
     assert_eq!(index, idx(4));
     preparation.await.unwrap();
     assert_eq!(tracker.active_count(), 1);
     assert_eq!(replay_state.last_replayed_index(), idx(5));
-    let mut next = Box::pin(replay_state.get_oplog_entry());
+    let mut next = Box::pin(replay_state.get_oplog_entry(None));
     assert!(
         tokio::time::timeout(Duration::from_millis(20), next.as_mut())
             .await
@@ -1437,6 +1439,24 @@ fn executor_shutdown_leaves_unfinished_call_incomplete_for_replay() {
         rx.try_recv().is_err(),
         "executor shutdown must not report cancellation or a policy violation"
     );
+}
+
+#[test]
+fn owner_teardown_leaves_unfinished_call_incomplete_without_cancellation() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<Cancellable>(idx(9), tx);
+    handle.runtime_teardown = Arc::new(|| true);
+    drop(handle);
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Disconnected)
+    ));
+
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<NotCancellable>(idx(10), tx);
+    handle.drop_sink = None;
+    handle.runtime_teardown = Arc::new(|| true);
+    drop(handle);
 }
 
 #[test]

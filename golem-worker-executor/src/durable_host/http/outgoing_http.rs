@@ -153,8 +153,8 @@ pub(crate) async fn maybe_enable_http_pending_status_retry<Ctx: WorkerCtx>(
     let assume_idempotence = ctx.state.assume_idempotence;
     let agent_type = ctx
         .state
-        .agent_id
-        .as_ref()
+        .owner_context
+        .agent()
         .map(|agent_id| agent_id.agent_type.to_string());
 
     let future_res = ctx
@@ -240,12 +240,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
 
         // Check the per-invocation HTTP call limit before initiating the call.
-        // Only counted in live mode; replay is a no-op.
+        // Only counted for fresh live work; replay is a no-op.
         self.state
             .check_and_increment_http_call_count()
             .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
 
-        // Record against the monthly account-level HTTP call quota (live mode only).
+        // Record against the monthly account-level HTTP call quota (fresh live work only).
         // Returns Err(WorkerMonthlyHttpCallBudgetExhausted) when exhausted,
         // which maps to RetryDecision::TryStop — suspending the worker until
         // the registry replenishes the budget (e.g. next billing month).

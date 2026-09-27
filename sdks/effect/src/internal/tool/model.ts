@@ -297,6 +297,17 @@ export interface CommandModel {
 export class CommandBuilder<M extends CommandModel = CommandModel> {
   constructor(readonly model: M) {}
   declare readonly name: M["name"]
+  /** Bind this complete definition to its registered tool name. @since 1.6.0 @category constructors */
+  client(
+    options?: import("../../Tool.js").ClientOptions,
+  ): import("../../Tool.js").Client<
+    ToolDefinition<M["name"], M>,
+    import("../../host/ToolClient.js").ToolClient
+  > {
+    if (!toolClientFactory)
+      throw new Error("tool client runtime is unavailable in this guest world")
+    return toolClientFactory(this as ToolDefinition<M["name"], M>, options) as never
+  }
   implement(
     implementation: [ImplementationRequirements<M, never>] extends [never]
       ? ToolImplementation<M>
@@ -319,7 +330,10 @@ export class CommandBuilder<M extends CommandModel = CommandModel> {
   body<B extends BodyBuilder<any, any, any>>(
     build: (body: BodyBuilder) => B,
   ): CommandBuilder<Omit<M, "body"> & { readonly body: B["model"] }> {
-    return new CommandBuilder({ ...this.model, body: build(new BodyBuilder()).model } as never)
+    return new CommandBuilder({
+      ...this.model,
+      body: build(new BodyBuilder()).model,
+    } as never) as unknown as CommandBuilder<Omit<M, "body"> & { readonly body: B["model"] }>
   }
   command<N extends string, C extends CommandBuilder<any>>(
     name: N,
@@ -342,6 +356,14 @@ export interface ToolDefinition<
 > {
   readonly name: Name
   readonly model: M
+}
+
+let toolClientFactory:
+  | ((definition: ToolDefinition, options?: import("../../Tool.js").ClientOptions) => unknown)
+  | undefined
+/** @internal Install client construction outside the metadata-only tool model. */
+export const registerToolClientFactory = (factory: typeof toolClientFactory): void => {
+  toolClientFactory = factory
 }
 export interface ErasedToolImplementation {
   readonly [name: string]: Handler<any, any> | ErasedToolImplementation
@@ -457,6 +479,25 @@ export function compileDefinition(
     ...args.filter((a) => a.kind === "option" && !a.global),
     ...args.filter((a) => a.kind === "flag" && !a.global),
   ]
+  const inputSchema = (argument: ArgumentSpec): Schema.Top => {
+    const optional =
+      (argument.kind === "option" || argument.kind === "positional") &&
+      !(argument.options.required ?? argument.kind === "positional") &&
+      argument.options.default === undefined &&
+      !argument.repeatable
+    if (!optional) return argument.schema
+    const graph = compileOnce(argument.schema).graph
+    let root = graph.root
+    const seen = new Set<string>()
+    while (root.body.tag === "ref") {
+      if (seen.has(root.body.id)) throw new TypeError(`Cyclic tool schema ref '${root.body.id}'`)
+      seen.add(root.body.id)
+      const definition = graph.defs.get(root.body.id)
+      if (!definition) throw new TypeError(`Unresolved tool schema ref '${root.body.id}'`)
+      root = definition.body
+    }
+    return root.body.tag === "option" ? argument.schema : Schema.NullOr(argument.schema)
+  }
   const collect = (
     m: CommandModel,
     path: readonly string[],
@@ -467,7 +508,7 @@ export function compileDefinition(
       const args = ordered([...inherited, ...m.body.args])
       inputCodecs.set(
         path.join("/"),
-        compileOnce(Schema.Struct(Object.fromEntries(args.map((a) => [a.name, a.schema])))),
+        compileOnce(Schema.Struct(Object.fromEntries(args.map((a) => [a.name, inputSchema(a)])))),
       )
       for (const argument of args) compileOnce(argument.wireSchema)
       if (m.body.output) compileOnce(m.body.output)
@@ -796,11 +837,10 @@ function registerTool<N extends string>(
 export const registeredTools = () => [...registry.values()]
 export const resetTools = () => registry.clear()
 export const findCommand = (r: Registered, path: readonly string[]) => r.bodies.get(path.join("/"))
-/** Canonical host input order: inherited globals, positionals, tail, options, then flags. */
-export const canonicalInputFields = (
+const canonicalInputArguments = (
   definition: ToolDefinition,
   path: readonly string[],
-): Fields | undefined => {
+): ReadonlyArray<ArgumentSpec> | undefined => {
   let command = definition.model
   const inherited: ArgumentSpec[] = []
   for (const segment of path) {
@@ -819,7 +859,61 @@ export const canonicalInputFields = (
     ...args.filter((a) => a.kind === "option" && !a.global),
     ...args.filter((a) => a.kind === "flag" && !a.global),
   ]
-  return Object.fromEntries(ordered.map((argument) => [argument.name, argument.schema]))
+  return ordered
+}
+
+const canonicalArgumentSchema = (argument: ArgumentSpec): Schema.Top => {
+  const optional =
+    (argument.kind === "option" || argument.kind === "positional") &&
+    !(argument.options.required ?? argument.kind === "positional") &&
+    argument.options.default === undefined &&
+    !argument.repeatable
+  return optional ? Schema.NullOr(argument.schema) : argument.schema
+}
+
+/** Canonical host input order and effective wire schemas. */
+export const canonicalInputFields = (
+  definition: ToolDefinition,
+  path: readonly string[],
+): Fields | undefined => {
+  const arguments_ = canonicalInputArguments(definition, path)
+  return arguments_
+    ? Object.fromEntries(
+        arguments_.map((argument) => [argument.name, canonicalArgumentSchema(argument)]),
+      )
+    : undefined
+}
+
+/** Values supplied by command-line parsing when optional arguments are omitted. */
+export const canonicalInputDefaults = (
+  definition: ToolDefinition,
+  path: readonly string[],
+): Readonly<Record<string, unknown>> | undefined => {
+  const arguments_ = canonicalInputArguments(definition, path)
+  if (!arguments_) return undefined
+  return Object.fromEntries(
+    arguments_.flatMap((argument): Array<readonly [string, unknown]> => {
+      if (argument.kind === "flag")
+        return [
+          [argument.name, argument.flag === "count" ? 0 : (argument.options.default ?? false)],
+        ]
+      if (argument.kind === "tail")
+        return ((argument.options as { readonly min?: number }).min ?? 0) > 0
+          ? []
+          : [[argument.name, []]]
+      const required = argument.options.required ?? argument.kind === "positional"
+      if (required) return []
+      if (argument.options.default !== undefined) return [[argument.name, argument.options.default]]
+      if (argument.repeatable)
+        return [
+          [
+            argument.name,
+            resolveRoot(Effect.runSync(compile(argument.schema))).tag === "map" ? new Map() : [],
+          ],
+        ]
+      return [[argument.name, null]]
+    }),
+  )
 }
 export const implementationAt = (
   impl: ToolImplementation,

@@ -23,7 +23,7 @@ use openidconnect::{
     EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, Scope, StandardClaims, SubjectIdentifier,
 };
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tracing::debug;
 
 pub fn apply_session_from_header_security_middleware(
@@ -42,7 +42,7 @@ pub fn apply_session_from_header_security_middleware(
         debug!("did not find oidc session header, rejecting request");
         return Ok(Some(RouteExecutionResult {
             status: StatusCode::UNAUTHORIZED,
-            headers: HashMap::new(),
+            headers: http::HeaderMap::new(),
             body: ResponseBody::NoBody,
         }));
     };

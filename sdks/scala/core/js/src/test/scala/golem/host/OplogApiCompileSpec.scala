@@ -32,6 +32,10 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
 
   private val pluginDesc  = PluginInstallationDescription("plug", "1.0", Map("key" -> "val"))
   private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
+  private val walletPin   = PublicInvocationWalletPin(
+    WalletVersionToken(Array[Byte](1, 2, 3), BigInt(7)),
+    Some(golem.Uuid(BigInt(10), BigInt(20)))
+  )
 
   private val localSpan                 = LocalSpanData("span1", ts, Some("parent"), Some(BigInt(1)), List(attr), inherited = false)
   private val externalSpan              = ExternalSpanData("span2")
@@ -208,7 +212,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           "idem-1",
           "trace-1",
           List("state"),
-          List(spanDatas)
+          List(spanDatas),
+          walletPin
         )
       ),
       OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head)),

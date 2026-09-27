@@ -391,7 +391,7 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
           @universalToolMiddleware(name = "universal")
           final class UniversalPolicy(state: String) extends UniversalToolMiddleware {
             def invoke(
-              invocation: UniversalToolMiddlewareInvocation,
+              invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
               underlying: UniversalToolUnderlying
             ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
               underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
@@ -412,7 +412,7 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
           import scala.concurrent.Future
           abstract class StatefulUniversalPolicy(val state: String) extends UniversalToolMiddleware {
             def invoke(
-              invocation: UniversalToolMiddlewareInvocation,
+              invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
               underlying: UniversalToolUnderlying
             ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
               underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
@@ -436,7 +436,7 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
           @universalToolMiddleware(name = "universal")
           final class UniversalPolicy[A] extends UniversalToolMiddleware {
             def invoke(
-              invocation: UniversalToolMiddlewareInvocation,
+              invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
               underlying: UniversalToolUnderlying
             ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
               underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
@@ -475,7 +475,7 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
           import scala.concurrent.Future
           final class UniversalPolicy extends UniversalToolMiddleware {
             def invoke(
-              invocation: UniversalToolMiddlewareInvocation,
+              invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
               underlying: UniversalToolUnderlying
             ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
               underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)

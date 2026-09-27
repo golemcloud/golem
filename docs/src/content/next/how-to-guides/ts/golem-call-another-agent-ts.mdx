@@ -95,10 +95,12 @@ counter.increment.schedule(runAt);
 const cancellation = counter.increment.scheduleCancelable(runAt);
 ```
 
-Every generated method supports an awaited call plus `.trigger`, `.schedule`,
-and `.scheduleCancelable`. No npm install, package path dependency, manual
-bridge-generation command, or REST client `configure()` call is needed:
-`golem build` regenerates the bridge before the consumer compiles.
+Every stream-free generated method supports an awaited call plus `.trigger`,
+`.schedule`, and `.scheduleCancelable`. A method whose input or output schema
+recursively contains a stream is awaited only; use `AgentStream` values as
+described by the [`golem-streaming-agent-ts`](/next/how-to-guides/ts/golem-streaming-agent-ts) guide. No npm install, package path
+dependency, manual bridge-generation command, or REST client `configure()` call
+is needed: `golem build` regenerates the bridge before the consumer compiles.
 
 ## Avoiding Deadlocks
 

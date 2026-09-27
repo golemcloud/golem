@@ -25,6 +25,7 @@ use golem_common::model::tool::TOOL_METADATA_WIT_VERSION;
 use golem_common::model::tool::ToolProvisionConfig;
 use golem_common::model::tool_middleware::{RegisteredToolMiddleware, ToolMiddlewareSource};
 use golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId;
+use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{Doc, ToolMiddleware, ToolMiddlewareScope};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
@@ -492,6 +493,11 @@ async fn test_component_stage(#[dimension(postgres_variant)] deps: &Deps) {
 }
 
 #[test]
+async fn test_http_agent_metadata_blob_roundtrip(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_http_agent_metadata_blob_roundtrip(deps).await;
+}
+
+#[test]
 async fn test_initial_permission_card_ids_by_account_are_unique(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
@@ -819,6 +825,11 @@ async fn test_update_http_call_counts(#[dimension(postgres_variant)] deps: &Deps
 }
 
 #[test]
+async fn test_mcp_http_policy(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_mcp_http_policy(deps).await;
+}
+
+#[test]
 async fn test_update_rpc_call_counts(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_update_rpc_call_counts(deps).await;
 }
@@ -838,6 +849,11 @@ async fn test_resolve_agent_type_no_deployment_returns_none(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_resolve_agent_type_no_deployment_returns_none(deps).await;
+}
+
+#[test]
+async fn missing_security_retains_active_route_barrier(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::missing_security_retains_active_route_barrier(deps).await;
 }
 
 #[test]
@@ -943,6 +959,7 @@ async fn test_tool_depublication_waits_for_grant_eligibility_lock(db: &PostgresD
         version: "1.0.0".to_string(),
         aliases: Vec::new(),
         doc: Doc::default(),
+        parameter_schema: SchemaGraph::empty(),
         scope: ToolMiddlewareScope::Universal,
     };
     let release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(

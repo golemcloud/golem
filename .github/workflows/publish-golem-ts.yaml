@@ -73,6 +73,10 @@ jobs:
         working-directory: sdks/ts
         run: pnpm run build-agent-template
 
+      - name: Check packed SDK HTTP contract
+        working-directory: sdks/ts
+        run: pnpm --filter @golemcloud/golem-ts-sdk run check:package
+
       - name: Publish all packages
         working-directory: sdks/ts
         run: pnpm -r publish --access public --no-git-checks

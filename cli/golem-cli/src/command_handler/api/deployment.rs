@@ -187,6 +187,19 @@ impl ApiDeploymentCommandHandler {
             .unwrap_or_default())
     }
 
+    pub async fn deployable_manifest_mcp_imports(
+        &self,
+        environment_name: &EnvironmentName,
+    ) -> anyhow::Result<Vec<golem_common::model::mcp_import::McpImportDeployment>> {
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        Ok(app_ctx
+            .application()
+            .mcp_imports(environment_name)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     pub async fn get_http_api_deployment_revision_by_id(
         &self,
         http_api_deployment_id: &HttpApiDeploymentId,
@@ -250,6 +263,7 @@ impl ApiDeploymentCommandHandler {
                     &environment.environment_id.0,
                     &HttpApiDeploymentCreation {
                         domain: domain.clone(),
+                        scheme: deployable_http_api_deployment.scheme,
                         webhooks_prefix: deployable_http_api_deployment.webhooks_prefix.clone(),
                         openapi_endpoint_prefix: deployable_http_api_deployment
                             .openapi_prefix
@@ -349,6 +363,11 @@ impl ApiDeploymentCommandHandler {
             diff::DiffForHashOf::ValueDiff { diff } => diff.openapi_endpoint_changed,
         };
 
+        let scheme_changed = match diff {
+            diff::DiffForHashOf::HashDiff { .. } => true,
+            diff::DiffForHashOf::ValueDiff { diff } => diff.scheme_changed,
+        };
+
         let agents_changed = match diff {
             diff::DiffForHashOf::HashDiff { .. } => true,
             diff::DiffForHashOf::ValueDiff { diff } => !diff.agents_changes.is_empty(),
@@ -363,6 +382,7 @@ impl ApiDeploymentCommandHandler {
                 &http_api_deployment.id.0,
                 &HttpApiDeploymentUpdate {
                     current_revision: http_api_deployment.revision,
+                    scheme: scheme_changed.then_some(deployable_http_api_deployment.scheme),
                     webhook_prefix: if webhook_url_changed {
                         Some(deployable_http_api_deployment.webhooks_prefix.clone())
                     } else {
@@ -421,10 +441,31 @@ impl ApiDeploymentCommandHandler {
                 )
             })
             .collect();
+        let tools = deployable_mcp_deployment
+            .tools
+            .iter()
+            .map(|(k, v)| {
+                Ok((
+                    k.clone(),
+                    golem_common::model::mcp_deployment::McpDeploymentToolOptions {
+                        owner_component: v.owner_component.clone(),
+                        security_scheme: v
+                            .security_scheme
+                            .as_ref()
+                            .map(|s| s.parse())
+                            .transpose()
+                            .map_err(anyhow::Error::msg)?,
+                        include: v.include.clone(),
+                        exclude: v.exclude.clone(),
+                    },
+                ))
+            })
+            .collect::<anyhow::Result<_>>()?;
 
         let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {
             domain: domain.clone(),
             agents,
+            tools,
         };
 
         let create = async || {
@@ -512,6 +553,10 @@ impl ApiDeploymentCommandHandler {
             diff::DiffForHashOf::HashDiff { .. } => true,
             diff::DiffForHashOf::ValueDiff { diff } => !diff.agents_changes.is_empty(),
         };
+        let tools_changed = match diff {
+            diff::DiffForHashOf::HashDiff { .. } => true,
+            diff::DiffForHashOf::ValueDiff { diff } => !diff.tools_changes.is_empty(),
+        };
 
         let deployment = self
             .ctx
@@ -524,6 +569,11 @@ impl ApiDeploymentCommandHandler {
                     current_revision: update.current_revision,
                     agents: if agents_changed {
                         update.agents.clone()
+                    } else {
+                        None
+                    },
+                    tools: if tools_changed {
+                        update.tools.clone()
                     } else {
                         None
                     },

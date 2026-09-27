@@ -108,6 +108,7 @@ pub fn[X] Stream::produce(async (Sink[X]) -> Unit, cleanup? : (X) -> Unit, on_un
 pub async fn[X] Stream::read(Self[X], Int) -> FixedArray[X]?
 pub async fn[X] Stream::reject(Self[X], (X) -> Unit) -> Unit noraise
 pub fn[X] Stream::take_producer(Self[X]) -> (async (Sink[X]) -> Unit)?
+pub fn[X] Stream::transfer(Self[X]) -> Self[X]
 
 pub struct Task[X] {
   // private fields

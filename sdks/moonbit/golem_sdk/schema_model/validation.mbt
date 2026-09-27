@@ -243,6 +243,28 @@ fn check_type(
 // ============================================================
 
 ///|
+/// Resolve aliases before deciding whether an optional input already owns its carrier.
+pub fn schema_root_is_option(graph : SchemaGraph) -> Bool {
+  let visited : Map[String, Unit] = Map([])
+  for current = graph.root {
+    match current.body {
+      Option(_) => break true
+      Ref(id) =>
+        if visited.contains(id) {
+          break false
+        } else {
+          visited[id] = ()
+          match lookup_def(graph, id) {
+            Some(body) => continue body
+            None => break false
+          }
+        }
+      _ => break false
+    }
+  }
+}
+
+///|
 /// Whether `ty` resolves (through a cycle-aware ref chain) to a primitive type
 /// accepted as a map key.
 fn is_primitive_key_resolved(graph : SchemaGraph, ty : SchemaType) -> Bool {

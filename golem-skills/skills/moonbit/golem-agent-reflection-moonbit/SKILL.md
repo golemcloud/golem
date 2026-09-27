@@ -1,0 +1,334 @@
+---
+name: golem-agent-reflection-moonbit
+description: "Discovering and calling Golem agents through runtime reflection in MoonBit. Use when agent types or methods are selected dynamically, schemas must be inspected at runtime, caller-authored codecs are needed, or SchemaValue calls must avoid discovery."
+---
+
+# Agent Reflection and Client Approaches (MoonBit)
+
+Golem exposes four composable client approaches:
+
+- **Normal RPC** uses a shared source definition through the MoonBit SDK's ordinary typed RPC mechanism. It is not reflection.
+- **Caller-defined static clients** use caller-owned compile-time `IntoSchema` and `FromSchema` codecs without deployment discovery. They may be method-only or full.
+- **Discovered clients** read the current environment and produce immutable, snapshot-backed reflected clients with automatic input and output validation.
+- **Fully dynamic clients** use `DynamicAgentClient` or `DynamicToolClient` to transport caller-packed schema-native values without retaining a schema authority.
+
+The last three are reflection approaches. They compose: discovery can select
+schemas, canonical tool paths, and durable identities for later fully dynamic
+calls, while a durable `ParsedAgentId` can be rebound through a method-only,
+discovered, or fully dynamic client.
+
+## Discover and inspect schemas
+
+```moonbit
+let available = @reflection.get_all_agent_types()
+guard @reflection.get_agent_type("CounterAgent") is Some(counter_type) else {
+  raise @reflection.ReflectError::Discovery("CounterAgent is unavailable")
+}
+guard counter_type.find_method("add") is Some(add) else {
+  raise @reflection.ReflectError::Discovery("add is unavailable")
+}
+```
+
+Agent type names and reflection identity strings are environment-scoped.
+`AgentType` exposes the currently implementing component as deployment
+metadata, plus its lifecycle mode, constructor `SchemaRef`, and method schemas.
+Reflection clients do not pin that component ID. `SchemaRef::pack_json`
+converts canonical JSON into a schema-native value; `unpack_json` performs the
+awaited conversion back. `to_json_schema()` projects the canonical JSON carrier
+for introspection, including named definitions and representable restrictions;
+capabilities and streams have no JSON value representation. Discovery returns
+an immutable snapshot; explicitly
+discover again when a newer deployment must be observed.
+
+## Use discovered clients
+
+JSON convenience automatically packs and unpacks:
+
+```moonbit
+let counter = counter_type.get_json(Json::object({
+  "name": Json::string("main"),
+}))
+let result = counter.invoke_json(
+  "add",
+  Json::object({ "by": Json::number(5.0) }),
+)
+```
+
+For explicit reflected packing, call `add.input.pack_json`, invoke through
+`invoke_value`, await the result, and call the output `SchemaRef::unpack_json`.
+Reflected schema-native constructor and method inputs are checked locally
+against the selected schema graph before opening RPC. Declared native outputs
+are checked after invocation.
+
+Reflected factories accept optional creation-time overrides. Use
+`get_json_with_config(input, entries)` with `ReflectedConfigJsonValue` entries,
+or `get_value_with_config(input, entries)` with `ReflectedConfigValue` entries;
+known and fresh phantom factories provide corresponding `*_with_config`
+methods. The reflected type rejects unknown paths, secret fields, and values
+that do not match their declarations before creating transport. Component
+defaults may satisfy required declarations. The host validates the effective
+config when it creates the worker and supplies secrets. An existing durable
+worker retains its initial config; overrides supplied when reaching its ID do
+not reconfigure it.
+
+For fully dynamic values, manually construct the positional record and use a dynamic
+client:
+
+```moonbit
+let result = dynamic.invoke_value(
+  "add",
+  @model.SchemaValue::Record([@model.SchemaValue::U32(5U)]),
+)
+```
+
+Fully dynamic clients never discover or validate schemas. Constructor and method
+record fields must be packed in declaration order; the runtime authoritatively
+accepts or rejects the attempt.
+
+## Discover a tool, then invoke it dynamically
+
+This bridge packs and validates with a discovered snapshot, invokes through a
+fully dynamic client, handles the raw tool result, and then explicitly validates
+and decodes the output:
+
+```moonbit
+fn describe_dynamic_tool_error(
+  error : @tool.ToolError[@reflection.ReflectedToolCustomError],
+) -> String {
+  match error {
+    Rpc(error) => "rpc:\{Repr(error)}"
+    RemoteTool(error) => "remote:\{Repr(error)}"
+    Tool(custom) => {
+      let message = "tool:\{Repr(custom)}"
+      @model.drop_owned_capabilities(custom.payload.value)
+      message
+    }
+    UnknownToolError(name, payload) => {
+      @model.drop_owned_capabilities(payload.value)
+      "unknown:\{name}"
+    }
+    InvalidInput(message) => "input:\{message}"
+    MalformedRemoteOutput(message) => "output:\{message}"
+  }
+}
+
+async fn invoke_discovered_tool_dynamically() -> String {
+  let tool = @reflection.get_tool_type("moonbit-reflection-test")
+  let command = tool.command(["echo"])
+  let packed = match command.pack_json(
+    Json::object({ "label": Json::string("moonbit") }),
+  ) {
+    Ok(value) => value
+    Err(error) => return "input:\{describe_dynamic_tool_error(error)}"
+  }
+  command.input_schema.validate_value(packed) catch {
+    error => return "input:\{Repr(error)}"
+  }
+
+  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name)
+  let raw = match dynamic.invoke_value(
+    command.path,
+    { graph: command.input_schema.graph, value: packed },
+  ) {
+    Ok(raw) => raw
+    Err(error) => {
+      return "invoke:\{describe_dynamic_tool_error(error)}"
+    }
+  }
+
+  match (command.result, raw.result) {
+    (None, None) => "ok"
+    (Some(schema), Some(output)) => {
+      schema.validate_value(output.value) catch {
+        error => {
+          @model.drop_owned_capabilities(output.value)
+          return "output:\{Repr(error)}"
+        }
+      }
+      let json = schema.unpack_json(output.value) catch {
+        error => {
+          @model.drop_owned_capabilities(output.value)
+          return "decode:\{Repr(error)}"
+        }
+      }
+      @model.drop_owned_capabilities(output.value)
+      json.stringify()
+    }
+    (_, Some(output)) => {
+      @model.drop_owned_capabilities(output.value)
+      "output:unexpected"
+    }
+    _ => "output:missing"
+  }
+}
+```
+
+Moving the discovered name, path, and graphs into `DynamicToolClient` does not
+transfer automatic validation policy. The recipe explicitly releases custom
+error payloads and returned values after decoding. For dynamic streaming calls,
+drain or close transferred streams and cancel a started invocation when it is
+abandoned.
+
+Both reflected and direct clients support awaited, trigger, and scheduled
+calls through `invoke_value`, `trigger_value`, and `schedule_value`. Awaited
+calls use the asynchronous host invocation path and can carry live streams.
+Reflected trigger and scheduled calls reject methods whose input or output
+schema contains a stream.
+
+## Define caller-defined static clients
+
+Method-only and full clients do not discover payload schemas. The caller's
+`IntoSchema` and `FromSchema` implementations are the schema authority. They have
+two forms.
+
+For tools, wrap any caller-owned typed client factory in a named or reusable
+definition. Binding is optimistic and performs no discovery or compatibility
+preflight:
+
+```moonbit
+let named = @reflection.ToolClientDefinition::named(
+  "reports",
+  fn(name) { ReportsClient::new_for(name) },
+)
+let reports = named.client()
+
+let reusable = @reflection.ToolClientDefinition::unnamed(
+  fn(name) { ReportsClient::new_for(name) },
+)
+let staging_reports = reusable.client_for("reports-staging")
+```
+
+Method-only clients contain method codecs only. Bind a durable
+`ParsedAgentId`; its type name, constructor value, and phantom UUID supply the
+target. Do not add a standalone name to this form:
+
+```moonbit
+let counter = @reflection.MethodOnlyAgentClient::bind(existing_id)
+let result : @reflection.Invocation[AddOutput] = counter.invoke(
+  "add",
+  AddInput::{ by: 5U },
+)
+```
+
+Full clients add a declared type name, typed constructor/ID shape,
+lifecycle mode, and an optional typed config carrier:
+
+```moonbit
+#derive.golem_schema
+struct CounterId { name : String }
+#derive.golem_schema
+struct AddInput { by : UInt }
+#derive.golem_schema
+struct AddOutput { value : UInt }
+
+let counter = @reflection.FullAgentClient::get(
+  "CounterAgent",
+  CounterId::{ name: "main" },
+)
+let known = @reflection.FullAgentClient::get_phantom(
+  "CounterAgent",
+  CounterId::{ name: "main" },
+  phantom_id,
+)
+let fresh = @reflection.FullAgentClient::new_phantom(
+  "CounterAgent",
+  CounterId::{ name: "main" },
+)
+let reusable_id = @reflection.FullAgentClient::agent_id(
+  "CounterAgent",
+  CounterId::{ name: "main" },
+  phantom_id~,
+)
+```
+
+Bind an existing durable ID to a full client with a constructor type tag.
+This rejects both a different declared agent name and a constructor value that
+cannot be decoded as the declared ID shape before creating the RPC client:
+
+```moonbit
+let bound = @reflection.FullAgentClient::bind(
+  "CounterAgent",
+  existing_id,
+  (@schema.type_tag() : @schema.TypeTag[CounterId]),
+)
+```
+
+`bind_with_config` accepts the same typed override carrier after
+checking the full identity. A method-only client uses `bind_with_config`
+with raw `TypedAgentConfigValue` entries; it has no declarations to validate
+those entries against locally.
+
+For ephemeral full clients, use `ephemeral` for a logical fresh target or
+`ephemeral_phantom` for a known phantom UUID. There is no generic full
+ephemeral binding operation:
+
+```moonbit
+let logical = @reflection.FullAgentClient::ephemeral(
+  "ResearchRequest",
+  ResearchRequestId::{ route: "live" },
+)
+let known = @reflection.FullAgentClient::ephemeral_phantom(
+  "ResearchRequest",
+  ResearchRequestId::{ route: "live" },
+  phantom_id,
+)
+```
+
+Ordinary RPC `*Override` records implement `@rpc.AgentConfigOverrides`, so the
+same typed carrier accepted by a normal RPC client can be passed to
+`get_with_config`, `get_phantom_with_config`, `new_phantom_with_config`,
+`ephemeral_with_config`, or `ephemeral_phantom_with_config`. Secret config
+fields are deliberately absent from generated override records. Custom callers
+may implement `AgentConfigOverrides` using `@rpc.typed_config_value`.
+
+The type name is resolved to its current implementing component in the
+environment; callers do not pin component metadata. Normal RPC `#derive.agent`
+clients expose the same durable ordinary/known/fresh phantom and ephemeral
+logical/known phantom construction matrix. Caller codecs remain authoritative
+for payload encoding and decoding.
+
+For trigger or scheduled caller-codec calls, pass an output type tag so the
+SDK can reject live streams in either direction:
+
+```moonbit
+counter.trigger(
+  "reset",
+  ResetInput::{},
+  (@schema.type_tag() : @schema.TypeTag[Unit]),
+)
+```
+
+## Identity and lifecycle boundaries
+
+- Use a supplied `ParsedAgentId` with `DynamicAgentClient::from_agent_id`, or
+  inspect it with `ParsedAgentId::parts`.
+- Use `DynamicAgentClient::lookup` for a manually packed durable identity
+  without a phantom UUID.
+- Use `resume_phantom` with a known UUID.
+- Use `new_phantom` to generate a UUID and receive the client, reusable
+  `ParsedAgentId`, and phantom UUID together.
+- Use `DynamicAgentClient::ephemeral` for a raw invocation address built from
+  the type name and manually packed constructor values.
+
+Fully dynamic address helpers perform no discovery, schema validation, lifecycle-mode
+verification, or local factory checks. The runtime is authoritative.
+
+A bound method-only or fully dynamic client exposes no lifecycle factories.
+The associated dynamic helpers above construct raw addresses rather than
+validated lifecycle factories. Packed streams and owned handles still follow
+the MoonBit SDK's transfer and cleanup rules.
+
+An ephemeral address has no guaranteed reusable pre-invocation identity. The
+final identity comes from invocation metadata and must not be treated as a
+resumable durable identity or rebound. Durable identities from invocation
+metadata may be discovered later and rebound through a reflected client.
+
+## Choose an invocation path
+
+| Situation | Use |
+|---|---|
+| Shared source definition available | Normal RPC agent client |
+| Typed client owned by the caller | `MethodOnlyAgentClient` or `FullAgentClient` resolved by environment type name |
+| Runtime-selected method with automatic JSON conversion | `invoke_json` |
+| Explicit runtime-schema packing and inspection | `SchemaRef::pack_json`, `invoke_value`, `unpack_json`, `to_json_schema` |
+| Fully dynamic infrastructure with Golem values | `DynamicAgentClient` |

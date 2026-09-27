@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { ByteStreamFailure, ByteStreamItem } from 'golem:tool/host@0.1.0';
+import type { ByteStreamFailure, ByteStreamItem } from 'golem:tool/streams@0.1.0';
 
 export type ToolInputStream = ReadableStream<Uint8Array>;
 

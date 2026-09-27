@@ -17,13 +17,13 @@ use crate::base_model::diff::Hash;
 use crate::base_model::tool::ToolProvisionConfig;
 use crate::base_model::tool::{SecretKeyScope, ToolFilesystemAccess, ToolName};
 use crate::base_model::validate_lower_kebab_case_identifier;
-use crate::model::agent::AgentTypeName;
 use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::json::NormalizedJsonValue;
 use crate::model::tool_middleware_release::{
     ToolMiddlewareReleaseId, ToolMiddlewareReleaseReference,
 };
+use crate::schema::TypedSchemaValue;
 use crate::schema::tool::compatibility::CompiledToolCompatibility;
 use crate::schema::tool::{Tool, ToolMiddleware};
 use serde::{Deserialize, Serialize};
@@ -115,6 +115,8 @@ pub struct ToolMiddlewareInstallation {
     pub version: Option<String>,
     pub parameters: NormalizedJsonValue,
     pub account: Option<AccountEmail>,
+    pub secret_keys_readable: Option<SecretKeyScope>,
+    pub secret_keys_revealable: Option<SecretKeyScope>,
     #[serde(default)]
     #[cfg_attr(feature = "full", desert(default), oai(default))]
     pub filesystem_access: ToolFilesystemAccess,
@@ -185,6 +187,20 @@ pub struct RemoteToolMiddlewareDeployment {
     pub provision: ToolProvisionConfig,
 }
 
+/// Deployment-owned inputs for compiling middleware against dynamic tool metadata.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct ToolMiddlewareConfiguration {
+    pub universal: Vec<ToolMiddlewareInstallation>,
+    pub compatibility_mode: crate::schema::tool::compatibility::ToolCompatibilityMode,
+    pub environment_bindings:
+        std::collections::BTreeMap<ToolName, crate::model::tool::ToolBindingInput>,
+    pub agent_bindings: std::collections::BTreeMap<
+        crate::model::agent::AgentTypeName,
+        std::collections::BTreeMap<ToolName, crate::model::tool::ToolBindingInput>,
+    >,
+}
+
 /// One pinned middleware invocation in a compiled tool chain.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -193,8 +209,9 @@ pub struct RemoteToolMiddlewareDeployment {
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct CompiledToolMiddlewareOccurrence {
     pub middleware: RegisteredToolMiddleware,
-    pub parameters: NormalizedJsonValue,
+    pub parameters: TypedSchemaValue,
     pub provision: ToolProvisionConfig,
+    pub config_keys_readable: crate::model::tool::ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
     pub filesystem_access: ToolFilesystemAccess,
@@ -212,7 +229,7 @@ pub struct CompiledToolMiddlewareOccurrence {
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct CompiledToolMiddlewareChain {
     pub deployment_revision: DeploymentRevision,
-    pub agent_type_name: AgentTypeName,
+    pub owner: crate::model::tool::ToolBindingOwner,
     pub tool_name: ToolName,
     pub effective_definition: Tool,
     pub occurrences: Vec<CompiledToolMiddlewareOccurrence>,

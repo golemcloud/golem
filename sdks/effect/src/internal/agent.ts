@@ -6,6 +6,7 @@ import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { DatabaseSync } from "node:sqlite"
+import * as AgentIdentity from "../AgentIdentity.js"
 import { AgentHostClient } from "../host/AgentHostClient.js"
 import { EnvironmentClient } from "../host/EnvironmentClient.js"
 import { HostLive, type HostServices } from "../host/HostLive.js"
@@ -15,15 +16,18 @@ import {
   isQueryOrHeaderBindableSchema,
   isStringBindableSchema,
   validateAgentHttp,
+  type CompiledHttp,
   type MethodHttpInput,
 } from "../Http.js"
 import type { BindableKeys, MountDefCovering, WebhookVarsValid } from "./httpTypes.js"
 import { isMultimodal } from "../Multimodal.js"
 import {
+  compileCallerParamBindings,
   compileMethodSpec,
   compileParamBindings,
   invokeSchemaValue,
   type CompiledInputCodec,
+  type CallerInput,
   type Handler,
   type MethodCodec,
   type MethodInput,
@@ -57,7 +61,14 @@ import {
 } from "./snapshotEnvelope.js"
 import { isElementSpec } from "../Unstructured.js"
 import { type UnsupportedSchemaError } from "../WitCodec.js"
-import { clientFor, type AgentClient } from "../Client.js"
+import {
+  bindIdentity,
+  bindingFor,
+  clientFor,
+  type AgentClient,
+  type IdentityBinding,
+  type RemoteAgent,
+} from "../Client.js"
 import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "../Config.js"
 import * as GolemLogging from "../Logging.js"
 import * as GolemTracing from "../Tracing.js"
@@ -383,6 +394,24 @@ export type AgentSpec<
   S extends SnapshotDef = never,
 > = AgentMetadata<C, Methods, M, F, S> & {
   readonly client: AgentClient<C, Methods, M, F>
+  readonly agentId: M extends "ephemeral"
+    ? (
+        input: CallerInput<C>,
+        phantomId: string,
+      ) => Effect.Effect<
+        AgentIdentity.Identity,
+        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
+        AgentHostClient
+      >
+    : (
+        input: CallerInput<C>,
+        phantomId?: string,
+      ) => Effect.Effect<
+        AgentIdentity.Identity,
+        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
+        AgentHostClient
+      >
+  readonly [bindIdentity]: IdentityBinding<RemoteAgent<Methods>>[typeof bindIdentity]
   /**
    * Attach an implementation to the spec and eagerly register the agent
    * with the runtime. Returns an {@link ImplementedAgent} that exposes
@@ -420,6 +449,8 @@ export type ImplementedAgent<
   S extends SnapshotDef = never,
 > = AgentMetadata<C, Methods, M, F, S> & {
   readonly client: AgentClient<C, Methods, M, F>
+  readonly agentId: AgentSpec<C, Methods, M, F, S>["agentId"]
+  readonly [bindIdentity]: IdentityBinding<RemoteAgent<Methods>>[typeof bindIdentity]
   readonly spec: AgentSpec<C, Methods, M, F, S>
 }
 
@@ -533,6 +564,29 @@ export const defineAgent = <
   // same reference is shared between the spec and any
   // `ImplementedAgent` produced by `spec.implement(...)` below.
   const sharedClient = clientFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
+  const sharedBinding = bindingFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
+  let identityCodec: CompiledInputCodec<C> | undefined
+  const agentId = (input: CallerInput<C>, phantomId?: string) =>
+    Effect.gen(function* () {
+      if (canonical.mode === "ephemeral" && phantomId === undefined)
+        return yield* Effect.fail(
+          new AgentIdentity.AgentIdentityError(
+            new TypeError(`ephemeral agent type '${canonical.name}' requires a phantom ID`),
+          ),
+        )
+      const codec = (identityCodec ??= yield* compileCallerParamBindings(
+        `${canonical.name} constructor`,
+        canonical.id,
+      ))
+      const constructorValue = yield* codec
+        .encodeAsync(input as unknown as MethodInput<C>)
+        .pipe(Effect.mapError((cause) => new AgentIdentity.AgentIdentityError(cause)))
+      return yield* AgentIdentity.make({
+        typeName: canonical.name,
+        constructorValue,
+        ...(phantomId === undefined ? {} : { phantomId }),
+      })
+    })
 
   // `implement` is created as a closure rather than a prototype method
   // so the generics inferred by `defineAgent` (C, Methods, M, F, S)
@@ -570,6 +624,8 @@ export const defineAgent = <
     return Object.freeze({
       ...canonical,
       client: sharedClient,
+      agentId,
+      [bindIdentity]: sharedBinding[bindIdentity],
       spec,
     }) as unknown as ImplementedAgent<C, Methods, M, F, S>
   }
@@ -580,6 +636,8 @@ export const defineAgent = <
   const spec = Object.freeze({
     ...canonical,
     client: sharedClient,
+    agentId,
+    [bindIdentity]: sharedBinding[bindIdentity],
     implement,
   }) as unknown as AgentSpec<C, Methods, M, F, S>
   return spec
@@ -685,6 +743,7 @@ export const registerAgent = <
 >(
   metadata: AgentMetadata<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
   impl: AgentImpl<C, Methods, State, F, S>,
+  routerHttp?: CompiledHttp,
 ): Effect.Effect<
   void,
   UnsupportedSchemaError | HttpRouteError | InvalidSnapshotError | DuplicateAgentNameError
@@ -719,14 +778,24 @@ export const registerAgent = <
     }
 
     // Validate + compile HTTP routes (mount + per-method endpoints).
-    const compiledHttp = yield* validateAgentHttp({
-      agentName: metadata.name,
-      mount: metadata.http,
-      constructorParamNames: Object.keys(metadata.id),
-      nonStringBindableConstructorParams: collectNonStringBindableParams(metadata.id),
-      stringBindableConstructorParams: collectStringBindableParams(metadata.id),
-      methods: methodHttpInputs,
-    })
+    if (
+      metadata.http?.exposeFiles?.length &&
+      (metadata.mode === "ephemeral" || metadata.http.phantomAgent)
+    ) {
+      return yield* Effect.fail(
+        new HttpRouteError("File exposure requires a regular durable non-phantom agent"),
+      )
+    }
+    const compiledHttp =
+      routerHttp ??
+      (yield* validateAgentHttp({
+        agentName: metadata.name,
+        mount: metadata.http,
+        constructorParamNames: Object.keys(metadata.id),
+        nonStringBindableConstructorParams: collectNonStringBindableParams(metadata.id),
+        stringBindableConstructorParams: collectStringBindableParams(metadata.id),
+        methods: methodHttpInputs,
+      }))
 
     let compiledConfig: CompiledConfig | null = null
     if (metadata.config !== undefined) compiledConfig = yield* metadata.config.__compile()
@@ -784,6 +853,7 @@ export const registerAgent = <
 
     const agentType: AgentCommon.AgentType = {
       typeName: metadata.name,
+      kind: routerHttp ? "http-router" : "regular",
       description: metadata.description ?? "",
       sourceLanguage: "typescript",
       schema: encoder.finish(),
@@ -853,7 +923,7 @@ const collectBindableParams = (
   for (const [name, p] of Object.entries(params)) {
     if (isMultimodal(p) || isElementSpec(p)) continue
     // Only Schema.Top values can be string-bindable.
-    if (p && typeof p === "object" && "ast" in (p as object)) {
+    if (Schema.isSchema(p)) {
       if (isBindable(p as Schema.Top)) {
         out.add(name)
       }
@@ -1121,6 +1191,21 @@ export const dispatchInvoke = async (
     program = program.pipe(
       Effect.provideService(compiled.metadata.config as never, shape as never),
     ) as typeof program
+  }
+  if (compiled.agentType.kind === "http-router") {
+    const scope = Scope.makeUnsafe()
+    const handler = compiled.agentType.methods.find((method) => method.name === methodName)
+    const transfersScope = handler?.httpEndpoint.some(
+      (endpoint) => endpoint.httpMethod.tag === "any",
+    )
+    return await runUserPromise(
+      program.pipe(
+        Scope.provide(scope),
+        Effect.onExit((exit) =>
+          !transfersScope || Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void,
+        ),
+      ),
+    )
   }
   return await runUserPromise(program)
 }

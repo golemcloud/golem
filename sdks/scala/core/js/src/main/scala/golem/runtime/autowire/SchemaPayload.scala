@@ -69,16 +69,23 @@ object SchemaPayload {
     encodeValueAsync(ev.toValue(value))
 
   /** Includes typed conversion in the stream-transfer transaction. */
-  def encodeValueAsync(value: => SchemaValue): Future[JsSchemaValueTree] = {
+  def encodeValueAsync(value: => SchemaValue): Future[JsSchemaValueTree] =
+    encodePreparedValueAsync(value)(Future.successful)
+
+  private[autowire] def encodePreparedValueAsync(value: => SchemaValue)(
+    prepare: SchemaValue => Future[SchemaValue]
+  ): Future[JsSchemaValueTree] = {
     val transaction = new AgentStreamOutputTransaction
     val result      =
       try {
-        val wire = AgentStreamOutputTransaction.capture(transaction) {
-          SchemaWire.schemaValueToWit(value)
+        val prepared = AgentStreamOutputTransaction.capture(transaction) {
+          prepare(value)
         }
-        try SchemaWireInterop.valueTreeToJsAsync(wire)
-        catch {
-          case NonFatal(error) => Future.failed(error)
+        prepared.flatMap { value =>
+          val wire = AgentStreamOutputTransaction.capture(transaction) {
+            SchemaWire.schemaValueToWit(value)
+          }
+          SchemaWireInterop.valueTreeToJsAsync(wire)
         }
       } catch {
         case NonFatal(error) => Future.failed(error)

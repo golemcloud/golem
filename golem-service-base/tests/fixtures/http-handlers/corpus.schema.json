@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Custom HTTP handler semantic conformance cases",
+  "description": "Fixture structure only, not a runtime HTTP or OpenAPI validator. Invalid semantic inputs are intentional.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "contract", "cases"],
+  "properties": {
+    "$schema": {"const": "./corpus.schema.json"},
+    "contract": {"const": "https://linear.app/golem-cloud/issue/GOL-554/freeze-the-custom-http-handler-contract-and-shared-conformance-corpus"},
+    "cases": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/case"}}
+  },
+  "$defs": {
+    "rule": {"description": "Stable rule IDs from the HTTP_HANDLERS.md attachment on GOL-554. C01 describes the checker; all other rules require corpus coverage.", "enum": ["M01", "M02", "M03", "H01", "H02", "H03", "H04", "H05", "P01", "R01", "F01", "F02", "F03", "F04", "O01", "O02", "O03", "O04", "O05", "T01", "T02", "C01"]},
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "count": {"type": "integer", "minimum": 0},
+    "counts": {"type": "array", "items": {"$ref": "#/$defs/count"}},
+    "hexes": {"type": "array", "items": {"$ref": "#/$defs/hex"}},
+    "security": {"type": "array", "items": {"type": "object", "additionalProperties": {"$ref": "#/$defs/strings"}}},
+    "compiled": {
+      "type": "array", "items": {
+        "oneOf": [
+          {"type": "object", "additionalProperties": false, "required": ["Exact"], "properties": {"Exact": {"type": "object", "additionalProperties": false, "required": ["public_path", "file_path"], "properties": {"public_path": {"$ref": "#/$defs/strings"}, "file_path": {"type": "string"}}}}},
+          {"type": "object", "additionalProperties": false, "required": ["Subtree"], "properties": {"Subtree": {"type": "object", "additionalProperties": false, "required": ["public_prefix", "filesystem_root"], "properties": {"public_prefix": {"$ref": "#/$defs/strings"}, "filesystem_root": {"type": "string"}}}}}
+        ]
+      }
+    },
+    "pair": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"}},
+    "mappings": {"type": "array", "items": {"$ref": "#/$defs/pair"}},
+    "hex": {"type": "string", "pattern": "^(?:[0-9a-f]{2})*$"},
+    "events": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "header": {
+      "oneOf": [
+        {"allOf": [{"$ref": "#/$defs/pair"}, {"prefixItems": [{}, {"pattern": "^[\\u0000-\\u007f]*$"}]}]},
+        {"type": "object", "additionalProperties": false, "required": ["name", "value_hex"], "properties": {"name": {"type": "string"}, "value_hex": {"$ref": "#/$defs/hex"}}}
+      ]
+    },
+    "headers": {"description": "Preserve every occurrence and byte value, with ordering within each case-insensitive header name. Relative ordering across different names is unconstrained. Runtime assertions compare per-name occurrence lists; other arrays retain exact ordering.", "type": "array", "items": {"$ref": "#/$defs/header"}},
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "suite", "rules", "input", "expect"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$"},
+        "suite": {"enum": ["metadata", "mapping", "path", "routing", "envelope", "lifecycle", "files", "openapi", "cache", "tooling"]},
+        "rules": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/rule"}},
+        "input": {"type": "object", "minProperties": 1},
+        "expect": {
+          "type": "object", "minProperties": 1, "additionalProperties": false,
+          "properties": {
+            "error": {"type": "string", "minLength": 1},
+            "status": {"type": "integer", "minimum": 200, "maximum": 599},
+            "accepted": {"const": true},
+            "included": {"type": "boolean"},
+            "headers": {"$ref": "#/$defs/headers"},
+            "absent_headers": {"$ref": "#/$defs/strings"},
+            "body_hex": {"$ref": "#/$defs/hex"},
+            "segments": {"$ref": "#/$defs/strings"},
+            "trailing_slash": {"type": "boolean"},
+            "query": {"type": ["string", "null"]},
+            "attempted_files": {"$ref": "#/$defs/strings"},
+            "auth_calls": {"$ref": "#/$defs/count"},
+            "authority": {"type": "string"},
+            "blob_revision": {"$ref": "#/$defs/count"},
+            "body_polls": {"$ref": "#/$defs/count"},
+            "cancelled_streams": {"type": "array", "uniqueItems": true, "items": {"enum": ["input", "output"]}},
+            "committed_application_heads": {"$ref": "#/$defs/count"},
+            "committed_heads": {"$ref": "#/$defs/count"},
+            "compiled": {"$ref": "#/$defs/compiled"},
+            "component_revision": {"$ref": "#/$defs/count"},
+            "component_schema_names": {"$ref": "#/$defs/strings"},
+            "current_generation": {"type": "string"},
+            "effects": {"$ref": "#/$defs/count"},
+            "end_user": {"type": ["string", "null"]},
+            "executor_calls": {"$ref": "#/$defs/count"},
+            "exported_method_calls": {"$ref": "#/$defs/count"},
+            "external_fetches": {"$ref": "#/$defs/count"},
+            "forwarded_request_headers": {"$ref": "#/$defs/headers"},
+            "guest_input_hex": {"$ref": "#/$defs/hex"},
+            "handler": {"type": ["string", "null"]},
+            "handler_calls": {"$ref": "#/$defs/count"},
+            "initializations": {"$ref": "#/$defs/count"},
+            "invocation_cancellations": {"$ref": "#/$defs/count"},
+            "invocation_principal": {"type": "string"},
+            "invocations": {"$ref": "#/$defs/count"},
+            "json_yaml_equivalent": {"type": "boolean"},
+            "location": {"type": "string"},
+            "lookup": {"enum": ["absent", "found", "initialization-error", "symlink", "not-regular", "permission", "missing-blob"]},
+            "maximum_buffered_bytes": {"$ref": "#/$defs/count"},
+            "maximum_public_body_bytes": {"$ref": "#/$defs/count"},
+            "method": {"type": "string"},
+            "mixed_generations": {"type": "boolean"},
+            "operation_refs": {"$ref": "#/$defs/strings"},
+            "operation_security": {"type": "object", "additionalProperties": {"$ref": "#/$defs/security"}},
+            "ownership_released_after_production": {"type": "boolean"},
+            "path": {"type": "string"},
+            "paths": {"$ref": "#/$defs/strings"},
+            "pending_before_release": {"type": "boolean"},
+            "producer_polls_before_grant": {"$ref": "#/$defs/count"},
+            "producer_releases": {"$ref": "#/$defs/count"},
+            "provider": {"type": ["string", "null"]},
+            "provider_calls": {"$ref": "#/$defs/count"},
+            "provider_cancellations": {"$ref": "#/$defs/count"},
+            "public_abort": {"type": "boolean"},
+            "publications": {"$ref": "#/$defs/count"},
+            "published_fills": {"$ref": "#/$defs/strings"},
+            "read_selection": {"enum": ["Full", "Bounded", "OpenEnded", "Suffix", "MetadataOnly"]},
+            "reattachments": {"$ref": "#/$defs/count"},
+            "replacement_invocations": {"$ref": "#/$defs/count"},
+            "resources_released": {"type": "boolean"},
+            "response_bodies_hex": {"$ref": "#/$defs/hexes"},
+            "response_lengths": {"$ref": "#/$defs/counts"},
+            "restores": {"$ref": "#/$defs/count"},
+            "root_security_present": {"type": "boolean"},
+            "router_available": {"type": "boolean"},
+            "schema_examples": {"type": "array"},
+            "scheme": {"enum": ["http", "https"]},
+            "scheduled_order": {"$ref": "#/$defs/strings"},
+            "selected": {"type": ["string", "null"]},
+            "served_deployment_revisions": {"$ref": "#/$defs/counts"},
+            "served_fills": {"$ref": "#/$defs/strings"},
+            "servers": {"type": "array", "items": {"type": "object", "required": ["url"], "properties": {"url": {"type": "string"}}}},
+            "statuses": {"type": "array", "items": {"type": "integer", "minimum": 200, "maximum": 599}},
+            "successful_eof": {"type": "boolean"},
+            "successful_waiters": {"$ref": "#/$defs/strings"},
+            "tags": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}},
+            "wait_for_input_eof": {"type": "boolean"}
+          },
+          "not": {"required": ["accepted", "error"]}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"suite": {"const": "metadata"}}},
+          "then": {"properties": {"input": {"required": ["kind", "mode", "constructor", "mounts"], "properties": {"kind": {"type": "string"}, "mode": {"type": "string"}, "constructor": {"$ref": "#/$defs/mappings"}, "mounts": {"$ref": "#/$defs/strings"}}}}}
+        },
+        {
+          "if": {"properties": {"suite": {"const": "mapping"}}},
+          "then": {"properties": {"input": {"additionalProperties": false, "required": ["mappings"], "properties": {"mappings": {"$ref": "#/$defs/mappings"}}}, "expect": {"oneOf": [{"required": ["compiled"]}, {"required": ["error"]}]}}}
+        },
+        {
+          "if": {"properties": {"suite": {"const": "path"}}},
+          "then": {"properties": {"input": {"additionalProperties": false, "required": ["target"], "properties": {"target": {"type": "string"}}}, "expect": {"oneOf": [{"required": ["segments", "trailing_slash", "path", "query"]}, {"required": ["status", "error"]}]}}}
+        },
+        {
+          "if": {"properties": {"suite": {"const": "routing"}}},
+          "then": {"properties": {"input": {"required": ["method", "target", "typed", "mounts"], "properties": {"method": {"type": "string"}, "target": {"type": "string"}, "typed": {"type": "array"}, "mounts": {"type": "array"}, "headers": {"$ref": "#/$defs/headers"}}}}}
+        },
+        {
+          "if": {"properties": {"suite": {"const": "envelope"}}},
+          "then": {"properties": {"input": {"required": ["action", "headers"], "properties": {"action": {"enum": ["request", "response", "origin"]}, "headers": {"$ref": "#/$defs/headers"}, "chunks_hex": {"type": "array", "items": {"$ref": "#/$defs/hex"}}}}}}
+        },
+        {
+          "if": {"properties": {"suite": {"const": "lifecycle"}}},
+          "then": {"properties": {"input": {"required": ["events"], "properties": {"events": {"$ref": "#/$defs/events"}}}}}
+        },
+        {
+          "if": {"properties": {"suite": {"const": "files"}}},
+          "then": {"properties": {"input": {"required": ["mode", "method", "path"], "properties": {"mode": {"enum": ["live", "immutable"]}, "method": {"enum": ["GET", "HEAD"]}, "path": {"type": "string"}, "headers": {"$ref": "#/$defs/headers"}, "body_hex": {"$ref": "#/$defs/hex"}}}}}
+        },
+        {
+          "if": {"properties": {"suite": {"const": "openapi"}}},
+          "then": {"properties": {"input": {"oneOf": [{"required": ["providers"]}, {"required": ["limit_check"]}, {"required": ["raw_document"]}], "properties": {"providers": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["mount", "document"], "properties": {"mount": {"type": "string"}}}}, "limit_check": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "integer", "minimum": 0}}, "raw_document": {"type": "string"}}}}}
+        },
+        {
+          "if": {"properties": {"suite": {"const": "cache"}}},
+          "then": {"properties": {"input": {"required": ["key", "events"], "properties": {"key": {"type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [{"type": "string"}, {"type": "integer"}, {"type": "string"}]}, "events": {"$ref": "#/$defs/events"}}}}}
+        },
+        {
+          "if": {"properties": {"suite": {"const": "tooling"}}},
+          "then": {"properties": {"input": {"required": ["kind", "consumer"], "properties": {"kind": {"enum": ["regular", "http-router"]}, "consumer": {"type": "string", "minLength": 1}}}, "expect": {"required": ["included"]}}}
+        }
+      ]
+    }
+  }
+}

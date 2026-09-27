@@ -1,4 +1,5 @@
 import {
+  err,
   ok,
   s,
   toolDefinition,
@@ -12,7 +13,12 @@ toolDefinition("ts-streaming")
       .positional("mode", z.string())
       .stdin({ required: true })
       .stdout({ required: true })
-      .returns(s.u64()),
+      .returns(s.u64())
+      .error("declared", {
+        kind: "runtime",
+        exitCode: 1,
+        payload: z.string(),
+      }),
   )
   .implement({
     "ts-streaming": async ({ mode }, context) => {
@@ -30,6 +36,10 @@ toolDefinition("ts-streaming")
         await writer.write(new TextEncoder().encode("ts-marker:"));
       }
 
+      if (mode === "declared-error") {
+        await writer.write(new TextEncoder().encode("ts-declared:"));
+      }
+
       while (true) {
         const item = await reader.read();
         if (item.done) break;
@@ -37,6 +47,8 @@ toolDefinition("ts-streaming")
         await writer.write(item.value);
       }
 
-      return ok(bytesRead);
+      return mode === "declared-error"
+        ? err("declared", "expected")
+        : ok(bytesRead);
     },
   });

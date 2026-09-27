@@ -1,0 +1,2361 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Runtime agent reflection and schema-free invocation.
+
+pub use super::tool_reflection::{
+    DynamicToolClient, ReflectedToolClient, ReflectedToolCustomError, ToolArgument,
+    ToolArgumentKind, ToolClientCommandDefinition, ToolClientDefinition,
+    ToolClientDefinitionBuilder, ToolCommand, ToolNode, ToolReflectionError, ToolType,
+    TypedToolClient, TypedToolCommand, TypedUnitToolCommand, get_all_tool_types, get_tool_type,
+};
+
+use crate::bindings::golem::agent::{common as wire_common, host};
+use crate::schema::render::{
+    RenderError, from_json_value, to_json_schema_with_config, to_json_value,
+};
+use crate::schema::validation::validate_value;
+use crate::schema::{
+    MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+};
+use crate::{ComponentId, ScheduledTime, Uuid};
+use std::cell::RefCell;
+use std::fmt::{Display, Formatter};
+use std::future::Future;
+use std::marker::PhantomData;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+/// A graph-backed view of one schema root.
+#[derive(Clone, Debug)]
+pub struct SchemaRef {
+    graph: Arc<SchemaGraph>,
+    root: SchemaType,
+}
+
+impl SchemaRef {
+    pub fn new(graph: SchemaGraph) -> Self {
+        let root = graph.root.clone();
+        Self {
+            graph: Arc::new(graph),
+            root,
+        }
+    }
+
+    pub(crate) fn with_root(graph: Arc<SchemaGraph>, root: SchemaType) -> Self {
+        Self { graph, root }
+    }
+
+    pub fn graph(&self) -> &SchemaGraph {
+        &self.graph
+    }
+
+    pub fn root(&self) -> &SchemaType {
+        &self.root
+    }
+
+    pub fn contains_stream(&self) -> bool {
+        super::schema_type_contains_stream(&self.root, &self.graph.defs)
+    }
+
+    pub fn validate_value(&self, value: &SchemaValue) -> Result<(), GolemReflectError> {
+        validate_value(&self.graph, &self.root, value).map_err(|errors| {
+            GolemReflectError::InvalidSchemaValue {
+                issues: errors.into_iter().map(|error| error.to_string()).collect(),
+            }
+        })
+    }
+
+    #[cfg(feature = "json")]
+    pub fn validate_json(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<SchemaValue, GolemReflectError> {
+        self.pack_json(value)
+    }
+
+    #[cfg(feature = "json")]
+    pub fn pack_json(&self, value: &serde_json::Value) -> Result<SchemaValue, GolemReflectError> {
+        let packed = from_json_value(&self.graph, &self.root, value)?;
+        self.validate_value(&packed)?;
+        Ok(packed)
+    }
+
+    #[cfg(feature = "json")]
+    pub fn unpack_json(&self, value: &SchemaValue) -> Result<serde_json::Value, GolemReflectError> {
+        self.validate_value(value)?;
+        Ok(to_json_value(&self.graph, &self.root, value)?)
+    }
+
+    #[cfg(feature = "json")]
+    pub fn to_json_schema(&self, include_draft_marker: bool) -> serde_json::Value {
+        let config = if include_draft_marker {
+            crate::schema::render::JsonSchemaConfig::CANONICAL
+        } else {
+            crate::schema::render::JsonSchemaConfig::WITHOUT_DRAFT_MARKER
+        };
+        to_json_schema_with_config(&self.graph, &self.root, config)
+    }
+}
+
+/// A closed, structured error surface shared by reflection and invocation.
+#[derive(Debug)]
+pub enum GolemReflectError {
+    AgentTypeNotFound(String),
+    MethodNotFound { agent_type: String, method: String },
+    InvalidAgentId(String),
+    InvalidInput(String),
+    InvalidType(String),
+    KnownEphemeralBinding(String),
+    InvalidSchemaValue { issues: Vec<String> },
+    MalformedRemoteOutput(String),
+    SchemaRender(RenderError),
+    SchemaEncode(String),
+    SchemaDecode(String),
+    ProtocolError(String),
+    Denied(String),
+    RemoteNotFound(String),
+    RemoteInternalError(String),
+    RemoteAgent(RemoteAgentError),
+}
+
+#[derive(Debug)]
+pub enum RemoteAgentError {
+    InvalidInput(String),
+    InvalidMethod(String),
+    InvalidType(String),
+    InvalidAgentId(String),
+    Custom(Box<TypedSchemaValue>),
+    MalformedCustomError(String),
+}
+
+impl Display for GolemReflectError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AgentTypeNotFound(name) => write!(f, "agent type `{name}` was not found"),
+            Self::MethodNotFound { agent_type, method } => {
+                write!(f, "agent type `{agent_type}` has no method `{method}`")
+            }
+            Self::InvalidAgentId(message) => write!(f, "invalid agent id: {message}"),
+            Self::InvalidInput(message) => write!(f, "invalid input: {message}"),
+            Self::InvalidType(message) => write!(f, "invalid type: {message}"),
+            Self::KnownEphemeralBinding(name) => {
+                write!(
+                    f,
+                    "cannot bind an existing identity to ephemeral agent type `{name}`"
+                )
+            }
+            Self::InvalidSchemaValue { issues } => {
+                write!(f, "schema value is invalid: {}", issues.join("; "))
+            }
+            Self::MalformedRemoteOutput(message) => {
+                write!(f, "malformed remote output: {message}")
+            }
+            Self::SchemaRender(error) => write!(f, "schema rendering failed: {error}"),
+            Self::SchemaEncode(message) => write!(f, "schema encoding failed: {message}"),
+            Self::SchemaDecode(message) => write!(f, "schema decoding failed: {message}"),
+            Self::ProtocolError(message) => write!(f, "RPC protocol error: {message}"),
+            Self::Denied(message) => write!(f, "RPC access denied: {message}"),
+            Self::RemoteNotFound(message) => write!(f, "remote target not found: {message}"),
+            Self::RemoteInternalError(message) => {
+                write!(f, "remote internal error: {message}")
+            }
+            Self::RemoteAgent(error) => write!(f, "remote agent error: {error}"),
+        }
+    }
+}
+
+impl Display for RemoteAgentError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidInput(message) => write!(f, "invalid input: {message}"),
+            Self::InvalidMethod(message) => write!(f, "invalid method: {message}"),
+            Self::InvalidType(message) => write!(f, "invalid type: {message}"),
+            Self::InvalidAgentId(message) => write!(f, "invalid agent id: {message}"),
+            Self::Custom(_) => write!(f, "custom typed error"),
+            Self::MalformedCustomError(message) => {
+                write!(f, "malformed custom error: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for GolemReflectError {}
+impl std::error::Error for RemoteAgentError {}
+
+impl From<RenderError> for GolemReflectError {
+    fn from(value: RenderError) -> Self {
+        Self::SchemaRender(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentMode {
+    Durable,
+    Ephemeral,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentMethod {
+    agent_type_name: String,
+    raw: wire_common::AgentMethod,
+    input: SchemaRef,
+    output: Option<SchemaRef>,
+}
+
+impl AgentMethod {
+    pub fn name(&self) -> &str {
+        &self.raw.name
+    }
+
+    pub fn description(&self) -> &str {
+        &self.raw.description
+    }
+
+    pub fn prompt_hint(&self) -> Option<&str> {
+        self.raw.prompt_hint.as_deref()
+    }
+
+    pub fn input(&self) -> &SchemaRef {
+        &self.input
+    }
+
+    pub fn output(&self) -> Option<&SchemaRef> {
+        self.output.as_ref()
+    }
+
+    pub fn raw_wit(&self) -> &wire_common::AgentMethod {
+        &self.raw
+    }
+
+    pub fn agent_type_name(&self) -> &str {
+        &self.agent_type_name
+    }
+
+    pub fn http_endpoints(&self) -> &[wire_common::HttpEndpointDetails] {
+        &self.raw.http_endpoint
+    }
+
+    pub fn read_only(&self) -> Option<&wire_common::ReadOnlyConfig> {
+        self.raw.read_only.as_ref()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentType {
+    raw: Arc<wire_common::AgentType>,
+    component_id: ComponentId,
+    graph: Arc<SchemaGraph>,
+    constructor_input: SchemaRef,
+    methods: Arc<[AgentMethod]>,
+    config_schemas: Arc<[(Vec<String>, SchemaRef)]>,
+    mode: AgentMode,
+}
+
+impl AgentType {
+    fn from_registered(registered: host::RegisteredAgentType) -> Result<Self, GolemReflectError> {
+        let component_id = crate::wire_component_id_to_schema(registered.implemented_by);
+        let raw = Arc::new(registered.agent_type);
+        let decoder = crate::schema::wit::GraphDecoder::new(&raw.schema)
+            .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
+        let graph = Arc::new(SchemaGraph {
+            defs: decoder
+                .decode_defs()
+                .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?,
+            root: decode_root(&decoder, raw.schema.root)?,
+        });
+        let constructor_input = input_schema_ref(&decoder, &raw.constructor.input_schema, &graph)?;
+        let methods = raw
+            .methods
+            .iter()
+            .map(|method| {
+                Ok(AgentMethod {
+                    agent_type_name: raw.type_name.clone(),
+                    raw: method.clone(),
+                    input: input_schema_ref(&decoder, &method.input_schema, &graph)?,
+                    output: output_schema_ref(&decoder, &method.output_schema, &graph)?,
+                })
+            })
+            .collect::<Result<Vec<_>, GolemReflectError>>()?;
+        let config_schemas = raw
+            .config
+            .iter()
+            .map(|declaration| {
+                Ok((
+                    declaration.path.clone(),
+                    SchemaRef::with_root(
+                        graph.clone(),
+                        decode_root(&decoder, declaration.value_type)?,
+                    ),
+                ))
+            })
+            .collect::<Result<Vec<_>, GolemReflectError>>()?;
+        let mode = match raw.mode {
+            wire_common::AgentMode::Durable => AgentMode::Durable,
+            wire_common::AgentMode::Ephemeral => AgentMode::Ephemeral,
+        };
+        Ok(Self {
+            raw,
+            component_id,
+            graph,
+            constructor_input,
+            methods: methods.into(),
+            config_schemas: config_schemas.into(),
+            mode,
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.raw.type_name
+    }
+
+    pub fn description(&self) -> &str {
+        &self.raw.description
+    }
+
+    pub fn source_language(&self) -> &str {
+        &self.raw.source_language
+    }
+
+    pub fn component_id(&self) -> &ComponentId {
+        &self.component_id
+    }
+
+    pub fn mode(&self) -> AgentMode {
+        self.mode
+    }
+
+    pub fn schema_graph(&self) -> &SchemaGraph {
+        &self.graph
+    }
+
+    pub fn constructor_input(&self) -> &SchemaRef {
+        &self.constructor_input
+    }
+
+    pub fn methods(&self) -> &[AgentMethod] {
+        &self.methods
+    }
+
+    pub fn method(&self, name: &str) -> Result<AgentMethod, GolemReflectError> {
+        self.methods
+            .iter()
+            .find(|method| method.name() == name)
+            .cloned()
+            .ok_or_else(|| GolemReflectError::MethodNotFound {
+                agent_type: self.name().to_string(),
+                method: name.to_string(),
+            })
+    }
+
+    pub fn raw_wit(&self) -> &wire_common::AgentType {
+        &self.raw
+    }
+
+    pub fn constructor(&self) -> &wire_common::AgentConstructor {
+        &self.raw.constructor
+    }
+
+    pub fn dependencies(&self) -> &[wire_common::AgentDependency] {
+        &self.raw.dependencies
+    }
+
+    pub fn http_mount(&self) -> Option<&wire_common::HttpMountDetails> {
+        self.raw.http_mount.as_ref()
+    }
+
+    pub fn snapshotting(&self) -> &wire_common::Snapshotting {
+        &self.raw.snapshotting
+    }
+
+    pub fn config(&self) -> &[wire_common::AgentConfigDeclaration] {
+        &self.raw.config
+    }
+
+    fn config_schema(&self, path: &[String]) -> Result<SchemaRef, GolemReflectError> {
+        let declaration = self
+            .raw
+            .config
+            .iter()
+            .find(|declaration| declaration.path == path)
+            .ok_or_else(|| {
+                GolemReflectError::InvalidInput(format!("unknown config path `{}`", path.join(".")))
+            })?;
+        if declaration.source == wire_common::AgentConfigSource::Secret {
+            return Err(GolemReflectError::InvalidInput(format!(
+                "secret config field `{}` cannot be overridden over RPC",
+                path.join(".")
+            )));
+        }
+        self.config_schemas
+            .iter()
+            .find(|(candidate, _)| candidate == path)
+            .map(|(_, schema)| schema.clone())
+            .ok_or_else(|| {
+                GolemReflectError::InvalidInput(format!("unknown config path `{}`", path.join(".")))
+            })
+    }
+
+    fn validate_config(
+        &self,
+        config: Vec<AgentConfigValue>,
+    ) -> Result<Vec<AgentConfigValue>, GolemReflectError> {
+        config
+            .into_iter()
+            .map(|entry| {
+                let schema = self.config_schema(&entry.path)?;
+                schema.validate_value(entry.value.value())?;
+                Ok(AgentConfigValue {
+                    path: entry.path,
+                    value: TypedSchemaValue::new(
+                        SchemaGraph {
+                            defs: schema.graph.defs.clone(),
+                            root: schema.root.clone(),
+                        },
+                        entry.value.value().clone(),
+                    ),
+                })
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "json")]
+    pub fn pack_config_json(
+        &self,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<Vec<AgentConfigValue>, GolemReflectError> {
+        config
+            .into_iter()
+            .map(|(path, json)| {
+                let schema = self.config_schema(&path)?;
+                Ok(AgentConfigValue {
+                    path,
+                    value: TypedSchemaValue::new(
+                        SchemaGraph {
+                            defs: schema.graph.defs.clone(),
+                            root: schema.root.clone(),
+                        },
+                        schema.pack_json(&json)?,
+                    ),
+                })
+            })
+            .collect()
+    }
+
+    pub fn client(&self) -> ReflectedAgentClientFactory {
+        ReflectedAgentClientFactory {
+            agent_type: self.clone(),
+        }
+    }
+
+    pub fn agent_id_value(
+        &self,
+        constructor: SchemaValue,
+        phantom_id: Option<Uuid>,
+    ) -> Result<ParsedAgentId, GolemReflectError> {
+        self.constructor_input.validate_value(&constructor)?;
+        make_agent_id_value(self.name(), constructor, phantom_id)
+    }
+
+    #[cfg(feature = "json")]
+    pub fn agent_id_json(
+        &self,
+        constructor: &serde_json::Value,
+        phantom_id: Option<Uuid>,
+    ) -> Result<ParsedAgentId, GolemReflectError> {
+        self.agent_id_value(self.constructor_input.pack_json(constructor)?, phantom_id)
+    }
+
+    pub fn bind(
+        &self,
+        agent_id: &ParsedAgentId,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.bind_with_config(agent_id, Vec::new())
+    }
+
+    pub fn bind_with_config(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: Vec<AgentConfigValue>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        if self.mode == AgentMode::Ephemeral {
+            return Err(GolemReflectError::KnownEphemeralBinding(
+                self.name().to_string(),
+            ));
+        }
+        let parts = agent_id.parts()?;
+        if parts.type_name != self.name() {
+            return Err(GolemReflectError::InvalidType(format!(
+                "reflected type `{}` cannot bind identity for `{}`",
+                self.name(),
+                parts.type_name
+            )));
+        }
+        self.constructor_input
+            .validate_value(&parts.constructor_value)?;
+        let config = self.validate_config(config)?;
+        let transport = RpcTransport::create(
+            parts.type_name,
+            parts.constructor_value,
+            parts.phantom_id,
+            config,
+        )?;
+        Ok(ReflectedAgentClient {
+            agent_type: self.clone(),
+            transport: Rc::new(transport),
+            reusable_identity: Some(agent_id.clone()),
+        })
+    }
+
+    #[cfg(feature = "json")]
+    pub fn bind_with_json_config(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.bind_with_config(agent_id, self.pack_config_json(config)?)
+    }
+}
+
+pub fn get_all_agent_types() -> Result<Vec<AgentType>, GolemReflectError> {
+    host::get_all_agent_types()
+        .into_iter()
+        .map(AgentType::from_registered)
+        .collect()
+}
+
+pub fn get_agent_type(name: &str) -> Result<AgentType, GolemReflectError> {
+    let registered = host::get_agent_type(name)
+        .ok_or_else(|| GolemReflectError::AgentTypeNotFound(name.to_string()))?;
+    AgentType::from_registered(registered)
+}
+
+pub fn get_agent_type_for(agent_id: &ParsedAgentId) -> Result<AgentType, GolemReflectError> {
+    let registered = host::get_agent_type_by_agent_id(agent_id.as_str())
+        .ok_or_else(|| GolemReflectError::AgentTypeNotFound(agent_id.as_str().to_string()))?;
+    AgentType::from_registered(registered)
+}
+
+#[derive(Clone, Debug)]
+pub struct ParsedAgentIdParts {
+    pub type_name: String,
+    pub constructor_value: SchemaValue,
+    pub constructor_schema: SchemaGraph,
+    pub phantom_id: Option<Uuid>,
+}
+
+/// Environment-scoped agent identity encoded by the Golem host.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ParsedAgentId(String);
+
+impl ParsedAgentId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn from_value(
+        type_name: impl Into<String>,
+        constructor_value: SchemaValue,
+        phantom_id: Option<Uuid>,
+    ) -> Result<Self, GolemReflectError> {
+        make_agent_id_value(&type_name.into(), constructor_value, phantom_id)
+    }
+
+    pub fn from_schema<T: crate::IntoSchema>(
+        type_name: impl Into<String>,
+        constructor: &T,
+        phantom_id: Option<Uuid>,
+    ) -> Result<Self, GolemReflectError> {
+        Self::from_value(type_name, constructor.to_value(), phantom_id)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    pub fn parts(&self) -> Result<ParsedAgentIdParts, GolemReflectError> {
+        let (type_name, typed, phantom_id) =
+            host::parse_agent_id(&self.0).map_err(agent_error_to_reflect)?;
+        let typed = crate::decode_typed_schema_value(&typed)
+            .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
+        Ok(ParsedAgentIdParts {
+            type_name,
+            constructor_value: typed.value().clone(),
+            constructor_schema: typed.graph().clone(),
+            phantom_id: phantom_id.map(crate::wire_uuid_to_schema),
+        })
+    }
+
+    pub fn dynamic_client(&self) -> Result<DynamicAgentClient, GolemReflectError> {
+        DynamicAgentClient::from_agent_id(self)
+    }
+
+    pub fn client(
+        &self,
+        definition: &MethodOnlyAgentClientDefinition,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        definition.bind(self)
+    }
+
+    pub fn reflected_client(
+        &self,
+        agent_type: &AgentType,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        agent_type.bind(self)
+    }
+}
+
+impl Display for ParsedAgentId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl AsRef<str> for ParsedAgentId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+pub fn make_agent_id_value(
+    type_name: &str,
+    constructor_value: SchemaValue,
+    phantom_id: Option<Uuid>,
+) -> Result<ParsedAgentId, GolemReflectError> {
+    let encoded = crate::encode_schema_value(&constructor_value)
+        .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
+    let agent_id = host::make_agent_id(
+        type_name,
+        encoded,
+        phantom_id.map(crate::schema_uuid_to_wire),
+    )
+    .map_err(agent_error_to_reflect)?;
+    Ok(ParsedAgentId::new(agent_id))
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentConfigValue {
+    pub path: Vec<String>,
+    pub value: TypedSchemaValue,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReflectedPhantomClient {
+    pub agent_id: ParsedAgentId,
+    pub phantom_id: Uuid,
+    pub client: ReflectedAgentClient,
+}
+
+#[derive(Clone, Debug)]
+pub enum NewPhantomClient {
+    Durable(ReflectedPhantomClient),
+    Ephemeral(ReflectedAgentClient),
+}
+
+#[derive(Clone, Debug)]
+pub struct ReflectedAgentClientFactory {
+    agent_type: AgentType,
+}
+
+impl ReflectedAgentClientFactory {
+    pub fn get_value(
+        &self,
+        constructor: SchemaValue,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        if self.agent_type.mode != AgentMode::Durable {
+            return Err(GolemReflectError::InvalidType(
+                "get is available only for durable agent types".to_string(),
+            ));
+        }
+        self.create(constructor, None, Vec::new(), true)
+    }
+
+    pub fn get_value_with_config(
+        &self,
+        constructor: SchemaValue,
+        config: Vec<AgentConfigValue>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        if self.agent_type.mode != AgentMode::Durable {
+            return Err(GolemReflectError::InvalidType(
+                "get_with_config is available only for durable agent types".to_string(),
+            ));
+        }
+        self.create(constructor, None, config, true)
+    }
+
+    #[cfg(feature = "json")]
+    pub fn get_json(
+        &self,
+        constructor: &serde_json::Value,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.get_value(self.agent_type.constructor_input.pack_json(constructor)?)
+    }
+
+    #[cfg(feature = "json")]
+    pub fn get_json_with_config(
+        &self,
+        constructor: &serde_json::Value,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.get_value_with_config(
+            self.agent_type.constructor_input.pack_json(constructor)?,
+            self.agent_type.pack_config_json(config)?,
+        )
+    }
+
+    pub fn get_phantom_value(
+        &self,
+        constructor: SchemaValue,
+        phantom_id: Uuid,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            Some(phantom_id),
+            Vec::new(),
+            self.agent_type.mode == AgentMode::Durable,
+        )
+    }
+
+    pub fn get_phantom_value_with_config(
+        &self,
+        constructor: SchemaValue,
+        phantom_id: Uuid,
+        config: Vec<AgentConfigValue>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            Some(phantom_id),
+            config,
+            self.agent_type.mode == AgentMode::Durable,
+        )
+    }
+
+    #[cfg(feature = "json")]
+    pub fn get_phantom_json_with_config(
+        &self,
+        constructor: &serde_json::Value,
+        phantom_id: Uuid,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.get_phantom_value_with_config(
+            self.agent_type.constructor_input.pack_json(constructor)?,
+            phantom_id,
+            self.agent_type.pack_config_json(config)?,
+        )
+    }
+
+    pub fn new_phantom_value(
+        &self,
+        constructor: SchemaValue,
+    ) -> Result<NewPhantomClient, GolemReflectError> {
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(NewPhantomClient::Ephemeral(self.create(
+                constructor,
+                None,
+                Vec::new(),
+                false,
+            )?));
+        }
+        let phantom_id = Uuid::new_v4();
+        let agent_id = self
+            .agent_type
+            .agent_id_value(constructor.clone(), Some(phantom_id))?;
+        let client = self.create(constructor, Some(phantom_id), Vec::new(), true)?;
+        Ok(NewPhantomClient::Durable(ReflectedPhantomClient {
+            agent_id,
+            phantom_id,
+            client,
+        }))
+    }
+
+    pub fn new_phantom_value_with_config(
+        &self,
+        constructor: SchemaValue,
+        config: Vec<AgentConfigValue>,
+    ) -> Result<NewPhantomClient, GolemReflectError> {
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(NewPhantomClient::Ephemeral(self.create(
+                constructor,
+                None,
+                config,
+                false,
+            )?));
+        }
+        let phantom_id = Uuid::new_v4();
+        let agent_id = self
+            .agent_type
+            .agent_id_value(constructor.clone(), Some(phantom_id))?;
+        let client = self.create(constructor, Some(phantom_id), config, true)?;
+        Ok(NewPhantomClient::Durable(ReflectedPhantomClient {
+            agent_id,
+            phantom_id,
+            client,
+        }))
+    }
+
+    #[cfg(feature = "json")]
+    pub fn new_phantom_json(
+        &self,
+        constructor: &serde_json::Value,
+    ) -> Result<NewPhantomClient, GolemReflectError> {
+        self.new_phantom_value(self.agent_type.constructor_input.pack_json(constructor)?)
+    }
+
+    #[cfg(feature = "json")]
+    pub fn new_phantom_json_with_config(
+        &self,
+        constructor: &serde_json::Value,
+        config: Vec<(Vec<String>, serde_json::Value)>,
+    ) -> Result<NewPhantomClient, GolemReflectError> {
+        self.new_phantom_value_with_config(
+            self.agent_type.constructor_input.pack_json(constructor)?,
+            self.agent_type.pack_config_json(config)?,
+        )
+    }
+
+    fn create(
+        &self,
+        constructor: SchemaValue,
+        phantom_id: Option<Uuid>,
+        config: Vec<AgentConfigValue>,
+        reusable: bool,
+    ) -> Result<ReflectedAgentClient, GolemReflectError> {
+        self.agent_type
+            .constructor_input
+            .validate_value(&constructor)?;
+        let identity = reusable
+            .then(|| {
+                self.agent_type
+                    .agent_id_value(constructor.clone(), phantom_id)
+            })
+            .transpose()?;
+        let config = self.agent_type.validate_config(config)?;
+        let transport = RpcTransport::create(
+            self.agent_type.name().to_string(),
+            constructor,
+            phantom_id,
+            config,
+        )?;
+        Ok(ReflectedAgentClient {
+            agent_type: self.agent_type.clone(),
+            transport: Rc::new(transport),
+            reusable_identity: identity,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct ReflectedAgentClient {
+    agent_type: AgentType,
+    transport: Rc<RpcTransport>,
+    reusable_identity: Option<ParsedAgentId>,
+}
+
+impl std::fmt::Debug for ReflectedAgentClient {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReflectedAgentClient")
+            .field("agent_type", &self.agent_type.name())
+            .field("reusable_identity", &self.reusable_identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ReflectedAgentClient {
+    pub fn agent_id(&self) -> Option<&ParsedAgentId> {
+        self.reusable_identity.as_ref()
+    }
+
+    pub fn method(&self, name: &str) -> Result<ReflectedAgentMethod, GolemReflectError> {
+        Ok(ReflectedAgentMethod {
+            definition: self.agent_type.method(name)?,
+            transport: self.transport.clone(),
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct ReflectedAgentMethod {
+    definition: AgentMethod,
+    transport: Rc<RpcTransport>,
+}
+
+fn validate_declared_output(
+    output: Option<&SchemaRef>,
+    value: Option<&SchemaValue>,
+    method: &str,
+) -> Result<(), GolemReflectError> {
+    match (output, value) {
+        (Some(schema), Some(value)) => schema
+            .validate_value(value)
+            .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string())),
+        (None, None) => Ok(()),
+        _ => Err(GolemReflectError::MalformedRemoteOutput(format!(
+            "method `{method}` returned an unexpected unit/value shape"
+        ))),
+    }
+}
+
+impl ReflectedAgentMethod {
+    pub fn definition(&self) -> &AgentMethod {
+        &self.definition
+    }
+
+    pub async fn invoke_value(
+        &self,
+        input: SchemaValue,
+    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+        self.definition.input.validate_value(&input)?;
+        let invocation = self
+            .transport
+            .invoke_and_await(&self.definition.raw.name, input)
+            .await?;
+        validate_declared_output(
+            self.definition.output.as_ref(),
+            invocation.value.as_ref(),
+            &self.definition.raw.name,
+        )?;
+        Ok(invocation)
+    }
+
+    #[cfg(feature = "json")]
+    pub async fn invoke_json(
+        &self,
+        input: &serde_json::Value,
+    ) -> Result<Invocation<Option<serde_json::Value>>, GolemReflectError> {
+        let invocation = self
+            .invoke_value(self.definition.input.pack_json(input)?)
+            .await?;
+        let value = match (&self.definition.output, invocation.value) {
+            (Some(schema), Some(value)) => Some(
+                schema
+                    .unpack_json(&value)
+                    .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?,
+            ),
+            _ => None,
+        };
+        Ok(Invocation {
+            metadata: invocation.metadata,
+            value,
+        })
+    }
+
+    pub fn trigger_value(
+        &self,
+        input: SchemaValue,
+    ) -> Result<InvocationMetadata, GolemReflectError> {
+        self.reject_non_awaited_streams("trigger")?;
+        self.definition.input.validate_value(&input)?;
+        self.transport.trigger(&self.definition.raw.name, input)
+    }
+
+    pub fn pending_value(
+        &self,
+        input: SchemaValue,
+    ) -> Result<ReflectedPendingInvocation, GolemReflectError> {
+        if self.definition.input.contains_stream() {
+            return Err(GolemReflectError::InvalidType(format!(
+                "method `{}` has streaming input; use invoke_value or invoke_json",
+                self.definition.raw.name
+            )));
+        }
+        self.definition.input.validate_value(&input)?;
+        Ok(ReflectedPendingInvocation {
+            checked: CheckedReflectedOutput {
+                inner: self.transport.pending(&self.definition.raw.name, input)?,
+                output: self.definition.output.clone(),
+                method: self.definition.raw.name.clone(),
+            },
+        })
+    }
+
+    pub fn schedule_value(
+        &self,
+        at: ScheduledTime,
+        input: SchemaValue,
+    ) -> Result<ScheduledInvocation, GolemReflectError> {
+        self.reject_non_awaited_streams("schedule")?;
+        self.definition.input.validate_value(&input)?;
+        self.transport
+            .schedule(at, &self.definition.raw.name, input)
+    }
+
+    fn reject_non_awaited_streams(&self, operation: &str) -> Result<(), GolemReflectError> {
+        if self.definition.input.contains_stream()
+            || self
+                .definition
+                .output
+                .as_ref()
+                .is_some_and(SchemaRef::contains_stream)
+        {
+            return Err(GolemReflectError::InvalidType(format!(
+                "{operation} is unavailable for streaming method `{}`",
+                self.definition.raw.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct DynamicAgentClient {
+    transport: Rc<RpcTransport>,
+    agent_id: ParsedAgentId,
+}
+
+impl DynamicAgentClient {
+    pub fn from_agent_id(agent_id: &ParsedAgentId) -> Result<Self, GolemReflectError> {
+        let parts = agent_id.parts()?;
+        let transport = RpcTransport::create(
+            parts.type_name,
+            parts.constructor_value,
+            parts.phantom_id,
+            Vec::new(),
+        )?;
+        Ok(Self {
+            transport: Rc::new(transport),
+            agent_id: agent_id.clone(),
+        })
+    }
+
+    pub fn agent_id(&self) -> &ParsedAgentId {
+        &self.agent_id
+    }
+
+    pub fn method(&self, name: impl Into<String>) -> DynamicAgentMethod {
+        DynamicAgentMethod {
+            name: name.into(),
+            transport: self.transport.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct DynamicAgentMethod {
+    name: String,
+    transport: Rc<RpcTransport>,
+}
+
+impl DynamicAgentMethod {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub async fn invoke_value(
+        &self,
+        input: SchemaValue,
+    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+        self.transport.invoke_and_await(&self.name, input).await
+    }
+
+    pub fn trigger_value(
+        &self,
+        input: SchemaValue,
+    ) -> Result<InvocationMetadata, GolemReflectError> {
+        self.transport.trigger(&self.name, input)
+    }
+
+    pub fn pending_value(
+        &self,
+        input: SchemaValue,
+    ) -> Result<PendingInvocation, GolemReflectError> {
+        self.transport.pending(&self.name, input)
+    }
+
+    pub fn schedule_value(
+        &self,
+        at: ScheduledTime,
+        input: SchemaValue,
+    ) -> Result<ScheduledInvocation, GolemReflectError> {
+        self.transport.schedule(at, &self.name, input)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct InvocationMetadata {
+    pub agent_id: ParsedAgentId,
+    pub idempotency_key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Invocation<T> {
+    pub metadata: InvocationMetadata,
+    pub value: T,
+}
+
+pub struct CancellationToken {
+    raw: host::CancellationToken,
+}
+
+impl CancellationToken {
+    pub fn cancel(&self) {
+        self.raw.cancel();
+    }
+}
+
+impl std::fmt::Debug for CancellationToken {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CancellationToken").finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+pub struct ScheduledInvocation {
+    pub metadata: InvocationMetadata,
+    pub cancellation_token: CancellationToken,
+}
+
+type PendingResult = Result<Invocation<Option<SchemaValue>>, GolemReflectError>;
+
+pub struct PendingInvocation {
+    pub metadata: InvocationMetadata,
+    raw: Rc<host::FutureInvokeResult>,
+    state: RefCell<Option<Pin<Box<dyn Future<Output = PendingResult>>>>>,
+}
+
+/// A reflected pending invocation that applies the selected method's output policy on completion.
+pub struct ReflectedPendingInvocation {
+    checked: CheckedReflectedOutput<PendingInvocation>,
+}
+
+struct CheckedReflectedOutput<F> {
+    inner: F,
+    output: Option<SchemaRef>,
+    method: String,
+}
+
+impl ReflectedPendingInvocation {
+    pub fn metadata(&self) -> &InvocationMetadata {
+        &self.checked.inner.metadata
+    }
+
+    pub fn cancel(&self) {
+        self.checked.inner.cancel();
+    }
+
+    pub async fn get(self) -> PendingResult {
+        self.await
+    }
+}
+
+impl Future for ReflectedPendingInvocation {
+    type Output = PendingResult;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.get_mut().checked).poll(cx)
+    }
+}
+
+impl<F: Future<Output = PendingResult> + Unpin> Future for CheckedReflectedOutput<F> {
+    type Output = PendingResult;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Ready(Ok(invocation)) => {
+                if let Err(error) = validate_declared_output(
+                    this.output.as_ref(),
+                    invocation.value.as_ref(),
+                    &this.method,
+                ) {
+                    return Poll::Ready(Err(error));
+                }
+                Poll::Ready(Ok(invocation))
+            }
+        }
+    }
+}
+
+impl PendingInvocation {
+    pub fn cancel(&self) {
+        self.raw.cancel();
+    }
+
+    pub async fn get(self) -> PendingResult {
+        self.await
+    }
+}
+
+impl Future for PendingInvocation {
+    type Output = PendingResult;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if this.state.borrow().is_none() {
+            let raw = this.raw.clone();
+            let metadata = this.metadata.clone();
+            *this.state.borrow_mut() = Some(Box::pin(async move {
+                let result = raw.get().await.map_err(rpc_error_to_reflect)?;
+                let value = result
+                    .map(crate::decode_schema_value)
+                    .transpose()
+                    .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
+                Ok(Invocation { metadata, value })
+            }));
+        }
+        let mut state = this.state.borrow_mut();
+        state
+            .as_mut()
+            .expect("pending invocation future initialized")
+            .as_mut()
+            .poll(cx)
+    }
+}
+
+type CallerPendingResult<T> = Result<Invocation<T>, GolemReflectError>;
+type CallerPendingFuture<T> = Pin<Box<dyn Future<Output = CallerPendingResult<T>>>>;
+
+/// A cancellable pending invocation generated for a full caller-owned client.
+pub struct CallerPendingInvocation<T> {
+    pub metadata: InvocationMetadata,
+    raw: Rc<crate::golem_agentic::golem::agent::host::FutureInvokeResult>,
+    state: RefCell<Option<CallerPendingFuture<T>>>,
+    decode: Rc<dyn Fn(Option<SchemaValue>) -> Result<T, GolemReflectError>>,
+}
+
+impl<T: 'static> CallerPendingInvocation<T> {
+    pub fn cancel(&self) {
+        self.raw.cancel();
+    }
+
+    pub async fn get(self) -> CallerPendingResult<T> {
+        self.await
+    }
+}
+
+impl<T: 'static> Future for CallerPendingInvocation<T> {
+    type Output = CallerPendingResult<T>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if this.state.borrow().is_none() {
+            let raw = Rc::clone(&this.raw);
+            let metadata = this.metadata.clone();
+            let decode = this.decode.clone();
+            *this.state.borrow_mut() = Some(Box::pin(async move {
+                let value = raw
+                    .get()
+                    .await
+                    .map_err(agentic_rpc_error_to_reflect)?
+                    .map(crate::decode_schema_value)
+                    .transpose()
+                    .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
+                Ok(Invocation {
+                    metadata,
+                    value: decode(value)?,
+                })
+            }));
+        }
+        let mut state = this.state.borrow_mut();
+        state
+            .as_mut()
+            .expect("caller pending invocation future initialized")
+            .as_mut()
+            .poll(cx)
+    }
+}
+
+#[doc(hidden)]
+pub fn start_caller_pending<T: 'static>(
+    rpc: &crate::golem_agentic::golem::agent::host::WasmRpc,
+    method: &str,
+    input: SchemaValue,
+    decode: impl Fn(Option<SchemaValue>) -> Result<T, GolemReflectError> + 'static,
+) -> Result<CallerPendingInvocation<T>, GolemReflectError> {
+    let input = crate::encode_schema_value(&input)
+        .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
+    let invocation = rpc.async_invoke_and_await(method, input, None);
+    Ok(CallerPendingInvocation {
+        metadata: InvocationMetadata {
+            agent_id: ParsedAgentId::new(invocation.metadata.agent_id),
+            idempotency_key: invocation.metadata.idempotency_key,
+        },
+        raw: Rc::new(invocation.future),
+        state: RefCell::new(None),
+        decode: Rc::new(decode),
+    })
+}
+
+struct RpcTransport {
+    raw: host::WasmRpc,
+}
+
+impl RpcTransport {
+    fn create(
+        type_name: String,
+        constructor: SchemaValue,
+        phantom_id: Option<Uuid>,
+        config: Vec<AgentConfigValue>,
+    ) -> Result<Self, GolemReflectError> {
+        let config = config
+            .into_iter()
+            .map(|value| {
+                Ok(wire_common::TypedAgentConfigValue {
+                    path: value.path,
+                    value: crate::encode_typed_schema_value_owned(value.value)
+                        .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?,
+                })
+            })
+            .collect::<Result<Vec<_>, GolemReflectError>>()?;
+        Self::create_with_typed_config(type_name, constructor, phantom_id, config)
+    }
+
+    fn create_with_typed_config(
+        type_name: String,
+        constructor: SchemaValue,
+        phantom_id: Option<Uuid>,
+        config: Vec<wire_common::TypedAgentConfigValue>,
+    ) -> Result<Self, GolemReflectError> {
+        let constructor = crate::encode_schema_value(&constructor)
+            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
+        let raw = host::WasmRpc::create(
+            &type_name,
+            constructor,
+            phantom_id.map(crate::schema_uuid_to_wire),
+            config,
+        )
+        .map_err(rpc_error_to_reflect)?;
+        Ok(Self { raw })
+    }
+
+    async fn invoke_and_await(
+        &self,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
+        let input = crate::encode_schema_value_async(&input)
+            .await
+            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
+        let invocation = self.raw.async_invoke_and_await(method, input, None);
+        let metadata = self.metadata(invocation.metadata);
+        let value = invocation
+            .future
+            .get()
+            .await
+            .map_err(rpc_error_to_reflect)?
+            .map(crate::decode_schema_value)
+            .transpose()
+            .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
+        Ok(Invocation { metadata, value })
+    }
+
+    fn trigger(
+        &self,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<InvocationMetadata, GolemReflectError> {
+        let input = crate::encode_schema_value(&input)
+            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
+        let metadata = self
+            .raw
+            .invoke(method, input, None)
+            .map_err(rpc_error_to_reflect)?;
+        Ok(self.metadata(metadata))
+    }
+
+    fn pending(
+        &self,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<PendingInvocation, GolemReflectError> {
+        let input = crate::encode_schema_value(&input)
+            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
+        let pending = self.raw.async_invoke_and_await(method, input, None);
+        let metadata = self.metadata(pending.metadata);
+        Ok(PendingInvocation {
+            metadata,
+            raw: Rc::new(pending.future),
+            state: RefCell::new(None),
+        })
+    }
+
+    fn schedule(
+        &self,
+        at: ScheduledTime,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<ScheduledInvocation, GolemReflectError> {
+        let input = crate::encode_schema_value(&input)
+            .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
+        let receipt = self
+            .raw
+            .schedule_cancelable_invocation(at, method, input, None)
+            .map_err(rpc_error_to_reflect)?;
+        Ok(ScheduledInvocation {
+            metadata: self.metadata(receipt.metadata),
+            cancellation_token: CancellationToken {
+                raw: receipt.cancellation_token,
+            },
+        })
+    }
+
+    fn metadata(&self, raw: host::InvocationMetadata) -> InvocationMetadata {
+        InvocationMetadata {
+            agent_id: ParsedAgentId::new(raw.agent_id),
+            idempotency_key: raw.idempotency_key,
+        }
+    }
+}
+
+fn input_schema_ref(
+    decoder: &crate::schema::wit::GraphDecoder<'_>,
+    input: &wire_common::InputSchema,
+    graph: &Arc<SchemaGraph>,
+) -> Result<SchemaRef, GolemReflectError> {
+    let wire_common::InputSchema::Parameters(fields) = input;
+    let fields = fields
+        .iter()
+        .filter(|field| matches!(field.source, wire_common::FieldSource::UserSupplied))
+        .map(|field| {
+            Ok(NamedFieldType {
+                name: field.name.clone(),
+                body: decode_root(decoder, field.schema)?,
+                metadata: crate::schema::wit::decode_metadata(&field.metadata),
+            })
+        })
+        .collect::<Result<Vec<_>, GolemReflectError>>()?;
+    Ok(SchemaRef::with_root(
+        graph.clone(),
+        SchemaType::Record {
+            fields,
+            metadata: MetadataEnvelope::default(),
+        },
+    ))
+}
+
+fn output_schema_ref(
+    decoder: &crate::schema::wit::GraphDecoder<'_>,
+    output: &wire_common::OutputSchema,
+    graph: &Arc<SchemaGraph>,
+) -> Result<Option<SchemaRef>, GolemReflectError> {
+    match output {
+        wire_common::OutputSchema::Unit => Ok(None),
+        wire_common::OutputSchema::Single(root) => Ok(Some(SchemaRef::with_root(
+            graph.clone(),
+            decode_root(decoder, *root)?,
+        ))),
+    }
+}
+
+fn decode_root(
+    decoder: &crate::schema::wit::GraphDecoder<'_>,
+    root: i32,
+) -> Result<SchemaType, GolemReflectError> {
+    decoder
+        .decode_type_at(root)
+        .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))
+}
+
+#[doc(hidden)]
+pub fn rpc_error_to_reflect(error: host::RpcError) -> GolemReflectError {
+    match error {
+        host::RpcError::ProtocolError(message) => GolemReflectError::ProtocolError(message),
+        host::RpcError::Denied(message) => GolemReflectError::Denied(message),
+        host::RpcError::NotFound(message) => GolemReflectError::RemoteNotFound(message),
+        host::RpcError::RemoteInternalError(message) => {
+            GolemReflectError::RemoteInternalError(message)
+        }
+        host::RpcError::RemoteAgentError(error) => {
+            GolemReflectError::RemoteAgent(remote_agent_error(error))
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn agentic_rpc_error_to_reflect(
+    error: crate::golem_agentic::golem::agent::host::RpcError,
+) -> GolemReflectError {
+    use crate::golem_agentic::golem::agent::host::RpcError;
+    match error {
+        RpcError::ProtocolError(message) => GolemReflectError::ProtocolError(message),
+        RpcError::Denied(message) => GolemReflectError::Denied(message),
+        RpcError::NotFound(message) => GolemReflectError::RemoteNotFound(message),
+        RpcError::RemoteInternalError(message) => GolemReflectError::RemoteInternalError(message),
+        RpcError::RemoteAgentError(error) => {
+            GolemReflectError::RemoteAgent(agentic_remote_agent_error(error))
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn agent_error_to_reflect(error: wire_common::AgentError) -> GolemReflectError {
+    match error {
+        wire_common::AgentError::InvalidInput(message) => GolemReflectError::InvalidInput(message),
+        wire_common::AgentError::InvalidMethod(message) => {
+            GolemReflectError::RemoteAgent(RemoteAgentError::InvalidMethod(message))
+        }
+        wire_common::AgentError::InvalidType(message) => GolemReflectError::InvalidType(message),
+        wire_common::AgentError::InvalidAgentId(message) => {
+            GolemReflectError::InvalidAgentId(message)
+        }
+        wire_common::AgentError::CustomError(value) => {
+            GolemReflectError::RemoteAgent(decode_custom_error(value))
+        }
+    }
+}
+
+#[doc(hidden)]
+pub fn agentic_agent_error_to_reflect(
+    error: crate::golem_agentic::golem::agent::common::AgentError,
+) -> GolemReflectError {
+    use crate::golem_agentic::golem::agent::common::AgentError;
+    match error {
+        AgentError::InvalidInput(message) => GolemReflectError::InvalidInput(message),
+        AgentError::InvalidMethod(message) => {
+            GolemReflectError::RemoteAgent(RemoteAgentError::InvalidMethod(message))
+        }
+        AgentError::InvalidType(message) => GolemReflectError::InvalidType(message),
+        AgentError::InvalidAgentId(message) => GolemReflectError::InvalidAgentId(message),
+        AgentError::CustomError(value) => {
+            GolemReflectError::RemoteAgent(decode_custom_error(value))
+        }
+    }
+}
+
+fn remote_agent_error(error: wire_common::AgentError) -> RemoteAgentError {
+    match error {
+        wire_common::AgentError::InvalidInput(message) => RemoteAgentError::InvalidInput(message),
+        wire_common::AgentError::InvalidMethod(message) => RemoteAgentError::InvalidMethod(message),
+        wire_common::AgentError::InvalidType(message) => RemoteAgentError::InvalidType(message),
+        wire_common::AgentError::InvalidAgentId(message) => {
+            RemoteAgentError::InvalidAgentId(message)
+        }
+        wire_common::AgentError::CustomError(value) => decode_custom_error(value),
+    }
+}
+
+fn agentic_remote_agent_error(
+    error: crate::golem_agentic::golem::agent::common::AgentError,
+) -> RemoteAgentError {
+    use crate::golem_agentic::golem::agent::common::AgentError;
+    match error {
+        AgentError::InvalidInput(message) => RemoteAgentError::InvalidInput(message),
+        AgentError::InvalidMethod(message) => RemoteAgentError::InvalidMethod(message),
+        AgentError::InvalidType(message) => RemoteAgentError::InvalidType(message),
+        AgentError::InvalidAgentId(message) => RemoteAgentError::InvalidAgentId(message),
+        AgentError::CustomError(value) => decode_custom_error(value),
+    }
+}
+
+fn decode_custom_error(value: crate::schema::wit::wire::TypedSchemaValue) -> RemoteAgentError {
+    match crate::decode_typed_schema_value(&value) {
+        Ok(value) => RemoteAgentError::Custom(Box::new(value)),
+        Err(error) => RemoteAgentError::MalformedCustomError(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CheckedReflectedOutput, GolemReflectError, Invocation, InvocationMetadata,
+        MethodOnlyAgentClientDefinition, ParsedAgentId, SchemaRef, validate_declared_output,
+    };
+    use crate::schema::{
+        MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, VariantCaseType,
+        VariantValuePayload,
+    };
+    use serde_json::json;
+    use std::future::{Future, ready};
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
+    use test_r::test;
+
+    #[test]
+    fn schema_ref_packs_validates_and_unpacks_canonical_json() {
+        let schema = SchemaRef::new(SchemaGraph::anonymous(SchemaType::record(vec![
+            NamedFieldType {
+                name: "name".to_string(),
+                body: SchemaType::string(),
+                metadata: MetadataEnvelope::default(),
+            },
+            NamedFieldType {
+                name: "enabled".to_string(),
+                body: SchemaType::option(SchemaType::bool()),
+                metadata: MetadataEnvelope::default(),
+            },
+        ])));
+
+        let packed = schema
+            .pack_json(&json!({ "name": "demo", "enabled": true }))
+            .expect("pack canonical JSON");
+        assert_eq!(
+            packed,
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("demo".to_string()),
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::Bool(true)))
+                    }
+                ]
+            }
+        );
+        assert_eq!(
+            schema.unpack_json(&packed).expect("unpack canonical JSON"),
+            json!({ "name": "demo", "enabled": true })
+        );
+        assert_eq!(schema.to_json_schema(true)["type"], json!("object"));
+    }
+
+    #[test]
+    fn schema_ref_reports_json_and_packed_value_failures() {
+        let schema = SchemaRef::new(SchemaGraph::anonymous(SchemaType::variant(vec![
+            VariantCaseType {
+                name: "ready".to_string(),
+                payload: None,
+                metadata: MetadataEnvelope::default(),
+            },
+        ])));
+
+        assert!(matches!(
+            schema.pack_json(&json!("missing")),
+            Err(GolemReflectError::SchemaRender(_))
+        ));
+        assert!(matches!(
+            schema.validate_value(&SchemaValue::Variant(VariantValuePayload {
+                case: 1,
+                payload: None,
+            })),
+            Err(GolemReflectError::InvalidSchemaValue { .. })
+        ));
+    }
+
+    #[test]
+    fn malformed_declared_outputs_are_distinct_remote_errors() {
+        let output = SchemaRef::new(SchemaGraph::anonymous(SchemaType::string()));
+        assert!(
+            validate_declared_output(
+                Some(&output),
+                Some(&SchemaValue::String("ok".to_string())),
+                "read",
+            )
+            .is_ok()
+        );
+        for value in [Some(SchemaValue::U32(7)), None] {
+            assert!(matches!(
+                validate_declared_output(Some(&output), value.as_ref(), "read"),
+                Err(GolemReflectError::MalformedRemoteOutput(_))
+            ));
+        }
+        assert!(matches!(
+            validate_declared_output(None, Some(&SchemaValue::Bool(true)), "unit"),
+            Err(GolemReflectError::MalformedRemoteOutput(_))
+        ));
+    }
+
+    #[test]
+    fn reflected_pending_output_matches_awaited_policy() {
+        let output = SchemaRef::new(SchemaGraph::anonymous(SchemaType::string()));
+        for (declared, value) in [
+            (Some(output.clone()), None),
+            (None, Some(SchemaValue::Bool(true))),
+            (Some(output.clone()), Some(SchemaValue::U32(7))),
+            (
+                Some(output.clone()),
+                Some(SchemaValue::String("ok".to_string())),
+            ),
+        ] {
+            let awaited = validate_declared_output(declared.as_ref(), value.as_ref(), "read");
+            let invocation = Invocation {
+                metadata: InvocationMetadata {
+                    agent_id: ParsedAgentId::new("test"),
+                    idempotency_key: "test".to_string(),
+                },
+                value,
+            };
+            let mut pending = CheckedReflectedOutput {
+                inner: ready(Ok(invocation)),
+                output: declared,
+                method: "read".to_string(),
+            };
+            let mut context = Context::from_waker(Waker::noop());
+            let completed = Pin::new(&mut pending).poll(&mut context);
+            let Poll::Ready(result) = completed else {
+                panic!("ready reflected invocation must complete");
+            };
+            assert_eq!(result.is_ok(), awaited.is_ok());
+            if let Err(error) = result {
+                assert!(matches!(error, GolemReflectError::MalformedRemoteOutput(_)));
+            }
+        }
+    }
+
+    #[test]
+    fn schema_ref_detects_nested_streams() {
+        let scalar = SchemaRef::new(SchemaGraph::anonymous(SchemaType::string()));
+        let streaming = SchemaRef::new(SchemaGraph::anonymous(SchemaType::record(vec![
+            NamedFieldType {
+                name: "items".to_string(),
+                body: SchemaType::stream(Some(SchemaType::string())),
+                metadata: MetadataEnvelope::default(),
+            },
+        ])));
+
+        assert!(!scalar.contains_stream());
+        assert!(streaming.contains_stream());
+    }
+
+    #[test]
+    fn caller_owned_method_only_client_is_lifecycle_free() {
+        let definition = MethodOnlyAgentClientDefinition::builder()
+            .method_only()
+            .method::<String, u64>("lookup")
+            .expect("method schema")
+            .unit_method::<u32>("invalidate")
+            .expect("unit method schema")
+            .build();
+
+        assert!(definition.data.type_name.is_none());
+        assert_eq!(definition.data.methods.len(), 2);
+        assert_eq!(definition.data.methods[0].name, "lookup");
+        assert_eq!(definition.data.methods[1].name, "invalidate");
+    }
+
+    #[test]
+    fn full_client_rejects_a_constructor_value_with_the_wrong_shape() {
+        let definition = MethodOnlyAgentClientDefinition::builder()
+            .durable::<String>("Counter")
+            .build();
+        let constructor = definition
+            .data
+            .constructor
+            .as_ref()
+            .expect("full client constructor schema");
+
+        assert!(matches!(
+            constructor.validate_value(&SchemaValue::U64(1)),
+            Err(GolemReflectError::InvalidSchemaValue { .. })
+        ));
+    }
+}
+
+/// Typed method definition retained by a caller-owned client.
+#[derive(Clone, Debug)]
+pub struct AgentClientMethodDefinition {
+    pub name: String,
+    pub input: SchemaRef,
+    pub output: Option<SchemaRef>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentClientDefinitionBuilder<State> {
+    type_name: Option<String>,
+    constructor: Option<SchemaRef>,
+    methods: Vec<AgentClientMethodDefinition>,
+    state: PhantomData<State>,
+}
+
+#[derive(Clone, Debug)]
+pub struct UnselectedAgentClient;
+
+#[derive(Clone, Debug)]
+pub struct MethodOnlyAgentClient;
+
+#[derive(Clone, Debug)]
+pub struct NoAgentClientConfig;
+
+#[derive(Clone, Debug)]
+pub struct DurableAgentClient;
+
+#[derive(Clone, Debug)]
+pub struct EphemeralAgentClient;
+
+#[derive(Clone, Debug)]
+pub struct FullAgentClient<Id, Config, Mode>(PhantomData<(Id, Config, Mode)>);
+
+impl AgentClientDefinitionBuilder<UnselectedAgentClient> {
+    fn new() -> Self {
+        Self {
+            type_name: None,
+            constructor: None,
+            methods: Vec::new(),
+            state: PhantomData,
+        }
+    }
+
+    pub fn method_only(self) -> AgentClientDefinitionBuilder<MethodOnlyAgentClient> {
+        AgentClientDefinitionBuilder {
+            type_name: None,
+            constructor: None,
+            methods: self.methods,
+            state: PhantomData,
+        }
+    }
+
+    pub fn durable<Id>(
+        self,
+        type_name: impl Into<String>,
+    ) -> AgentClientDefinitionBuilder<FullAgentClient<Id, NoAgentClientConfig, DurableAgentClient>>
+    where
+        Id: crate::IntoSchema,
+    {
+        AgentClientDefinitionBuilder {
+            type_name: Some(type_name.into()),
+            constructor: Some(SchemaRef::new(
+                crate::schema::try_into_schema_graph::<Id>()
+                    .expect("fully defined client identity must have a valid schema"),
+            )),
+            methods: self.methods,
+            state: PhantomData,
+        }
+    }
+
+    pub fn ephemeral<Id>(
+        self,
+        type_name: impl Into<String>,
+    ) -> AgentClientDefinitionBuilder<FullAgentClient<Id, NoAgentClientConfig, EphemeralAgentClient>>
+    where
+        Id: crate::IntoSchema,
+    {
+        AgentClientDefinitionBuilder {
+            type_name: Some(type_name.into()),
+            constructor: Some(SchemaRef::new(
+                crate::schema::try_into_schema_graph::<Id>()
+                    .expect("fully defined client identity must have a valid schema"),
+            )),
+            methods: self.methods,
+            state: PhantomData,
+        }
+    }
+}
+
+impl<Id, Mode> AgentClientDefinitionBuilder<FullAgentClient<Id, NoAgentClientConfig, Mode>> {
+    pub fn config<C>(self) -> AgentClientDefinitionBuilder<FullAgentClient<Id, C, Mode>>
+    where
+        C: super::ConfigSchema,
+    {
+        AgentClientDefinitionBuilder {
+            type_name: self.type_name,
+            constructor: self.constructor,
+            methods: self.methods,
+            state: PhantomData,
+        }
+    }
+}
+
+impl<State> AgentClientDefinitionBuilder<State> {
+    pub fn method<I, O>(mut self, name: impl Into<String>) -> Result<Self, GolemReflectError>
+    where
+        I: crate::IntoSchema,
+        O: crate::IntoSchema,
+    {
+        let input = crate::schema::try_into_schema_graph::<I>()
+            .map_err(|error| GolemReflectError::InvalidType(error.to_string()))?;
+        let output = crate::schema::try_into_schema_graph::<O>()
+            .map_err(|error| GolemReflectError::InvalidType(error.to_string()))?;
+        self.methods.push(AgentClientMethodDefinition {
+            name: name.into(),
+            input: SchemaRef::new(input),
+            output: Some(SchemaRef::new(output)),
+        });
+        Ok(self)
+    }
+
+    pub fn unit_method<I>(mut self, name: impl Into<String>) -> Result<Self, GolemReflectError>
+    where
+        I: crate::IntoSchema,
+    {
+        let input = crate::schema::try_into_schema_graph::<I>()
+            .map_err(|error| GolemReflectError::InvalidType(error.to_string()))?;
+        self.methods.push(AgentClientMethodDefinition {
+            name: name.into(),
+            input: SchemaRef::new(input),
+            output: None,
+        });
+        Ok(self)
+    }
+
+    fn finish(self) -> AgentClientDefinitionData {
+        AgentClientDefinitionData {
+            type_name: self.type_name,
+            constructor: self.constructor,
+            methods: self.methods.into(),
+        }
+    }
+}
+
+impl AgentClientDefinitionBuilder<MethodOnlyAgentClient> {
+    pub fn build(self) -> MethodOnlyAgentClientDefinition {
+        MethodOnlyAgentClientDefinition {
+            data: self.finish(),
+        }
+    }
+}
+
+impl<Id, Config, Mode> AgentClientDefinitionBuilder<FullAgentClient<Id, Config, Mode>> {
+    pub fn build(self) -> FullAgentClientDefinition<Id, Config, Mode> {
+        FullAgentClientDefinition {
+            data: self.finish(),
+            state: PhantomData,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MethodOnlyAgentClientDefinition {
+    data: AgentClientDefinitionData,
+}
+
+#[derive(Clone, Debug)]
+struct AgentClientDefinitionData {
+    type_name: Option<String>,
+    constructor: Option<SchemaRef>,
+    methods: Arc<[AgentClientMethodDefinition]>,
+}
+
+impl MethodOnlyAgentClientDefinition {
+    pub fn builder() -> AgentClientDefinitionBuilder<UnselectedAgentClient> {
+        AgentClientDefinitionBuilder::new()
+    }
+
+    pub fn bind(&self, agent_id: &ParsedAgentId) -> Result<TypedAgentClient, GolemReflectError> {
+        self.bind_with_entries(agent_id, Vec::new())
+    }
+
+    pub fn bind_with_entries(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: Vec<wire_common::TypedAgentConfigValue>,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        let parts = agent_id.parts()?;
+        let transport = RpcTransport::create_with_typed_config(
+            parts.type_name,
+            parts.constructor_value,
+            parts.phantom_id,
+            config,
+        )?;
+        Ok(TypedAgentClient {
+            definition: self.data.clone(),
+            transport: Rc::new(transport),
+            reusable_identity: Some(agent_id.clone()),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FullAgentClientDefinition<Id, Config, Mode> {
+    data: AgentClientDefinitionData,
+    state: PhantomData<(Id, Config, Mode)>,
+}
+
+fn encode_rpc_config<Config>(
+    config: <Config as super::ConfigSchema>::RpcType,
+) -> Vec<wire_common::TypedAgentConfigValue>
+where
+    Config: super::ConfigSchema,
+{
+    super::IntoRpcConfigParam::into_rpc_param(config, &[])
+        .into_iter()
+        .map(|value| wire_common::TypedAgentConfigValue {
+            path: value.path,
+            value: value.value,
+        })
+        .collect()
+}
+
+impl<Id, Config, Mode> FullAgentClientDefinition<Id, Config, Mode>
+where
+    Id: crate::IntoSchema,
+{
+    pub fn agent_id(
+        &self,
+        constructor: &Id,
+        phantom_id: Option<Uuid>,
+    ) -> Result<ParsedAgentId, GolemReflectError> {
+        make_agent_id_value(self.type_name(), constructor.to_value(), phantom_id)
+    }
+
+    fn type_name(&self) -> &str {
+        self.data
+            .type_name
+            .as_deref()
+            .expect("full client has a type name")
+    }
+
+    fn create(
+        &self,
+        constructor: &Id,
+        phantom_id: Option<Uuid>,
+        config: Vec<wire_common::TypedAgentConfigValue>,
+        reusable: bool,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        let constructor = constructor.to_value();
+        self.data
+            .constructor
+            .as_ref()
+            .expect("full client has a constructor schema")
+            .validate_value(&constructor)?;
+        let reusable_identity = reusable
+            .then(|| make_agent_id_value(self.type_name(), constructor.clone(), phantom_id))
+            .transpose()?;
+        let transport = RpcTransport::create_with_typed_config(
+            self.type_name().to_string(),
+            constructor,
+            phantom_id,
+            config,
+        )?;
+        Ok(TypedAgentClient {
+            definition: self.data.clone(),
+            transport: Rc::new(transport),
+            reusable_identity,
+        })
+    }
+}
+
+impl<Id, Config> FullAgentClientDefinition<Id, Config, DurableAgentClient>
+where
+    Id: crate::IntoSchema,
+{
+    pub fn get_phantom(
+        &self,
+        phantom_id: Uuid,
+        constructor: &Id,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, Some(phantom_id), Vec::new(), true)
+    }
+
+    pub fn bind(&self, agent_id: &ParsedAgentId) -> Result<TypedAgentClient, GolemReflectError> {
+        self.bind_with_entries(agent_id, Vec::new())
+    }
+
+    fn bind_with_entries(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: Vec<wire_common::TypedAgentConfigValue>,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        let parts = agent_id.parts()?;
+        if parts.type_name != self.type_name() {
+            return Err(GolemReflectError::InvalidType(format!(
+                "full client expects `{}`, identity is `{}`",
+                self.type_name(),
+                parts.type_name
+            )));
+        }
+        self.data
+            .constructor
+            .as_ref()
+            .expect("full client has a constructor schema")
+            .validate_value(&parts.constructor_value)?;
+        let transport = RpcTransport::create_with_typed_config(
+            parts.type_name,
+            parts.constructor_value,
+            parts.phantom_id,
+            config,
+        )?;
+        Ok(TypedAgentClient {
+            definition: self.data.clone(),
+            transport: Rc::new(transport),
+            reusable_identity: Some(agent_id.clone()),
+        })
+    }
+
+    pub fn get(&self, constructor: &Id) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, None, Vec::new(), true)
+    }
+
+    pub fn new_phantom(&self, constructor: &Id) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, Some(Uuid::new_v4()), Vec::new(), true)
+    }
+}
+
+impl<Id, Config> FullAgentClientDefinition<Id, Config, EphemeralAgentClient>
+where
+    Id: crate::IntoSchema,
+{
+    pub fn get_phantom(
+        &self,
+        phantom_id: Uuid,
+        constructor: &Id,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, Some(phantom_id), Vec::new(), false)
+    }
+
+    pub fn new_phantom(&self, constructor: &Id) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, None, Vec::new(), false)
+    }
+}
+
+impl<Id, Config> FullAgentClientDefinition<Id, Config, DurableAgentClient>
+where
+    Id: crate::IntoSchema,
+    Config: super::ConfigSchema,
+{
+    pub fn bind_with_config(
+        &self,
+        agent_id: &ParsedAgentId,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.bind_with_entries(agent_id, encode_rpc_config::<Config>(config))
+    }
+
+    pub fn get_phantom_with_config(
+        &self,
+        phantom_id: Uuid,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            Some(phantom_id),
+            encode_rpc_config::<Config>(config),
+            true,
+        )
+    }
+}
+
+impl<Id, Config> FullAgentClientDefinition<Id, Config, EphemeralAgentClient>
+where
+    Id: crate::IntoSchema,
+    Config: super::ConfigSchema,
+{
+    pub fn get_phantom_with_config(
+        &self,
+        phantom_id: Uuid,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            Some(phantom_id),
+            encode_rpc_config::<Config>(config),
+            false,
+        )
+    }
+}
+
+impl<Id, Config> FullAgentClientDefinition<Id, Config, DurableAgentClient>
+where
+    Id: crate::IntoSchema,
+    Config: super::ConfigSchema,
+{
+    pub fn get_with_config(
+        &self,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(constructor, None, encode_rpc_config::<Config>(config), true)
+    }
+
+    pub fn new_phantom_with_config(
+        &self,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            Some(Uuid::new_v4()),
+            encode_rpc_config::<Config>(config),
+            true,
+        )
+    }
+}
+
+impl<Id, Config> FullAgentClientDefinition<Id, Config, EphemeralAgentClient>
+where
+    Id: crate::IntoSchema,
+    Config: super::ConfigSchema,
+{
+    pub fn new_phantom_with_config(
+        &self,
+        constructor: &Id,
+        config: <Config as super::ConfigSchema>::RpcType,
+    ) -> Result<TypedAgentClient, GolemReflectError> {
+        self.create(
+            constructor,
+            None,
+            encode_rpc_config::<Config>(config),
+            false,
+        )
+    }
+}
+
+#[derive(Clone)]
+pub struct TypedAgentClient {
+    definition: AgentClientDefinitionData,
+    transport: Rc<RpcTransport>,
+    reusable_identity: Option<ParsedAgentId>,
+}
+
+impl TypedAgentClient {
+    pub fn agent_id(&self) -> Option<&ParsedAgentId> {
+        self.reusable_identity.as_ref()
+    }
+
+    pub fn method<I, O>(&self, name: &str) -> Result<TypedAgentMethod<I, O>, GolemReflectError>
+    where
+        I: crate::IntoSchema,
+        O: crate::FromSchema,
+    {
+        let definition = self
+            .definition
+            .methods
+            .iter()
+            .find(|method| method.name == name)
+            .cloned()
+            .ok_or_else(|| GolemReflectError::MethodNotFound {
+                agent_type: self
+                    .definition
+                    .type_name
+                    .clone()
+                    .unwrap_or_else(|| "<method-only client>".to_string()),
+                method: name.to_string(),
+            })?;
+        Ok(TypedAgentMethod {
+            definition,
+            transport: self.transport.clone(),
+            marker: PhantomData,
+        })
+    }
+}
+
+pub struct TypedAgentMethod<I, O> {
+    definition: AgentClientMethodDefinition,
+    transport: Rc<RpcTransport>,
+    marker: PhantomData<fn(I) -> O>,
+}
+
+impl<I, O> TypedAgentMethod<I, O>
+where
+    I: crate::IntoSchema,
+    O: crate::FromSchema,
+{
+    pub async fn invoke(&self, input: &I) -> Result<Invocation<Option<O>>, GolemReflectError> {
+        let input = input.to_value();
+        self.definition.input.validate_value(&input)?;
+        let invocation = self
+            .transport
+            .invoke_and_await(&self.definition.name, input)
+            .await?;
+        validate_declared_output(
+            self.definition.output.as_ref(),
+            invocation.value.as_ref(),
+            &self.definition.name,
+        )?;
+        let value = invocation
+            .value
+            .as_ref()
+            .map(O::from_value)
+            .transpose()
+            .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?;
+        Ok(Invocation {
+            metadata: invocation.metadata,
+            value,
+        })
+    }
+
+    pub fn trigger(&self, input: &I) -> Result<InvocationMetadata, GolemReflectError> {
+        self.reject_non_awaited_streams("trigger")?;
+        let input = input.to_value();
+        self.definition.input.validate_value(&input)?;
+        self.transport.trigger(&self.definition.name, input)
+    }
+
+    pub fn pending(&self, input: &I) -> Result<TypedPendingInvocation<O>, GolemReflectError> {
+        if self.definition.input.contains_stream() {
+            return Err(GolemReflectError::InvalidType(format!(
+                "method `{}` has streaming input; use invoke",
+                self.definition.name
+            )));
+        }
+        let input = input.to_value();
+        self.definition.input.validate_value(&input)?;
+        Ok(TypedPendingInvocation {
+            inner: self.transport.pending(&self.definition.name, input)?,
+            output: self.definition.output.clone(),
+            marker: PhantomData,
+        })
+    }
+
+    pub fn schedule(
+        &self,
+        at: ScheduledTime,
+        input: &I,
+    ) -> Result<ScheduledInvocation, GolemReflectError> {
+        self.reject_non_awaited_streams("schedule")?;
+        let input = input.to_value();
+        self.definition.input.validate_value(&input)?;
+        self.transport.schedule(at, &self.definition.name, input)
+    }
+
+    fn reject_non_awaited_streams(&self, operation: &str) -> Result<(), GolemReflectError> {
+        if self.definition.input.contains_stream()
+            || self
+                .definition
+                .output
+                .as_ref()
+                .is_some_and(SchemaRef::contains_stream)
+        {
+            return Err(GolemReflectError::InvalidType(format!(
+                "{operation} is unavailable for streaming method `{}`",
+                self.definition.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+pub struct TypedPendingInvocation<O> {
+    inner: PendingInvocation,
+    output: Option<SchemaRef>,
+    marker: PhantomData<fn() -> O>,
+}
+
+impl<O> TypedPendingInvocation<O> {
+    pub fn metadata(&self) -> &InvocationMetadata {
+        &self.inner.metadata
+    }
+
+    pub fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
+impl<O: crate::FromSchema> Future for TypedPendingInvocation<O> {
+    type Output = Result<Invocation<Option<O>>, GolemReflectError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Ready(Ok(invocation)) => {
+                if let Err(error) = validate_declared_output(
+                    this.output.as_ref(),
+                    invocation.value.as_ref(),
+                    "pending invocation",
+                ) {
+                    return Poll::Ready(Err(error));
+                }
+                let value = match invocation.value.as_ref().map(O::from_value).transpose() {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Poll::Ready(Err(GolemReflectError::MalformedRemoteOutput(
+                            error.to_string(),
+                        )));
+                    }
+                };
+                Poll::Ready(Ok(Invocation {
+                    metadata: invocation.metadata,
+                    value,
+                }))
+            }
+        }
+    }
+}

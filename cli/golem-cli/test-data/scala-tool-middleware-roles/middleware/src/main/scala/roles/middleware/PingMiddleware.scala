@@ -16,5 +16,5 @@ final class PingMiddleware extends PingToolMiddleware {
     underlying: PingToolUnderlying,
     value: String
   ): Future[Either[ToolInvokeError[Nothing], String]] =
-    underlying.ping(value)
+    underlying.ping(value).toMiddlewareResult
 }

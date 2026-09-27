@@ -11,9 +11,21 @@ pub(all) enum RpcError {
 ///|
 pub(all) enum ToolError[E] {
   Rpc(RpcError)
+  RemoteTool(RemoteToolError)
   Tool(E)
   UnknownToolError(String, @model.TypedSchemaValue)
+  InvalidInput(String)
+  MalformedRemoteOutput(String)
 }
+
+///|
+pub(all) enum RemoteToolError {
+  InvalidToolName(String)
+  InvalidCommandPath(Array[String])
+  InvalidInput(String)
+  ConstraintViolation(String)
+  InvalidResult(String)
+} derive(Eq, Debug)
 
 ///|
 fn release_optional_value(
@@ -37,7 +49,7 @@ pub struct ToolInvocation[E] {
   priv future : @toolHost.FutureInvokeResult
   priv decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?
   priv stdout_source : @async-core.Stream[
-    Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]?
   stdout : @async-core.Stream[Byte]?
 }
@@ -104,6 +116,13 @@ pub async fn[T, E] TypedToolInvocation::collect(
 ///|
 pub fn[E] ToolInvocation::cancel(self : ToolInvocation[E]) -> Unit {
   self.future.cancel()
+}
+
+///|
+pub fn[E] ToolInvocation::stdout_stream(
+  self : ToolInvocation[E],
+) -> @async-core.Stream[Byte]? {
+  self.stdout
 }
 
 ///|
@@ -186,6 +205,17 @@ pub fn ToolClient::new(tool_name : String) -> ToolClient {
 }
 
 ///|
+/// Reflected callers open the RPC resource through this fallible constructor.
+pub fn[E] ToolClient::try_new(
+  tool_name : String,
+) -> Result[ToolClient, ToolError[E]] {
+  match @toolHost.ToolRpc::create(tool_name) {
+    Ok(rpc) => Ok({ rpc, })
+    Err(error) => Err(map_rpc_error(error, fn(_name, _value) { None }))
+  }
+}
+
+///|
 /// Creates a client for a presented descriptor while routing calls by the
 /// registered leaf tool identity.
 pub fn ToolClient::for_definition(
@@ -237,6 +267,31 @@ pub fn[E] ToolClient::start(
     command_path, wire_input, wire_stdin, wire_stdout,
   )
   Ok({ future, decode_error, stdout_source, stdout: output, })
+}
+
+///|
+pub fn[E] ToolClient::trigger(
+  self : ToolClient,
+  command_path : Array[String],
+  input : @model.TypedSchemaValue,
+  stdin : @async-core.Stream[Byte]?,
+  decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
+) -> Result[Unit, ToolError[E]] {
+  let wire_input = @model.typed_schema_value_to_wit(input) catch {
+    e => {
+      release_failed_tool_input(input, @model_host.resource_drops())
+      match stdin {
+        Some(stream) => stream.drop_sync()
+        None => ()
+      }
+      return Err(tool_protocol_error("failed to encode tool input: \{Repr(e)}"))
+    }
+  }
+  let wire_stdin = prepare_stdin(stdin)
+  match self.rpc.invoke(command_path, wire_input, wire_stdin) {
+    Ok(_) => Ok(())
+    Err(error) => Err(map_rpc_error(error, decode_error))
+  }
 }
 
 ///|
@@ -567,33 +622,33 @@ fn[E : @schema.FromSchema] decode_custom_tool_error(
 
 ///|
 fn[E] map_rpc_error(
-  error : @toolHost.RpcError,
+  error : @types.ToolRpcError,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolError[E] {
   match error {
-    @toolHost.RpcError::ProtocolError(message) =>
+    @types.ToolRpcError::ProtocolError(message) =>
       ToolError::Rpc(RpcError::Protocol(message))
-    @toolHost.RpcError::Denied(message) =>
+    @types.ToolRpcError::Denied(message) =>
       ToolError::Rpc(RpcError::Denied(message))
-    @toolHost.RpcError::NotFound(message) =>
+    @types.ToolRpcError::NotFound(message) =>
       ToolError::Rpc(RpcError::NotFound(message))
-    @toolHost.RpcError::RemoteInternalError(message) =>
+    @types.ToolRpcError::RemoteInternalError(message) =>
       ToolError::Rpc(RpcError::RemoteInternal(message))
-    @toolHost.RpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled)
-    @toolHost.RpcError::ResourceExhausted(message) =>
+    @types.ToolRpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled)
+    @types.ToolRpcError::ResourceExhausted(message) =>
       ToolError::Rpc(RpcError::ResourceExhausted(message))
-    @toolHost.RpcError::RemoteToolError(error) =>
+    @types.ToolRpcError::RemoteToolError(error) =>
       map_remote_tool_error(error, decode_error)
   }
 }
 
 ///|
 fn[E] map_remote_tool_error(
-  error : @toolCommon.ToolError,
+  error : @types.ToolError,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolError[E] {
   match error {
-    @toolCommon.ToolError::CustomError(error) => {
+    @types.ToolError::CustomError(error) => {
       let decoded = @model_host.typed_schema_value_from_wit(error.payload) catch {
         e =>
           return tool_protocol_error(
@@ -604,33 +659,20 @@ fn[E] map_remote_tool_error(
         Some(Ok(error)) => ToolError::Tool(error)
         Some(Err(message)) => {
           decoded.value.release_resources(@model_host.resource_drops())
-          ToolError::Rpc(RpcError::Protocol(message))
+          ToolError::MalformedRemoteOutput(message)
         }
         None => ToolError::UnknownToolError(error.name, decoded)
       }
     }
-    other =>
-      ToolError::Rpc(
-        RpcError::Protocol(
-          "remote tool error: " + remote_tool_error_label(other),
-        ),
-      )
-  }
-}
-
-///|
-fn remote_tool_error_label(error : @toolCommon.ToolError) -> String {
-  match error {
-    @toolCommon.ToolError::InvalidToolName(name) =>
-      "invalid tool name `" + name + "`"
-    @toolCommon.ToolError::InvalidCommandPath(path) =>
-      "invalid command path `" + path.join(" ") + "`"
-    @toolCommon.ToolError::InvalidInput(message) => "invalid input: " + message
-    @toolCommon.ToolError::ConstraintViolation(message) =>
-      "constraint violation: " + message
-    @toolCommon.ToolError::InvalidResult(message) =>
-      "invalid result: " + message
-    @toolCommon.ToolError::CustomError(error) =>
-      "custom error `" + error.name + "`"
+    @types.ToolError::InvalidToolName(name) =>
+      ToolError::RemoteTool(RemoteToolError::InvalidToolName(name))
+    @types.ToolError::InvalidCommandPath(path) =>
+      ToolError::RemoteTool(RemoteToolError::InvalidCommandPath(path))
+    @types.ToolError::InvalidInput(message) =>
+      ToolError::RemoteTool(RemoteToolError::InvalidInput(message))
+    @types.ToolError::ConstraintViolation(message) =>
+      ToolError::RemoteTool(RemoteToolError::ConstraintViolation(message))
+    @types.ToolError::InvalidResult(message) =>
+      ToolError::RemoteTool(RemoteToolError::InvalidResult(message))
   }
 }

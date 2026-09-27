@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::agent::AgentTypeName;
+use crate::model::component::ComponentName;
 use crate::model::diff;
 use crate::model::tool::ToolBindingInput;
 use std::collections::{BTreeMap, BTreeSet};
@@ -53,6 +54,11 @@ impl DeploymentPlan {
                 .mcp_deployments
                 .iter()
                 .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
+                .collect(),
+            mcp_imports: self
+                .mcp_imports
+                .iter()
+                .map(|import| (import.index.to_string(), import.hash.into()))
                 .collect(),
             remote_tools,
             published_tools: self
@@ -96,6 +102,7 @@ impl DeploymentPlanAmbientToolEntry {
         &self,
         agent_types: impl IntoIterator<Item = AgentTypeName>,
         overrides: &BTreeMap<AgentTypeName, ToolBindingInput>,
+        component_overrides: &BTreeMap<ComponentName, ToolBindingInput>,
     ) -> diff::RemoteToolDeployment {
         let bindings = agent_types
             .into_iter()
@@ -104,6 +111,13 @@ impl DeploymentPlanAmbientToolEntry {
             .filter_map(|agent| {
                 diff::effective_tool_binding(Some(&self.environment_binding), overrides.get(&agent))
                     .map(|(binding, _)| (agent, binding))
+            })
+            .collect();
+        let component_bindings = component_overrides
+            .iter()
+            .filter_map(|(component, binding)| {
+                diff::effective_tool_binding(Some(&self.environment_binding), Some(binding))
+                    .map(|(binding, _)| (component.0.clone(), binding))
             })
             .collect();
         diff::RemoteToolDeployment {
@@ -115,6 +129,7 @@ impl DeploymentPlanAmbientToolEntry {
             metadata_version: self.metadata_version.0.clone(),
             metadata_digest: self.metadata_digest,
             provision: self.provision.clone(),
+            component_bindings,
             bindings,
         }
     }
@@ -137,6 +152,11 @@ impl DeploymentSummary {
                 .mcp_deployments
                 .iter()
                 .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
+                .collect(),
+            mcp_imports: self
+                .mcp_imports
+                .iter()
+                .map(|import| (import.index.to_string(), import.hash.into()))
                 .collect(),
             remote_tools: self
                 .remote_tools

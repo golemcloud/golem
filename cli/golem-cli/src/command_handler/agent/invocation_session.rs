@@ -113,8 +113,14 @@ struct PendingOperation {
     request: PublicClientMessage,
 }
 
-struct CliSessionRequestProvider {
+pub(crate) struct CliSessionRequestProvider {
     ctx: Arc<Context>,
+}
+
+impl CliSessionRequestProvider {
+    pub(crate) fn new(ctx: Arc<Context>) -> Self {
+        Self { ctx }
+    }
 }
 
 #[async_trait::async_trait]
@@ -420,7 +426,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
         checkpoint: Mutex::new(checkpoint),
         path: checkpoint_path,
     });
-    let request_provider = Arc::new(CliSessionRequestProvider { ctx: ctx.clone() });
+    let request_provider = Arc::new(CliSessionRequestProvider::new(ctx.clone()));
     let mut session = tokio::select! {
         biased;
         _ = interrupt.cancelled() => bail!(PipedExitCode(130)),
@@ -1540,12 +1546,12 @@ async fn handle_response(
             }
         }
         ServerFrame::Message(PublicServerMessage::InvocationResult { result, .. }) => {
-            match result {
+            match result.as_ref() {
                 PublicInvocationResult::Value { value } => {
                     let Some(output_type) = output_schema.schema() else {
                         bail!("session returned a value for a unit-returning method");
                     };
-                    let value = decode_output_value(graph, output_type, &value, bindings)?;
+                    let value = decode_output_value(graph, output_type, value, bindings)?;
                     discover_streams(
                         graph,
                         output_type,
@@ -1586,6 +1592,10 @@ async fn handle_response(
                     } else {
                         emit(output_tx, OutputJob::Text("void".to_string())).await?;
                     }
+                }
+                PublicInvocationResult::ToolSuccess { .. }
+                | PublicInvocationResult::ToolFailure { .. } => {
+                    bail!("native tool result received by the agent invocation command");
                 }
             }
         }
@@ -2728,6 +2738,7 @@ mod public_tests {
         let mapping = PublicStreamMapping {
             channel: 3,
             direction: PublicStreamDirection::Output,
+            byte_role: None,
             input_high_water: None,
             provisional_ref: None,
             stream_token: "stream-one".to_string(),

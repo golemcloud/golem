@@ -14,7 +14,8 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, validate_relative_blob_path,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
+    ExistsResult, blob_path_is_root, validate_range, validate_relative_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -24,7 +25,7 @@ use futures::stream::BoxStream;
 use golem_common::model::Timestamp;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio_stream::StreamExt;
 
 #[derive(Debug)]
@@ -204,6 +205,36 @@ impl BlobStorage for FileSystemBlobStorage {
         }
     }
 
+    async fn get_range_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        validate_relative_blob_path(path)?;
+        let full_path = self.path_of(&namespace, path);
+        self.ensure_path_is_inside_root(&full_path)?;
+        let mut file = match tokio::fs::File::open(full_path).await {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata().await?;
+        anyhow::ensure!(metadata.is_file(), "Blob is not a regular file");
+        let total_size = metadata.len();
+        validate_range(offset, length, total_size)?;
+        file.seek(std::io::SeekFrom::Start(offset)).await?;
+        let stream =
+            tokio_util::io::ReaderStream::with_capacity(file.take(length), BLOB_STREAM_CHUNK_SIZE);
+        Ok(Some(BlobRangeStream {
+            total_size,
+            stream: Box::pin(stream.map_err(Error::from)),
+        }))
+    }
+
     async fn get_metadata(
         &self,
         _target_label: &'static str,
@@ -346,6 +377,11 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
+
+        if blob_path_is_root(path) {
+            return Ok(false);
+        }
+
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 

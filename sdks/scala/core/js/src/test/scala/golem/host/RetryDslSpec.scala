@@ -20,6 +20,7 @@ import golem.host.js._
 import zio.test._
 
 import scala.concurrent.duration._
+import scala.scalajs.js
 
 object RetryDslSpec extends ZIOSpecDefault {
   private val predicate =
@@ -79,6 +80,51 @@ object RetryDslSpec extends ZIOSpecDefault {
     test("rejects invalid jitter factors at conversion time") {
       val result = Retry.Policy.toJs(Retry.Policy.immediate.withJitter(-0.1))
       assertTrue(result.left.toOption.exists(_.message.contains("policy.factor must be >= 0")))
+    },
+    test("raw exponential factors must be finite and greater than zero") {
+      def raw(factor: Double) =
+        JsRetryPolicyTree(
+          js.Array(
+            JsPolicyNode.exponential(JsExponentialConfig(js.BigInt("1000000"), factor))
+          )
+        )
+
+      val invalid = List(0.0, -1.0, Double.NaN, Double.PositiveInfinity, Double.NegativeInfinity)
+
+      assertTrue(
+        Retry.Policy.fromJs(raw(2.0)) == Retry.Policy.exponential(1.millis, 2.0),
+        invalid.forall { factor =>
+          try {
+            Retry.Policy.fromJs(raw(factor))
+            false
+          } catch {
+            case _: IllegalArgumentException => true
+          }
+        }
+      )
+    },
+    test("raw jitter accepts zero and rejects negative or nonfinite factors") {
+      def raw(factor: Double) =
+        JsRetryPolicyTree(
+          js.Array(
+            JsPolicyNode.jitter(JsJitterConfig(factor, 1)),
+            JsPolicyNode.immediate
+          )
+        )
+
+      val invalid = List(-1.0, Double.NaN, Double.PositiveInfinity, Double.NegativeInfinity)
+
+      assertTrue(
+        Retry.Policy.fromJs(raw(0.0)) == Retry.Policy.immediate.withJitter(0.0),
+        invalid.forall { factor =>
+          try {
+            Retry.Policy.fromJs(raw(factor))
+            false
+          } catch {
+            case _: IllegalArgumentException => true
+          }
+        }
+      )
     },
     test("rejects inverted clamp ranges at conversion time") {
       val result = Retry.Policy.toJs(Retry.Policy.immediate.clamp(5.seconds, 1.second))

@@ -315,7 +315,12 @@ export class CanonicalInputModel {
       if (!value) {
         throw new Error(`missing canonical tool input field \`${field.name}\``);
       }
-      if (!schemaShapesMatch(value.codec.graph, field.codec.graph)) {
+      if (
+        !schemaShapesMatch(
+          unwrappedCarrierGraph(value.codec.graph, value.optionalCarrier === true),
+          unwrappedCarrierGraph(field.codec.graph, field.optionalCarrier === true),
+        )
+      ) {
         throw new Error(
           `canonical tool input field \`${value.name}\` has incompatible schema for forwarded field \`${field.name}\``,
         );
@@ -697,8 +702,9 @@ function isRepeatable(shape: ExtendedOptionShape): boolean {
  * preserves graph equality when forwarding inherited arguments.
  */
 export function optionalCanonicalFieldCodec(inner: SchemaCodec): SchemaCodec {
+  if (resolveCodecRoot(inner).body.tag === 'option') return inner;
   return {
-    graph: inner.graph,
+    graph: { defs: inner.graph.defs, root: t.option(inner.graph.root) },
     toValue: isolateCapabilityRoot((input) =>
       v.option(input === undefined ? undefined : encodeChild(inner, input)),
     ),
@@ -707,6 +713,11 @@ export function optionalCanonicalFieldCodec(inner: SchemaCodec): SchemaCodec {
       return input.value === undefined ? undefined : inner.fromValue(input.value);
     },
   };
+}
+
+function unwrappedCarrierGraph(graph: SchemaGraph, optionalCarrier: boolean): SchemaGraph {
+  if (!optionalCarrier || graph.root.body.tag !== 'option') return graph;
+  return { defs: graph.defs, root: graph.root.body.element };
 }
 
 export function optionValueCodec(shape: ExtendedOptionShape): SchemaCodec | undefined {

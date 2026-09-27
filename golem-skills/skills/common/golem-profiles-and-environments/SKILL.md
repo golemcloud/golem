@@ -138,9 +138,12 @@ environments:
     cli:
       format: json                   # Default output format
       autoConfirm: true              # Auto-answer "yes" to prompts
-      redeployAgents: true           # Equivalent to --reset on deploy
-      reset: true                    # Reset all state on deploy
+      redeployAgents: true           # Delete/recreate agents; agent state is lost
 ```
+
+`reset: true` is equivalent to `--reset`: it deletes existing agents for the deployed components
+after deployment, losing their state, and enables incompatibility-replacement fallbacks. The
+environment itself is retained. It takes precedence over `redeployAgents` when both are configured.
 
 ### Deployment options (`deployment:`)
 
@@ -161,7 +164,7 @@ environments:
 | `-L` / `--local` | Select the `local` environment (or `local` profile if no manifest) |
 | `-C` / `--cloud` | Select the `cloud` environment (or `cloud` profile if no manifest) |
 | `-e <name>` | Select a named environment from the manifest |
-| *(none)* | Use the `default: true` environment, or fall back to active profile |
+| *(none)* | Use the explicitly default environment, otherwise the first declared manifest environment |
 
 ### Managing environments
 
@@ -252,10 +255,10 @@ components:
     presets:
       local:
         build:
-          - command: cargo build --target wasm32-wasip1
+          - command: cargo build --target wasm32-wasip2
       release:
         build:
-          - command: cargo build --target wasm32-wasip1 --release
+          - command: cargo build --target wasm32-wasip2 --release
 
 agents:
   MyAgent:

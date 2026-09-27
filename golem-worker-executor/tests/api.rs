@@ -27,7 +27,7 @@ use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
 };
@@ -52,6 +52,7 @@ use golem_test_framework::dsl::{
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
 use golem_worker_executor::services::resource_limits::{ResourceLimits, ResourceLimitsGrpc};
+use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::{
     INVOCATION_OWNERSHIP_RECHECK_INTERVAL, WorkerDeletionHook, WorkerDeletionStage,
@@ -288,6 +289,34 @@ impl RegistryService for MutableResourceLimitsRegistry {
         _component_revision: ComponentRevision,
         _name: &golem_common::model::agent::AgentTypeName,
     ) -> Result<golem_common::model::agent::RegisteredAgentType, RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn get_mcp_runtime_credential(
+        &self,
+        _source: &golem_common::model::mcp_import::McpImportSource,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+    {
+        unimplemented!()
+    }
+
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        _source: &golem_common::model::mcp_import::McpImportSource,
+        _auth_ctx: &AuthCtx,
+        _oauth_grant_generation: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        unimplemented!()
+    }
+
+    async fn resolve_mcp_import(
+        &self,
+        _source: &golem_common::model::mcp_import::McpImportSource,
+        _auth_ctx: &AuthCtx,
+        _refresh: bool,
+    ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+    {
         unimplemented!()
     }
 
@@ -1767,11 +1796,11 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
             &target_agent_id,
             golem_common::model::oplog::OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_received(
+                Box::new(QueuedCardEvent::transfer_received(
                     detached_status_transfer_id,
                     source_card_id,
                     card.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -2010,13 +2039,11 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
     assert_eq!(detached_status_transfer.len(), 1);
     assert_eq!(concurrent_transfer.len(), 1);
     assert_eq!(conflict_winner.len(), 1);
-    assert_eq!(original_transfer[0].source_card_id, Some(source_card_id));
+    assert_eq!(original_transfer[0].source_card_id, source_card_id);
     assert_eq!(original_transfer[0].installed_card_id, card.card_id());
     assert_eq!(concurrent_transfer[0].installed_card_id, card.card_id());
     assert_eq!(conflict_winner[0].installed_card_id, card.card_id());
-    let target_generation = original_transfer[0]
-        .target_wallet_generation
-        .expect("target transfer admission must record its wallet generation");
+    let target_generation = original_transfer[0].target_wallet_generation;
     assert!(
         [
             detached_status_transfer[0],
@@ -2024,7 +2051,7 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
             conflict_winner[0],
         ]
         .into_iter()
-        .all(|transfer| transfer.target_wallet_generation == Some(target_generation)),
+        .all(|transfer| transfer.target_wallet_generation == target_generation),
         "reinstalling the same card through another transfer must not bump the target generation"
     );
 
@@ -2213,12 +2240,12 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     pending_transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -2232,12 +2259,12 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     completed_transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -2246,12 +2273,12 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     started_transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -2262,9 +2289,9 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
                 None,
                 started_transfer_id,
                 card.card_id(),
-                Some(source_holder.clone()),
+                source_holder.clone(),
                 target_holder.clone(),
-                Some(0),
+                0,
             ),
         )
         .await?;
@@ -2275,9 +2302,9 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
                 None,
                 completed_transfer_id,
                 card.card_id(),
-                Some(source_holder),
+                source_holder,
                 target_holder.clone(),
-                Some(0),
+                0,
             ),
         )
         .await?;
@@ -2457,12 +2484,12 @@ async fn pending_self_card_transfer_recovery_does_not_deadlock(
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer_id,
                     card.card_id(),
                     card.clone(),
                     self_holder,
-                ),
+                )),
             ),
         )
         .await?;
@@ -2592,12 +2619,12 @@ async fn lost_card_transfer_response_converges_after_source_and_target_restart(
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -2608,9 +2635,9 @@ async fn lost_card_transfer_response_converges_after_source_and_target_restart(
                 None,
                 transfer_id,
                 card.card_id(),
-                Some(source_holder),
+                source_holder,
                 target_holder,
-                Some(0),
+                0,
             ),
         )
         .await?;
@@ -2842,11 +2869,12 @@ async fn interruption(
 
 /// Shard-assignment recovery must not acknowledge an assignment whose activations failed.
 ///
-/// Recovery reads each running worker's record twice: once to enumerate the shard, once more
-/// when the worker is activated. This fails the second read only, so enumeration succeeds and
-/// activation does not. The assignment must fail - the shard manager retries a failed one,
-/// whereas a worker skipped here would stay stopped, unrecorded, until an unrelated invocation
-/// happened to arrive - and the retry, once storage is back, must restart the worker.
+/// Recovery resolves each running worker's identity and metadata while enumerating the shard,
+/// then resolves its identity again when the worker is activated. This fails the activation read
+/// only, so enumeration succeeds and activation does not. The assignment must fail - the shard
+/// manager retries a failed one, whereas a worker skipped here would stay stopped, unrecorded,
+/// until an unrelated invocation happened to arrive - and the retry, once storage is back, must
+/// restart the worker.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -2918,16 +2946,16 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     })
     .await
     .map_err(|_| anyhow!("worker remained loaded after its shard was revoked"))?;
-    // The unloaded shell would otherwise still be cached, and activation would reuse it without
-    // reading storage. Retire it as the idle-expiry sweep would, which is also the shape of an
-    // executor restart: recovery then has to rebuild the worker from its record.
+    // Retire the unloaded shell as the idle-expiry sweep would, so activation must reconstruct the
+    // worker and load its metadata. This is also the shape of an executor restart.
     executor.retire_unloaded_worker(&owned_agent_id).await?;
     assert!(!executor.worker_is_cached(&owned_agent_id).await);
 
-    // Enumeration reads the worker's record once; activation reads it again. Fail the second.
+    // Enumeration resolves the worker's identity, then loads its metadata (which resolves the
+    // identity again); activation resolves it once more. Fail the activation read.
     faults.fail_after(
         "read_cached_agent_mode",
-        1,
+        2,
         1,
         KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
     );
@@ -3686,6 +3714,199 @@ async fn get_workers_from_worker(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn malformed_worker_enumeration_cursor_returns_domain_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::Cursor;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetWorkersMetadataRequest, get_workers_metadata_response,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let response = executor
+        .client
+        .clone()
+        .get_workers_metadata(GetWorkersMetadataRequest {
+            component_id: Some(ComponentId::new().into()),
+            environment_id: Some(context.default_environment_id.into()),
+            filter: None,
+            cursor: Some(Cursor {
+                value: "not-a-valid-cursor".to_string(),
+            }),
+            count: 1,
+            precise: false,
+            auth_ctx: Some(executor.auth_ctx().into()),
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(get_workers_metadata_response::Result::Failure(error)) => {
+            let error: WorkerExecutorError = error.try_into().map_err(anyhow::Error::msg)?;
+            assert!(matches!(error, WorkerExecutorError::InvalidRequest { .. }));
+        }
+        other => panic!("expected InvalidRequest domain failure, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[derive(Clone)]
+struct CountingWorkerEnumerationService {
+    inner: Arc<dyn WorkerEnumerationService>,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl WorkerEnumerationService for CountingWorkerEnumerationService {
+    async fn get(
+        &self,
+        environment_id: &EnvironmentId,
+        component_id: &ComponentId,
+        filter: Option<AgentFilter>,
+        cursor: ScanCursor,
+        count: u64,
+        precise: bool,
+    ) -> Result<(Option<ScanCursor>, Vec<golem_common::model::AgentMetadata>), WorkerExecutorError>
+    {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .get(environment_id, component_id, filter, cursor, count, precise)
+            .await
+    }
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn get_workers_opaque_cursor_replays_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let enumeration_calls = Arc::new(AtomicUsize::new(0));
+    let wrap_calls = enumeration_calls.clone();
+    let overrides = TestExecutorOverrides {
+        wrap_worker_enumeration_service: Some(Arc::new(move |inner| {
+            Arc::new(CountingWorkerEnumerationService {
+                inner,
+                calls: wrap_calls.clone(),
+            })
+        })),
+        ..TestExecutorOverrides::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "opaque-cursor-replay");
+    let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
+
+    let mut expected_ids = HashSet::from([caller.to_string()]);
+    for index in 0..50 {
+        let target = agent_id!("GolemHostApi", format!("opaque-cursor-target-{index}"));
+        executor.start_agent(&component.id, target.clone()).await?;
+        expected_ids.insert(target.to_string());
+    }
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &caller, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected promise id"))?;
+    let component_id_value = {
+        let (high, low) = component.id.0.as_u64_pair();
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Record {
+                fields: vec![SchemaValue::U64(high), SchemaValue::U64(low)],
+            }],
+        }
+    };
+    let params = crate::raw_params(vec![component_id_value, promise_id_value.clone()]);
+    let resumed_params = params.clone();
+    let invocation_key = IdempotencyKey::fresh();
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let caller_clone = caller.clone();
+    let key_clone = invocation_key.clone();
+    let mut pending_invocation = tokio::spawn(async move {
+        executor_clone
+            .invoke_and_await_agent_with_key(
+                &component_clone,
+                &caller_clone,
+                &key_clone,
+                "get_agents_across_promise",
+                params,
+            )
+            .await
+    });
+    tokio::select! {
+        result = &mut pending_invocation => {
+            return Err(anyhow!("enumeration returned before the promise was completed: {:?}", result??));
+        }
+        status = executor.wait_for_status(&caller_id, AgentStatus::Suspended, Duration::from_secs(10)) => {
+            status?;
+        }
+    }
+    assert_eq!(enumeration_calls.load(Ordering::SeqCst), 1);
+    pending_invocation.abort();
+    assert!(
+        pending_invocation
+            .await
+            .expect_err("pending invocation should be cancelled")
+            .is_cancelled()
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: caller_id.clone(),
+                oplog_idx,
+            },
+            Vec::new(),
+        )
+        .await?;
+    let pages = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &invocation_key,
+            "get_agents_across_promise",
+            resumed_params,
+        )
+        .await?
+        .into_typed::<Result<Vec<Vec<String>>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].len(), 50);
+    assert_eq!(pages[1].len(), 1);
+    let first_page: HashSet<_> = pages[0].iter().cloned().collect();
+    let second_page: HashSet<_> = pages[1].iter().cloned().collect();
+    assert!(first_page.is_disjoint(&second_page));
+    assert_eq!(
+        first_page
+            .union(&second_page)
+            .cloned()
+            .collect::<HashSet<_>>(),
+        expected_ids
+    );
+    assert_eq!(enumeration_calls.load(Ordering::SeqCst), 2);
+    executor.check_oplog_is_queryable(&caller_id).await?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn get_metadata_from_worker(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -4366,28 +4587,14 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
     };
     let service = worker.oplog_service();
     let target_guard = service.lock_lifecycle(&target).await;
+    let (copy_entered, release_copy) = executor.gate_next_oplog_read(&source, OplogIndex::INITIAL);
     let fork = tokio::spawn({
         let executor = executor.clone();
         let source = source.clone();
         let target = target.clone();
         async move { executor.fork_worker(&source, &target.agent_id, cut).await }
     });
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if tokio::time::timeout(Duration::from_millis(10), service.lock_lifecycle(&source))
-                .await
-                .is_err()
-            {
-                break;
-            }
-            assert!(
-                !fork.is_finished(),
-                "fork exited before holding its source guard"
-            );
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
+    tokio::time::timeout(Duration::from_secs(10), copy_entered).await??;
     let hook = Arc::new(DeletionStageHook::new(
         owned.clone(),
         Some(WorkerDeletionStage::DurableStateRemoved),
@@ -4407,9 +4614,12 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
             .is_err()
     );
     assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+    release_copy.send(()).unwrap();
+    // Once the hidden copy is complete, deletion must not wait for target publication.
+    tokio::time::timeout(Duration::from_secs(10), deleting).await???;
+    assert!(!fork.is_finished());
     drop(target_guard);
     fork.await??;
-    deleting.await??;
     assert!(executor.get_worker_metadata(&source).await.is_err());
     assert_eq!(
         executor
@@ -4550,12 +4760,26 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
         assert!(failure.contains("status"), "{failure}");
         assert!(executor.worker_is_cached(&owned).await);
         executor.get_worker_metadata(&worker_id).await?;
+        let metadata = Worker::get_latest_metadata(&all, &owned).await?.unwrap();
+        let reconstructed =
+            golem_worker_executor::worker::status::calculate_last_known_status_with_checkpoint(
+                &all,
+                &owned,
+                metadata.fingerprint,
+                metadata.agent_mode,
+                None,
+            )
+            .await
+            .map_err(anyhow::Error::msg)?
+            .unwrap();
+        assert_eq!(metadata.last_known_status, reconstructed);
 
         // The old attempt keeps its error, but all old writes have finished. An explicit retry
         // can now remove the persisted generation without a late actor restoring its index.
         executor.delete_worker(&worker_id).await?;
         assert!(!executor.worker_is_cached(&owned).await);
         assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+        assert!(Worker::get_latest_metadata(&all, &owned).await?.is_none());
         assert_eq!(hook.calls(WorkerDeletionStage::OwnedWorkJoined), 1);
         // Keeping the old shell alive retains its failed stop result across the explicit retry.
         assert_eq!(old_weak.upgrade().is_some(), !drop_old_shell);
@@ -5434,7 +5658,26 @@ async fn get_worker_metadata(
     )?
     .len();
     assert_eq!(metadata2.component_size, component_file_size);
-    assert_eq!(metadata2.total_linear_memory_size, 34 * 65536);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let initial_memory = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Create(create) => Some(create.initial_total_linear_memory_size),
+            _ => None,
+        })
+        .expect("the worker must have a Create entry");
+    let memory_growth: u64 = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::GrowMemory(growth) => Some(growth.delta),
+            _ => None,
+        })
+        .sum();
+    assert!(initial_memory > 0);
+    assert_eq!(
+        metadata2.total_linear_memory_size,
+        initial_memory + memory_growth
+    );
     Ok(())
 }
 

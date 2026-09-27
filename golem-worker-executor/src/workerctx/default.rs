@@ -19,7 +19,7 @@ use crate::durable_host::{
     SnapshotBoundaryBlocker,
 };
 use crate::metrics::wasm::record_allocated_memory;
-use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use crate::preview2::golem::agent::host::{
     AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
     FutureInvokeResult, Host as AgentHost, HostCancellationToken, HostFutureInvokeResult,
@@ -63,7 +63,7 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::AccountUsagePeriod;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -784,13 +784,6 @@ impl FileSystemReading for Context {
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
     }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        self.durable_ctx.read_file(path).await
-    }
 }
 
 impl HostWasmRpc for Context {
@@ -1057,7 +1050,7 @@ impl WorkerCtx for Context {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -1110,7 +1103,7 @@ impl WorkerCtx for Context {
         let account_resource_limits = owner_resources.resource_limits();
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id.clone(),
-            agent_id,
+            owner_context,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -1151,6 +1144,7 @@ impl WorkerCtx for Context {
             owner_execution,
             owner_resources,
             None,
+            None,
             filesystem_capability,
             executable,
             entity_activation,
@@ -1185,6 +1179,10 @@ impl WorkerCtx for Context {
 
     fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
+    }
+
+    fn owner_context(&self) -> &ResolvedOwnerContext {
+        self.durable_ctx.owner_context()
     }
 
     fn agent_mode(&self) -> AgentMode {

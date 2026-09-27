@@ -63,9 +63,11 @@ components:
         id:
           type: string
         limit:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
       required:
       - id
       - limit
@@ -162,9 +164,11 @@ components:
       additionalProperties: false
       properties:
         payload_length:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
       required:
       - payload_length
       title: WebhookResponse
@@ -232,9 +236,11 @@ components:
         id:
           type: string
         limit:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
       required:
       - id
       - limit
@@ -331,9 +337,11 @@ components:
       additionalProperties: false
       properties:
         payload_length:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
       required:
       - payload_length
       title: WebhookResponse
@@ -363,6 +371,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.OkResponse'
           description: Response 200
+      security: []
     options:
       responses:
         '204':
@@ -394,6 +403,7 @@ paths:
               schema:
                 type: string
               style: simple
+      security: []
   /cors-agents/{agent-name}/preflight-required:
     options:
       responses:
@@ -426,6 +436,7 @@ paths:
               schema:
                 type: string
               style: simple
+      security: []
     post:
       description: ''
       operationId: CorsAgent-preflight
@@ -458,6 +469,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.PreflightResponse'
           description: Response 200
+      security: []
   /cors-agents/{agent-name}/wildcard:
     get:
       description: ''
@@ -478,6 +490,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.OkResponse'
           description: Response 200
+      security: []
     options:
       responses:
         '204':
@@ -509,6 +522,7 @@ paths:
               schema:
                 type: string
               style: simple
+      security: []
   /http-agents/{agent-name}/json-body/{id}:
     post:
       description: Accepts JSON body parameters and returns a success response
@@ -537,9 +551,11 @@ paths:
               additionalProperties: false
               properties:
                 count:
-                  maximum: 18446744073709551615
-                  minimum: 0
-                  type: integer
+                  format: uint64
+                  pattern: ^(?:0|[1-9][0-9]*)$
+                  type: string
+                  x-golem-maximum: '18446744073709551615'
+                  x-golem-minimum: '0'
                 name:
                   type: string
               required:
@@ -555,6 +571,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.JsonBodyResponse'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/multi-path-vars/{first}/{second}:
     get:
       description: Combines two path variables with a colon separator
@@ -591,6 +608,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.MultiPathVarsResponse'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/path-and-header/{resource-id}:
     get:
       description: Combines a path variable with a header value in the response
@@ -627,6 +645,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.PathAndHeaderResponse'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/path-and-query/{item-id}:
     get:
       description: Combines a path variable with a query parameter in the response
@@ -655,9 +674,11 @@ paths:
         name: limit
         required: true
         schema:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
         style: form
       responses:
         '200':
@@ -666,6 +687,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.PathAndQueryResponse'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/resource/{id}:
     patch:
       description: Updates a resource using PATCH method with provided update data
@@ -707,6 +729,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResourceResponse'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/resource/{id}/partial:
     patch:
       description: Performs a partial update on a resource using PATCH method
@@ -735,6 +758,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResourceResponse'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/resp/binary:
     get:
       description: Returns binary data as an unstructured binary response
@@ -756,6 +780,7 @@ paths:
                 format: binary
                 type: string
           description: Response 200
+      security: []
   /http-agents/{agent-name}/resp/json:
     get:
       description: Returns a JSON response with a value field
@@ -776,6 +801,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.JsonResponse'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/resp/no-content:
     get:
       description: Returns a 204 No Content response
@@ -792,6 +818,7 @@ paths:
       responses:
         '204':
           description: Response 204
+      security: []
   /http-agents/{agent-name}/resp/optional/{found}:
     get:
       description: Returns an optional response based on the found parameter
@@ -822,6 +849,7 @@ paths:
           description: Response 200
         '404':
           description: Response 404
+      security: []
   /http-agents/{agent-name}/resp/result-json-json/{ok}:
     get:
       description: Returns either a success or error result based on the ok parameter
@@ -856,6 +884,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse'
           description: Response 500
+      security: []
   /http-agents/{agent-name}/resp/result-json-void:
     get:
       description: Returns either a JSON success result or unit error
@@ -878,6 +907,7 @@ paths:
           description: Response 200
         '500':
           description: Response 500
+      security: []
   /http-agents/{agent-name}/resp/result-void-json:
     post:
       description: Returns either unit success or a JSON error result
@@ -900,6 +930,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.ResultErrResponse'
           description: Response 500
+      security: []
   /http-agents/{agent-name}/rest/{tail}:
     get:
       description: Returns the remaining path after the /rest prefix
@@ -929,6 +960,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.RemainingPathResponse'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/restricted-unstructured-binary/{bucket}:
     post:
       description: Accepts restricted binary data (image/gif only) and returns the payload size
@@ -963,10 +995,13 @@ paths:
           content:
             application/json:
               schema:
-                maximum: 9223372036854775807
-                minimum: -9223372036854775808
-                type: integer
+                format: int64
+                pattern: ^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$
+                type: string
+                x-golem-maximum: '9223372036854775807'
+                x-golem-minimum: '-9223372036854775808'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/string-path-var/{path-var}:
     get:
       description: Returns the provided path variable as a response
@@ -995,6 +1030,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.StringPathVarResponse'
           description: Response 200
+      security: []
   /http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}:
     post:
       description: Accepts unrestricted binary data and returns the payload size
@@ -1029,10 +1065,13 @@ paths:
           content:
             application/json:
               schema:
-                maximum: 9223372036854775807
-                minimum: -9223372036854775808
-                type: integer
+                format: int64
+                pattern: ^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$
+                type: string
+                x-golem-maximum: '9223372036854775807'
+                x-golem-minimum: '-9223372036854775808'
           description: Response 200
+      security: []
   /openapi.json:
     get:
       responses:
@@ -1043,6 +1082,7 @@ paths:
                 additionalProperties: true
                 type: object
           description: Response 200
+      security: []
   /openapi.yaml:
     get:
       responses:
@@ -1053,6 +1093,7 @@ paths:
                 additionalProperties: true
                 type: object
           description: Response 200
+      security: []
   /webhook-agents/{agent-name}/set-test-server-url:
     post:
       description: ''
@@ -1082,6 +1123,7 @@ paths:
       responses:
         '204':
           description: Response 204
+      security: []
   /webhook-agents/{agent-name}/test-webhook:
     post:
       description: ''
@@ -1102,6 +1144,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.WebhookResponse'
           description: Response 200
+      security: []
   /webhooks/cors-agent/{promise-id}:
     post:
       parameters:
@@ -1126,6 +1169,7 @@ paths:
           description: Response 204
         '404':
           description: Response 404
+      security: []
   /webhooks/http-agent/{promise-id}:
     post:
       parameters:
@@ -1150,6 +1194,7 @@ paths:
           description: Response 204
         '404':
           description: Response 404
+      security: []
   /webhooks/webhook-agent/{promise-id}:
     post:
       parameters:
@@ -1174,6 +1219,6 @@ paths:
           description: Response 204
         '404':
           description: Response 404
+      security: []
 servers:
 - url: https://<ENV_ID>.golem.cloud
-- url: http://<ENV_ID>.golem.cloud

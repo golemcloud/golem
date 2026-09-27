@@ -68,10 +68,10 @@ pub fn discover_tools() -> Array[@toolCommon.Tool] {
 ///|
 pub fn get_registered_tool(
   name : String,
-) -> Result[@toolCommon.Tool, @toolCommon.ToolError] {
+) -> Result[@toolCommon.Tool, @types.ToolError] {
   match state.tools.get(name) {
     Some(tool) => Ok(tool)
-    None => Err(@toolCommon.ToolError::InvalidToolName(name))
+    None => Err(@types.ToolError::InvalidToolName(name))
   }
 }
 
@@ -91,8 +91,8 @@ pub fn release_registered_subtool_input(
 pub fn reject_wire_invocation(
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
-  error : @toolCommon.ToolError,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  error : @types.ToolError,
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   reject_wire_invocation_with_resource_drops(
     input,
     stdin,
@@ -105,9 +105,9 @@ pub fn reject_wire_invocation(
 fn reject_wire_invocation_with_resource_drops(
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
-  error : @toolCommon.ToolError,
+  error : @types.ToolError,
   drops : @model.SchemaValueResourceDrops,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   release_wire_invocation_input(input, drops)
   drop_optional_stdin(stdin)
   Err(error)
@@ -128,8 +128,8 @@ fn release_wire_invocation_input(
 ///|
 pub fn reject_undecoded_invocation(
   stdin : @async-core.Stream[Byte]?,
-  error : @toolCommon.ToolError,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  error : @types.ToolError,
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   drop_optional_stdin(stdin)
   Err(error)
 }
@@ -138,8 +138,8 @@ pub fn reject_undecoded_invocation(
 pub fn reject_decoded_invocation(
   fields : Array[CanonicalInputValue],
   stdin : @async-core.Stream[Byte]?,
-  error : @toolCommon.ToolError,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  error : @types.ToolError,
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   reject_decoded_invocation_with_resource_drops(
     fields,
     stdin,
@@ -152,9 +152,9 @@ pub fn reject_decoded_invocation(
 fn reject_decoded_invocation_with_resource_drops(
   fields : Array[CanonicalInputValue],
   stdin : @async-core.Stream[Byte]?,
-  error : @toolCommon.ToolError,
+  error : @types.ToolError,
   drops : @model.SchemaValueResourceDrops,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   release_canonical_input_values(fields, drops)
   drop_optional_stdin(stdin)
   Err(error)

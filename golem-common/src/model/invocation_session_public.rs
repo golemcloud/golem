@@ -19,6 +19,8 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
+use crate::schema::SchemaGraph;
+
 pub const INVOCATION_SESSION_SUBPROTOCOL: &str = "golem.agent-invocation.v1";
 pub const INVOCATION_SESSION_VERSION: u8 = 1;
 pub const MAX_WEBSOCKET_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
@@ -236,6 +238,37 @@ pub struct InvocationSelector {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum PublicNativeToolTarget {
+    Agent {
+        component_id: Uuid,
+        agent_id: String,
+    },
+    Component {
+        component_id: Uuid,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PublicTypedValue {
+    pub schema: SchemaGraph,
+    pub value: Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PublicByteStreamRole {
+    Stdin,
+    Stdout,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PublicConfigEntry {
     pub path: Vec<String>,
@@ -261,6 +294,8 @@ pub struct PublicInputHighWater {
 pub struct PublicStreamMapping {
     pub channel: u32,
     pub direction: PublicStreamDirection,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_role: Option<PublicByteStreamRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_high_water: Option<PublicInputHighWater>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,6 +351,24 @@ pub enum PublicClientMessage {
         selector: Box<InvocationSelector>,
         version: u8,
     },
+    #[serde(rename = "toolStart")]
+    ToolStart {
+        #[serde(rename = "attemptId")]
+        attempt_id: Uuid,
+        application: String,
+        environment: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "toolName")]
+        tool_name: String,
+        #[serde(rename = "commandPath")]
+        command_path: Vec<String>,
+        target: PublicNativeToolTarget,
+        input: Box<PublicTypedValue>,
+        stdin: bool,
+        stdout: bool,
+        version: u8,
+    },
     #[serde(rename = "resumeAttach")]
     ResumeAttach {
         #[serde(rename = "attemptId")]
@@ -352,7 +405,17 @@ pub enum PublicClientMessage {
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum PublicInvocationResult {
     None,
-    Value { value: Value },
+    Value {
+        value: Value,
+    },
+    ToolSuccess {
+        result: Option<PublicTypedValue>,
+    },
+    ToolFailure {
+        code: String,
+        message: Option<String>,
+        custom_error: Option<PublicTypedValue>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -404,7 +467,7 @@ pub enum PublicServerMessage {
     #[serde(rename = "invocationResult")]
     InvocationResult {
         mappings: Vec<PublicStreamMapping>,
-        result: PublicInvocationResult,
+        result: Box<PublicInvocationResult>,
         version: u8,
     },
     #[serde(rename = "outputStreamItem")]
@@ -814,6 +877,38 @@ fn validate_client_message(message: &PublicClientMessage) -> Result<(), PublicPr
                         "configuration values must not contain stream references",
                     ));
                 }
+            }
+        }
+        PublicClientMessage::ToolStart {
+            attempt_id,
+            application,
+            environment,
+            idempotency_key,
+            tool_name,
+            command_path,
+            target,
+            ..
+        } => {
+            validate_uuid_v4(*attempt_id, "attempt ID")?;
+            if application.is_empty()
+                || environment.is_empty()
+                || tool_name.is_empty()
+                || command_path.iter().any(String::is_empty)
+                || idempotency_key.is_empty()
+                || idempotency_key.len() > MAX_IDEMPOTENCY_KEY_SIZE
+            {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::ValidationError,
+                    "tool start names, command path segments, and idempotency key must not be empty",
+                ));
+            }
+            if let PublicNativeToolTarget::Agent { agent_id, .. } = target
+                && agent_id.is_empty()
+            {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::ValidationError,
+                    "tool target agent ID must not be empty",
+                ));
             }
         }
         PublicClientMessage::ResumeAttach {
@@ -1231,9 +1326,11 @@ mod tests {
     use super::new_durable_stream_session_id;
     use super::{
         BinaryMessageKind, MAX_WEBSOCKET_MESSAGE_SIZE, PublicClientMessage, PublicErrorCode,
-        PublicServerMessage, decode_binary_message, decode_client_text, decode_server_text,
-        encode_text, validate_durable_stream_session_id, validate_message_size,
+        PublicNativeToolTarget, PublicServerMessage, PublicTypedValue, decode_binary_message,
+        decode_client_text, decode_server_text, encode_text, validate_durable_stream_session_id,
+        validate_message_size,
     };
+    use crate::schema::{SchemaGraph, SchemaType};
     use serde::Deserialize;
     use test_r::test;
 
@@ -1356,6 +1453,35 @@ mod tests {
             decode_client_text(input).is_err(),
             "UUIDv4 requires the RFC 4122 variant as well as the version-4 nibble"
         );
+    }
+
+    #[test]
+    fn native_tool_start_round_trips_camel_case_fields_and_allows_root_command() {
+        let message = PublicClientMessage::ToolStart {
+            attempt_id: uuid::Uuid::new_v4(),
+            application: "app".to_string(),
+            environment: "env".to_string(),
+            idempotency_key: "key".to_string(),
+            tool_name: "tool".to_string(),
+            command_path: Vec::new(),
+            target: PublicNativeToolTarget::Component {
+                component_id: uuid::Uuid::new_v4(),
+            },
+            input: Box::new(PublicTypedValue {
+                schema: SchemaGraph::anonymous(SchemaType::u8()),
+                value: serde_json::json!(7),
+            }),
+            stdin: true,
+            stdout: true,
+            version: 1,
+        };
+        let encoded = encode_text(&message).unwrap();
+        assert!(encoded.contains("\"commandPath\""));
+        assert!(encoded.contains("\"componentId\""));
+        assert!(matches!(
+            decode_client_text(encoded.as_bytes()).unwrap(),
+            PublicClientMessage::ToolStart { command_path, .. } if command_path.is_empty()
+        ));
     }
 
     #[test]

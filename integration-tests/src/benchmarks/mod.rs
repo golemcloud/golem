@@ -34,8 +34,11 @@ pub mod cold_start_unknown;
 pub mod durability_overhead;
 pub mod idempotency_key;
 pub mod latency;
+mod public_invocation;
 pub mod sleep;
 pub mod streaming;
+pub mod streaming_history;
+pub mod streaming_recovery;
 pub mod throughput;
 
 // Re-export cleanup helpers so callers can use the flat `benchmarks::*` path.
@@ -62,11 +65,16 @@ fn inject_trace_context(request: &mut Request) {
 pub async fn delete_workers(
     user: &TestUserContext<BenchmarkTestDependencies>,
     agent_ids: &[AgentId],
+    recorder: &BenchmarkRecorder,
 ) {
     info!("Deleting {} workers...", agent_ids.len());
     for agent_id in agent_ids {
         if let Err(err) = user.delete_worker(agent_id).await {
-            warn!("Failed to delete worker: {:?}", err);
+            warn!(error = ?err, "Failed to delete worker");
+            recorder.failure(
+                &ResultKey::primary("cleanup-delete-worker"),
+                format!("{err:?}"),
+            );
         }
     }
     info!("Deleting {} workers completed", agent_ids.len());

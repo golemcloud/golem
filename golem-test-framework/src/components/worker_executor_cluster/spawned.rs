@@ -153,13 +153,6 @@ impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
         self.worker_executors.len()
     }
 
-    async fn kill_all(&self) {
-        info!("Killing all worker executors");
-        for worker_executor in &self.worker_executors {
-            worker_executor.kill().await;
-        }
-    }
-
     async fn restart_all(&self) {
         info!("Restarting all worker executors");
         for worker_executor in &self.worker_executors {
@@ -182,7 +175,10 @@ impl WorkerExecutorCluster for SpawnedWorkerExecutorCluster {
     async fn stop(&self, index: usize) {
         let mut stopped = self.stopped_indices.lock().await;
         if !stopped.contains(&index) {
-            self.worker_executors[index].kill().await;
+            self.worker_executors[index]
+                .kill_and_wait(tokio::time::Instant::now() + Duration::from_secs(60))
+                .await
+                .expect("failed to stop worker executor");
             stopped.insert(index);
         }
     }

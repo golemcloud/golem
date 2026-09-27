@@ -1328,6 +1328,11 @@ async fn drive_gated_body_discard_round(
     done_rx: &mut mpsc::UnboundedReceiver<anyhow::Result<()>>,
     cancel_signal_release: &tokio::sync::Semaphore,
 ) -> anyhow::Result<()> {
+    assert_eq!(
+        cancel_signal_release.available_permits(),
+        0,
+        "each round must withhold cancellation until its own chunk is persisted"
+    );
     recv_request_event(gated_rx).await?;
     timeout(Duration::from_secs(10), gate.appended()).await?;
     cancel_signal_release.add_permits(1);
@@ -1947,7 +1952,7 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
                             } else if request.starts_with(b"GET /cancel-signal ") {
                                 // Withheld until the test wants the guest's race
                                 // to drop the pending chunk read.
-                                let _permit = cancel_signal_release.acquire().await?;
+                                cancel_signal_release.acquire().await?.forget();
                                 stream
                                     .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
                                     .await?;

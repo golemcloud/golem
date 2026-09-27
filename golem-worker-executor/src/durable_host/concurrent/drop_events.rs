@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::entity::OwnerRuntime;
 
 /// Call-owned facts available to a cancellation recorder when a live persisted handle is dropped.
 ///
@@ -406,17 +407,110 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
             }
         }
         DropEvent::CancelDroppedDurableInput { cancellation } => {
-            cancellation.cancel().await.map_err(|error| {
-                TerminalCallError::new(
-                    WorkerExecutorError::runtime(format!(
-                        "failed to cancel dropped durable stream: {error}"
-                    )),
-                    ambient_trap_context(ctx),
-                )
-            })?;
+            let result = async {
+                if !ctx.is_live() {
+                    if cancellation
+                        .is_recorded()
+                        .await
+                        .map_err(WorkerExecutorError::runtime)?
+                    {
+                        return Ok(());
+                    }
+                    if ctx.rejects_live_continuation_at_replay_tail() {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "durable stream guest-drop cancellation",
+                            "no recorded cancellation during completed entity replay",
+                        ));
+                    }
+                    loop {
+                        ctx.state.replay_state.await_natural_tail_end(None).await?;
+                        match ctx
+                            .prepare_live_continuation_at_replay_tail(
+                                true,
+                                "durable stream guest-drop cancellation".to_string(),
+                            )
+                            .await?
+                        {
+                            BeginReplayToLive::ReplayResumed => continue,
+                            BeginReplayToLive::Pending(pending) => {
+                                ctx.finish_switch_to_live(pending).await?.require_live()?;
+                                break;
+                            }
+                        }
+                    }
+                }
+                cancellation
+                    .cancel()
+                    .await
+                    .map_err(WorkerExecutorError::runtime)
+            }
+            .await;
+            result.map_err(|error| TerminalCallError::new(error, ambient_trap_context(ctx)))?;
         }
     }
     Ok(())
+}
+
+pub(crate) async fn cancel_dropped_durable_input_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    cancellation: &DroppedDurableInput,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (live, rejected, replay, activity) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.is_live(),
+            ctx.rejects_live_continuation_at_replay_tail(),
+            ctx.state.replay_state.clone(),
+            ctx.tail_work_tracker().activity(),
+        )
+    });
+    if !live {
+        if cancellation
+            .is_recorded()
+            .await
+            .map_err(WorkerExecutorError::runtime)?
+        {
+            return Ok(());
+        }
+        if rejected {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "durable stream guest-drop cancellation",
+                "no recorded cancellation during completed entity replay",
+            ));
+        }
+        loop {
+            replay.await_natural_tail_end(Some(&activity)).await?;
+            let (transition, primary) = store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                (
+                    ctx.prepare_live_continuation_at_replay_tail(
+                        true,
+                        "durable stream guest-drop cancellation".to_string(),
+                    ),
+                    ctx.runtime == OwnerRuntime::Agent,
+                )
+            });
+            match transition.await? {
+                BeginReplayToLive::ReplayResumed => continue,
+                BeginReplayToLive::Pending(pending) => {
+                    finish_prepared_access_to_live(pending, primary, store, get_ctx)
+                        .await?
+                        .require_live()?;
+                    break;
+                }
+            }
+        }
+    }
+    cancellation
+        .cancel()
+        .await
+        .map_err(WorkerExecutorError::runtime)
 }
 
 /// Accessor-window variant of [`drain_queued_dropped_call_events`]. It drains the queue from a short
@@ -693,12 +787,12 @@ where
                 }
             }
             DropEvent::CancelDroppedDurableInput { cancellation } => {
-                if let Err(error) = cancellation.cancel().await {
+                if let Err(error) =
+                    cancel_dropped_durable_input_access(store, get_ctx, cancellation).await
+                {
                     if first_error.is_none() {
                         first_error = Some(TerminalCallError::new(
-                            WorkerExecutorError::runtime(format!(
-                                "failed to cancel dropped durable stream: {error}"
-                            )),
+                            error,
                             store.with(|mut access| {
                                 let ctx = get_ctx(access.data_mut());
                                 ambient_trap_context(ctx)

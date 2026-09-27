@@ -1,6 +1,7 @@
-import { describe, expect, it } from "@effect/vitest"
-import * as fc from "effect/testing/FastCheck"
+import { describe, expect } from "@effect/vitest"
+import * as fc from "fast-check"
 import { decodeMultipart, encodeMultipart, extractBoundary } from "../src/internal/multipart.js"
+import { prop } from "./property.js"
 
 // ---------------------------------------------------------------------------
 // Arbitraries
@@ -41,7 +42,7 @@ const partsArb = fc
 // ---------------------------------------------------------------------------
 
 describe("multipart codec properties", () => {
-  it.prop(
+  prop(
     "encodeMultipart -> decodeMultipart round-trips arbitrary parts",
     { parts: partsArb },
     ({ parts }) => {
@@ -56,7 +57,7 @@ describe("multipart codec properties", () => {
     },
   )
 
-  it.prop(
+  prop(
     "the chosen boundary never appears as `\\r\\n--<boundary>` in any part body",
     { parts: partsArb },
     ({ parts }) => {
@@ -76,7 +77,7 @@ describe("multipart codec properties", () => {
     },
   )
 
-  it.prop(
+  prop(
     "extractBoundary recovers the boundary embedded in the mime type",
     { parts: partsArb },
     ({ parts }) => {

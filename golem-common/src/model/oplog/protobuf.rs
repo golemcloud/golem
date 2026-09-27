@@ -15,18 +15,19 @@
 use super::public_oplog_entry::CardExpiredParams;
 use super::{
     AgentError, AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, FallibleResultParameters, JsonSnapshotData,
+    AgentMethodInvocationParameters, AgentResourceId, ExternalToolInvocationParameters,
+    ExternalToolResultParameters, FallibleResultParameters, JsonSnapshotData,
     LoadSnapshotParameters, LogLevel, ManualUpdateParameters, MultipartPartData,
     MultipartSnapshotData, MultipartSnapshotPart, OplogCursor, PluginInstallationDescription,
     ProcessOplogEntriesParameters, ProcessOplogEntriesResultParameters, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicExternalSpanData,
-    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
-    PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
-    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, StringAttributeValue,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicExternalToolResult, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex, PublicRetryPolicyState, PublicSnapshotData, PublicSpanData,
+    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
+    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
+    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
@@ -51,6 +52,10 @@ use crate::model::oplog::payload::OplogPayload;
 use crate::model::oplog::payload::host_functions::{
     HostFunctionName, host_request_from_typed_schema_value,
 };
+use crate::model::oplog::payload::types::{
+    SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
+    SerializableToolRpcError,
+};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
@@ -68,6 +73,7 @@ use crate::model::oplog::public_oplog_entry::{
     StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
     StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
+use crate::model::oplog::raw_types::CreateParameters;
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, HostStreamKind, OplogEntry,
@@ -329,7 +335,9 @@ fn raw_queued_card_event_from_proto(
             Ok(QueuedCardEvent::TransferReceived(
                 QueuedCardEventTransferReceived {
                     transfer_id: event.transfer_id.ok_or("Missing transfer_id")?.into(),
-                    source_card_id: event.source_card_id.map(|card_id| CardId(card_id.into())),
+                    source_card_id: CardId(
+                        event.source_card_id.ok_or("Missing source_card_id")?.into(),
+                    ),
                     card_id,
                     card: Some(card),
                 },
@@ -412,7 +420,7 @@ fn raw_queued_card_event_to_proto(
                 transfer_id: Some(event.transfer_id.into()),
                 card_id: Some(event.card_id.0.into()),
                 card: crate::serialization::serialize(&card)?,
-                source_card_id: event.source_card_id.map(|card_id| card_id.0.into()),
+                source_card_id: Some(event.source_card_id.0.into()),
             })
         }
     };
@@ -729,6 +737,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .agent_id
                     .ok_or("Missing agent_id field")?
                     .try_into()?,
+                owner_kind: crate::model::agent::OwnerKind::try_from(create.owner_kind)?,
                 agent_mode: golem_api_grpc::proto::golem::component::AgentMode::try_from(
                     create.agent_mode,
                 )
@@ -829,10 +838,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .invocation
                         .ok_or("Missing invocation field")?
                         .try_into()?,
-                    wallet_pin: agent_invocation_started
-                        .wallet_pin
-                        .map(public_invocation_wallet_pin_from_proto)
-                        .transpose()?,
+                    wallet_pin: public_invocation_wallet_pin_from_proto(
+                        agent_invocation_started
+                            .wallet_pin
+                            .ok_or("Missing wallet_pin field")?,
+                    )?,
                 }),
             ),
             oplog_entry::Entry::AgentInvocationFinished(agent_invocation_finished) => Ok(
@@ -1266,7 +1276,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .transfer_id
                         .ok_or("Missing transfer_id field")?
                         .into(),
-                    source_card_id: params.source_card_id.map(|id| CardId(id.into())),
+                    source_card_id: CardId(
+                        params
+                            .source_card_id
+                            .ok_or("Missing source_card_id field")?
+                            .into(),
+                    ),
                     installed_card_id: CardId(
                         params
                             .installed_card_id
@@ -1375,6 +1390,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::CreateParameters {
                         timestamp: Some(create.timestamp.into()),
                         agent_id: Some(create.agent_id.into()),
+                        owner_kind: create.owner_kind.into(),
                         agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(
                             create.agent_mode,
                         ) as i32,
@@ -1460,9 +1476,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::AgentInvocationStartedParameters {
                             timestamp: Some(agent_invocation_started.timestamp.into()),
                             invocation: Some(agent_invocation_started.invocation.try_into()?),
-                            wallet_pin: agent_invocation_started
-                                .wallet_pin
-                                .map(public_invocation_wallet_pin_to_proto),
+                            wallet_pin: Some(public_invocation_wallet_pin_to_proto(
+                                agent_invocation_started.wallet_pin,
+                            )),
                         },
                     )),
                 }
@@ -1980,7 +1996,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CardTransferredParameters {
                             timestamp: Some(params.timestamp.into()),
                             transfer_id: Some(params.transfer_id.into()),
-                            source_card_id: params.source_card_id.map(|id| id.0.into()),
+                            source_card_id: Some(params.source_card_id.0.into()),
                             installed_card_id: Some(params.installed_card_id.0.into()),
                             target_holder: Some(card_holder_to_proto(params.target_holder)),
                             target_wallet_generation: params.target_wallet_generation,
@@ -2256,6 +2272,24 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                     },
                 ))
             }
+            Invocation::ExternalTool(tool) => {
+                let input = tool.input.ok_or("Missing input field")?.try_into()?;
+                let invocation_context = encode_public_span_data(tool.invocation_context)?;
+                Ok(PublicAgentInvocation::ExternalTool(
+                    ExternalToolInvocationParameters {
+                        idempotency_key: tool
+                            .idempotency_key
+                            .ok_or("Missing idempotency_key field")?
+                            .into(),
+                        tool_name: tool.tool_name,
+                        command_path: tool.command_path,
+                        input,
+                        trace_id: TraceId::from_string(tool.trace_id)?,
+                        trace_states: tool.trace_states,
+                        invocation_context,
+                    },
+                ))
+            }
             Invocation::SaveSnapshot(_) => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
             Invocation::LoadSnapshot(load) => {
                 let snapshot = load.snapshot.ok_or("Missing snapshot field")?;
@@ -2355,6 +2389,20 @@ impl TryFrom<PublicAgentInvocation>
                     },
                 )
             }
+            PublicAgentInvocation::ExternalTool(tool) => {
+                let invocation_context = decode_public_span_data(&tool.invocation_context, 0);
+                Invocation::ExternalTool(
+                    golem_api_grpc::proto::golem::worker::PublicExternalToolInvocation {
+                        idempotency_key: Some(tool.idempotency_key.into()),
+                        tool_name: tool.tool_name,
+                        command_path: tool.command_path,
+                        input: Some(tool.input.try_into()?),
+                        trace_id: tool.trace_id.to_string(),
+                        trace_states: tool.trace_states,
+                        invocation_context,
+                    },
+                )
+            }
             PublicAgentInvocation::SaveSnapshot(_) => {
                 Invocation::SaveSnapshot(golem_api_grpc::proto::golem::common::Empty {})
             }
@@ -2448,6 +2496,51 @@ impl TryFrom<PublicAgentInvocation>
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicExternalToolResult>
+    for PublicExternalToolResult
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicExternalToolResult,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::public_external_tool_result::Result;
+        match value.result.ok_or("Missing external tool result")? {
+            Result::Success(success) => Ok(Self::Success(SerializableToolInvocationResult {
+                result: success
+                    .result
+                    .map(TryInto::try_into)
+                    .transpose()?
+                    .map(Box::new),
+            })),
+            Result::Error(error) => Ok(Self::Failure(tool_rpc_error_from_proto(error)?)),
+        }
+    }
+}
+
+impl TryFrom<PublicExternalToolResult>
+    for golem_api_grpc::proto::golem::worker::PublicExternalToolResult
+{
+    type Error = String;
+
+    fn try_from(value: PublicExternalToolResult) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::public_external_tool_result::Result;
+        let result = match value {
+            PublicExternalToolResult::Success(result) => Result::Success(
+                golem_api_grpc::proto::golem::worker::PublicToolInvocationResult {
+                    result: result.result.map(|value| (*value).try_into()).transpose()?,
+                },
+            ),
+            PublicExternalToolResult::Failure(error) => {
+                Result::Error(tool_rpc_error_to_proto(error)?)
+            }
+        };
+        Ok(Self {
+            result: Some(result),
+        })
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
     for PublicAgentInvocationResult
 {
@@ -2470,6 +2563,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
                     AgentInvocationOutputParameters { output },
                 ))
             }
+            ProtoResult::ExternalTool(tool) => Ok(PublicAgentInvocationResult::ExternalTool(
+                ExternalToolResultParameters {
+                    result: tool.try_into()?,
+                },
+            )),
             ProtoResult::ManualUpdate(_) => Ok(PublicAgentInvocationResult::ManualUpdate(Empty {})),
             ProtoResult::LoadSnapshot(opt_err) => Ok(PublicAgentInvocationResult::LoadSnapshot(
                 FallibleResultParameters {
@@ -2547,6 +2645,9 @@ impl TryFrom<PublicAgentInvocationResult>
             }
             PublicAgentInvocationResult::AgentMethod(output) => {
                 ProtoResult::AgentMethodOutput(output.output.try_into()?)
+            }
+            PublicAgentInvocationResult::ExternalTool(tool) => {
+                ProtoResult::ExternalTool(tool.result.try_into()?)
             }
             PublicAgentInvocationResult::ManualUpdate(_) => {
                 ProtoResult::ManualUpdate(golem_api_grpc::proto::golem::common::Empty {})
@@ -2637,6 +2738,87 @@ impl TryFrom<PublicAgentInvocationResult>
             },
         )
     }
+}
+
+fn tool_rpc_error_from_proto(
+    value: golem_api_grpc::proto::golem::worker::PublicToolRpcError,
+) -> Result<SerializableToolRpcError, String> {
+    use golem_api_grpc::proto::golem::worker::public_tool_error::Error as ToolError;
+    use golem_api_grpc::proto::golem::worker::public_tool_rpc_error::Error as RpcError;
+    Ok(match value.error.ok_or("Missing tool RPC error")? {
+        RpcError::ProtocolError(value) => SerializableToolRpcError::ProtocolError(value),
+        RpcError::Denied(value) => SerializableToolRpcError::Denied(value),
+        RpcError::NotFound(value) => SerializableToolRpcError::NotFound(value),
+        RpcError::RemoteInternalError(value) => {
+            SerializableToolRpcError::RemoteInternalError(value)
+        }
+        RpcError::Cancelled(_) => SerializableToolRpcError::Cancelled,
+        RpcError::ResourceExhausted(value) => SerializableToolRpcError::ResourceExhausted(value),
+        RpcError::RemoteToolError(value) => SerializableToolRpcError::RemoteToolError(Box::new(
+            match value.error.ok_or("Missing remote tool error")? {
+                ToolError::InvalidToolName(value) => SerializableToolError::InvalidToolName(value),
+                ToolError::InvalidCommandPath(value) => {
+                    SerializableToolError::InvalidCommandPath(value.values)
+                }
+                ToolError::InvalidInput(value) => SerializableToolError::InvalidInput(value),
+                ToolError::ConstraintViolation(value) => {
+                    SerializableToolError::ConstraintViolation(value)
+                }
+                ToolError::InvalidResult(value) => SerializableToolError::InvalidResult(value),
+                ToolError::CustomError(value) => {
+                    SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                        name: value.name,
+                        payload: value
+                            .payload
+                            .ok_or("Missing custom tool error payload")?
+                            .try_into()?,
+                    }))
+                }
+            },
+        )),
+    })
+}
+
+fn tool_rpc_error_to_proto(
+    value: SerializableToolRpcError,
+) -> Result<golem_api_grpc::proto::golem::worker::PublicToolRpcError, String> {
+    use golem_api_grpc::proto::golem::worker::public_tool_error::Error as ToolError;
+    use golem_api_grpc::proto::golem::worker::public_tool_rpc_error::Error as RpcError;
+    let error = match value {
+        SerializableToolRpcError::ProtocolError(value) => RpcError::ProtocolError(value),
+        SerializableToolRpcError::Denied(value) => RpcError::Denied(value),
+        SerializableToolRpcError::NotFound(value) => RpcError::NotFound(value),
+        SerializableToolRpcError::RemoteInternalError(value) => {
+            RpcError::RemoteInternalError(value)
+        }
+        SerializableToolRpcError::Cancelled => {
+            RpcError::Cancelled(golem_api_grpc::proto::golem::common::Empty {})
+        }
+        SerializableToolRpcError::ResourceExhausted(value) => RpcError::ResourceExhausted(value),
+        SerializableToolRpcError::RemoteToolError(value) => {
+            let error = match *value {
+                SerializableToolError::InvalidToolName(value) => ToolError::InvalidToolName(value),
+                SerializableToolError::InvalidCommandPath(values) => ToolError::InvalidCommandPath(
+                    golem_api_grpc::proto::golem::worker::StringList { values },
+                ),
+                SerializableToolError::InvalidInput(value) => ToolError::InvalidInput(value),
+                SerializableToolError::ConstraintViolation(value) => {
+                    ToolError::ConstraintViolation(value)
+                }
+                SerializableToolError::InvalidResult(value) => ToolError::InvalidResult(value),
+                SerializableToolError::CustomError(value) => ToolError::CustomError(
+                    golem_api_grpc::proto::golem::worker::PublicCustomToolError {
+                        name: value.name,
+                        payload: Some(value.payload.try_into()?),
+                    },
+                ),
+            };
+            RpcError::RemoteToolError(golem_api_grpc::proto::golem::worker::PublicToolError {
+                error: Some(error),
+            })
+        }
+    };
+    Ok(golem_api_grpc::proto::golem::worker::PublicToolRpcError { error: Some(error) })
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for PublicUpdateDescription {
@@ -3138,27 +3320,30 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
         match value {
             PublicOplogEntry::Create(create) => Ok(OplogEntry::Create {
                 timestamp: create.timestamp,
-                agent_id: create.agent_id,
-                agent_mode: create.agent_mode,
-                component_revision: create.component_revision,
-                env: create.env.into_iter().collect(),
-                environment_id: create.environment_id,
-                created_by: create.created_by,
-                local_agent_config: create
-                    .local_agent_config
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?,
-                parent: create.parent,
-                component_size: create.component_size,
-                initial_total_linear_memory_size: create.initial_total_linear_memory_size,
-                initial_active_plugins: create
-                    .initial_active_plugins
-                    .into_iter()
-                    .map(|p| p.environment_plugin_grant_id)
-                    .collect(),
-                original_phantom_id: create.original_phantom_id,
-                instance_id: create.instance_id
+                parameters: Box::new(CreateParameters {
+                    agent_id: create.agent_id,
+                    owner_kind: create.owner_kind,
+                    agent_mode: create.agent_mode,
+                    component_revision: create.component_revision,
+                    env: create.env.into_iter().collect(),
+                    environment_id: create.environment_id,
+                    created_by: create.created_by,
+                    local_agent_config: create
+                        .local_agent_config
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()?,
+                    parent: create.parent,
+                    component_size: create.component_size,
+                    initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                    initial_active_plugins: create
+                        .initial_active_plugins
+                        .into_iter()
+                        .map(|p| p.environment_plugin_grant_id)
+                        .collect(),
+                    original_phantom_id: create.original_phantom_id,
+                    instance_id: create.instance_id,
+                }),
             }),
             PublicOplogEntry::Start(start) => {
                 let durable_function_type = match start.durable_function_type {
@@ -3487,7 +3672,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::SetRetryPolicy(p) => Ok(OplogEntry::SetRetryPolicy {
                 timestamp: p.timestamp,
                 entity_parent_start_index: None,
-                policy: p.policy.into(),
+                policy: Box::new(p.policy.into()),
             }),
             PublicOplogEntry::RemoveRetryPolicy(p) => Ok(OplogEntry::RemoveRetryPolicy {
                 timestamp: p.timestamp,
@@ -3610,6 +3795,14 @@ fn public_agent_invocation_result_to_raw(
         PublicAgentInvocationResult::AgentMethod(params) => {
             Ok(AgentInvocationResult::AgentMethod {
                 output: params.output.into_parts().1,
+            })
+        }
+        PublicAgentInvocationResult::ExternalTool(params) => {
+            Ok(AgentInvocationResult::ExternalTool {
+                result: match params.result {
+                    PublicExternalToolResult::Success(result) => Ok(result),
+                    PublicExternalToolResult::Failure(error) => Err(error),
+                },
             })
         }
         PublicAgentInvocationResult::ManualUpdate(_) => Ok(AgentInvocationResult::ManualUpdate),
@@ -3982,46 +4175,50 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         let proto_ts: prost_types::Timestamp = timestamp.into();
 
         let entry = match value {
-            OplogEntry::Create {
-                agent_id,
-                agent_mode,
-                component_revision,
-                env,
-                environment_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                local_agent_config,
-                original_phantom_id,
-                instance_id,
-                ..
-            } => Entry::Create(RawCreateParameters {
-                agent_id: Some(agent_id.into()),
-                agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
-                    as i32,
-                component_revision: component_revision.into(),
-                env: env
-                    .into_iter()
-                    .map(|(k, v)| RawEnvVar { key: k, value: v })
-                    .collect(),
-                environment_id: Some(environment_id.into()),
-                created_by: Some(created_by.into()),
-                parent: parent.map(Into::into),
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins: initial_active_plugins
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                local_agent_config: local_agent_config
-                    .into_iter()
-                    .map(|e| crate::serialization::serialize(&e))
-                    .collect::<Result<Vec<_>, _>>()?,
-                original_phantom_id: original_phantom_id.map(Into::into),
-                instance_id: Some(instance_id.into()),
-            }),
+            OplogEntry::Create { parameters, .. } => {
+                let CreateParameters {
+                    agent_id,
+                    owner_kind,
+                    agent_mode,
+                    component_revision,
+                    env,
+                    environment_id,
+                    created_by,
+                    parent,
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins,
+                    local_agent_config,
+                    original_phantom_id,
+                    instance_id,
+                } = *parameters;
+                Entry::Create(RawCreateParameters {
+                    agent_id: Some(agent_id.into()),
+                    owner_kind: owner_kind.into(),
+                    agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
+                        as i32,
+                    component_revision: component_revision.into(),
+                    env: env
+                        .into_iter()
+                        .map(|(k, v)| RawEnvVar { key: k, value: v })
+                        .collect(),
+                    environment_id: Some(environment_id.into()),
+                    created_by: Some(created_by.into()),
+                    parent: parent.map(Into::into),
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins: initial_active_plugins
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    local_agent_config: local_agent_config
+                        .into_iter()
+                        .map(|e| crate::serialization::serialize(&e))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    original_phantom_id: original_phantom_id.map(Into::into),
+                    instance_id: Some(instance_id.into()),
+                })
+            }
             OplogEntry::Start {
                 parent_start_index,
                 function_name,
@@ -4083,7 +4280,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .into_iter()
                     .map(span_data_to_proto)
                     .collect(),
-                wallet_pin: wallet_pin.map(invocation_wallet_pin_to_proto),
+                wallet_pin: Some(invocation_wallet_pin_to_proto(*wallet_pin)),
             }),
             OplogEntry::AgentInvocationFinished {
                 result,
@@ -4340,7 +4537,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::SetRetryPolicy { policy, .. } => {
                 Entry::SetRetryPolicy(RawSetRetryPolicyParameters {
-                    policy: Some(policy.into()),
+                    policy: Some((*policy).into()),
                 })
             }
             OplogEntry::RemoveRetryPolicy { name, .. } => {
@@ -4362,7 +4559,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 timestamp, event, ..
             } => Entry::CardEventQueued(RawCardEventQueuedParameters {
                 timestamp: Some(timestamp.into()),
-                event: Some(raw_queued_card_event_to_proto(event)?),
+                event: Some(raw_queued_card_event_to_proto(*event)?),
             }),
             OplogEntry::CardInstalled {
                 timestamp,
@@ -4410,7 +4607,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 timestamp: Some(timestamp.into()),
                 transfer_id: Some(transfer_id.into()),
                 card_id: Some(card_id.0.into()),
-                source_holder: source_holder.map(card_holder_to_proto),
+                source_holder: Some(card_holder_to_proto(source_holder)),
                 target_holder: Some(card_holder_to_proto(target_holder)),
                 source_wallet_generation,
             }),
@@ -4432,7 +4629,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 Entry::CardTransferred(RawCardTransferredParameters {
                     timestamp: Some(timestamp.into()),
                     transfer_id: Some(transfer_id.into()),
-                    source_card_id: source_card_id.map(|id| id.0.into()),
+                    source_card_id: Some(source_card_id.0.into()),
                     installed_card_id: Some(installed_card_id.0.into()),
                     target_holder: Some(card_holder_to_proto(target_holder)),
                     card: crate::serialization::serialize(&card)?,
@@ -4452,7 +4649,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .into_iter()
                     .map(card_holder_to_proto)
                     .collect(),
-                generation_bumps: Vec::new(),
                 local_wallet_generation,
             }),
             OplogEntry::CardTransferConfirmed {
@@ -4545,6 +4741,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
         match value.entry.ok_or("Missing entry in RawOplogEntry")? {
             Entry::Create(p) => {
                 let agent_id = p.agent_id.ok_or("Missing agent_id")?.try_into()?;
+                let owner_kind = crate::model::agent::OwnerKind::try_from(p.owner_kind)?;
                 let agent_mode: AgentMode =
                     golem_api_grpc::proto::golem::component::AgentMode::try_from(p.agent_mode)
                         .map_err(|e| format!("Invalid agent_mode: {e}"))?
@@ -4577,19 +4774,22 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
 
                 Ok(OplogEntry::Create {
                     timestamp,
-                    agent_id,
-                    agent_mode,
-                    component_revision,
-                    env,
-                    environment_id,
-                    created_by,
-                    parent,
-                    component_size: p.component_size,
-                    initial_total_linear_memory_size: p.initial_total_linear_memory_size,
-                    initial_active_plugins,
-                    local_agent_config,
-                    original_phantom_id,
-                    instance_id,
+                    parameters: Box::new(CreateParameters {
+                        agent_id,
+                        owner_kind,
+                        agent_mode,
+                        component_revision,
+                        env,
+                        environment_id,
+                        created_by,
+                        parent,
+                        component_size: p.component_size,
+                        initial_total_linear_memory_size: p.initial_total_linear_memory_size,
+                        initial_active_plugins,
+                        local_agent_config,
+                        original_phantom_id,
+                        instance_id,
+                    }),
                 })
             }
             Entry::Start(p) => {
@@ -4657,10 +4857,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     trace_id,
                     trace_states: p.trace_states,
                     invocation_context,
-                    wallet_pin: p
-                        .wallet_pin
-                        .map(invocation_wallet_pin_from_proto)
-                        .transpose()?,
+                    wallet_pin: Box::new(invocation_wallet_pin_from_proto(
+                        p.wallet_pin.ok_or("Missing wallet_pin")?,
+                    )?),
                 })
             }
             Entry::AgentInvocationFinished(p) => {
@@ -4959,7 +5158,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::SetRetryPolicy {
                     timestamp,
                     entity_parent_start_index,
-                    policy,
+                    policy: Box::new(policy),
                 })
             }
             Entry::RemoveRetryPolicy(p) => Ok(OplogEntry::RemoveRetryPolicy {
@@ -4977,13 +5176,15 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::CardEventQueued(p) => Ok(OplogEntry::CardEventQueued {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
                 entity_parent_start_index,
-                event: raw_queued_card_event_from_proto(p.event.ok_or("Missing event")?)?,
+                event: Box::new(raw_queued_card_event_from_proto(
+                    p.event.ok_or("Missing event")?,
+                )?),
             }),
             Entry::CardInstalled(p) => Ok(OplogEntry::CardInstalled {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
                 entity_parent_start_index,
                 queued_event_index: p.queued_event_index.map(OplogIndex::from_u64),
-                card: deserialize_stored_card(&p.card, "installed card")?,
+                card: Box::new(deserialize_stored_card(&p.card, "installed card")?),
                 wallet_generation: p.wallet_generation,
             }),
             Entry::CardInstallFailed(p) => Ok(OplogEntry::CardInstallFailed {
@@ -4999,7 +5200,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::CardDerived(p) => Ok(OplogEntry::CardDerived {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
                 entity_parent_start_index,
-                card: deserialize_stored_card(&p.card, "derived card")?,
+                card: Box::new(deserialize_stored_card(&p.card, "derived card")?),
                 wallet_generation: p.wallet_generation,
             }),
             Entry::CardTransferStarted(p) => Ok(OplogEntry::CardTransferStarted {
@@ -5007,7 +5208,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 entity_parent_start_index,
                 transfer_id: p.transfer_id.ok_or("Missing transfer_id")?.into(),
                 card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
-                source_holder: p.source_holder.map(card_holder_from_proto).transpose()?,
+                source_holder: card_holder_from_proto(
+                    p.source_holder.ok_or("Missing source_holder")?,
+                )?,
                 target_holder: card_holder_from_proto(
                     p.target_holder.ok_or("Missing target_holder")?,
                 )?,
@@ -5029,12 +5232,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
                     entity_parent_start_index,
                     transfer_id: p.transfer_id.ok_or("Missing transfer_id")?.into(),
-                    source_card_id: p.source_card_id.map(|id| CardId(id.into())),
+                    source_card_id: CardId(
+                        p.source_card_id.ok_or("Missing source_card_id")?.into(),
+                    ),
                     installed_card_id,
                     target_holder: card_holder_from_proto(
                         p.target_holder.ok_or("Missing target_holder")?,
                     )?,
-                    card,
+                    card: Box::new(card),
                     target_wallet_generation: p.target_wallet_generation,
                 })
             }
@@ -5204,6 +5409,75 @@ mod successful_update_proto_tests {
 }
 
 #[cfg(test)]
+mod public_tool_result_proto_tests {
+    use crate::base_model::oplog::{
+        ExternalToolResultParameters, PublicAgentInvocationResult, PublicExternalToolResult,
+    };
+    use crate::base_model::tool::{
+        SerializableCustomToolError, SerializableToolError, SerializableToolInvocationResult,
+        SerializableToolRpcError,
+    };
+    use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+    use test_r::test;
+
+    fn typed(value: &str) -> TypedSchemaValue {
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::string()),
+            SchemaValue::String(value.to_string()),
+        )
+    }
+
+    fn assert_roundtrip(result: PublicExternalToolResult) {
+        let original =
+            PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters { result });
+        let proto: golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult =
+            original.clone().try_into().unwrap();
+        let decoded = PublicAgentInvocationResult::try_from(proto).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn public_external_tool_result_protobuf_preserves_success_and_every_error_variant() {
+        assert_roundtrip(PublicExternalToolResult::Success(
+            SerializableToolInvocationResult {
+                result: Some(Box::new(typed("output"))),
+            },
+        ));
+        for error in [
+            SerializableToolRpcError::ProtocolError("protocol".into()),
+            SerializableToolRpcError::Denied("denied".into()),
+            SerializableToolRpcError::NotFound("missing".into()),
+            SerializableToolRpcError::RemoteInternalError("internal".into()),
+            SerializableToolRpcError::Cancelled,
+            SerializableToolRpcError::ResourceExhausted("quota".into()),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidToolName("name".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidCommandPath(vec!["a".into(), "b".into()]),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidInput("input".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::ConstraintViolation("constraint".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidResult("result".into()),
+            )),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                    name: "custom".into(),
+                    payload: typed("custom"),
+                })),
+            )),
+        ] {
+            assert_roundtrip(PublicExternalToolResult::Failure(error));
+        }
+    }
+}
+
+#[cfg(test)]
 mod read_only_violation_roundtrip {
     use crate::model::oplog::{AgentError, ReadOnlyViolationError};
     use proptest::prelude::*;
@@ -5329,7 +5603,7 @@ mod queued_card_event_proto_tests {
         let source_card_id = CardId::new();
         let event = QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
             transfer_id: Uuid::new_v4(),
-            source_card_id: Some(source_card_id),
+            source_card_id,
             card_id,
             card: Some(stored_card(card_id)),
         });
@@ -5345,7 +5619,7 @@ mod queued_card_event_proto_tests {
         let card_id = CardId::new();
         let event = QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
             transfer_id: Uuid::new_v4(),
-            source_card_id: Some(CardId::new()),
+            source_card_id: CardId::new(),
             card_id,
             card: Some(stored_card(card_id)),
         });

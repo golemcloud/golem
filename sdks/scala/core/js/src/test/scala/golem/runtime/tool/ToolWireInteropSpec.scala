@@ -19,7 +19,7 @@ package golem.runtime.tool
 import golem.host.ToolWireInterop
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
-import golem.tool.{Doc, ToolMiddlewareDescriptor, ToolMiddlewareScope}
+import golem.tool.{Doc, ToolMiddleware, ToolMiddlewareDescriptor, ToolMiddlewareScope}
 import golem.tool.wire.{WitCustomToolError, WitTool, WitToolError}
 import zio.test._
 
@@ -76,13 +76,15 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
           "interop-monomorphic",
           List("mono"),
           Doc("summary", "description"),
-          ToolMiddlewareScope.Monomorphic(tool, Some(tool))
+          ToolMiddlewareScope.Monomorphic(tool, Some(tool)),
+          ToolMiddleware.noParametersSchema
         ),
         ToolMiddlewareDescriptor(
           "interop-universal",
           Nil,
           Doc.empty,
-          ToolMiddlewareScope.Universal
+          ToolMiddlewareScope.Universal,
+          ToolMiddleware.noParametersSchema
         )
       )
       val roundtripped =
@@ -97,13 +99,20 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
             "interop-monomorphic-shape",
             List("shape"),
             Doc.empty,
-            ToolMiddlewareScope.Monomorphic(tool, None)
+            ToolMiddlewareScope.Monomorphic(tool, None),
+            ToolMiddleware.noParametersSchema
           )
         )
       )
       val universal = dyn(
         ToolWireInterop.toolMiddlewareToJs(
-          ToolMiddlewareDescriptor("interop-universal-shape", Nil, Doc.empty, ToolMiddlewareScope.Universal)
+          ToolMiddlewareDescriptor(
+            "interop-universal-shape",
+            Nil,
+            Doc.empty,
+            ToolMiddlewareScope.Universal,
+            ToolMiddleware.noParametersSchema
+          )
         )
       )
       val monomorphicScope = dyn(monomorphic.scope)

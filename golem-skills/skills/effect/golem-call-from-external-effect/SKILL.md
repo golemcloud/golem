@@ -17,7 +17,8 @@ standalone Node.js process.
 ## Steps
 
 1. Ensure the Effect agent has the required TypeScript name and method contract, then build it.
-2. Configure a `ts` bridge in `golem.yaml`; there is no separate `effect` bridge target.
+2. Configure a `ts` external bridge in `golem.yaml` for the Promise-based client used below. An
+   `effect` bridge target also exists, but has a different Effect-native API.
 3. Run `golem build` to regenerate the bridge from the built agent metadata.
 4. Deploy the built application so the external client can reach the current agent definition.
 5. Install and build the generated npm package.
@@ -33,20 +34,20 @@ Add or extend the top-level `bridge` section in `golem.yaml`:
 ```yaml
 bridge:
   ts:
-    agents:
-      - CounterAgent
-    outputDir: ./bridge-sdk/ts/counter-agent-client
+    external:
+      agents:
+        - CounterAgent
+      outputDir: ./bridge-sdk/ts
 ```
 
 `agents` accepts `"*"` or a list containing agent type names and component names
 (`namespace:name`). Preserve any existing bridge languages and selected agents.
 
-For this Golem manifest version:
+For this Promise-based client:
 
-- use `bridge.ts.agents`, not `bridge.effect`;
-- do not add an `external:` level under `ts`;
-- a custom `outputDir` is the generated package directory itself, not a parent directory for all
-  generated clients;
+- use `bridge.ts.external`; use `bridge.effect.external` only when the caller will consume the
+  Effect-native generated API;
+- `outputDir` is the parent directory for generated clients;
 - without `outputDir`, `CounterAgent` is generated under
   `golem-temp/bridge-sdk/ts/counter-agent-client/`.
 
@@ -84,7 +85,7 @@ do not guess them from the component source.
 
 Create the external application outside the Golem component source. Add the generated package as
 a file dependency and install Effect v4. Keep the `effect` version exactly aligned with the root
-Effect component's `package.json` (the pinned SDK uses `4.0.0-beta.98`):
+Effect component's `package.json` (the current SDK uses `4.0.0-rc.117`):
 
 ```json
 {
@@ -97,7 +98,7 @@ Effect component's `package.json` (the pinned SDK uses `4.0.0-beta.98`):
   },
   "dependencies": {
     "counter-agent-client": "file:../bridge-sdk/ts/counter-agent-client",
-    "effect": "4.0.0-beta.98"
+    "effect": "4.0.0-rc.117"
   },
   "devDependencies": {
     "@types/node": "^25",
@@ -231,7 +232,7 @@ For a durable agent, `get` creates or gets the instance identified by its agent 
 const getAgent = Effect.tryPromise(() => MyAgent.get("my-instance"));
 ```
 
-Every generated agent supports phantom instances:
+Durable agents support known and fresh phantom instances:
 
 ```typescript
 const phantomProgram = Effect.gen(function* () {
@@ -245,14 +246,16 @@ const phantomProgram = Effect.gen(function* () {
 });
 ```
 
-When the agent declares local configuration, the generated package also provides
-`getWithConfig`, `getPhantomWithConfig`, and `newPhantomWithConfig`. Read their generated
-declarations because configuration arguments follow the agent id values and reflect the
-agent's exact config schema.
+For ephemeral agents, use `newPhantom`; they do not expose durable `getPhantom` constructors. When
+a durable agent declares local configuration, the generated package provides `getWithConfig`,
+`getPhantomWithConfig`, and `newPhantomWithConfig`. An ephemeral agent with local configuration
+provides `newPhantomWithConfig`. Read the generated declarations because configuration arguments
+reflect the agent's exact schema.
 
-Generated remote methods are callable Promises for invoke-and-await. They also expose
-`abortable(signal, ...args)`, `trigger(...args)`, and `schedule(isoTimestamp, ...args)`. The latter
-two return `void`; do not wrap them as if they awaited a result.
+Generated remote methods are callable Promises for invoke-and-await and expose
+`abortable(signal, ...args)`. Durable non-streaming methods also expose `trigger(...args)` and
+`schedule(isoTimestamp, ...args)`, which return `void`. Ephemeral trigger/schedule operations return
+`Promise<InvocationReceipt>`. Streaming methods do not expose trigger or schedule variants.
 
 ## CLI Values for Effect Components
 
@@ -268,7 +271,8 @@ checks, but the external application should use the generated bridge for typed c
 
 ## Key Constraints
 
-- Generate `bridge.ts`; there is no Effect-specific external bridge target.
+- Generate `bridge.ts.external` for the Promise-based adapter shown here; an Effect-specific
+  external target also exists and exposes a different API.
 - Use the generated `configure` function and generated class declarations as the source of truth.
 - Wrap generated Promise calls in deferred `Effect.tryPromise` thunks.
 - Yield stateful calls sequentially when order matters.

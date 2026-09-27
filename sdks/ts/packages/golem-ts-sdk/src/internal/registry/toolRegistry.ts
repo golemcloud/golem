@@ -318,17 +318,7 @@ function camelCase(name: string): string {
 }
 
 function canonicalValueConforms(field: CanonicalInputField, value: SchemaValue): boolean {
-  if (field.optionalCarrier) {
-    if (value.tag !== 'option') return false;
-    if (
-      value.value !== undefined &&
-      !schemaValueConforms(field.codec.graph, field.codec.graph.root, value.value)
-    ) {
-      return false;
-    }
-  } else if (!schemaValueConforms(field.codec.graph, field.codec.graph.root, value)) {
-    return false;
-  }
+  if (!schemaValueConforms(field.codec.graph, field.codec.graph.root, value)) return false;
   try {
     return schemaValueIsCanonical(field.codec, value);
   } catch {

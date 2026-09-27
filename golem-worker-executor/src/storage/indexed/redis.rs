@@ -14,7 +14,7 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanResume,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -46,6 +46,13 @@ impl RedisIndexedStorage {
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:oplog:{key}")
+            }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id: _,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:staged-oplog:{key}")
             }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id: _,
@@ -209,17 +216,23 @@ impl IndexedStorage for RedisIndexedStorage {
             .map_err(|e| IndexedStorageError::Other(e.to_string()))
     }
 
-    async fn scan(
+    async fn scan_stable(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageMetaNamespace,
         prefix: Option<&str>,
-        cursor: ScanCursor,
+        resume: Option<ScanResume>,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        // A Redis SCAN cursor walks the hash space, so deleting keys behind it moves nothing, and
+        // a key present for the whole iteration comes back at least once.
+        let cursor = resume
+            .map(|resume| resume.into_cursor("Redis"))
+            .transpose()?
+            .unwrap_or(0);
         let pattern = Self::to_scan_pattern(prefix);
-        let (cursor, keys) = self
+        let (next, keys) = self
             .redis
             .with(svc_name, api_name)
             .scan(
@@ -231,29 +244,8 @@ impl IndexedStorage for RedisIndexedStorage {
             .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
         let keys = keys
             .into_iter()
-            .map(|k| Self::parse_composite_meta_key(namespace.clone(), &k))
+            .map(|key| Self::parse_composite_meta_key(namespace.clone(), &key))
             .collect();
-        Ok((cursor, keys))
-    }
-
-    async fn scan_stable(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        resume: Option<ScanResume>,
-        count: u64,
-    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
-        // Plain `scan`: a `SCAN` cursor walks the hash space, so deleting keys behind it moves
-        // nothing, and a key present for the whole iteration comes back at least once.
-        let cursor = resume
-            .map(|resume| resume.into_cursor("Redis"))
-            .transpose()?
-            .unwrap_or(0);
-        let (next, keys) = self
-            .scan(svc_name, api_name, namespace, prefix, cursor, count)
-            .await?;
         let next = (next != 0).then_some(ScanResume::Cursor(next));
         Ok((next, keys))
     }
@@ -269,7 +261,10 @@ impl IndexedStorage for RedisIndexedStorage {
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
-        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
+        let primary_oplog_insert = matches!(
+            &namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
         let options = primary_oplog_insert.then_some(Options {
             max_attempts: Some(1),
             ..Default::default()
@@ -301,7 +296,10 @@ impl IndexedStorage for RedisIndexedStorage {
         pairs: Arc<[(u64, Bytes)]>,
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
-            let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
+            let primary_oplog_insert = matches!(
+                namespace,
+                IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+            );
             let options = primary_oplog_insert.then_some(Options {
                 max_attempts: Some(1),
                 ..Default::default()
@@ -328,6 +326,33 @@ impl IndexedStorage for RedisIndexedStorage {
                 .map_err(|error| Self::classify_append_error(error, primary_oplog_insert))?;
         }
         Ok(())
+    }
+
+    async fn move_if_absent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        let source = Self::composite_key(source_namespace, source_key);
+        let target = Self::composite_key(target_namespace, target_key);
+        match self
+            .redis
+            .with(svc_name, api_name)
+            .move_stream_if_absent(source, target, expected_last_id)
+            .await
+            .map_err(|error| Self::classify_append_error(error, true))?
+        {
+            1 => Ok(true),
+            0 => Ok(false),
+            _ => Err(IndexedStorageError::Other(
+                "source index is missing, empty, gapped, or has an unexpected tip".to_string(),
+            )),
+        }
     }
 
     async fn length(

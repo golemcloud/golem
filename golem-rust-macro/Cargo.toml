@@ -13,6 +13,7 @@ path = "src/lib.rs"
 proc-macro = true
 
 [dependencies]
+golem-schema = { workspace = true }
 heck = { workspace = true }
 humantime = { workspace = true }
 proc-macro-crate = { workspace = true }
@@ -21,4 +22,5 @@ quote = { workspace = true }
 syn = { workspace = true, features = ["extra-traits", "full", "fold", "parsing", "visit-mut"] }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 test-r = { workspace = true }

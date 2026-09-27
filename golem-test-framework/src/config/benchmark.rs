@@ -122,6 +122,14 @@ pub struct BenchmarkCliParameters {
     #[arg(long, default_value = "false")]
     pub primary_only: bool,
 
+    /// Retain raw duration and count samples in JSON.
+    #[arg(long, default_value = "false")]
+    pub retain_details: bool,
+
+    /// Retain zero-valued primary count series in JSON.
+    #[arg(long, default_value = "false")]
+    pub retain_selected_zero_counts: bool,
+
     #[arg(long, default_value = "false")]
     pub otlp: bool,
 }

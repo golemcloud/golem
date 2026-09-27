@@ -47,11 +47,7 @@ object GolemPlugin extends AutoPlugin {
 
   private final case class GuestArtifact(fileName: String)
 
-  private val AgentGuestArtifact               = GuestArtifact("agent_guest.wasm")
-  private val ToolMiddlewareGuestArtifact      = GuestArtifact("tool_middleware_guest.wasm")
-  private val AgentToolMiddlewareGuestArtifact = GuestArtifact("agent_tool_middleware_guest.wasm")
-  private val GuestArtifacts                   =
-    Seq(AgentGuestArtifact, ToolMiddlewareGuestArtifact, AgentToolMiddlewareGuestArtifact)
+  private val AgentGuestArtifact = GuestArtifact("agent_guest.wasm")
 
   private lazy val scalafmt: Scalafmt = Scalafmt.create(getClass.getClassLoader)
 
@@ -153,16 +149,6 @@ object GolemPlugin extends AutoPlugin {
         "Where to write the embedded base guest runtime WASM (agent_guest.wasm) for use by app manifests."
       )
 
-    val golemToolMiddlewareGuestWasmFile: SettingKey[File] =
-      settingKey[File](
-        "Where to write the embedded pure tool middleware guest runtime WASM."
-      )
-
-    val golemAgentToolMiddlewareGuestWasmFile: SettingKey[File] =
-      settingKey[File](
-        "Where to write the embedded combined agent and tool middleware guest runtime WASM."
-      )
-
     val golemWriteAgentGuestWasm: TaskKey[File] =
       taskKey[File]("Writes the embedded base guest runtime WASM (agent_guest.wasm) to golemAgentGuestWasmFile.")
 
@@ -171,15 +157,9 @@ object GolemPlugin extends AutoPlugin {
         "Ensures the base guest runtime WASM (agent_guest.wasm) exists at golemAgentGuestWasmFile; writes it if missing."
       )
 
-    val golemEnsureToolMiddlewareGuestWasm: TaskKey[File] =
-      taskKey[File]("Ensures the pure tool middleware guest runtime WASM exists and is up-to-date.")
-
-    val golemEnsureAgentToolMiddlewareGuestWasm: TaskKey[File] =
-      taskKey[File]("Ensures the combined agent and tool middleware guest runtime WASM exists and is up-to-date.")
-
     val golemPrepare: TaskKey[Unit] =
       taskKey[Unit](
-        "Prepares the app directory for golem-cli by ensuring every role runtime WASM exists and is up-to-date."
+        "Prepares the app directory for golem-cli by ensuring the guest runtime WASM exists and is up-to-date."
       )
 
     val golemBuildComponent: InputKey[File] =
@@ -208,14 +188,6 @@ object GolemPlugin extends AutoPlugin {
       golemAgentGuestWasmFile := {
         val projectRoot = (ThisProject / baseDirectory).value
         appGeneratedArtifactFile(projectRoot, AgentGuestArtifact.fileName)
-      },
-      golemToolMiddlewareGuestWasmFile := {
-        val projectRoot = (ThisProject / baseDirectory).value
-        appGeneratedArtifactFile(projectRoot, ToolMiddlewareGuestArtifact.fileName)
-      },
-      golemAgentToolMiddlewareGuestWasmFile := {
-        val projectRoot = (ThisProject / baseDirectory).value
-        appGeneratedArtifactFile(projectRoot, AgentToolMiddlewareGuestArtifact.fileName)
       },
       golemWriteAgentGuestWasm := {
         val out = golemAgentGuestWasmFile.value
@@ -247,28 +219,8 @@ object GolemPlugin extends AutoPlugin {
             }
         }.value
       },
-      golemEnsureToolMiddlewareGuestWasm := {
-        ensureGuestWasm(
-          ToolMiddlewareGuestArtifact,
-          golemToolMiddlewareGuestWasmFile.value,
-          getClass.getClassLoader,
-          (LocalRootProject / baseDirectory).value,
-          streams.value.log
-        )
-      },
-      golemEnsureAgentToolMiddlewareGuestWasm := {
-        ensureGuestWasm(
-          AgentToolMiddlewareGuestArtifact,
-          golemAgentToolMiddlewareGuestWasmFile.value,
-          getClass.getClassLoader,
-          (LocalRootProject / baseDirectory).value,
-          streams.value.log
-        )
-      },
       golemPrepare := {
         golemEnsureAgentGuestWasm.value
-        golemEnsureToolMiddlewareGuestWasm.value
-        golemEnsureAgentToolMiddlewareGuestWasm.value
         ()
       },
       golemBuildComponent := Def.inputTaskDyn {
@@ -282,7 +234,7 @@ object GolemPlugin extends AutoPlugin {
 
           agentWasmOpt.foreach { p =>
             val target   = file(p)
-            val artifact = GuestArtifacts.find(_.fileName == target.getName).getOrElse(AgentGuestArtifact)
+            val artifact = AgentGuestArtifact
             val bytes    =
               embeddedGuestWasmBytes(artifact, getClass.getClassLoader, (LocalRootProject / baseDirectory).value)
             val sha = sha256(bytes)

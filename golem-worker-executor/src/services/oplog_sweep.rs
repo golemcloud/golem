@@ -952,10 +952,10 @@ mod tests {
     };
     use crate::services::shard::ShardServiceDefault;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
-    use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace, ScanCursor};
+    use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
     use async_trait::async_trait;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::Principal;
+    use golem_common::model::agent::{OwnerKind, Principal};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
@@ -963,8 +963,8 @@ mod tests {
     use golem_common::model::oplog::OplogEntry;
     use golem_common::model::worker::AgentConfigEntryDto;
     use golem_common::model::{
-        AgentFingerprint, AgentInvocation, AgentMetadata, AgentStatusRecord, RetryConfig,
-        ShardEpoch, ShardLeaseRevision, Timestamp,
+        AgentFingerprint, AgentInvocation, AgentMetadata, AgentStatusRecord, IdempotencyKey,
+        RetryConfig, ShardEpoch, ShardLeaseRevision, Timestamp,
     };
     use golem_common::read_only_lock;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -987,21 +987,22 @@ mod tests {
     }
 
     fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry {
-        OplogEntry::create(
-            agent_id.clone(),
-            AgentMode::Ephemeral,
-            ComponentRevision::new(1).unwrap(),
-            Vec::new(),
+        OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            agent_id: agent_id.clone(),
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_mode: AgentMode::Ephemeral,
+            component_revision: ComponentRevision::new(1).unwrap(),
+            env: Vec::new(),
             environment_id,
-            AccountId::new(),
-            None,
-            100,
-            100,
-            HashSet::new(),
-            Vec::new(),
-            None,
-            Uuid::new_v4(),
-        )
+            created_by: AccountId::new(),
+            parent: None,
+            component_size: 100,
+            initial_total_linear_memory_size: 100,
+            initial_active_plugins: HashSet::new(),
+            local_agent_config: Vec::new(),
+            original_phantom_id: None,
+            instance_id: Uuid::new_v4(),
+        }))
     }
 
     // --- pure functions -----------------------------------------------------------------------
@@ -1442,20 +1443,6 @@ mod tests {
             self.inner.exists(svc_name, api_name, namespace, key).await
         }
 
-        async fn scan(
-            &self,
-            svc_name: &'static str,
-            api_name: &'static str,
-            namespace: IndexedStorageMetaNamespace,
-            prefix: Option<&str>,
-            cursor: ScanCursor,
-            count: u64,
-        ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-            self.inner
-                .scan(svc_name, api_name, namespace, prefix, cursor, count)
-                .await
-        }
-
         async fn scan_stable(
             &self,
             svc_name: &'static str,
@@ -1670,6 +1657,7 @@ mod tests {
     fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata {
         AgentMetadata {
             agent_id: agent_id.clone(),
+            owner_kind: OwnerKind::ComponentAgent,
             env: vec![],
             environment_id,
             created_by: AccountId::new(),
@@ -1811,6 +1799,17 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for DirectAccess {
+        async fn expire_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_agent_fingerprint: AgentFingerprint,
+            _public_session_id: String,
+            _session_key: IdempotencyKey,
+            _expected_deadline_millis: u64,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!("the sweep never expires durable stream sessions")
+        }
+
         async fn active_worker_fingerprint(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1880,6 +1879,24 @@ mod tests {
             _component_revision: Option<ComponentRevision>,
             _worker_parent: Option<AgentId>,
             _worker_creation_principal: Principal,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!("the sweep never enqueues invocations")
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            unreachable!("the sweep never enqueues invocations")
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
         ) -> Result<(), WorkerExecutorError> {
             unreachable!("the sweep never enqueues invocations")
         }

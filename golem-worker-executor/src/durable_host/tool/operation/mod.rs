@@ -198,6 +198,7 @@ impl ToolOperationWinner {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct OwnerToolOperationContext {
     pub parent: OwnerInvocationId,
     pub call_mode: EntityCallMode,
@@ -1405,6 +1406,7 @@ impl OwnerToolOperation {
     pub(crate) async fn select_infrastructure(&self, error: WorkerExecutorError) -> bool {
         tracing::debug!(
             operation_id = self.id,
+            error = %error,
             "Tool operation observed an infrastructure failure"
         );
         let selected = self

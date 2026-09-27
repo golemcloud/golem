@@ -1196,6 +1196,8 @@ pub mod environment {
 }
 
 pub mod tool {
+    use crate::model::agent::RawAgentId;
+    use chrono::{DateTime, Utc};
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
@@ -1204,6 +1206,8 @@ pub mod tool {
     use golem_common::base_model::tool_middleware::ToolMiddlewareName;
     use golem_common::base_model::tool_middleware_release::ToolMiddlewareReleaseId;
     use golem_common::base_model::tool_release::ToolReleaseId;
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::component::ComponentName;
 
     #[derive(Debug, Subcommand)]
     pub enum ToolSubcommand {
@@ -1216,6 +1220,8 @@ pub mod tool {
             /// Deployed tool name
             tool_name: ToolName,
         },
+        /// Invoke a deployed native external tool
+        Invoke(ToolInvokeArgs),
         /// Manage published tool releases
         Release {
             #[command(subcommand)]
@@ -1321,6 +1327,43 @@ pub mod tool {
             /// Published tool middleware release ID
             release_id: ToolMiddlewareReleaseId,
         },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
+    pub struct ToolInvokeArgs {
+        /// Existing agent that owns the invocation
+        #[arg(long)]
+        pub agent: Option<RawAgentId>,
+        /// Component used to create a fresh ephemeral invocation owner without constructing an agent
+        #[arg(long)]
+        pub component: Option<ComponentName>,
+        /// Deployed tool name
+        pub tool_name: ToolName,
+        /// Tool subcommands, arguments and options after `--`; use `-- --help` for tool help
+        #[arg(last = true, value_name = "TOOL_ARGUMENT")]
+        pub tool_args: Vec<String>,
+        /// Read raw tool stdin from this file; use `-` for process stdin
+        #[arg(long, value_name = "PATH")]
+        pub stdin: Option<std::path::PathBuf>,
+        /// Request raw tool stdout
+        #[arg(long)]
+        pub stdout: bool,
+        /// Write raw stdout to a file instead of process stdout
+        #[arg(long, requires = "stdout")]
+        pub output: Option<std::path::PathBuf>,
+        /// Enqueue without waiting
+        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output"])]
+        pub trigger: bool,
+        /// Look up an existing invocation without starting execution or input
+        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output"])]
+        pub lookup: bool,
+        /// Schedule execution at an RFC 3339 timestamp
+        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output"])]
+        pub schedule_at: Option<DateTime<Utc>>,
+        /// Idempotency key; `-` generates a fresh key
+        #[arg(long, short)]
+        pub idempotency_key: Option<IdempotencyKey>,
     }
 
     #[derive(Debug, Subcommand)]
@@ -1596,10 +1639,10 @@ pub mod worker {
             ///
             /// Cursor can be used to get the next page of results, use the cursor returned
             /// in the previous response.
-            /// The cursor has the format 'layer/position' where both layer and position are numbers.
+            /// The cursor is an opaque string and must be passed back unchanged.
             ///
             /// Returned cursors: in `--format json/yaml/toon` the response includes a
-            /// `cursors` map of the form `{ "<component-name>": "<layer>/<position>", ... }`
+            /// `cursors` map of the form `{ "<component-name>": "<opaque-cursor>", ... }`
             /// (one entry per component that still has more results). Pass any of
             /// those values back as `--scan-cursor` to fetch the next page.
             /// An entry being absent means that component has been fully scanned.
@@ -1828,6 +1871,31 @@ pub mod api {
     use crate::command::api::domain::ApiDomainSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
     use clap::Subcommand;
+    use std::fmt::{Debug, Formatter};
+    use std::str::FromStr;
+
+    #[derive(Clone)]
+    pub struct OAuthCallbackUrl(url::Url);
+
+    impl OAuthCallbackUrl {
+        pub fn into_inner(self) -> url::Url {
+            self.0
+        }
+    }
+
+    impl Debug for OAuthCallbackUrl {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("OAuthCallbackUrl([REDACTED])")
+        }
+    }
+
+    impl FromStr for OAuthCallbackUrl {
+        type Err = url::ParseError;
+
+        fn from_str(value: &str) -> Result<Self, Self::Err> {
+            value.parse().map(Self)
+        }
+    }
 
     #[derive(Debug, Subcommand)]
     pub enum ApiSubcommand {
@@ -1841,10 +1909,81 @@ pub mod api {
             #[clap(subcommand)]
             subcommand: ApiSecuritySchemeSubcommand,
         },
+        /// Inspect, refresh and authorize MCP imports
+        McpImport {
+            #[clap(subcommand)]
+            subcommand: McpImportSubcommand,
+        },
         /// Manage API Domains
         Domain {
             #[clap(subcommand)]
             subcommand: ApiDomainSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum McpImportSubcommand {
+        /// Inspect an import's projected tool definitions
+        Tools {
+            /// Zero-based index in the target deployment's MCP imports
+            import_index: u32,
+            /// Deployment revision to target; defaults to the current deployment
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Fetch fresh upstream definitions for an import
+        Refresh {
+            /// Zero-based index in the target deployment's MCP imports
+            import_index: u32,
+            /// Deployment revision to target; defaults to the current deployment
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+        },
+        /// Start authorization and print the provider consent URL
+        Authorize {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Complete authorization from the exact provider callback URL
+        Complete {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Exact provider callback URL received after consent, including query parameters
+            callback_url: OAuthCallbackUrl,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Show non-secret authorization state
+        Status {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
+        },
+        /// Revoke the stored grant
+        Disconnect {
+            /// Zero-based import index in the target deployment or selected manifest
+            import_index: u32,
+            /// Deployment revision; defaults to current. Mutually exclusive with --manifest
+            #[arg(long)]
+            revision: Option<golem_common::model::deployment::DeploymentRevision>,
+            /// Use the selected environment's manifest import before deployment
+            #[arg(long, conflicts_with = "revision")]
+            manifest: bool,
         },
     }
 
@@ -2796,7 +2935,7 @@ pub mod server {
         /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
         /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
         /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
-        #[clap(long, value_parser = crate::model::byte_size::parse_positive)]
+        #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]
         pub system_memory_override: Option<std::num::NonZeroU64>,
 
         /// Address to serve the main API on, defaults to 0.0.0.0
@@ -2860,7 +2999,7 @@ pub mod server {
                 match get_env(NAME) {
                     Ok(value) => {
                         self.system_memory_override = Some(
-                            crate::model::byte_size::parse_positive(&value)
+                            golem_common::config::byte_size::parse_positive(&value)
                                 .map_err(anyhow::Error::msg)
                                 .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
                         );
@@ -3011,6 +3150,84 @@ mod test {
         }
 
         assert!(GolemCliCommand::try_parse_from(["golem", "environment", "tool", "list"]).is_err());
+    }
+
+    #[test]
+    fn tool_invoke_enforces_live_io_argument_ownership() {
+        let base = [
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "native",
+        ];
+        for suffix in [
+            &["--trigger", "--stdin", "-"][..],
+            &["--trigger", "--stdout"][..],
+            &["--lookup", "--input", "{}"][..],
+            &["--lookup", "--stdin", "-"][..],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.into_iter().chain(suffix.iter().copied()))
+                    .is_err(),
+                "unexpectedly accepted {suffix:?}"
+            );
+        }
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain([
+                "--stdin",
+                "-",
+                "--stdout",
+                "--output",
+                "result.bin"
+            ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn tool_invoke_passes_tool_options_after_separator_unchanged() {
+        let parsed = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "native",
+            "--",
+            "query",
+            "--stdout",
+            "--help",
+            "-vv",
+            "--",
+            "-file",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::Tool {
+            subcommand: crate::command::tool::ToolSubcommand::Invoke(args),
+        } = parsed.subcommand
+        else {
+            panic!()
+        };
+        assert!(args.stdout);
+        assert_eq!(
+            args.tool_args,
+            ["query", "--stdout", "--help", "-vv", "--", "-file"]
+        );
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "tool",
+                "invoke",
+                "--component",
+                "example:component",
+                "native",
+                "query",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

@@ -19,6 +19,8 @@ package golem
 import golem.host.{Retry, RetryApi}
 import zio.test._
 
+import scala.concurrent.Future
+
 object RetryCompileSpec extends ZIOSpecDefault {
   private val namedPolicy =
     Retry
@@ -41,10 +43,13 @@ object RetryCompileSpec extends ZIOSpecDefault {
       (verb, nounUri, prop) => RetryApi.resolvePolicy(verb, nounUri, prop)
     val retryGuard: Retry.NamedPolicy => Guards.RetryPolicyGuard =
       policy => Guards.useRetryPolicy(policy)
+    val localRetry: Future[String] =
+      Retry.retry(namedPolicy.policy, _ => List(property))(Future.successful("done"))
 
     val _ = retrySetter
     val _ = retryResolver
     val _ = retryGuard
+    val _ = localRetry
   }
 
   def spec = suite("RetryCompileSpec")(

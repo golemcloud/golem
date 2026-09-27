@@ -20,6 +20,7 @@ import golem.Principal
 import golem.runtime.annotations.{arg, error, toolDefinition, toolMiddleware, universalToolMiddleware}
 import golem.schema.TypedSchemaValue
 import golem.tool.{
+  ToolMiddleware,
   ToolInvokeError,
   ToolMiddlewareResult,
   UniversalToolMiddleware,
@@ -65,7 +66,7 @@ final class MiddlewareFixtureTransparent extends MiddlewareFixtureToolMiddleware
     underlying: MiddlewareFixtureToolUnderlying,
     config: String
   ): Future[Either[ToolInvokeError[Nothing], Unit]] =
-    underlying.middlewareFixture(config)
+    underlying.middlewareFixture(config).toMiddlewareResult
 
   def call(
     underlying: MiddlewareFixtureToolUnderlying,
@@ -73,7 +74,7 @@ final class MiddlewareFixtureTransparent extends MiddlewareFixtureToolMiddleware
     value: String,
     principal: Principal
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
-    underlying.call(config, value)
+    underlying.call(config, value).toMiddlewareResult
 
   def inspect(
     underlying: MiddlewareFixtureToolUnderlying,
@@ -81,7 +82,7 @@ final class MiddlewareFixtureTransparent extends MiddlewareFixtureToolMiddleware
     prefix: String,
     name: String
   ): Future[Either[ToolInvokeError[Nothing], String]] =
-    underlying.inspect(config, prefix, name)
+    underlying.inspect(config, prefix, name).toMiddlewareResult
 }
 
 @toolMiddleware(name = "middleware-fixture-adapter")
@@ -101,6 +102,7 @@ final class MiddlewareFixtureAdapter
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
     underlying
       .execute(value)
+      .toMiddlewareResult
       .map {
         case Right(length) => Right(s"$config:$length")
         case Left(error)   =>
@@ -121,8 +123,43 @@ final class MiddlewareFixtureAdapter
 @universalToolMiddleware(name = "middleware-fixture-universal")
 final class MiddlewareFixtureUniversal extends UniversalToolMiddleware {
   def invoke(
-    invocation: UniversalToolMiddlewareInvocation,
+    invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
     underlying: UniversalToolUnderlying
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
     underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
+}
+
+final case class MiddlewareInstallationRule(path: List[String], enabled: Boolean)
+final case class MiddlewareInstallationParameters(prefix: String, rules: List[MiddlewareInstallationRule])
+object MiddlewareInstallationRule {
+  implicit val schema: zio.blocks.schema.Schema[MiddlewareInstallationRule] = zio.blocks.schema.Schema.derived
+}
+object MiddlewareInstallationParameters {
+  implicit val schema: zio.blocks.schema.Schema[MiddlewareInstallationParameters] = zio.blocks.schema.Schema.derived
+}
+
+@universalToolMiddleware(name = "middleware-fixture-typed-universal")
+final class MiddlewareFixtureTypedUniversal
+    extends UniversalToolMiddleware.WithParameters[MiddlewareInstallationParameters] {
+  def invoke(
+    invocation: UniversalToolMiddlewareInvocation[MiddlewareInstallationParameters],
+    underlying: UniversalToolUnderlying
+  ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
+    underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
+}
+
+@toolDefinition(name = "middleware-typed-parameters")
+trait MiddlewareTypedParametersTool {
+  def call(value: String): String
+}
+
+@toolMiddleware(name = "middleware-fixture-typed-monomorphic")
+final class MiddlewareFixtureTypedMonomorphic
+    extends MiddlewareTypedParametersToolMiddleware.WithParameters[MiddlewareInstallationParameters] {
+  def call(
+    underlying: MiddlewareTypedParametersToolUnderlying,
+    parameters: MiddlewareInstallationParameters,
+    value: String
+  ): Future[Either[ToolInvokeError[Nothing], String]] =
+    underlying.call(s"${parameters.prefix}:$value").toMiddlewareResult
 }

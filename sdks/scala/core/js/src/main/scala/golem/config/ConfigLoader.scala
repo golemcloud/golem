@@ -52,16 +52,21 @@ private[golem] object ConfigLoader extends ConfigFieldLoader {
     }
   }
 
-  private def loadSecretValue[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): A = {
+  private[golem] def loadSecretHandle[A](
+    path: List[String]
+  )(implicit into: IntoSchema[A]): golem.schema.GuestSecretHandle = {
     val expectedHandleGraph = SchemaPayload.graphFromModel(secretGraph(into.graph))
     val handleTree          = AgentHostApi.getConfigValue(path, expectedHandleGraph)
     val handleValue         = SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(handleTree))
-    val handle              = handleValue match {
+    handleValue match {
       case SchemaValue.SecretValue(h) => h
       case other                      =>
         throw new RuntimeException(s"Expected secret handle at path ${path.mkString(".")}, got $other")
     }
+  }
 
+  private def loadSecretValue[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): A = {
+    val handle     = loadSecretHandle[A](path)
     val innerGraph = SchemaPayload.graph[A]
     val revealed   = SecretApi.reveal(handle, innerGraph)
     if (handle.take().isEmpty)

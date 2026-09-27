@@ -38,7 +38,9 @@
 //! `repeatable-map` option into its map node, a bool flag into `bool`, and a
 //! count flag into `u32`.
 
-use super::{CommandNode, FlagShape, FlagSpec, OptionShape, OptionSpec, TailPositional, Tool};
+use super::{
+    CommandNode, FlagShape, FlagSpec, OptionShape, OptionSpec, Positional, TailPositional, Tool,
+};
 use crate::schema::graph::{SchemaGraph, reachable_defs};
 use crate::schema::metadata::MetadataEnvelope;
 use crate::schema::schema_type::{NamedFieldType, SchemaType};
@@ -328,7 +330,7 @@ impl Tool {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
                     short: option.short,
-                    type_: option_collected_type(&option.shape),
+                    type_: canonical_option_type(option),
                 })
             }
             CanonicalSurfaceRef::GlobalFlag { node, index } => {
@@ -346,7 +348,7 @@ impl Tool {
                     name: positional.name.clone(),
                     aliases: Vec::new(),
                     short: None,
-                    type_: positional.type_.clone(),
+                    type_: canonical_positional_type(positional),
                 })
             }
             CanonicalSurfaceRef::BodyTail => {
@@ -364,7 +366,7 @@ impl Tool {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
                     short: option.short,
-                    type_: option_collected_type(&option.shape),
+                    type_: canonical_option_type(option),
                 })
             }
             CanonicalSurfaceRef::BodyFlag { index } => {
@@ -596,6 +598,33 @@ pub fn option_collected_type(shape: &OptionShape) -> SchemaType {
     }
 }
 
+fn canonical_option_type(option: &OptionSpec) -> SchemaType {
+    let collected = option_collected_type(&option.shape);
+    if !option.required
+        && option.default.is_none()
+        && !matches!(
+            option.shape,
+            OptionShape::RepeatableList(_) | OptionShape::RepeatableMap(_)
+        )
+        && !matches!(&collected, SchemaType::Option { .. })
+    {
+        SchemaType::option(collected)
+    } else {
+        collected
+    }
+}
+
+fn canonical_positional_type(positional: &Positional) -> SchemaType {
+    if !positional.required
+        && positional.default.is_none()
+        && !matches!(&positional.type_, SchemaType::Option { .. })
+    {
+        SchemaType::option(positional.type_.clone())
+    } else {
+        positional.type_.clone()
+    }
+}
+
 /// The collected value type of a tail positional: `list<item>`.
 pub fn tail_collected_type(tail: &TailPositional) -> SchemaType {
     SchemaType::list(tail.item_type.clone())
@@ -696,6 +725,7 @@ mod tests {
         BoolFlagShape, CommandBody, CommandIndex, CommandTree, Doc, Globals, Positional,
         Positionals, RepeatableListShape, RepeatableMapShape, Repetition, TailPositional,
     };
+    use crate::schema::validation::value::validate_value;
     use test_r::test;
 
     fn body() -> CommandBody {
@@ -945,7 +975,7 @@ mod tests {
                 .find(|f| f.name == name)
                 .unwrap_or_else(|| panic!("field {name}"))
         };
-        assert_eq!(by_name("color").type_, color_ref());
+        assert_eq!(by_name("color").type_, SchemaType::option(color_ref()));
         assert_eq!(by_name("case-sensitive").type_, SchemaType::bool());
         assert_eq!(by_name("pattern").type_, SchemaType::string());
         assert_eq!(
@@ -956,8 +986,83 @@ mod tests {
             by_name("extra-patterns").type_,
             SchemaType::list(SchemaType::string())
         );
-        assert_eq!(by_name("max-count").type_, SchemaType::u32());
+        assert_eq!(
+            by_name("max-count").type_,
+            SchemaType::option(SchemaType::u32())
+        );
         assert_eq!(by_name("verbosity").type_, SchemaType::u32());
+    }
+
+    #[test]
+    fn optional_surfaces_do_not_nest_an_author_supplied_option_carrier() {
+        let mut root = node("optional");
+        let mut positional = positional("label", SchemaType::option(SchemaType::string()));
+        positional.required = false;
+        root.body = Some(CommandBody {
+            positionals: Positionals {
+                fixed: vec![positional],
+                tail: None,
+            },
+            options: vec![option(
+                "mode",
+                OptionShape::Scalar(SchemaType::option(SchemaType::string())),
+            )],
+            ..body()
+        });
+        let tool = Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: vec![root] },
+            schema: SchemaGraph::empty(),
+        };
+
+        let fields = tool.canonical_input_fields(0);
+        assert_eq!(fields[0].type_, SchemaType::option(SchemaType::string()));
+        assert_eq!(fields[1].type_, SchemaType::option(SchemaType::string()));
+        tool.canonical_input_model(0)
+            .expect("canonical input remains well formed");
+    }
+
+    #[test]
+    fn optional_fields_accept_omitted_and_supplied_values_in_the_wire_record() {
+        let mut root = node("optional");
+        let mut positional = positional("label", SchemaType::string());
+        positional.required = false;
+        root.body = Some(CommandBody {
+            positionals: Positionals {
+                fixed: vec![positional],
+                tail: None,
+            },
+            options: vec![option("mode", OptionShape::Scalar(SchemaType::string()))],
+            ..body()
+        });
+        let tool = Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: vec![root] },
+            schema: SchemaGraph {
+                defs: Vec::new(),
+                root: SchemaType::record(Vec::new()),
+            },
+        };
+        let graph = tool.canonical_input_record_schema(0).unwrap();
+        for values in [
+            vec![
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option { inner: None },
+            ],
+            vec![
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("label".to_string()))),
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("mode".to_string()))),
+                },
+            ],
+        ] {
+            assert!(
+                validate_value(&graph, &graph.root, &SchemaValue::Record { fields: values })
+                    .is_ok()
+            );
+        }
     }
 
     #[test]

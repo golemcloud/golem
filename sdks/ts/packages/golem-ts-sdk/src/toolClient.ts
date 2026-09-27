@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { RpcError } from 'golem:tool/host@0.1.0';
+import type { ToolRpcError } from 'golem:core/types@2.0.0';
 import { createToolClientTransport, isRpcError } from './bridge/tool';
 import {
   createToolClient,
   decodeDeclaredToolError,
   getExtendedToolDefinition,
+  registerToolClientFactory,
   type AnyToolDefinition,
   type ToolClient,
   type ToolClientFailureContext,
@@ -30,8 +31,35 @@ export interface ToolClientOptions {
   readonly lookupName?: string;
 }
 
+/** A caller-owned typed command definition; its commands may be a subset of the deployed tool. */
+export interface ToolClientDefinition<Definition extends AnyToolDefinition> {
+  readonly name?: string;
+  readonly definition: Definition;
+  client(
+    targetName?: string,
+    options?: Omit<ToolClientOptions, 'lookupName'>,
+  ): ToolClient<Definition>;
+}
+
+/** Bind a partial typed tool definition without discovery or compatibility preflight. */
+export function toolClientDefinition<Definition extends AnyToolDefinition>(
+  definition: Definition,
+  name?: string,
+): ToolClientDefinition<Definition> {
+  return Object.freeze({
+    name,
+    definition,
+    client(targetName?: string, options: Omit<ToolClientOptions, 'lookupName'> = {}) {
+      const lookupName = name ?? targetName;
+      if (!lookupName)
+        throw new TypeError('A nameless tool client definition requires a target name');
+      return client(definition, { ...options, lookupName });
+    },
+  });
+}
+
 export type ToolCallErrorCause<Errors> =
-  | { readonly tag: 'rpc'; readonly error: RpcError }
+  | { readonly tag: 'rpc'; readonly error: ToolRpcError }
   | { readonly tag: 'tool'; readonly error: Errors }
   | {
       readonly tag: 'unknown-error';
@@ -61,6 +89,8 @@ export function client<Definition extends AnyToolDefinition>(
   return createToolClient(definition, transport, mapToolClientFailure);
 }
 
+registerToolClientFactory(client);
+
 function mapToolClientFailure(
   error: unknown,
   { body, callName }: ToolClientFailureContext,
@@ -72,7 +102,7 @@ function mapToolClientFailure(
 
 function mapToolRpcError(
   body: ToolClientFailureContext['body'],
-  error: RpcError,
+  error: ToolRpcError,
   callName: string,
 ): ToolCallError<unknown> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error') {

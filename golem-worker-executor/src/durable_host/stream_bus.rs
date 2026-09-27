@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use async_broadcast::{Receiver, RecvError, Sender, TrySendError, broadcast};
 use golem_common::base_model::durable_stream::{
     MAX_LIVE_JOIN_BUFFER_SIZE, MAX_LIVE_READERS_PER_STREAM, MIN_LIVE_JOIN_BUFFER_SIZE, StreamOffset,
@@ -610,6 +611,10 @@ pub(crate) enum LiveStreamEventPayload<T> {
     Item(T),
     End,
     Error(String),
+    ClassifiedError {
+        kind: HostFailureKind,
+        message: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -682,6 +687,24 @@ impl<T: Clone> LiveStreamPublisher<T> {
             .await
     }
 
+    pub(crate) async fn publish_host_error(
+        &self,
+        error: anyhow::Error,
+        ordinary_message: String,
+    ) -> Result<u64, LiveStreamPublishError> {
+        let payload = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<ClassifiedHostError>())
+            .map_or_else(
+                || LiveStreamEventPayload::Error(ordinary_message),
+                |classified| LiveStreamEventPayload::ClassifiedError {
+                    kind: classified.kind,
+                    message: classified.message.clone(),
+                },
+            );
+        self.publish_terminal(payload).await
+    }
+
     async fn publish_terminal(
         &self,
         payload: LiveStreamEventPayload<T>,
@@ -732,6 +755,11 @@ impl<T: Clone> LiveStreamPublisher<T> {
         AuxiliaryLiveStreamSubscriber {
             receiver: self.sender.new_receiver(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn close_without_terminal(&self) {
+        self.sender.close();
     }
 }
 

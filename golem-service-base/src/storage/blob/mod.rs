@@ -32,6 +32,23 @@ pub mod memory;
 pub mod s3;
 pub mod sqlite;
 
+pub const BLOB_STREAM_CHUNK_SIZE: usize = 64 * 1024;
+
+pub struct BlobRangeStream {
+    pub total_size: u64,
+    pub stream: BoxStream<'static, Result<Bytes, Error>>,
+}
+
+fn validate_range(offset: u64, length: u64, total_size: u64) -> Result<(), Error> {
+    if offset
+        .checked_add(length)
+        .is_none_or(|end| end > total_size)
+    {
+        return Err(anyhow!("Blob range outside object"));
+    }
+    Ok(())
+}
+
 #[async_trait]
 pub trait BlobStorage: Debug + Send + Sync {
     async fn get_raw(
@@ -49,6 +66,20 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error>;
+
+    /// Opens a bounded selection without collecting the object. Missing objects return
+    /// None; out-of-bounds selections are errors. Empty selections are allowed, including
+    /// at EOF. Chunks are at most BLOB_STREAM_CHUNK_SIZE bytes; dropping the stream releases
+    /// the reader. The total size describes the opened object, not the selection.
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error>;
 
     async fn get_raw_slice(
         &self,
@@ -129,7 +160,12 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error>;
 
-    /// Returns true if the directory was deleted; false if it did not exist
+    /// Deletes the directory at the path and all the entries below it, at any depth.
+    ///
+    /// A root path changes nothing and returns false. A path is at the root when it has no
+    /// name in it, for example an empty path or `.`. A directory that only holds blobs
+    /// exists. Returns true if the path had a directory. Returns false if the path had
+    /// nothing.
     async fn delete_dir(
         &self,
         target_label: &'static str,
@@ -180,6 +216,7 @@ pub trait BlobStorage: Debug + Send + Sync {
     }
 }
 
+/// Creates a blob-storage facade that binds the service and API labels once for multiple calls.
 pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized> {
     fn with(&self, svc_name: &'static str, api_name: &'static str) -> LabelledBlobStorage<'_, S>;
 }
@@ -194,6 +231,7 @@ impl<S: BlobStorage + ?Sized> BlobStorageLabelledApi<S> for S {
     }
 }
 
+/// A blob-storage facade with service and API labels bound to every operation.
 pub struct LabelledBlobStorage<'a, S: BlobStorage + ?Sized> {
     svc_name: &'static str,
     api_name: &'static str,
@@ -201,6 +239,16 @@ pub struct LabelledBlobStorage<'a, S: BlobStorage + ?Sized> {
 }
 
 impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
+    fn record(&self, operation: &'static str) {
+        crate::metrics::storage::record_logical_operation(
+            "blob",
+            operation,
+            self.svc_name,
+            self.api_name,
+            "",
+        );
+    }
+
     pub fn new(svc_name: &'static str, api_name: &'static str, storage: &'a S) -> Self {
         Self {
             svc_name,
@@ -214,8 +262,40 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
+        self.record("get");
         self.storage
             .get_raw(self.svc_name, self.api_name, namespace, path)
+            .await
+    }
+
+    pub async fn get_stream(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        self.record("get_stream");
+        self.storage
+            .get_stream(self.svc_name, self.api_name, namespace, path)
+            .await
+    }
+
+    pub async fn get_range_stream(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        self.record("get_range_stream");
+        self.storage
+            .get_range_stream(
+                self.svc_name,
+                self.api_name,
+                namespace,
+                path,
+                offset,
+                length,
+            )
             .await
     }
 
@@ -226,6 +306,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
+        self.record("get_slice");
         self.storage
             .get_raw_slice(self.svc_name, self.api_name, namespace, path, start, end)
             .await
@@ -236,6 +317,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
+        self.record("get_metadata");
         self.storage
             .get_metadata(self.svc_name, self.api_name, namespace, path)
             .await
@@ -247,12 +329,26 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
+        self.record("put");
         self.storage
             .put_raw(self.svc_name, self.api_name, namespace, path, data)
             .await
     }
 
+    pub async fn put_stream(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<(), Error> {
+        self.record("put_stream");
+        self.storage
+            .put_stream(self.svc_name, self.api_name, namespace, path, stream)
+            .await
+    }
+
     pub async fn delete(&self, namespace: BlobStorageNamespace, path: &Path) -> Result<(), Error> {
+        self.record("delete");
         self.storage
             .delete(self.svc_name, self.api_name, namespace, path)
             .await
@@ -263,6 +359,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
     ) -> Result<(), Error> {
+        self.record("delete_many");
         self.storage
             .delete_many(self.svc_name, self.api_name, namespace, paths)
             .await
@@ -273,6 +370,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        self.record("create_dir");
         self.storage
             .create_dir(self.svc_name, self.api_name, namespace, path)
             .await
@@ -283,6 +381,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
+        self.record("list_dir");
         self.storage
             .list_dir(self.svc_name, self.api_name, namespace, path)
             .await
@@ -293,6 +392,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
+        self.record("delete_dir");
         self.storage
             .delete_dir(self.svc_name, self.api_name, namespace, path)
             .await
@@ -303,6 +403,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
+        self.record("exists");
         self.storage
             .exists(self.svc_name, self.api_name, namespace, path)
             .await
@@ -314,6 +415,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        self.record("copy");
         self.storage
             .copy(self.svc_name, self.api_name, namespace, from, to)
             .await
@@ -325,6 +427,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        self.record("move");
         self.storage
             .r#move(self.svc_name, self.api_name, namespace, from, to)
             .await
@@ -427,6 +530,16 @@ pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+/// Tells if the path is at the root of a namespace.
+///
+/// A path is at the root when it has no name in it. An empty path is at the root, and so is a
+/// path that only has `.` in it.
+pub(crate) fn blob_path_is_root(path: &Path) -> bool {
+    !path
+        .components()
+        .any(|component| matches!(component, Component::Normal(_)))
 }
 
 pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {

@@ -118,6 +118,16 @@ object OplogApi {
     final case class ExternalSpan(data: ExternalSpanData) extends SpanData
   }
 
+  final case class WalletVersionToken(
+    walletIdHash: Array[Byte],
+    generation: BigInt
+  )
+
+  final case class PublicInvocationWalletPin(
+    walletToken: WalletVersionToken,
+    scopeCardId: Option[Uuid]
+  )
+
   final case class AgentInvocationStartedParameters(
     timestamp: ContextApi.DateTime,
     functionName: String,
@@ -125,7 +135,8 @@ object OplogApi {
     idempotencyKey: String,
     traceId: String,
     traceStates: List[String],
-    invocationContext: List[List[SpanData]]
+    invocationContext: List[List[SpanData]],
+    walletPin: PublicInvocationWalletPin
   )
 
   final case class AgentInvocationFinishedParameters(
@@ -713,10 +724,22 @@ object OplogApi {
   private def parseSpanDataLists(raw: js.Array[js.Array[JsSpanData]]): List[List[SpanData]] =
     raw.toList.map(_.toList.map(parseSpanData))
 
+  private def parseWalletPin(raw: JsPublicInvocationWalletPin): PublicInvocationWalletPin =
+    PublicInvocationWalletPin(
+      walletToken = WalletVersionToken(
+        walletIdHash = raw.walletToken.walletIdHash.toArray.map(_.toByte),
+        generation = BigInt(raw.walletToken.generation.toString)
+      ),
+      scopeCardId = raw.scopeCardId.toOption.map(cardId =>
+        Uuid(BigInt(cardId.uuid.highBits.toString), BigInt(cardId.uuid.lowBits.toString))
+      )
+    )
+
   private def parseAgentInvocationStartedParameters(
     raw: JsAgentInvocationStartedParameters
   ): AgentInvocationStartedParameters = {
-    val inv = raw.invocation
+    val inv       = raw.invocation
+    val walletPin = parseWalletPin(raw.walletPin)
     inv.tag match {
       case "agent-method-invocation" | "exported-function" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsAgentMethodInvocationParameters]
@@ -731,7 +754,8 @@ object OplogApi {
           idempotencyKey = p.idempotencyKey,
           traceId = p.traceId,
           traceStates = p.traceStates.toList,
-          invocationContext = parseSpanDataLists(p.invocationContext)
+          invocationContext = parseSpanDataLists(p.invocationContext),
+          walletPin = walletPin
         )
       case "agent-initialization" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsAgentInitializationParameters]
@@ -742,7 +766,8 @@ object OplogApi {
           idempotencyKey = p.idempotencyKey,
           traceId = p.traceId,
           traceStates = p.traceStates.toList,
-          invocationContext = parseSpanDataLists(p.invocationContext)
+          invocationContext = parseSpanDataLists(p.invocationContext),
+          walletPin = walletPin
         )
       case "save-snapshot" =>
         AgentInvocationStartedParameters(
@@ -752,7 +777,8 @@ object OplogApi {
           idempotencyKey = "",
           traceId = "",
           traceStates = Nil,
-          invocationContext = Nil
+          invocationContext = Nil,
+          walletPin = walletPin
         )
       case "load-snapshot" =>
         AgentInvocationStartedParameters(
@@ -762,7 +788,8 @@ object OplogApi {
           idempotencyKey = "",
           traceId = "",
           traceStates = Nil,
-          invocationContext = Nil
+          invocationContext = Nil,
+          walletPin = walletPin
         )
       case "process-oplog-entries" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsProcessOplogEntriesParameters]
@@ -773,7 +800,8 @@ object OplogApi {
           idempotencyKey = p.idempotencyKey,
           traceId = "",
           traceStates = Nil,
-          invocationContext = Nil
+          invocationContext = Nil,
+          walletPin = walletPin
         )
       case other =>
         AgentInvocationStartedParameters(
@@ -783,7 +811,8 @@ object OplogApi {
           idempotencyKey = "",
           traceId = "",
           traceStates = Nil,
-          invocationContext = Nil
+          invocationContext = Nil,
+          walletPin = walletPin
         )
     }
   }

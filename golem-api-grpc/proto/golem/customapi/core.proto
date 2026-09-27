@@ -192,12 +192,25 @@ message CompiledRoutes {
 
 message CompiledRoute {
   int32 route_id = 1;
-  golem.component.HttpMethod method = 2;
+  RouteMatch route_match = 2;
   repeated PathSegment path = 3;
-  RequestBodySchema body = 4;
   RouteBehaviour behavior = 5;
   RouteSecurity security = 6;
   CorsOptions cors = 7;
+}
+
+message RouteMatch {
+  oneof kind {
+    Method method = 1;
+    MountPrefix mount_prefix = 2;
+  }
+
+  message Method {
+    golem.component.HttpMethod method = 1;
+    bool trailing_slash = 2;
+  }
+
+  message MountPrefix {}
 }
 
 message RouteBehaviour {
@@ -206,6 +219,8 @@ message RouteBehaviour {
     CorsPreflight cors_preflight = 2;
     WebhookCallback webhook_callback = 3;
     OpenApiSpec open_api_spec = 4;
+    HttpRouter http_router = 5;
+    AgentFilesystem agent_filesystem = 6;
   }
 
   message CallAgent {
@@ -224,6 +239,41 @@ message RouteBehaviour {
     golem.component.AgentMode agent_mode = 13;
     AgentRouteMode route_mode = 14;
     uint32 base_path_variables = 15;
+    RequestBodySchema body = 16;
+    optional DurableStreamRoutePolicy durable_streams = 17;
+  }
+
+  message DurableStreamRoutePolicy {
+    repeated DurableStreamSlot slots = 1;
+    bool allow_external_writes = 2;
+    bool allow_stream_delete = 3;
+    bool allow_invocation_delete = 4;
+    optional DurableStreamRouteLoadPolicy load = 5;
+  }
+
+  message DurableStreamSlot {
+    string canonical_name = 1;
+    string public_name = 2;
+    DurableStreamSlotDirection direction = 3;
+    string content_type = 4;
+    DurableStreamRepresentation representation = 5;
+  }
+
+  enum DurableStreamSlotDirection {
+    DURABLE_STREAM_SLOT_DIRECTION_UNSPECIFIED = 0;
+    INPUT = 1;
+    OUTPUT = 2;
+  }
+
+  enum DurableStreamRepresentation {
+    DURABLE_STREAM_REPRESENTATION_UNSPECIFIED = 0;
+    JSON = 1;
+    BYTES = 2;
+  }
+
+  message DurableStreamRouteLoadPolicy {
+    optional uint32 max_concurrent_readers_per_stream = 1;
+    optional uint32 max_append_requests_per_second_per_stream = 2;
   }
 
   enum AgentRouteMode {
@@ -253,7 +303,47 @@ message RouteBehaviour {
       YAML = 2;
     }
 
+    enum Scheme {
+      SCHEME_UNSPECIFIED = 0;
+      HTTP = 1;
+      HTTPS = 2;
+    }
+
     Format format = 1;
+    Scheme scheme = 2;
+  }
+
+  message HttpRouter {
+    golem.component.ComponentId component_id = 1;
+    uint64 component_revision = 2;
+    string agent_type = 3;
+    CompiledInputSchema constructor_input = 4;
+    optional RouterMethod handler = 5;
+    // The compiled parameterless router method that returns the OpenAPI document as a string.
+    optional RouterMethod openapi_provider_method = 6;
+    repeated golem.component.FileMapping static_bindings = 7;
+    repeated RouterFileIndexEntry file_index = 8;
+  }
+
+  message RouterMethod {
+    string method_name = 1;
+    CompiledInputSchema input = 2;
+    CompiledOutputSchema output = 3;
+  }
+
+  message RouterFileIndexEntry {
+    string path = 1;
+    bytes blob_key = 2;
+    uint64 size = 3;
+  }
+
+  message AgentFilesystem {
+    golem.component.ComponentId component_id = 1;
+    uint64 component_revision = 2;
+    string agent_type = 3;
+    CompiledInputSchema constructor_input = 4;
+    repeated ConstructorParameter constructor_parameters = 5;
+    repeated golem.component.FileMapping filesystem_bindings = 6;
   }
 }
 
@@ -262,9 +352,11 @@ message RouteSecurity {
     None none = 1;
     SessionFromHeader session_from_header = 2;
     SecurityScheme security_scheme = 3;
+    Unavailable unavailable = 4;
   }
 
   message None {}
+  message Unavailable {}
 
   message SessionFromHeader {
     string header_name = 1;

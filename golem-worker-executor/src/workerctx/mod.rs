@@ -16,7 +16,7 @@ pub mod default;
 
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
-use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
@@ -48,7 +48,7 @@ use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -133,6 +133,35 @@ pub trait EntityReconstructionClaimHook: Send + Sync {
     async fn after_claim(&self, start_index: OplogIndex);
 }
 
+/// Where a replaying accessor durable call is paused relative to its scope admission.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplayAdmissionStage {
+    /// Before the call opens its durable scope (when it has one) and before it claims its `Start`.
+    BeforeScope,
+    /// After the scope `Start` is claimed but before the call's own `Start` is claimed.
+    AfterScope,
+}
+
+/// Test-harness coordination at the host-scheduling boundaries of durable call replay: where a
+/// replaying accessor call is admitted to claim its recorded `Start`, and where a direct
+/// (Store-holding) call begins waiting for its recorded terminal.
+#[doc(hidden)]
+#[async_trait]
+pub trait ReplayAdmissionHook: Send + Sync {
+    /// Runs on the accessor future, outside every cursor lock, before the replaying call claims
+    /// its `Start` at `stage`.
+    async fn before_replay_access_start(&self, function: &'static str, stage: ReplayAdmissionStage);
+
+    /// Runs synchronously on the Store-holding direct call right before it waits for its
+    /// recorded terminal.
+    fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex);
+
+    /// Runs synchronously on the Store-holding direct path right before a positional replay
+    /// read expecting the `expected` marker entry.
+    fn before_positional_replay_read(&self, expected: &str);
+}
+
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
 /// well as providing hooks for the general worker executor logic.
@@ -165,18 +194,7 @@ pub trait WorkerCtx:
     /// Static log event behaviour configuration for workers
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour;
 
-    /// Whether an incomplete durable call encountered during replay (a committed `Start` whose
-    /// terminal `End`/`Cancelled` entry is missing before the replay target) may be repaired by
-    /// switching to live re-execution of the side effect.
-    ///
-    /// Regular workers allow this for re-executable function types. Debug sessions disable it:
-    /// a debugging session must never perform real side effects, and its oplog silently discards
-    /// writes, so the repaired call's `End` could never be persisted anyway. When disabled, such
-    /// a call fails with an explicit "replay target inside an in-flight durable call" error
-    /// instead of re-executing.
-    const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
-
-    /// Wraps a worker's oplog before it is shared with the worker internals and its context.
+    /// Wraps per-agent oplog handles used by worker internals, their context, and fork source reads.
     fn wrap_oplog(
         _owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -229,7 +247,7 @@ pub trait WorkerCtx:
     async fn create(
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -295,6 +313,10 @@ pub trait WorkerCtx:
 
     /// Get the agent-id resolved from the worker name
     fn parsed_agent_id(&self) -> Option<ParsedAgentId>;
+
+    /// Authoritative persisted execution-owner identity. Authorization and component-scoped
+    /// runtime selection must use this instead of interpreting `parsed_agent_id() == None`.
+    fn owner_context(&self) -> &ResolvedOwnerContext;
 
     fn agent_mode(&self) -> AgentMode;
 
@@ -385,12 +407,15 @@ pub trait CallCountManagement {
     /// Called at the start of each exported function invocation.
     fn reset_invocation_call_counts(&mut self);
 
-    /// Records one outgoing HTTP call against the monthly account quota.
+    /// Records one outgoing HTTP call against the monthly account quota. Only fresh live work is
+    /// charged; a replayed call or one that may adopt a retained recorded HTTP-charged `Start` is
+    /// not.
     ///
     /// Returns `Err` with `WorkerMonthlyHttpCallBudgetExhausted` if budget is exhausted.
     fn record_monthly_http_call(&mut self) -> anyhow::Result<()>;
 
-    /// Records one outgoing RPC call against the monthly account quota.
+    /// Records one outgoing RPC call against the monthly account quota, under the same rule as
+    /// [`Self::record_monthly_http_call`].
     ///
     /// Returns `Err` with `WorkerMonthlyRpcCallBudgetExhausted` if budget is exhausted.
     fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()>;
@@ -606,10 +631,6 @@ pub trait FileSystemReading {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError>;
 }
 
 /// Functions to manipulate and query the current invocation context

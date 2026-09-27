@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod native_tool;
 mod protobuf;
+pub use native_tool::CompiledMcpToolExport;
 
 use golem_common::base_model::account::AccountId;
 use golem_common::base_model::deployment::DeploymentRevision;
 use golem_common::base_model::domain_registration::Domain;
 use golem_common::base_model::environment::EnvironmentId;
+use golem_common::model::application::ApplicationName;
+use golem_common::model::environment::EnvironmentName;
 use golem_common::schema::RegisteredAgentTypeSchema;
 
 use crate::custom_api::SecuritySchemeDetails;
@@ -29,9 +33,12 @@ pub struct CompiledMcp {
     pub account_id: AccountId,
     pub account_email: AccountEmail,
     pub environment_id: EnvironmentId,
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
     pub deployment_revision: DeploymentRevision,
     pub domain: Domain,
     pub security_scheme_name: Option<SecuritySchemeName>,
     pub security_scheme: Option<SecuritySchemeDetails>, // Resolved at runtime
     pub registered_agent_types: Vec<RegisteredAgentTypeSchema>,
+    pub tools: Vec<CompiledMcpToolExport>,
 }

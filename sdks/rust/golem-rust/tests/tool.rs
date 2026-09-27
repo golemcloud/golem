@@ -52,10 +52,14 @@ mod tests {
             .expect("command path resolves");
         let model = CanonicalInputModel::from_fields(tool.canonical_input_fields(command_index))
             .expect("canonical input model builds");
-        let input = golem_rust::TypedSchemaValue::new(
-            model.record_schema,
-            golem_rust::SchemaValue::Record { fields: values },
-        );
+        let params = model
+            .fields
+            .iter()
+            .zip(values)
+            .map(|(field, value)| (field.name.as_str(), value))
+            .collect();
+        let input = golem_rust::agentic::build_canonical_input(&model, params)
+            .expect("canonical input builds");
         golem_rust::encode_typed_schema_value(&input).expect("typed schema value encodes")
     }
 
@@ -257,7 +261,7 @@ mod tests {
     impl GrepMiddleware for GrepMiddlewareShape {
         async fn grep(
             &self,
-            underlying: &mut GrepUnderlying,
+            underlying: &GrepUnderlying,
             case_sensitive: bool,
             pattern: String,
             files: Vec<String>,
@@ -273,7 +277,7 @@ mod tests {
     impl GrepMiddleware<RemoteUnderlying> for GrepAdapterShape {
         async fn grep(
             &self,
-            _underlying: &mut RemoteUnderlying,
+            _underlying: &RemoteUnderlying,
             _case_sensitive: bool,
             _pattern: String,
             _files: Vec<String>,
@@ -289,7 +293,7 @@ mod tests {
     impl PrincipalAutoInjectedRoundTripMiddleware for PrincipalMiddlewareShape {
         async fn whoami(
             &self,
-            underlying: &mut PrincipalAutoInjectedRoundTripUnderlying,
+            underlying: &PrincipalAutoInjectedRoundTripUnderlying,
             _principal: golem_rust::tool::Principal,
             name: String,
         ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
@@ -304,7 +308,7 @@ mod tests {
     impl GeneratedNameCollisionToolMiddleware for GeneratedNameCollisionMiddlewareShape {
         async fn echo(
             &self,
-            proxied: &mut GeneratedNameCollisionToolUnderlying,
+            proxied: &GeneratedNameCollisionToolUnderlying,
             underlying: String,
             __param_values: String,
             __value: String,
@@ -338,7 +342,7 @@ mod tests {
     impl GeneratedRawNameCollisionToolMiddleware for GeneratedRawNameCollisionMiddlewareShape {
         async fn echo(
             &self,
-            proxied: &mut GeneratedRawNameCollisionToolUnderlying,
+            proxied: &GeneratedRawNameCollisionToolUnderlying,
             r#underlying: String,
             r#__param_values: String,
             r#__value: String,
@@ -678,7 +682,7 @@ mod tests {
     impl GitMiddleware for GitMiddlewareShape {
         async fn commit(
             &self,
-            underlying: &mut GitUnderlying,
+            underlying: &GitUnderlying,
             message: String,
             config: BTreeMap<String, String>,
         ) -> Result<(), golem_rust::tool::ToolInvokeError<CommitError>> {
@@ -687,7 +691,7 @@ mod tests {
 
         async fn remote__add(
             &self,
-            underlying: &mut GitUnderlying,
+            underlying: &GitUnderlying,
             verbose: bool,
             name: String,
             url: String,
@@ -697,7 +701,7 @@ mod tests {
 
         async fn remote__remove(
             &self,
-            underlying: &mut GitUnderlying,
+            underlying: &GitUnderlying,
             verbose: bool,
             name: String,
         ) -> Result<(), golem_rust::tool::ToolInvokeError<RemoteError>> {
@@ -712,7 +716,7 @@ mod tests {
     impl OuterMiddleware for OuterMiddlewareShape {
         async fn mid__inner__leaf(
             &self,
-            underlying: &mut OuterUnderlying,
+            underlying: &OuterUnderlying,
             verbose: bool,
             name: String,
         ) -> Result<(), golem_rust::tool::ToolInvokeError<RemoteError>> {
@@ -736,13 +740,12 @@ mod tests {
     impl MiddlewareStreamSurfaceMiddleware for MiddlewareStreamShape {
         async fn copy(
             &self,
-            underlying: &mut MiddlewareStreamSurfaceUnderlying,
+            underlying: &MiddlewareStreamSurfaceUnderlying,
             input: golem_rust::tool::InputStream,
-        ) -> Result<
-            (String, golem_rust::tool::InputStream),
-            golem_rust::tool::ToolInvokeError<RemoteError>,
-        > {
-            underlying.copy(input).await
+            _output: golem_rust::tool::OutputStream,
+        ) -> Result<String, golem_rust::tool::ToolInvokeError<RemoteError>> {
+            let (result, _stdout) = underlying.copy(input).await?;
+            Ok(result)
         }
 
         fn __golem_tool_middleware_annotation() {}
@@ -784,7 +787,7 @@ impl Policy {
 impl EchoMiddleware for Policy {
     async fn echo(
         &self,
-        underlying: &mut EchoUnderlying,
+        underlying: &EchoUnderlying,
         value: String,
     ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
         underlying.echo(value).await
@@ -807,8 +810,8 @@ impl EchoMiddleware for Policy {
             r#"
 use golem_rust::{universal_tool_middleware, TypedSchemaValue};
 use golem_rust::tool::{
-    InputStream, InvocationResult, Principal, RawCustomToolError, Tool, ToolInvokeError,
-    UnderlyingTool,
+    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+    ToolInvokeError, UnderlyingTool,
 };
 
 #[universal_tool_middleware(name = "audit")]
@@ -818,10 +821,13 @@ async fn audit(
     command_path: Vec<String>,
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
     _principal: Principal,
-    mut underlying: UnderlyingTool,
+    underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
-    underlying.invoke(command_path, input, stdin).await
+    underlying
+        .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+        .await
 }
 "#,
         );
@@ -834,7 +840,7 @@ async fn audit(
     }
 
     #[test]
-    fn pure_middleware_feature_compiles_generated_definition_and_authoring_surfaces() {
+    fn default_world_compiles_generated_middleware_definition_and_authoring_surfaces() {
         let output = cargo_tool_crate_with_dependency(
             "pure-middleware-generated-surfaces",
             "pure-middleware-generated-surfaces",
@@ -858,7 +864,7 @@ impl Policy {
 impl EchoMiddleware for Policy {
     async fn echo(
         &self,
-        underlying: &mut EchoUnderlying,
+        underlying: &EchoUnderlying,
         value: String,
     ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
         underlying.echo(value).await
@@ -866,12 +872,12 @@ impl EchoMiddleware for Policy {
 }
 "#,
             "check",
-            "golem-rust = { path = PATH, features = [\"export_golem_tool_middleware\"] }",
+            "golem-rust = { path = PATH, features = [\"export_golem_agentic\"] }",
         );
 
         assert!(
             output.status.success(),
-            "the pure middleware feature must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
+            "the default world must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -996,6 +1002,43 @@ impl EchoMiddleware for Policy {
             ),
             "expected an InheritedGlobalConflict for `verbose` on `leaf`, got {err:?}",
         );
+    }
+
+    #[tool_definition]
+    trait OptionalCaptureChild {
+        fn leaf(&self, count: u32, name: String) -> Result<(), RemoteError>;
+    }
+
+    struct OptionalCaptureChildSubtree;
+
+    #[tool_definition]
+    trait OptionalCaptureParent {
+        #[command(subtree = OptionalCaptureChild, name = "optional-capture-child")]
+        #[arg(count = "global", required = false)]
+        fn child(&self, count: u32) -> OptionalCaptureChildSubtree;
+    }
+
+    fn generated_subtree_optional_capture_typechecks() {
+        let client = OptionalCaptureParentClient::default().child(7);
+        let _: &golem_rust::SchemaGraph = &client.inherited_prefix[0].schema;
+    }
+
+    #[test]
+    fn optional_parent_field_keeps_its_carrier_when_child_redeclares() {
+        let tool = __golem_tool_descriptor_for_OptionalCaptureParent(&mut ToolBuildCtx::new())
+            .expect("optional subtree descriptor builds");
+        let child = tool
+            .node_index_by_path(&["optional-capture-child".to_string()])
+            .expect("subtree command exists");
+        let field = tool
+            .canonical_input_fields(child)
+            .into_iter()
+            .find(|field| field.name == "count")
+            .expect("parent count field exists");
+        assert!(matches!(
+            field.schema.root,
+            golem_rust::SchemaType::Option { .. }
+        ));
     }
 
     #[tool_definition]
@@ -1710,9 +1753,9 @@ fn check_stdout_is_returned_not_passed(
     client: &StreamToolClient,
     input: golem_rust::agentic::InputStream,
 ) {
-    let invocation: Result<golem_rust::agentic::ToolInvocation<String, RemoteError>, golem_rust::agentic::ToolError<RemoteError>> =
-        client.copy(input);
-    let _ = invocation;
+    assert_future_output::<_, Result<golem_rust::agentic::ToolInvocation<String, RemoteError>, golem_rust::agentic::ToolError<RemoteError>>>(
+        client.copy(input),
+    );
 }
 
 fn check_subtree_client_shape() {
@@ -2185,8 +2228,6 @@ mod golem_rust {
                 pub use golem_rust_actual::golem_agentic::golem::tool::*;
 
                 pub mod host {
-                    pub use golem_rust_actual::golem_agentic::golem::tool::host::{ToolStdin, ToolStdout, ToolStdoutWriter};
-
                     #[derive(Clone, Debug)]
                     pub struct ToolRpc;
 
@@ -2217,8 +2258,8 @@ mod golem_rust {
             _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
             input: &crate::golem_rust::TypedSchemaValue,
-            _stdin: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdin>,
-            _stdout: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdout>,
+            _stdin: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdin>,
+            _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdout>,
         ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
             crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
             Ok(InvocationResult {
@@ -2275,7 +2316,9 @@ fn duplicate_canonical_param_uses_last_staged_value() {
 
     assert_eq!(
         fields[0],
-        golem_rust::SchemaValue::U32(2),
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(2))),
+        },
         "when two client arguments map to the same canonical inherited global, the generated client must preserve the pre-optimization BTreeMap::insert overwrite semantics",
     );
 }
@@ -2317,8 +2360,6 @@ mod golem_rust {
                 pub use golem_rust_actual::golem_agentic::golem::tool::*;
 
                 pub mod host {
-                    pub use golem_rust_actual::golem_agentic::golem::tool::host::{ToolStdin, ToolStdout, ToolStdoutWriter};
-
                     #[derive(Clone, Debug)]
                     pub struct ToolRpc;
 
@@ -2349,8 +2390,8 @@ mod golem_rust {
             _rpc: &ambient_tool_rpc::AmbientToolRpc,
             _command_path: &[String],
             input: &crate::golem_rust::TypedSchemaValue,
-            _stdin: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdin>,
-            _stdout: Option<crate::golem_rust::golem_agentic::golem::tool::host::ToolStdout>,
+            _stdin: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdin>,
+            _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdout>,
         ) -> Result<InvocationResult, ToolError<std::convert::Infallible>> {
             crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(input.clone()));
             Ok(InvocationResult {
@@ -2412,10 +2453,17 @@ fn duplicate_canonical_param_uses_last_staged_value_after_prior_removal() {
         panic!("expected client input to be a record");
     };
 
-    assert_eq!(fields[0], golem_rust::SchemaValue::U32(99));
+    assert_eq!(
+        fields[0],
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(99))),
+        },
+    );
     assert_eq!(
         fields[1],
-        golem_rust::SchemaValue::U32(3),
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(3))),
+        },
         "last staged duplicate canonical value must still win after packing an earlier canonical field",
     );
     assert_eq!(
@@ -6786,7 +6834,7 @@ impl Guest for Component {
         _command_path: Vec<String>,
         _input: TypedSchemaValue,
         _stdin: Option<InputStream>,
-        _stdout: Option<golem_rust::golem_agentic::golem::tool::host::ToolStdoutWriter>,
+        _stdout: Option<golem_rust::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
         _principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
         unimplemented!()

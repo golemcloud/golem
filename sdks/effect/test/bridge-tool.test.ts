@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { Effect, Exit, Scope } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import {
   createToolClientRuntime,
   splitToolRpcError,
@@ -100,7 +100,7 @@ describe("BridgeTool", () => {
     expect(observed?.[4]).toBe(false)
   })
 
-  it("returns Effect streams, result, and cancellation under scoped ownership", async () => {
+  it("returns independently consumable stdout, result, and explicit cancellation", async () => {
     let cancelled = false
     const transport: ToolTransportShape = {
       start: () =>
@@ -114,30 +114,33 @@ describe("BridgeTool", () => {
           }),
         }),
     }
-    const scope = await Effect.runPromise(Scope.make())
-    const invocation = await Effect.runPromise(
-      createToolClientRuntime("grep")
-        .start(
-          [],
-          { graph: { defs: new Map(), root: t.record([]) }, value: { tag: "record", fields: [] } },
-          undefined,
-          true,
-        )
-        .pipe(
-          Effect.provideService(ToolTransport, transport),
-          Effect.provideService(ToolClient, {} as never),
-          Effect.provideService(Scope.Scope, scope),
-        ),
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const invocation = yield* createToolClientRuntime("grep").start(
+            [],
+            {
+              graph: { defs: new Map(), root: t.record([]) },
+              value: { tag: "record", fields: [] },
+            },
+            undefined,
+            true,
+          )
+          expect(invocation.stdout).toBeDefined()
+          expect(yield* Stream.runCollect(invocation.stdout!)).toEqual([Uint8Array.of(1, 2)])
+          expect(yield* invocation.result).toEqual({ result: undefined })
+          expect(cancelled).toBe(false)
+          yield* invocation.cancel
+        }),
+      ).pipe(
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, {} as never),
+      ),
     )
-    expect(invocation.stdout).toBeDefined()
-    expect(await Effect.runPromise(invocation.result)).toEqual({ result: undefined })
-    await Effect.runPromise(Scope.close(scope, Exit.void))
-    expect(cancelled).toBe(true)
-    await Effect.runPromise(invocation.cancel)
     expect(cancelled).toBe(true)
   })
 
-  it("disposes unread stdout when its scope closes", async () => {
+  it("lets a started handle escape the admission scope without cancelling or dropping stdout", async () => {
     let disposed = false
     const transport: ToolTransportShape = {
       start: () =>
@@ -155,7 +158,7 @@ describe("BridgeTool", () => {
           cancel: Effect.void,
         }),
     }
-    await Effect.runPromise(
+    const invocation = await Effect.runPromise(
       Effect.scoped(
         createToolClientRuntime("grep").start(
           [],
@@ -168,6 +171,10 @@ describe("BridgeTool", () => {
         Effect.provideService(ToolClient, {} as never),
       ),
     )
+    expect(disposed).toBe(false)
+    const fiber = Effect.runFork(Stream.runDrain(invocation.stdout!))
+    await Effect.runPromise(Effect.sleep("1 millis"))
+    await Effect.runPromise(Fiber.interrupt(fiber))
     expect(disposed).toBe(true)
   })
 })

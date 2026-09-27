@@ -28,7 +28,9 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::mcp_deployment::{
     McpDeployment, McpDeploymentAgentOptions, McpDeploymentId, McpDeploymentRevision,
+    McpDeploymentToolOptions,
 };
+use golem_common::model::tool::ToolName;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::SqlDateTime;
@@ -52,6 +54,7 @@ error_forwarding!(McpDeploymentRepoError, RepoError);
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, BinaryCodec)]
 pub struct McpDeploymentData {
     pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+    pub tools: BTreeMap<ToolName, McpDeploymentToolOptions>,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -83,13 +86,14 @@ impl McpDeploymentRevisionRecord {
         mcp_deployment_id: McpDeploymentId,
         actor: AccountId,
         agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+        tools: BTreeMap<ToolName, McpDeploymentToolOptions>,
     ) -> Result<Self, McpDeploymentRepoError> {
         let mut value = Self {
             mcp_deployment_id: mcp_deployment_id.0,
             revision_id: McpDeploymentRevision::INITIAL.into(),
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(actor.0),
-            data: Blob::new(McpDeploymentData { agents }),
+            data: Blob::new(McpDeploymentData { agents, tools }),
         };
         value.update_hash()?;
         Ok(value)
@@ -106,6 +110,7 @@ impl McpDeploymentRevisionRecord {
             audit,
             data: Blob::new(McpDeploymentData {
                 agents: deployment.agents,
+                tools: deployment.tools,
             }),
         };
         value.update_hash()?;
@@ -124,6 +129,7 @@ impl McpDeploymentRevisionRecord {
             audit: DeletableRevisionAuditFields::deletion(created_by),
             data: Blob::new(McpDeploymentData {
                 agents: Default::default(),
+                tools: Default::default(),
             }),
         };
         value.update_hash()?;
@@ -142,6 +148,23 @@ impl McpDeploymentRevisionRecord {
                         k.0.clone(),
                         DiffMcpDeploymentAgentOptions {
                             security_scheme: v.security_scheme.as_ref().map(|s| s.0.clone()),
+                        },
+                    )
+                })
+                .collect(),
+            tools: self
+                .data
+                .value()
+                .tools
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string(),
+                        golem_common::model::diff::McpDeploymentToolOptions {
+                            owner_component: v.owner_component.0.clone(),
+                            security_scheme: v.security_scheme.as_ref().map(|s| s.0.clone()),
+                            include: v.include.clone(),
+                            exclude: v.exclude.clone(),
                         },
                     )
                 })
@@ -196,6 +219,7 @@ impl TryFrom<McpDeploymentExtRevisionRecord> for McpDeployment {
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
             agents: data.agents,
+            tools: data.tools,
             created_at: value.entity_created_at.into(),
         })
     }
