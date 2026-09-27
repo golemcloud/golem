@@ -76,7 +76,9 @@ impl Display for LeaseExpired {
 
 impl Error for LeaseExpired {}
 
-/// Tells whether an error in the chain is [`LeaseExpired`].
+/// Tells whether an error in the chain is [`LeaseExpired`]. Only tests ask this, because the store
+/// gives a lease that ran out as a retryable storage error, the same as a failed call.
+#[cfg(test)]
 pub(super) fn is_lease_expired(error: &(dyn Error + 'static)) -> bool {
     chain(error).any(|error| error.is::<LeaseExpired>())
 }
