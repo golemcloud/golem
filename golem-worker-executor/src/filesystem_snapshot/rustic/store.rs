@@ -212,15 +212,13 @@ pub(super) struct StepGate {
 }
 
 /// The claim of a prune that a delete holds.
-struct Claim<'a> {
-    directory: &'a Path,
-    number: u64,
+struct Claim {
     /// The lease of the prune. Each marker write that succeeds moves its end.
     lease: Arc<Lease>,
     /// The time that a marker write that succeeds adds to the lease.
     span: Duration,
-    /// Releases the claim when the delete stops before its prune starts, and writes the final
-    /// marker of a prune that started.
+    /// Holds the directory and the number of the claim. It releases the claim when the delete
+    /// stops before its prune starts, and writes the final marker of a prune that started.
     guard: ClaimGuard,
 }
 
@@ -298,6 +296,31 @@ impl ClaimGuard {
                 work.await;
             })
         })
+    }
+
+    /// Gives the directory of the claims of the ledger of the claim.
+    fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// Gives the number of the claim.
+    fn number(&self) -> u64 {
+        self.number
+    }
+
+    /// Gives the markers of the claim that this delete wrote.
+    fn markers(&self) -> &Mutex<Vec<Box<Path>>> {
+        &self.markers
+    }
+
+    /// Gives the state of the claim, which the prune shares with the guard.
+    fn state(&self) -> Arc<AtomicU8> {
+        self.state.clone()
+    }
+
+    /// Records that this delete wrote the claim, so a release deletes it.
+    fn mark_claimed(&self) {
+        self.claimed.store(true, Ordering::SeqCst);
     }
 
     /// Makes the release task, and moves the token of the tracker into it.
@@ -666,10 +689,8 @@ impl RusticSnapshotStore {
             guard.disarm();
             return Ok(());
         };
-        guard.claimed.store(true, Ordering::SeqCst);
+        guard.mark_claimed();
         let claim = Claim {
-            directory: &claims,
-            number,
             lease: Arc::new(lease),
             span,
             guard,
@@ -718,12 +739,12 @@ impl RusticSnapshotStore {
         scope: &SnapshotScope,
         token: &CancellationToken,
         files: &SnapshotFiles,
-        claim: &Claim<'_>,
+        claim: &Claim,
     ) -> Result<Option<Arc<BlobBackend>>, SnapshotStoreError> {
         // A prune writes its ledger before it deletes the claims, so a delete that claims in a
         // directory that such a prune removed sees the new ledger here.
         let again = read_ledger(files).await.map_err(storage_failure)?;
-        if *claims_directory(&again) != *claim.directory {
+        if *claims_directory(&again) != *claim.guard.directory() {
             return Ok(None);
         }
         Ok(Some(Arc::new(
@@ -737,13 +758,13 @@ impl RusticSnapshotStore {
         &self,
         backend: Arc<BlobBackend>,
         files: &SnapshotFiles,
-        claim: &Claim<'_>,
+        claim: &Claim,
         grace: Duration,
     ) -> Result<Option<bool>, SnapshotStoreError> {
         let key = self.key.clone();
         let settings = self.policy.prune;
         let low_priority = self.low_priority;
-        let state = claim.guard.state.clone();
+        let state = claim.guard.state();
         // The plan of a prune reads each snapshot file before the prune changes the repository.
         // A forget of another delete can remove a listed file before its read, so the prune
         // plans again from a new listing.
@@ -769,10 +790,10 @@ impl RusticSnapshotStore {
         // cancelled. The tracker counts the whole step, so no timer of it runs after a shut down.
         let refreshing = keep_claim_fresh(
             files,
-            claim.directory,
-            claim.number,
+            claim.guard.directory(),
+            claim.guard.number(),
             refresh_period(grace, self.policy.deadline),
-            &claim.guard.markers,
+            claim.guard.markers(),
             &claim.lease,
             claim.span,
         );
