@@ -1373,6 +1373,58 @@ async fn a_prune_refreshes_the_claim_with_its_own_number() {
 
 #[test]
 #[timeout("60s")]
+async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_after_refreshes_deletes_each_marker_of_its_claim()
+ {
+    // Each listing of the snapshot files by the prune takes 250 ms, and the grace period gives a
+    // new marker each 100 ms, so the claim gets new markers before the release. Each read of a
+    // snapshot file after the claim finds it gone.
+    let claimed = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let claimed = claimed.clone();
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            let after_claim = claimed.load(Ordering::SeqCst);
+            if after_claim && op_label == "list" && path == Path::new("snapshots") {
+                Script::Delay(Duration::from_millis(250))
+            } else if after_claim && path.starts_with("snapshots") && !is_forget(op_label, path) {
+                Script::Vanish
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_millis(400)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let failed = store.delete(&scope, &name("p-1")).await;
+    let refreshes = storage
+        .calls()
+        .iter()
+        .filter(|(op_label, _)| *op_label == "refresh_claim")
+        .count();
+
+    assert!(
+        failed.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{failed:?}"
+    );
+    assert_eq!(
+        (
+            refreshes > 0,
+            prunes(&storage.calls()),
+            blobs(&*storage, &scope.0, "golem/prune-claims/").await,
+        ),
+        (true, 0, Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
     // The gate holds the prune at its listing of the packs for longer than the grace period.
     let grace = Duration::from_millis(400);
