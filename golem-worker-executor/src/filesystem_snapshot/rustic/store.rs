@@ -27,10 +27,11 @@ use super::fault::{
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
-    ClaimChoice, Percent, claim_hold, claims_directory, keep_claim_fresh, lease_span, list_claims,
-    list_freed, marker_path, marker_time, needs_repository_size, next_claim, prune_due,
-    read_ledger, record_freed, refresh_period, release_claim, remove_freed, remove_old_claims,
-    remove_older_ledgers, repository_bytes, take_claim, write_ledger, write_marker,
+    ClaimChoice, Percent, claim_hold, claims_directory, hold_passed, keep_claim_fresh, lease_span,
+    list_claims, list_freed_names, marker_path, marker_time, may_be_due, named_bytes,
+    needs_repository_size, next_claim, prune_due, read_ledger, record_freed, refresh_period,
+    release_claim, remove_freed, remove_old_claims, remove_older_ledgers, repository_bytes,
+    settle_freed, take_claim, write_ledger, write_marker,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -631,25 +632,40 @@ impl RusticSnapshotStore {
         token: &CancellationToken,
     ) -> Result<(), SnapshotStoreError> {
         let files = self.files(scope, token);
+        let grace = self.policy.prune.keep_delete;
+        let deadline = self.policy.deadline;
+        let threshold = self.policy.prune_threshold;
         let ledger = read_ledger(&files).await.map_err(storage_failure)?;
-        let records = list_freed(&files).await.map_err(storage_failure)?;
         // Each comparison with a time from storage uses a clock reading from after the listing
         // that gave that time. A listing can take up to one storage call deadline, and a stale
         // reading can put a marker that another host wrote within the margin beyond the margin.
-        let now = self.now();
-        let grace = self.policy.prune.keep_delete;
-        let deadline = self.policy.deadline;
-        let size = if needs_repository_size(&ledger, records.bytes, now, grace, deadline) {
+        // Each step below runs only when a prune can still be due, so a delete within the hold
+        // reads no record, and a delete whose records are too small reads no record content.
+        if !hold_passed(&ledger, self.now(), grace, deadline) {
+            return Ok(());
+        }
+        let listed = list_freed_names(&files).await.map_err(storage_failure)?;
+        let upper = named_bytes(&listed);
+        if upper == 0 && !ledger.awaiting_removal {
+            return Ok(());
+        }
+        let size = if needs_repository_size(&ledger, upper, self.now(), grace, deadline) {
             repository_bytes(&files).await.map_err(storage_failure)?
         } else {
             0
         };
+        if !may_be_due(&ledger, upper, size, threshold) {
+            return Ok(());
+        }
+        let records = settle_freed(&files, &listed)
+            .await
+            .map_err(storage_failure)?;
         if !prune_due(
             &ledger,
             records.bytes,
-            now,
+            self.now(),
             size,
-            self.policy.prune_threshold,
+            threshold,
             grace,
             deadline,
         ) {

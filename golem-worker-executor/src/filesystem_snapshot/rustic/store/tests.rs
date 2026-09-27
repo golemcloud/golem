@@ -1807,6 +1807,103 @@ async fn the_lease_of_a_prune_starts_at_its_first_marker_so_a_prune_without_a_re
     );
 }
 
+/// The operation labels of the calls of the prune decision that read the records of freed bytes
+/// and what they name: the listing of the records, the read of a record, the listing of the
+/// snapshot files, and the listing of the packs.
+const DECISION_READS: [&str; 4] = ["list_freed", "read_freed", "list_snapshots", "list_data"];
+
+/// Gives the labels of [`DECISION_READS`] that the calls from `from` on made.
+fn decision_reads(storage: &ScriptedBlobStorage, from: usize) -> Vec<&'static str> {
+    let calls = storage.calls();
+    DECISION_READS
+        .into_iter()
+        .filter(|label| {
+            calls
+                .iter()
+                .skip(from)
+                .any(|(op_label, _)| op_label == label)
+        })
+        .collect()
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_within_the_hold_reads_no_record_of_freed_bytes_and_lists_no_pack() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2", "p-3"]).await;
+    store.delete(&scope, &name("p-1")).await.unwrap();
+    let pruned = ledger(&storage, &scope).await.last_prune.is_some();
+    let from = storage.calls().len();
+
+    let deleted = store.delete(&scope, &name("p-2")).await;
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (pruned, decision_reads(&storage, from)),
+        (true, Vec::<&str>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_whose_named_bytes_are_below_the_threshold_reads_no_record_content() {
+    // A threshold of all the bytes of the repository is above the bytes that one delete frees.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, Percent(100), Duration::ZERO),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let from = storage.calls().len();
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (
+            decision_reads(&storage, from),
+            ledger(&storage, &scope).await.last_prune.is_some(),
+            freed(&storage, &scope).await > 0,
+        ),
+        (vec!["list_freed", "list_data"], false, true)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_whose_named_bytes_reach_the_threshold_reads_and_settles_the_records_and_prunes() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let from = storage.calls().len();
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (
+            decision_reads(&storage, from),
+            prunes(&storage.calls()),
+            ledger(&storage, &scope).await.last_prune.is_some(),
+            freed(&storage, &scope).await,
+        ),
+        (DECISION_READS.to_vec(), 1, true, 0)
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_prune_deletes_the_claims_of_old_ledgers() {

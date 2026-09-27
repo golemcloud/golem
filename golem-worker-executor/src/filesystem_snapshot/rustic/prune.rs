@@ -74,7 +74,12 @@ impl Percent {
 /// Tells whether the hold of a claim passed at `now` since the last prune. The time of the last
 /// prune is after its final marker, so the next prune waits a full hold from the newest claim
 /// marker that the last prune wrote. A time more than the margin after `now` counts as missing.
-fn hold_passed(ledger: &PruneLedger, now: Timestamp, grace: Duration, deadline: Duration) -> bool {
+pub(super) fn hold_passed(
+    ledger: &PruneLedger,
+    now: Timestamp,
+    grace: Duration,
+    deadline: Duration,
+) -> bool {
     ledger
         .last_prune
         .filter(|last| !beyond_margin(*last, now))
@@ -118,6 +123,18 @@ pub(super) fn prune_due(
 ) -> bool {
     let work = freed_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal;
     hold_passed(ledger, now, grace, deadline) && work
+}
+
+/// Tells whether the freed bytes in the names of the records, which are at least the settled
+/// freed bytes, can make a prune due with the size of the repository. When this gives false,
+/// [`prune_due`] gives false for the settled bytes too, so the records need no read.
+pub(super) fn may_be_due(
+    ledger: &PruneLedger,
+    named_bytes: u64,
+    repository_bytes: u64,
+    threshold: Percent,
+) -> bool {
+    named_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal
 }
 
 /// Gives the size of the repository of the scope: the sum of the sizes of its packs.
@@ -324,29 +341,54 @@ pub(super) async fn record_freed(
         .map(|_| ())
 }
 
-/// Lists and reads the records of freed bytes, lists the snapshot files one time, and gives the
-/// settled records. A name that does not parse counts as zero bytes and stays, and a record that
-/// a prune deleted after the listing is left out. Without records, no snapshot file is listed.
-pub(super) async fn list_freed(files: &SnapshotFiles) -> anyhow::Result<FreedRecords> {
-    let listed = files
+/// A record of freed bytes that a listing found: its path and the bytes in its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ListedFreed {
+    pub(super) path: Box<Path>,
+    pub(super) bytes: u64,
+}
+
+/// Lists the names of the records of freed bytes, and reads no content. A name that does not
+/// parse is left out, so it counts as zero bytes and stays.
+pub(super) async fn list_freed_names(files: &SnapshotFiles) -> anyhow::Result<Box<[ListedFreed]>> {
+    Ok(files
         .list_below("list_freed", Path::new(FREED_PATH))
-        .await?;
-    let named = listed
+        .await?
         .iter()
         .filter_map(|blob| {
             let bytes = parse_freed(blob.path.file_name()?.to_str()?)?;
-            Some((bytes, &blob.path))
+            Some(ListedFreed {
+                path: blob.path.clone(),
+                bytes,
+            })
         })
-        .collect::<Box<[_]>>();
-    if named.is_empty() {
+        .collect())
+}
+
+/// Gives the sum of the bytes in the names of the listed records.
+pub(super) fn named_bytes(listed: &[ListedFreed]) -> u64 {
+    listed
+        .iter()
+        .map(|record| record.bytes)
+        .fold(0, u64::saturating_add)
+}
+
+/// Reads the listed records of freed bytes, lists the snapshot files one time, and gives the
+/// settled records. A record that a prune deleted after the listing is left out. Without records,
+/// no snapshot file is listed.
+pub(super) async fn settle_freed(
+    files: &SnapshotFiles,
+    listed: &[ListedFreed],
+) -> anyhow::Result<FreedRecords> {
+    if listed.is_empty() {
         return Ok(FreedRecords::default());
     }
-    let records = stream::iter(named.iter())
-        .then(|(bytes, path)| async move {
-            let content = files.get("read_freed", path).await?;
+    let records = stream::iter(listed)
+        .then(|listed| async move {
+            let content = files.get("read_freed", &listed.path).await?;
             Ok::<_, anyhow::Error>(content.map(|content| FreedRecord {
-                path: (*path).clone(),
-                bytes: *bytes,
+                path: listed.path.clone(),
+                bytes: listed.bytes,
                 snapshots: parse_record(&content),
             }))
         })
@@ -746,10 +788,11 @@ mod tests {
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
         FreedRecords, LEDGERS_PATH, Lease, Percent, PruneLedger, claim_hold, claims_directory,
-        keep_claim_fresh, lease_span, list_claims, list_freed, marker_path, marker_time,
-        needs_repository_size, newest_ledger, next_claim, old_claim_directories, older_entries,
-        parse_claim_entry, parse_freed, parse_ledger_entry, parse_record, prune_due, read_ledger,
-        record_content, record_freed, refresh_period, settle, take_claim, write_ledger,
+        keep_claim_fresh, lease_span, list_claims, list_freed_names, marker_path, marker_time,
+        may_be_due, named_bytes, needs_repository_size, newest_ledger, next_claim,
+        old_claim_directories, older_entries, parse_claim_entry, parse_freed, parse_ledger_entry,
+        parse_record, prune_due, read_ledger, record_content, record_freed, refresh_period, settle,
+        settle_freed, take_claim, write_ledger,
     };
     use futures::StreamExt;
     use golem_common::model::Timestamp;
@@ -803,6 +846,30 @@ mod tests {
             cancel: tokio_util::sync::CancellationToken::new(),
             tracker: tokio_util::task::TaskTracker::new(),
         }
+    }
+
+    #[test]
+    fn the_bytes_in_the_names_of_the_records_can_make_a_prune_due_only_when_they_reach_the_threshold()
+     {
+        let may = |awaiting_removal, named, repository_bytes| {
+            may_be_due(
+                &ledger(None, awaiting_removal),
+                named,
+                repository_bytes,
+                TEN_PERCENT,
+            )
+        };
+
+        assert_eq!(
+            [
+                may(false, 99, 1000),
+                may(false, 100, 1000),
+                may(false, 0, 0),
+                may(false, 1, 0),
+                may(true, 0, 1000),
+            ],
+            [false, true, false, true, true]
+        );
     }
 
     #[test]
@@ -1523,9 +1590,13 @@ mod tests {
         let gone = ["0".repeat(64).into_boxed_str()];
         record_freed(&files, 40, &gone).await.unwrap();
         record_freed(&files, 2, &gone).await.unwrap();
-        let listed = list_freed(&files).await.unwrap();
+        let listed = list_freed_names(&files).await.unwrap();
+        let settled = settle_freed(&files, &listed).await.unwrap();
 
-        assert_eq!((listed.bytes, listed.counted.len()), (42, 2));
+        assert_eq!(
+            (named_bytes(&listed), settled.bytes, settled.counted.len()),
+            (42, 42, 2)
+        );
     }
 
     #[test]
