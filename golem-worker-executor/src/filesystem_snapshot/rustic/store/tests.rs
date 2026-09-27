@@ -3761,6 +3761,132 @@ async fn shut_down_waits_for_the_check_of_the_tree_of_a_save() {
     assert_eq!((reached, waited, stopped), (true, true, true));
 }
 
+/// A store over the shared storage whose index reads wait at the gate while `hold` is set, and the
+/// number of index reads that reached the storage while it was set.
+fn holding_index_reads(
+    shared: &Arc<InMemoryBlobStorage>,
+) -> (
+    Arc<RusticSnapshotStore>,
+    Arc<ScriptedBlobStorage>,
+    Arc<AtomicBool>,
+    Arc<AtomicUsize>,
+) {
+    let (hold, held) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let storage = ScriptedBlobStorage::new(shared.clone(), {
+        let (hold, held) = (hold.clone(), held.clone());
+        move |op_label, path| {
+            if op_label == "read" && path.starts_with("index") && hold.load(Ordering::SeqCst) {
+                held.fetch_add(1, Ordering::SeqCst);
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    (store, storage, hold, held)
+}
+
+/// Saves `p-1` and `p-2` of two trees in a new scope of the shared storage, and deletes `p-2`
+/// through a store that prunes at once. The prune deletes the index file of `p-2`.
+async fn scope_with_a_prune_to_come(
+    shared: &Arc<InMemoryBlobStorage>,
+) -> (SnapshotScope, Arc<RusticSnapshotStore>, Scratch) {
+    let pruning = store(
+        shared.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let (kept, deleted) = (fixture_tree(), one_file_tree("deleted"));
+    pruning
+        .save(&scope, &name("p-1"), kept.path(), None)
+        .await
+        .unwrap();
+    pruning
+        .save(&scope, &name("p-2"), deleted.path(), None)
+        .await
+        .unwrap();
+    (scope, pruning, kept)
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_restore_whose_index_file_a_prune_deleted_after_the_listing_gives_retryable_storage_and_a_retry_restores()
+ {
+    let shared = Arc::new(InMemoryBlobStorage::new());
+    let (scope, pruning, kept) = scope_with_a_prune_to_come(&shared).await;
+    let (restoring, storage, hold, held) = holding_index_reads(&shared);
+    hold.store(true, Ordering::SeqCst);
+    let first = tokio::spawn({
+        let (restoring, scope) = (restoring.clone(), scope.clone());
+        async move {
+            let into = Scratch::new();
+            restoring.restore(&scope, &name("p-1"), into.path()).await
+        }
+    });
+    let reached = eventually(|| held.load(Ordering::SeqCst) > 0).await;
+
+    let deleted = pruning.delete(&scope, &name("p-2")).await;
+    let pruned = ledger(&shared, &scope).await.last_prune.is_some();
+    hold.store(false, Ordering::SeqCst);
+    storage.open_gate();
+    let first = tokio::time::timeout(LIMIT, first).await;
+    let again = restored_listing(&restoring, &scope, &name("p-1")).await;
+
+    assert!(
+        matches!(&first, Ok(Ok(Err(error))) if is_storage(error, true)),
+        "{first:?}"
+    );
+    assert_eq!(
+        (reached, deleted.is_ok(), pruned, again.ok()),
+        (true, true, true, Some(listing(kept.path())))
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_save_whose_index_file_a_prune_deleted_after_the_listing_gives_retryable_storage_and_a_retry_saves()
+ {
+    let shared = Arc::new(InMemoryBlobStorage::new());
+    let (scope, pruning, _) = scope_with_a_prune_to_come(&shared).await;
+    let (saving, storage, hold, held) = holding_index_reads(&shared);
+    let tree = one_file_tree("new");
+    hold.store(true, Ordering::SeqCst);
+    let first = tokio::spawn({
+        let (saving, scope, path) = (saving.clone(), scope.clone(), tree.path().to_path_buf());
+        async move { saving.save(&scope, &name("p-3"), &path, None).await }
+    });
+    let reached = eventually(|| held.load(Ordering::SeqCst) > 0).await;
+
+    let deleted = pruning.delete(&scope, &name("p-2")).await;
+    let pruned = ledger(&shared, &scope).await.last_prune.is_some();
+    hold.store(false, Ordering::SeqCst);
+    storage.open_gate();
+    let first = tokio::time::timeout(LIMIT, first).await;
+    let again = saving.save(&scope, &name("p-3"), tree.path(), None).await;
+
+    assert!(
+        matches!(&first, Ok(Ok(Err(error))) if is_storage(error, true)),
+        "{first:?}"
+    );
+    assert!(again.is_ok(), "{again:?}");
+    assert_eq!(
+        (
+            reached,
+            deleted.is_ok(),
+            pruned,
+            restored_listing(&saving, &scope, &name("p-3")).await.ok(),
+        ),
+        (true, true, true, Some(listing(tree.path())))
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {

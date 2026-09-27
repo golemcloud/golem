@@ -21,6 +21,7 @@
 use super::prune::SNAPSHOTS_PATH;
 use crate::filesystem_snapshot::SnapshotStoreError;
 use golem_service_base::storage::blob::BlobNameError;
+use rustic_core::FileType;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
@@ -126,6 +127,17 @@ pub(super) fn is_snapshot_missing(error: &(dyn Error + 'static)) -> bool {
     })
 }
 
+/// Tells whether an error in the chain is [`FileMissing`] for an index file. A prune writes its new
+/// index files and then deletes the old ones at once, so an operation that listed an index file
+/// before a prune can find it gone at its read. A later try lists the new index files.
+pub(super) fn is_index_missing(error: &(dyn Error + 'static)) -> bool {
+    chain(error).any(|error| {
+        error
+            .downcast_ref::<FileMissing>()
+            .is_some_and(|missing| missing.path.starts_with(FileType::Index.dirname()))
+    })
+}
+
 /// Tells whether an error in the chain is [`ConfigExists`].
 pub(super) fn is_config_exists(error: &(dyn Error + 'static)) -> bool {
     chain(error).any(|error| error.is::<ConfigExists>())
@@ -144,11 +156,14 @@ pub(super) enum Operation {
     Prune,
 }
 
-/// A failed storage call gives `Storage`, retryable unless a name error caused it. An I/O error
+/// A failed storage call gives `Storage`, retryable unless a name error caused it. An index file
+/// that a prune deleted after the listing gives retryable `Storage` in each operation. An I/O error
 /// gives `Source` in a save and `Destination` in a restore. Each other error gives `Storage` that
 /// is not retryable in a save or a prune, and `Corrupt` in a restore or a read of the repository.
+/// So a pack that is gone stays `Corrupt`, because a prune deletes a pack only after the grace
+/// period.
 pub(super) fn classify(operation: Operation, error: anyhow::Error) -> SnapshotStoreError {
-    let from_storage = is_storage_failure(error.as_ref());
+    let from_storage = is_storage_failure(error.as_ref()) || is_index_missing(error.as_ref());
     let io_kind = chain(error.as_ref())
         .find_map(|error| error.downcast_ref::<std::io::Error>())
         .map(std::io::Error::kind);
@@ -201,7 +216,8 @@ fn chain<'a>(error: &'a (dyn Error + 'static)) -> impl Iterator<Item = &'a (dyn 
 #[cfg(test)]
 mod tests {
     use super::{
-        BlobCallFailed, ConfigExists, Operation, OperationCancelled, classify, is_config_exists,
+        BlobCallFailed, ConfigExists, FileMissing, Operation, OperationCancelled, classify,
+        is_config_exists,
     };
     use crate::filesystem_snapshot::SnapshotStoreError;
     use golem_service_base::storage::blob::BlobNameError;
@@ -255,6 +271,40 @@ mod tests {
         assert_eq!(
             shape(&classify(Operation::Restore, failed_call(failure))),
             ("Storage", Some(true), None)
+        );
+    }
+
+    #[test]
+    fn an_index_file_that_is_gone_gives_retryable_storage_and_a_pack_that_is_gone_does_not() {
+        // The backend gives a missing file as a rustic error of the kind `Backend` whose source is
+        // `FileMissing`. The index load of rustic passes that error on as it is, through the read
+        // of the file and the stream of all index files.
+        let missing = |path: &str| {
+            rustic(FileMissing {
+                path: std::path::Path::new(path).into(),
+            })
+        };
+        let operations = [
+            Operation::Save,
+            Operation::Restore,
+            Operation::Repository,
+            Operation::Prune,
+        ];
+
+        assert_eq!(
+            (
+                operations.map(|operation| shape(&classify(operation, missing("index/ab12")))),
+                operations.map(|operation| shape(&classify(operation, missing("data/ab/ab12")))),
+            ),
+            (
+                [("Storage", Some(true), None); 4],
+                [
+                    ("Storage", Some(false), None),
+                    ("Corrupt", None, None),
+                    ("Corrupt", None, None),
+                    ("Storage", Some(false), None),
+                ]
+            )
         );
     }
 
