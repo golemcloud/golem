@@ -594,7 +594,8 @@ impl RusticSnapshotStore {
         // reading can put a marker that another host wrote within the margin beyond the margin.
         let now = self.now();
         let grace = self.policy.prune.keep_delete;
-        let size = if needs_repository_size(&ledger, records.bytes, now, grace) {
+        let deadline = self.policy.deadline;
+        let size = if needs_repository_size(&ledger, records.bytes, now, grace, deadline) {
             repository_bytes(&files).await.map_err(storage_failure)?
         } else {
             0
@@ -606,6 +607,7 @@ impl RusticSnapshotStore {
             size,
             self.policy.prune_threshold,
             grace,
+            deadline,
         ) {
             return Ok(());
         }
@@ -613,7 +615,6 @@ impl RusticSnapshotStore {
         let listed = list_claims(&files, &claims)
             .await
             .map_err(storage_failure)?;
-        let deadline = self.policy.deadline;
         let ClaimChoice::Claim(number) =
             next_claim(&listed, self.now(), claim_hold(grace, deadline))
         else {

@@ -71,13 +71,14 @@ impl Percent {
     }
 }
 
-/// Tells whether the grace period and the margin for clock skew passed at `now` since the last
-/// prune. A time more than the margin after `now` counts as missing.
-fn grace_passed(ledger: &PruneLedger, now: Timestamp, grace: Duration) -> bool {
+/// Tells whether the hold of a claim passed at `now` since the last prune. The time of the last
+/// prune is after its final marker, so the next prune waits a full hold from the newest claim
+/// marker that the last prune wrote. A time more than the margin after `now` counts as missing.
+fn hold_passed(ledger: &PruneLedger, now: Timestamp, grace: Duration, deadline: Duration) -> bool {
     ledger
         .last_prune
         .filter(|last| !beyond_margin(*last, now))
-        .is_none_or(|last| passed_since(last, now, grace.saturating_add(CLOCK_SKEW_MARGIN)))
+        .is_none_or(|last| passed_since(last, now, claim_hold(grace, deadline)))
 }
 
 /// Tells whether the grace period passed at `now` since the time.
@@ -89,19 +90,20 @@ fn passed_since(time: Timestamp, now: Timestamp, grace: Duration) -> bool {
 }
 
 /// Tells whether [`prune_due`] needs the size of the repository at `now`. Only freed bytes after
-/// the grace period, without marked packs, need it.
+/// the hold of a claim, without marked packs, need it.
 pub(super) fn needs_repository_size(
     ledger: &PruneLedger,
     freed_bytes: u64,
     now: Timestamp,
     grace: Duration,
+    deadline: Duration,
 ) -> bool {
-    grace_passed(ledger, now, grace) && freed_bytes > 0 && !ledger.awaiting_removal
+    hold_passed(ledger, now, grace, deadline) && freed_bytes > 0 && !ledger.awaiting_removal
 }
 
 /// Tells whether a prune is due at `now`.
 ///
-/// A prune is due when the grace period passed since the last prune, and the freed bytes reach the
+/// A prune is due when the hold of a claim passed since the last prune, and the freed bytes reach the
 /// threshold share of `repository_bytes`, rounded down to a whole byte, or the last prune marked
 /// packs. A threshold of zero bytes counts as one byte, so a prune never runs for a scope that
 /// freed nothing and marked nothing.
@@ -112,9 +114,10 @@ pub(super) fn prune_due(
     repository_bytes: u64,
     threshold: Percent,
     grace: Duration,
+    deadline: Duration,
 ) -> bool {
     let work = freed_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal;
-    grace_passed(ledger, now, grace) && work
+    hold_passed(ledger, now, grace, deadline) && work
 }
 
 /// Gives the size of the repository of the scope: the sum of the sizes of its packs.
@@ -811,6 +814,7 @@ mod tests {
                 repository_bytes,
                 TEN_PERCENT,
                 GRACE,
+                DEADLINE,
             )
         };
 
@@ -827,7 +831,9 @@ mod tests {
     }
 
     #[test]
-    fn no_second_prune_runs_within_the_grace_period() {
+    fn no_second_prune_runs_within_the_hold_of_a_claim_after_the_last_prune() {
+        // The grace period and the margin passed at `HELD_MILLIS`, and the full hold at
+        // `HOLD_MILLIS`.
         let last = 1_000_000;
         let full = |now| {
             prune_due(
@@ -837,32 +843,35 @@ mod tests {
                 1000,
                 TEN_PERCENT,
                 GRACE,
+                DEADLINE,
             )
         };
 
         assert_eq!(
             [
                 full(last),
-                full(last + HELD_MILLIS - 1),
                 full(last + HELD_MILLIS),
-                full(last + HELD_MILLIS + 1),
+                full(last + HOLD_MILLIS - 1),
+                full(last + HOLD_MILLIS),
+                full(last + HOLD_MILLIS + 1),
             ],
-            [false, false, true, true]
+            [false, false, false, true, true]
         );
     }
 
     #[test]
-    fn marked_packs_make_a_prune_due_after_the_grace_period_without_freed_bytes() {
+    fn marked_packs_make_a_prune_due_after_the_hold_without_freed_bytes() {
         let last = 1_000_000;
-        let after_grace = at(last + HELD_MILLIS);
+        let after_hold = at(last + HOLD_MILLIS);
         let due = |awaiting_removal| {
             prune_due(
                 &ledger(Some(last), awaiting_removal),
                 0,
-                after_grace,
+                after_hold,
                 1000,
                 TEN_PERCENT,
                 GRACE,
+                DEADLINE,
             )
         };
 
@@ -872,42 +881,69 @@ mod tests {
     #[test]
     fn a_zero_threshold_prunes_after_each_delete_that_freed_bytes() {
         let now = at(10_000_000);
-        let due = |ledger, freed| prune_due(&ledger, freed, now, 1000, Percent(0), Duration::ZERO);
+        let due = |ledger, freed| {
+            prune_due(
+                &ledger,
+                freed,
+                now,
+                1000,
+                Percent(0),
+                Duration::ZERO,
+                DEADLINE,
+            )
+        };
+        let hold = u64::try_from(claim_hold(Duration::ZERO, DEADLINE).as_millis()).unwrap();
 
         assert_eq!(
             [
                 due(ledger(None, false), 0),
                 due(ledger(None, false), 1),
-                due(ledger(Some(10_000_000 - 120_000), false), 1),
+                due(ledger(Some(10_000_000 - hold), false), 1),
             ],
             [false, true, true]
         );
     }
 
     #[test]
-    fn only_freed_bytes_after_the_grace_period_without_marked_packs_need_the_repository_size() {
+    fn only_freed_bytes_after_the_hold_without_marked_packs_need_the_repository_size() {
         let last = 1_000_000;
         let needs = |freed, awaiting_removal, now| {
-            needs_repository_size(&ledger(Some(last), awaiting_removal), freed, at(now), GRACE)
+            needs_repository_size(
+                &ledger(Some(last), awaiting_removal),
+                freed,
+                at(now),
+                GRACE,
+                DEADLINE,
+            )
         };
 
         assert_eq!(
             [
-                needs(1, false, last + HELD_MILLIS),
-                needs(1, false, last + HELD_MILLIS - 1),
-                needs(0, false, last + HELD_MILLIS),
-                needs(1, true, last + HELD_MILLIS),
+                needs(1, false, last + HOLD_MILLIS),
+                needs(1, false, last + HOLD_MILLIS - 1),
+                needs(0, false, last + HOLD_MILLIS),
+                needs(1, true, last + HOLD_MILLIS),
             ],
             [true, false, false, false]
         );
     }
 
     #[test]
-    fn the_margin_extends_the_grace_period_and_a_time_more_than_the_margin_ahead_counts_as_missing()
-    {
+    fn the_hold_holds_the_ledger_and_the_claims_and_a_time_more_than_the_margin_ahead_counts_as_missing()
+     {
         let now = 10_000_000;
         let margin = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap();
-        let due = |last| prune_due(&ledger(Some(last), false), 1, at(now), 0, Percent(0), GRACE);
+        let due = |last| {
+            prune_due(
+                &ledger(Some(last), false),
+                1,
+                at(now),
+                0,
+                Percent(0),
+                GRACE,
+                DEADLINE,
+            )
+        };
         let claim = |claimed_at| {
             next_claim(
                 &[ClaimEntry::Claim(0), ClaimEntry::Marker(0, at(claimed_at))],
@@ -916,13 +952,11 @@ mod tests {
             )
         };
 
-        let grace = u64::try_from(GRACE.as_millis()).unwrap();
-
         assert_eq!(
             (
                 [
-                    due(now - grace),
-                    due(now - grace - margin),
+                    due(now - HOLD_MILLIS + 1),
+                    due(now - HOLD_MILLIS),
                     due(now + margin),
                     due(now + margin + 1)
                 ],
