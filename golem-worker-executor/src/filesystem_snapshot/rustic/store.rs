@@ -239,7 +239,7 @@ struct ClaimGuard {
     /// The blobs of the scope, with a token that nothing cancels, so a release and a final marker
     /// also run after a cancel or a drop.
     files: SnapshotFiles,
-    directory: Box<Path>,
+    directory: Arc<Path>,
     number: u64,
     /// Whether this delete wrote the claim. A delete that did not write it deletes only its
     /// markers.
@@ -256,7 +256,7 @@ impl ClaimGuard {
     /// write of that marker.
     fn new(
         files: &SnapshotFiles,
-        directory: &Path,
+        directory: &Arc<Path>,
         number: u64,
         marker: Box<Path>,
         tracked: TaskTrackerToken,
@@ -266,7 +266,7 @@ impl ClaimGuard {
                 cancel: CancellationToken::new(),
                 ..files.clone()
             },
-            directory: directory.into(),
+            directory: directory.clone(),
             number,
             claimed: AtomicBool::new(false),
             markers: Mutex::new(vec![marker]),
@@ -621,7 +621,7 @@ impl RusticSnapshotStore {
         ) {
             return Ok(());
         }
-        let claims = claims_directory(&ledger);
+        let claims: Arc<Path> = claims_directory(&ledger).into();
         let listed = list_claims(&files, &claims)
             .await
             .map_err(storage_failure)?;
