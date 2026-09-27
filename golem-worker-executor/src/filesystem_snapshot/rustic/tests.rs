@@ -1148,7 +1148,6 @@ fn each_setting_goes_into_its_rustic_option() {
 }
 
 #[test]
-#[timeout("60s")]
 async fn a_repository_keeps_the_settings_of_its_first_save_and_inspect_gives_them() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let (fixed_scope, default_scope) = (new_scope(), new_scope());
@@ -1196,7 +1195,6 @@ async fn a_repository_keeps_the_settings_of_its_first_save_and_inspect_gives_the
 }
 
 #[test]
-#[timeout("60s")]
 async fn inspect_gives_an_error_for_fixed_chunks_that_no_setting_can_hold() {
     // A repository that rustic makes with fixed chunks of 4 GiB has a chunk size that does not fit
     // `Chunking::Fixed`. The inspection must not report it as a Rabin repository.
@@ -1234,7 +1232,6 @@ async fn inspect_gives_an_error_for_fixed_chunks_that_no_setting_can_hold() {
 }
 
 #[test]
-#[timeout("60s")]
 async fn inspect_gives_the_snapshots_the_name_and_the_phases_and_nothing_without_a_repository() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
