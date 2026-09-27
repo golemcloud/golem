@@ -16,8 +16,9 @@
 //!
 //! rustic reads each tree blob with its own ranged read. A backend lives for one operation, so it
 //! keeps each pack of tree blobs after its first read and gives the later ranges from memory. Once
-//! the kept packs fill the limit, a pack that is not kept is not read whole, because it cannot be
-//! kept, and the caller reads only its range.
+//! the kept packs fill the limit, or a pack that was read whole did not fit, the set is closed: a
+//! pack that is not kept is not read whole, because it cannot be kept, and the caller reads only
+//! its range.
 
 use bytes::Bytes;
 use rustic_core::{Id, RusticResult};
@@ -26,8 +27,8 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 /// The packs that one backend keeps, and the packs that a thread reads now. When the kept bytes
-/// reach the limit, the set keeps no more packs, and a pack that it does not keep is not read
-/// whole.
+/// reach the limit, or a pack that was read whole does not fit, the set is closed. A closed set
+/// keeps no more packs, and a pack that it does not keep is not read whole.
 pub(super) struct KeptPacks {
     limit: usize,
     state: Mutex<State>,
@@ -39,6 +40,8 @@ pub(super) struct KeptPacks {
 struct State {
     packs: HashMap<Id, Bytes>,
     bytes: usize,
+    /// A pack that was read whole did not fit in the limit.
+    closed: bool,
     reading: HashSet<Id>,
     /// The threads that wait for the read of a pack by another thread.
     #[cfg(test)]
@@ -57,9 +60,9 @@ impl KeptPacks {
 
     /// Gives the kept pack, or reads it with `read`. While one thread reads a pack, the other
     /// threads that want it wait for that read, and then take the kept pack or read it again. A
-    /// pack is kept only when its read succeeds and it fits in the limit. When the kept packs fill
-    /// the limit and the pack is not kept, it gives `None` and does not read, so the caller reads
-    /// only its range.
+    /// pack is kept only when its read succeeds and it fits in the limit. When the set is closed and
+    /// the pack is not kept, it gives `None` and does not read, so the caller reads only its range.
+    /// A failed read keeps nothing and does not close the set.
     pub(super) fn get_or_read(
         &self,
         id: &Id,
@@ -86,7 +89,7 @@ impl KeptPacks {
         if let Some(pack) = state.packs.get(id) {
             return Some(Ok(pack.clone()));
         }
-        if state.bytes >= self.limit {
+        if state.closed || state.bytes >= self.limit {
             return None;
         }
         state.reading.insert(*id);
@@ -133,13 +136,15 @@ struct Reading<'a> {
 }
 
 impl Reading<'_> {
-    /// Keeps the pack when it fits in the limit.
+    /// Keeps the pack when it fits in the limit, and closes the set when it does not.
     fn keep(&self, pack: &Bytes) {
         let mut state = self.kept.state();
         let bytes = state.bytes.saturating_add(pack.len());
         if bytes <= self.kept.limit {
             state.bytes = bytes;
             state.packs.insert(self.id, pack.clone());
+        } else {
+            state.closed = true;
         }
     }
 }

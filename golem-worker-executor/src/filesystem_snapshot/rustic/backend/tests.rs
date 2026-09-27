@@ -645,7 +645,7 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
 }
 
 #[test]
-fn a_pack_over_the_limit_is_read_again_at_its_next_range() {
+fn a_pack_over_the_limit_is_read_whole_one_time_and_its_next_range_is_a_ranged_read() {
     let fixture = PackFixture::new(99, |_, _| Script::Pass);
     let backend = fixture.backend.clone();
 
@@ -663,7 +663,44 @@ fn a_pack_over_the_limit_is_read_again_at_its_next_range() {
                 Some(Bytes::from_iter(0..10)),
                 Some(Bytes::from_iter(20..30))
             )),
-            vec!["read", "read"]
+            vec!["read", "read_range"]
+        )
+    );
+}
+
+#[test]
+fn a_pack_that_does_not_fit_below_the_limit_is_read_whole_one_time_and_then_by_its_ranges() {
+    // The first pack is kept, and its 100 bytes stay below the limit of 150. The second pack does
+    // not fit, so it is read whole one time and not kept.
+    let fixture = PackFixture::new(150, |_, _| Script::Pass);
+    let backend = fixture.backend.clone();
+
+    let ranges = within_limit(move || {
+        let second = |offset| {
+            backend
+                .read_partial(FileType::Pack, &id("cd"), true, offset, 10)
+                .ok()
+        };
+        (
+            tree_range(&backend, 0, 10).ok(),
+            second(20),
+            second(40),
+            second(60),
+            tree_range(&backend, 80, 10).ok(),
+        )
+    });
+
+    assert_eq!(
+        (ranges, fixture.pack_calls()),
+        (
+            Some((
+                Some(Bytes::from_iter(0..10)),
+                Some(Bytes::from_iter(20..30)),
+                Some(Bytes::from_iter(40..50)),
+                Some(Bytes::from_iter(60..70)),
+                Some(Bytes::from_iter(80..90))
+            )),
+            vec!["read", "read", "read_range", "read_range"]
         )
     );
 }
