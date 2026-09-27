@@ -21,7 +21,7 @@ use super::super::fault::{Operation, OperationCancelled, classify, is_config_exi
 use super::super::holding::{holding_storage, reached_deadline};
 use super::super::publish::{SnapshotStage, StagedSnapshot};
 use super::super::scripted::{Script, ScriptedBlobStorage};
-use super::{BlobBackend, file_size};
+use super::{BlobBackend, Lease, file_size};
 use crate::filesystem_snapshot::SnapshotStoreError;
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::anyhow;
@@ -770,6 +770,23 @@ fn a_cancelled_backend_makes_no_storage_call() {
     .map(|error| error.is_some_and(|error| was_cancelled(&error)));
 
     assert_eq!((cancelled, storage.calls()), ([true; 6], Vec::new()));
+}
+
+#[test]
+fn a_marker_write_that_starts_at_the_end_of_the_lease_does_not_move_it_and_one_that_starts_before_does()
+ {
+    let end = Instant::now() + Duration::from_secs(60);
+    let span = Duration::from_secs(10);
+    let at_the_end = Lease::until(end);
+    let just_before = Lease::until(end);
+
+    at_the_end.extend_from(end, span);
+    just_before.extend_from(end - Duration::from_nanos(1), span);
+
+    assert_eq!(
+        (at_the_end.expiry(), just_before.expiry()),
+        (end, end - Duration::from_nanos(1) + span)
+    );
 }
 
 #[test]
