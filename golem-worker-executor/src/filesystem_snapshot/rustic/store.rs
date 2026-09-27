@@ -74,9 +74,10 @@ use tracing::warn;
 /// the scope. The threshold is 10% of the size, rounded down to a whole byte, so about 10%.
 const PRUNE_THRESHOLD: Percent = Percent(10);
 
-/// How long a pack that a prune marks stays before a later prune deletes it. It is also the
-/// shortest time between two prunes of one scope. It must be longer than the longest save and the
-/// longest restore.
+/// How long a pack that a prune marks stays before a later prune deletes it. It must be longer than
+/// the longest save and the longest restore. Two prunes of one scope never run at once. The next
+/// prune waits a full hold from the newest claim marker that was written, and the hold starts from
+/// this time. When writes fail, only the gap between two prunes can be shorter.
 const PRUNE_GRACE: Duration = Duration::from_secs(15 * 60);
 
 /// The settings of the store: the rustic settings of each operation, and the prune threshold.
@@ -91,7 +92,9 @@ pub(super) struct StorePolicy {
     pub(super) save_threads: Option<NonZeroUsize>,
     /// The number of threads that read packs in a restore.
     pub(super) restore_reader_threads: NonZeroUsize,
-    /// The settings of a prune. `keep_delete` is also the shortest time between two prunes.
+    /// The settings of a prune. Two prunes never run at once. The next prune waits a full hold,
+    /// which starts from `keep_delete`, from the newest claim marker that was written. When writes
+    /// fail, only the gap between two prunes can be shorter.
     pub(super) prune: PruneSettings,
     /// The share of the size of the repository that deleted snapshots must free before a delete
     /// prunes.
