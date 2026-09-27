@@ -167,9 +167,9 @@ pub(crate) struct RusticSnapshotStore {
     policy: StorePolicy,
     /// The parent of the token of each operation.
     root: CancellationToken,
-    /// Counts the blocking tasks, the backends, the blob calls of the store, the publishes, the
-    /// deletes of dropped publishes, and the claim guards with their release and final-marker
-    /// tasks.
+    /// Counts the blocking tasks, the checks of local paths, the backends, the blob calls of the
+    /// store, the publishes, the deletes of dropped publishes, and the claim guards with their
+    /// release and final-marker tasks.
     tracker: TaskTracker,
     /// Runs saves and prunes at a low priority.
     low_priority: LowPriority,
@@ -180,6 +180,10 @@ pub(crate) struct RusticSnapshotStore {
     /// sets it.
     #[cfg(test)]
     pub(super) claim_gate: Option<Arc<StepGate>>,
+    /// Holds the check of the local path of a save or a restore on its blocking thread, when a
+    /// test sets it.
+    #[cfg(test)]
+    pub(super) path_check_gate: Option<Arc<StepGate>>,
     /// Makes each backend build fail while a test sets it.
     #[cfg(test)]
     pub(super) refuse_backends: Arc<std::sync::atomic::AtomicBool>,
@@ -467,6 +471,8 @@ impl RusticSnapshotStore {
             #[cfg(test)]
             claim_gate: None,
             #[cfg(test)]
+            path_check_gate: None,
+            #[cfg(test)]
             refuse_backends: Arc::default(),
             #[cfg(test)]
             clock_ahead: Arc::default(),
@@ -478,9 +484,10 @@ impl RusticSnapshotStore {
     /// ends them: a publish that started before the cancel runs to its end, and a claim guard
     /// releases its claim, or writes the final marker of a prune that started. A save that
     /// reaches its publish after the cancel publishes nothing and gives `Storage`. The call waits
-    /// until no blocking task, backend, blob call of the store, publish, delete of a dropped
-    /// publish, claim guard, or release or final marker of a claim guard remains. A blob call that is not polled holds the wait
-    /// until it is polled again, and then it ends at once. The runtime must not drop before it
+    /// until no blocking task, check of a local path, backend, blob call of the store, publish,
+    /// delete of a dropped publish, claim guard, or release or final marker of a claim guard
+    /// remains. A blob call that is not polled holds the wait until it is polled again, and then
+    /// it ends at once. The runtime must not drop before it
     /// returns, because a storage call after its time driver stops aborts the process.
     pub(crate) async fn shut_down(&self) {
         self.root.cancel();
@@ -787,7 +794,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         parent: Option<(&SnapshotName, ChangeDetection)>,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
-        check_tree(tree).await?;
+        self.check_tree(tree).await?;
         let stage = Arc::new(SnapshotStage::default());
         let backend = Arc::new(self.backend(scope, &token)?.staging_in(stage.clone()));
         let key = self.key.clone();
@@ -830,7 +837,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
-        check_destination(into).await?;
+        self.check_destination(into).await?;
         let backend = Arc::new(self.backend(scope, &token)?);
         let key = self.key.clone();
         let options = store_restore_options(&self.policy);
@@ -1002,31 +1009,55 @@ impl Lookup {
     }
 }
 
-/// Runs the check of a local path on a blocking thread. A thread that fails gives the error of the
-/// path.
-async fn check_path(
-    operation: NativeOperation,
-    path: &Path,
-    error: fn(std::io::Error) -> SnapshotStoreError,
-    check: fn(&Path) -> Result<(), SnapshotStoreError>,
-) -> Result<(), SnapshotStoreError> {
-    let path: Box<Path> = path.into();
-    execute_native(NativeStorageProfile::Unknown, operation, move || {
-        check(&path)
-    })
-    .await
-    .map_err(|failed| error(std::io::Error::other(failed)))?
-}
+impl RusticSnapshotStore {
+    /// Runs the check of a local path on a blocking thread. A thread that fails gives the error of
+    /// the path. The tracker counts the check until it ends, so `shut_down` waits for it, also when
+    /// the operation drops first.
+    async fn check_path(
+        &self,
+        operation: NativeOperation,
+        path: &Path,
+        error: fn(std::io::Error) -> SnapshotStoreError,
+        check: fn(&Path) -> Result<(), SnapshotStoreError>,
+    ) -> Result<(), SnapshotStoreError> {
+        let path: Box<Path> = path.into();
+        let tracked = self.tracker.token();
+        #[cfg(test)]
+        let gate = self.path_check_gate.clone();
+        execute_native(NativeStorageProfile::Unknown, operation, move || {
+            let _tracked = tracked;
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.reached.notify_one();
+                futures::executor::block_on(gate.open.notified());
+            }
+            check(&path)
+        })
+        .await
+        .map_err(|failed| error(std::io::Error::other(failed)))?
+    }
 
-/// Checks that the tree of a save is a directory at an absolute path.
-async fn check_tree(tree: &Path) -> Result<(), SnapshotStoreError> {
-    check_path(
-        NativeOperation::Metadata,
-        tree,
-        SnapshotStoreError::Source,
-        tree_is_valid,
-    )
-    .await
+    /// Checks that the tree of a save is a directory at an absolute path.
+    async fn check_tree(&self, tree: &Path) -> Result<(), SnapshotStoreError> {
+        self.check_path(
+            NativeOperation::Metadata,
+            tree,
+            SnapshotStoreError::Source,
+            tree_is_valid,
+        )
+        .await
+    }
+
+    /// Checks that the directory of a restore is an empty directory with a UTF-8 path.
+    async fn check_destination(&self, into: &Path) -> Result<(), SnapshotStoreError> {
+        self.check_path(
+            NativeOperation::DirectoryEnumeration,
+            into,
+            SnapshotStoreError::Destination,
+            destination_is_valid,
+        )
+        .await
+    }
 }
 
 fn tree_is_valid(tree: &Path) -> Result<(), SnapshotStoreError> {
@@ -1041,17 +1072,6 @@ fn tree_is_valid(tree: &Path) -> Result<(), SnapshotStoreError> {
         )));
     }
     Ok(())
-}
-
-/// Checks that the directory of a restore is an empty directory with a UTF-8 path.
-async fn check_destination(into: &Path) -> Result<(), SnapshotStoreError> {
-    check_path(
-        NativeOperation::DirectoryEnumeration,
-        into,
-        SnapshotStoreError::Destination,
-        destination_is_valid,
-    )
-    .await
 }
 
 fn destination_is_valid(into: &Path) -> Result<(), SnapshotStoreError> {

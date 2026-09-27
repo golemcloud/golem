@@ -3722,6 +3722,47 @@ async fn a_save_that_loses_the_creation_of_the_repository_after_its_first_config
 
 #[test]
 #[timeout("60s")]
+async fn shut_down_waits_for_the_check_of_the_tree_of_a_save() {
+    // The gate holds the check of the tree on its blocking thread.
+    let gate = Arc::new(StepGate::default());
+    let store = Arc::new(RusticSnapshotStore {
+        path_check_gate: Some(gate.clone()),
+        ..RusticSnapshotStore::with_policy(
+            Arc::new(InMemoryBlobStorage::new()),
+            key(),
+            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+        )
+    });
+    let scope = new_scope();
+    let tree = one_file_tree("checked");
+    let saving = tokio::spawn({
+        let (store, scope, path) = (store.clone(), scope.clone(), tree.path().to_path_buf());
+        async move { store.save(&scope, &name("p-checked"), &path, None).await }
+    });
+    let reached = tokio::time::timeout(LIMIT, gate.reached.notified())
+        .await
+        .is_ok();
+
+    let shutting = store.shut_down();
+    tokio::pin!(shutting);
+    let waited = tokio::time::timeout(Duration::from_millis(200), &mut shutting)
+        .await
+        .is_err();
+    gate.open.notify_one();
+    // A finished future must not be polled again, so the second wait runs only after a first wait
+    // that timed out.
+    let stopped = !waited || tokio::time::timeout(LIMIT, &mut shutting).await.is_ok();
+    let saved = tokio::time::timeout(LIMIT, saving).await;
+
+    assert!(
+        matches!(&saved, Ok(Ok(Err(error))) if is_storage(error, false) || is_storage(error, true)),
+        "{saved:?}"
+    );
+    assert_eq!((reached, waited, stopped), (true, true, true));
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {
     // The gate holds the save after its blocking work, so the tracker is empty and `shut_down`
     // returns before the publish starts.
