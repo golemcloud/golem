@@ -61,7 +61,9 @@ impl SnapshotStage {
 
 /// Writes the staged file only when its path has no blob, which makes the snapshot visible. The
 /// name is the hash of the content, so a blob at the path is this file. A failed write deletes the
-/// path before the error returns, and a dropped write deletes it in a task of `tracker`.
+/// path before the error returns, and a dropped write deletes it in a task of `tracker`. The guard
+/// stays armed until that delete ends, so a publish that is dropped during the delete also deletes
+/// the path in a task of `tracker`.
 pub(super) async fn publish(
     files: &SnapshotFiles,
     staged: &StagedSnapshot,
@@ -76,14 +78,14 @@ pub(super) async fn publish(
     let written = files
         .put_if_absent("publish", &staged.path, &staged.content)
         .await;
-    retraction.armed = false;
-    match written {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            retract_or_warn(files, &staged.path).await;
-            Err(error)
-        }
+    if let Err(error) = written {
+        // A write that lost its answer can have landed.
+        retract_or_warn(files, &staged.path).await;
+        retraction.armed = false;
+        return Err(error);
     }
+    retraction.armed = false;
+    Ok(())
 }
 
 /// Deletes the snapshot file at the path. A path without a blob gives success.

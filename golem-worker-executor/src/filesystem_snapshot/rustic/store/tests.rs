@@ -3886,6 +3886,67 @@ async fn a_save_whose_index_file_a_prune_deleted_after_the_listing_gives_retryab
 
 #[test]
 #[timeout("60s")]
+async fn a_save_dropped_during_the_delete_after_a_failed_publish_still_deletes_the_snapshot_file() {
+    // The publish write lands and loses its answer, so the publish deletes the file. The gate
+    // holds that delete, and the test drops the save there.
+    let storage =
+        ScriptedBlobStorage::new(
+            Arc::new(InMemoryBlobStorage::new()),
+            |op_label, _| match op_label {
+                "publish" => Script::LoseTheAnswer,
+                "retract" => Script::WaitForGate,
+                _ => Script::Pass,
+            },
+        );
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = one_file_tree("dropped");
+    let saving = tokio::spawn({
+        let (store, scope, path) = (store.clone(), scope.clone(), tree.path().to_path_buf());
+        async move { store.save(&scope, &name("p-dropped"), &path, None).await }
+    });
+    let retracting = eventually(|| {
+        storage
+            .calls()
+            .iter()
+            .any(|(op_label, _)| *op_label == "retract")
+    })
+    .await;
+    let written = blobs(&*storage, &scope.0, "snapshots/").await.len();
+
+    saving.abort();
+    let dropped = saving.await;
+    storage.open_gate();
+    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
+
+    assert!(
+        dropped.as_ref().is_err_and(|error| error.is_cancelled()),
+        "{dropped:?}"
+    );
+    assert_eq!(
+        (
+            retracting,
+            written,
+            stopped,
+            blobs(&*storage, &scope.0, "snapshots/").await,
+            RusticSnapshotStore::with_policy(
+                storage.clone(),
+                key(),
+                policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+            )
+            .stat(&scope, &name("p-dropped"))
+            .await
+            .ok(),
+        ),
+        (true, 1, true, Vec::<String>::new(), Some(None))
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {
     // The gate holds the save after its blocking work, so the tracker is empty and `shut_down`
     // returns before the publish starts.
