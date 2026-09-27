@@ -164,8 +164,9 @@ pub(crate) struct RusticSnapshotStore {
     policy: StorePolicy,
     /// The parent of the token of each operation.
     root: CancellationToken,
-    /// Counts the blocking tasks, the backends, the blob calls of the store, the publishes and the
-    /// deletes of dropped publishes.
+    /// Counts the blocking tasks, the backends, the blob calls of the store, the publishes, the
+    /// deletes of dropped publishes, and the claim guards with their release and final-marker
+    /// tasks.
     tracker: TaskTracker,
     /// Runs saves and prunes at a low priority.
     low_priority: LowPriority,
@@ -470,10 +471,12 @@ impl RusticSnapshotStore {
     }
 
     /// Cancels each operation, so each running storage call ends and no new call starts, and later
-    /// operations give `Storage`. A publish that starts before the cancel runs to its end. A save
-    /// that reaches its publish after the cancel publishes nothing and gives `Storage`. The call
-    /// waits until no blocking task, backend, blob call of the store, publish, delete of a dropped
-    /// publish or release of a prune claim remains. A blob call that is not polled holds the wait
+    /// operations give `Storage`. Some calls run after the cancel by design, because no cancel
+    /// ends them: a publish that started before the cancel runs to its end, and a claim guard
+    /// writes the release of its claim, or the final marker of a prune that started. A save that
+    /// reaches its publish after the cancel publishes nothing and gives `Storage`. The call waits
+    /// until no blocking task, backend, blob call of the store, publish, delete of a dropped
+    /// publish, claim guard, or release or final marker of a claim guard remains. A blob call that is not polled holds the wait
     /// until it is polled again, and then it ends at once. The runtime must not drop before it
     /// returns, because a storage call after its time driver stops aborts the process.
     pub(crate) async fn shut_down(&self) {
