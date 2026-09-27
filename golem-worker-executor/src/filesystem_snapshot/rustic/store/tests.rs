@@ -3947,6 +3947,57 @@ async fn a_save_dropped_during_the_delete_after_a_failed_publish_still_deletes_t
 
 #[test]
 #[timeout("60s")]
+async fn a_save_whose_publish_is_counted_before_shut_down_and_polled_after_its_cancel_publishes_nothing()
+ {
+    // The gate holds the save after the tracker counts its publish and before the first poll of
+    // the publish. `shut_down` cancels and then waits for the publish, and the gate opens only
+    // after the cancel.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let gate = Arc::new(StepGate::default());
+    let store = Arc::new(RusticSnapshotStore {
+        publish_poll_gate: Some(gate.clone()),
+        ..RusticSnapshotStore::with_policy(
+            storage.clone(),
+            key(),
+            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+        )
+    });
+    let scope = new_scope();
+    let tree = one_file_tree("late");
+    let saving = tokio::spawn({
+        let (store, scope, path) = (store.clone(), scope.clone(), tree.path().to_path_buf());
+        async move { store.save(&scope, &name("p-late"), &path, None).await }
+    });
+    let reached = tokio::time::timeout(LIMIT, gate.reached.notified())
+        .await
+        .is_ok();
+
+    let shutting_down = tokio::spawn({
+        let store = store.clone();
+        async move { store.shut_down().await }
+    });
+    let cancelled = eventually(|| store.root.is_cancelled()).await;
+    gate.open.notify_one();
+    let saved = tokio::time::timeout(LIMIT, saving).await;
+    let stopped = tokio::time::timeout(LIMIT, shutting_down).await;
+
+    assert!(
+        matches!(&saved, Ok(Ok(Err(error))) if is_storage(error, false)),
+        "{saved:?}"
+    );
+    assert!(matches!(stopped, Ok(Ok(()))), "{stopped:?}");
+    assert_eq!(
+        (
+            reached,
+            cancelled,
+            blobs(&*storage, &scope.0, "snapshots/").await
+        ),
+        (true, true, Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {
     // The gate holds the save after its blocking work, so the tracker is empty and `shut_down`
     // returns before the publish starts.

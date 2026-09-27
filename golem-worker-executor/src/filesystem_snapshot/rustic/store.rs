@@ -179,6 +179,10 @@ pub(crate) struct RusticSnapshotStore {
     /// Holds a save after its blocking work and before its publish, when a test sets it.
     #[cfg(test)]
     pub(super) publish_gate: Option<Arc<StepGate>>,
+    /// Holds a save after the tracker counts its publish and before the first poll of the publish,
+    /// when a test sets it.
+    #[cfg(test)]
+    pub(super) publish_poll_gate: Option<Arc<StepGate>>,
     /// Holds a delete after it chose its claim and before it builds its claim guard, when a test
     /// sets it.
     #[cfg(test)]
@@ -471,6 +475,8 @@ impl RusticSnapshotStore {
             low_priority: LowPriority::new(policy.save_threads),
             #[cfg(test)]
             publish_gate: None,
+            #[cfg(test)]
+            publish_poll_gate: None,
             #[cfg(test)]
             claim_gate: None,
             #[cfg(test)]
@@ -823,15 +829,25 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         }
         // The publish is the commit point, so no cancel ends it. The tracker counts it from here,
         // so a `shut_down` that has not cancelled yet waits for it, and the deadline limits that wait.
+        // The check of the cancel and the start of the write are in the first poll of the tracked
+        // future, so a publish never starts after the cancel.
         let files = self.files(scope, &CancellationToken::new());
-        let publishing = self
-            .tracker
-            .track_future(publish(&files, &staged, &self.tracker));
-        if self.root.is_cancelled() {
-            // No snapshot file is written. A later prune marks the packs of the save.
-            return Err(shut_down_error());
+        let (root, tracker) = (self.root.clone(), self.tracker.clone());
+        let publishing = self.tracker.track_future(async move {
+            if root.is_cancelled() {
+                // No snapshot file is written. A later prune marks the packs of the save.
+                return Err(shut_down_error());
+            }
+            publish(&files, &staged, &tracker)
+                .await
+                .map_err(storage_failure)
+        });
+        #[cfg(test)]
+        if let Some(gate) = &self.publish_poll_gate {
+            gate.reached.notify_one();
+            gate.open.notified().await;
         }
-        publishing.await.map_err(storage_failure)?;
+        publishing.await?;
         Ok(info)
     }
 
