@@ -76,10 +76,6 @@ fn is_refresh(op_label: &str) -> bool {
 /// quarter of it, so the markers come while the prune runs.
 const SWEEP_GRACE: Duration = Duration::from_millis(16);
 
-fn is_forget(op_label: &str, path: &Path) -> bool {
-    op_label == "delete" && path.starts_with("snapshots")
-}
-
 fn is_prune_start(op_label: &str, path: &str) -> bool {
     op_label == "list" && path == "data"
 }
