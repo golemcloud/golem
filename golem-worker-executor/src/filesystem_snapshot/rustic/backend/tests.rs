@@ -490,8 +490,9 @@ fn pack_content() -> Vec<u8> {
     (0..100).collect()
 }
 
-/// A backend over a storage that holds one pack at the path of the id `ab`, with the rule of
-/// the storage and the limit of the kept packs. The storage records each call.
+/// A backend over a storage that holds one pack at the path of the id `ab` and one at the path of
+/// the id `cd`, with the rule of the storage and the limit of the kept packs. The storage records
+/// each call.
 struct PackFixture {
     _runtime: Runtime,
     storage: Arc<ScriptedBlobStorage>,
@@ -503,15 +504,17 @@ impl PackFixture {
         let runtime = Runtime::new().unwrap();
         let inner = Arc::new(InMemoryBlobStorage::new());
         let namespace = new_namespace();
-        runtime
-            .block_on(inner.put_raw(
-                "test",
-                "test",
-                namespace.clone(),
-                Path::new(&format!("data/ab/{}", "ab".repeat(32))),
-                &pack_content(),
-            ))
-            .unwrap();
+        ["ab", "cd"].iter().for_each(|pack| {
+            runtime
+                .block_on(inner.put_raw(
+                    "test",
+                    "test",
+                    namespace.clone(),
+                    Path::new(&format!("data/{pack}/{}", pack.repeat(32))),
+                    &pack_content(),
+                ))
+                .unwrap();
+        });
         let storage = ScriptedBlobStorage::new(inner, rule);
         let backend = BlobBackend::new(
             storage.clone(),
@@ -661,6 +664,35 @@ fn a_pack_over_the_limit_is_read_again_at_its_next_range() {
                 Some(Bytes::from_iter(20..30))
             )),
             vec!["read", "read"]
+        )
+    );
+}
+
+#[test]
+fn once_the_kept_packs_fill_the_limit_a_range_of_another_pack_is_a_ranged_read() {
+    // The first pack fills the limit when it is kept.
+    let fixture = PackFixture::new(100, |_, _| Script::Pass);
+    let backend = fixture.backend.clone();
+
+    let ranges = within_limit(move || {
+        (
+            tree_range(&backend, 0, 10).ok(),
+            backend
+                .read_partial(FileType::Pack, &id("cd"), true, 20, 10)
+                .ok(),
+            tree_range(&backend, 40, 10).ok(),
+        )
+    });
+
+    assert_eq!(
+        (ranges, fixture.pack_calls()),
+        (
+            Some((
+                Some(Bytes::from_iter(0..10)),
+                Some(Bytes::from_iter(20..30)),
+                Some(Bytes::from_iter(40..50))
+            )),
+            vec!["read", "read_range"]
         )
     );
 }

@@ -368,9 +368,13 @@ impl ReadBackend for BlobBackend {
             return Ok(Bytes::new());
         };
         // rustic marks the reads of tree blobs as cacheable, and reads each tree blob on its own.
-        if cacheable && tpe == FileType::Pack {
-            let pack = self.kept.get_or_read(id, || self.read_full(tpe, id))?;
-            return range_of(&pack, &path, offset, last);
+        // A pack of tree blobs is read whole and kept, until the kept packs fill their limit.
+        // After that, a pack that is not kept is read by its range, as each other blob.
+        if cacheable
+            && tpe == FileType::Pack
+            && let Some(pack) = self.kept.get_or_read(id, || self.read_full(tpe, id))
+        {
+            return range_of(&pack?, &path, offset, last);
         }
         let start = u64::from(offset);
         self.request(

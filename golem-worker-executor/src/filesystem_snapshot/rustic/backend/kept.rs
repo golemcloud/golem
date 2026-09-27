@@ -15,7 +15,9 @@
 //! The packs that one backend keeps in memory after a full read, up to a limit of bytes.
 //!
 //! rustic reads each tree blob with its own ranged read. A backend lives for one operation, so it
-//! keeps each pack of tree blobs after its first read and gives the later ranges from memory.
+//! keeps each pack of tree blobs after its first read and gives the later ranges from memory. Once
+//! the kept packs fill the limit, a pack that is not kept is not read whole, because it cannot be
+//! kept, and the caller reads only its range.
 
 use bytes::Bytes;
 use rustic_core::{Id, RusticResult};
@@ -23,7 +25,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
-/// The packs that one backend keeps, and the packs that a thread reads now.
+/// The packs that one backend keeps, and the packs that a thread reads now. When the kept bytes
+/// reach the limit, the set keeps no more packs, and a pack that it does not keep is not read
+/// whole.
 pub(super) struct KeptPacks {
     limit: usize,
     state: Mutex<State>,
@@ -53,12 +57,14 @@ impl KeptPacks {
 
     /// Gives the kept pack, or reads it with `read`. While one thread reads a pack, the other
     /// threads that want it wait for that read, and then take the kept pack or read it again. A
-    /// pack is kept only when its read succeeds and it fits in the limit.
+    /// pack is kept only when its read succeeds and it fits in the limit. When the kept packs fill
+    /// the limit and the pack is not kept, it gives `None` and does not read, so the caller reads
+    /// only its range.
     pub(super) fn get_or_read(
         &self,
         id: &Id,
         read: impl FnOnce() -> RusticResult<Bytes>,
-    ) -> RusticResult<Bytes> {
+    ) -> Option<RusticResult<Bytes>> {
         #[cfg(test)]
         let mut counted = false;
         let mut state = self
@@ -78,7 +84,10 @@ impl KeptPacks {
             state.waiters -= 1;
         }
         if let Some(pack) = state.packs.get(id) {
-            return Ok(pack.clone());
+            return Some(Ok(pack.clone()));
+        }
+        if state.bytes >= self.limit {
+            return None;
         }
         state.reading.insert(*id);
         drop(state);
@@ -90,7 +99,7 @@ impl KeptPacks {
         if let Ok(pack) = &read {
             reading.keep(pack);
         }
-        read
+        Some(read)
     }
 
     /// Gives the number of threads that wait for the read of a pack by another thread.
