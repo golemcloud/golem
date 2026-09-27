@@ -885,6 +885,46 @@ async fn frozen_disposal_allocation_accrues_through_release_across_month_boundar
 
 #[test]
 #[timeout("5s")]
+async fn frozen_retained_close_skips_duplicate_allocation_read_and_holds_permit() {
+    let clock = TestClock::new(Instant::now());
+    let reader = ScriptedUsageReader::new(vec![
+        ObservationGate::ready(authoritative(100)),
+        ObservationGate::ready(authoritative(100)),
+        ObservationGate::ready(authoritative(100)),
+    ]);
+    let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
+    let (meter, _) = meter(reader.clone(), clock.clone(), &entry, GIB);
+    let (_, _, permit) = permit(&entry).await;
+    let mut window = open_window(&meter, permit).await.unwrap();
+    let held = Arc::new(AtomicBool::new(false));
+    window.track_permit_for_test(held.clone());
+    assert!(held.load(Ordering::Acquire));
+    wait_for_calls(&reader, 1).await;
+    wait_for_observation_state(&window).await;
+    assert_eq!(reader.calls.load(Ordering::Acquire), 1);
+
+    window.freeze_allocation().await.unwrap();
+    assert_eq!(reader.calls.load(Ordering::Acquire), 2);
+    assert!(held.load(Ordering::Acquire));
+    clock.set(Duration::from_secs(2)).await;
+
+    let (settlement, returned_permit) =
+        close_window_retaining_permit(window, clock.now() + Duration::from_secs(1)).await;
+    settlement.unwrap();
+    assert_eq!(reader.calls.load(Ordering::Acquire), 2);
+    assert!(!meter.is_active());
+    assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 2);
+    assert_eq!(entry.durable_byte_seconds_delta(), 200);
+    let returned_permit =
+        returned_permit.expect("retaining close must return the concurrent-agent permit");
+    assert!(held.load(Ordering::Acquire));
+
+    drop(returned_permit);
+    assert!(!held.load(Ordering::Acquire));
+}
+
+#[test]
+#[timeout("5s")]
 async fn active_memory_and_storage_are_split_at_the_utc_month_boundary() {
     let now = Instant::now();
     let base_utc = Utc
