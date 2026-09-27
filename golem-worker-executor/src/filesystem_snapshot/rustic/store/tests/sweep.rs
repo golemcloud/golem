@@ -161,11 +161,13 @@ async fn until(condition: impl Fn() -> bool) -> bool {
 
 /// Waits until the delete waits for a step or ended. While the prune waits for the listing of
 /// the packs, it also waits until the first new marker of the claim waits for a step, so each
-/// prune writes a new marker right after that listing.
+/// prune writes a new marker right after that listing. A dropped delete writes no new marker,
+/// because the cancel stops the refresh, and the cancel also ends its listing of the packs.
 async fn settle(delete: &Delete) -> bool {
     until(|| {
         let waiting = delete.storage.waiting_steps();
-        delete.finished() || waiting > usize::from(prune_waits(&delete.storage))
+        let refreshing = !delete.dropped && prune_waits(&delete.storage);
+        delete.finished() || waiting > usize::from(refreshing)
     })
     .await
 }
@@ -468,9 +470,9 @@ fn forgotten_at(log: &[Step], who: usize) -> Option<usize> {
 }
 
 /// Gives each claim, or marker of a claim, that a delete wrote and that stays, when the first
-/// failed call of that delete, or its drop, came after it took its claim and before it called for
-/// the listing of the packs. A claim that the other delete wrote later at the same path is not the claim of the
-/// delete. A blob whose own delete failed is left out, because no call can remove it then, and a
+/// failed call of that delete, or its drop, came after it took its claim and before its prune
+/// started: before it called for the listing of the packs, and when it made no final marker call.
+/// A claim that the other delete wrote later at the same path is not the claim of the delete. A blob whose own delete failed is left out, because no call can remove it then, and a
 /// claim or a marker that stays only delays a prune.
 fn kept_claims(log: &[Step], claims: &[String]) -> Vec<String> {
     [0, 1]
@@ -484,7 +486,8 @@ fn kept_claims(log: &[Step], claims: &[String]) -> Vec<String> {
             let pruning = log[..=failed_at]
                 .iter()
                 .any(|step| own(step) && is_prune_start(step.op_label, &step.path));
-            (claimed_at < failed_at && !pruning).then_some((who, claimed_at))
+            (claimed_at < failed_at && !pruning && !marked_final(log, who))
+                .then_some((who, claimed_at))
         })
         .flat_map(|(who, claimed_at)| {
             let claim = &log[claimed_at].path;
@@ -525,6 +528,15 @@ fn kept_claims(log: &[Step], claims: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Tells whether the delete called for the final marker of its claim. The guard writes it only
+/// after the prune started. A drop can come right after the start, when the cancel ends the
+/// listing of the packs before it takes a step, so the final marker is then the only step that
+/// shows the start.
+fn marked_final(log: &[Step], who: usize) -> bool {
+    log.iter()
+        .any(|step| step.delete == who && !step.landed && step.op_label == "final_marker")
+}
+
 /// Gives the claim of each delete whose prune started and that wrote no ledger entry, when that
 /// claim is gone. A prune that started keeps its claim, so the next prune waits for the hold.
 fn started_claims_gone(log: &[Step], claims: &[String]) -> Vec<String> {
@@ -539,7 +551,8 @@ fn started_claims_gone(log: &[Step], claims: &[String]) -> Vec<String> {
             let started = log
                 .iter()
                 .filter(own)
-                .any(|step| is_prune_start(step.op_label, &step.path));
+                .any(|step| is_prune_start(step.op_label, &step.path))
+                || marked_final(log, who);
             let ledger_written = log
                 .iter()
                 .filter(own)

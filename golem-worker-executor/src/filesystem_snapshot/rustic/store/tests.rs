@@ -4950,6 +4950,30 @@ async fn two_deletes_make_at_most_one_prune_when_one_is_dropped_at_its_first_ste
 
 #[test]
 #[timeout("60s")]
+async fn two_deletes_make_at_most_one_prune_when_one_is_dropped_as_its_prune_starts() {
+    // A drop right after the second read of the ledger can come just after the prune started. The
+    // listing of the packs then waits for a step until the cancel ends it, and the guard writes
+    // the final marker. The order ran into that race in a random case, so the test runs it many
+    // times.
+    let (shared, prepared) = prepared_scope().await;
+    let schedule = sweep::Schedule {
+        first: 1,
+        turns: vec![16, 10, 3, 9, 14],
+        fail: None,
+        late: None,
+        drop: Some((1, 10)),
+    };
+
+    let cases = futures::stream::iter(0..DROP_REPEATS)
+        .then(|_| sweep::run_case(&shared, &prepared, &schedule))
+        .try_fold(0usize, |cases, _| async move { Ok(cases + 1) })
+        .await;
+
+    assert!(cases.is_ok(), "{cases:?}");
+}
+
+#[test]
+#[timeout("60s")]
 async fn two_deletes_make_at_most_one_prune_in_random_orders_with_a_failed_call() {
     // The test generates the order of the steps, a call that fails, and a call that gets no answer
     // and reaches the storage later, and shrinks a failing case to the shortest order. The seed is fixed, and no file keeps a failing case.
