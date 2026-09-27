@@ -220,10 +220,12 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// snapshot. That time is later than the time of each snapshot that the scope held when the
     /// save started.
     ///
-    /// `parent` names the snapshot that the save compares with. With `SizeMtime`, a file whose
-    /// size and modification time equal those of the same path in the parent keeps the content of
-    /// the parent, and the save does not read it. With `Full`, the save reads every file. A parent
-    /// that the scope does not hold gives a save that reads every file.
+    /// `parent` names the snapshot that the save can compare with. With `SizeMtime`, the store can
+    /// keep the content of the parent for a file whose size and modification time equal those of
+    /// the same path in the parent, and then it does not read that file. So such a file that
+    /// changed can keep the content of the parent. A store can also read each file. With `Full`,
+    /// the save reads every file. A parent that the scope does not hold gives a save that reads
+    /// every file.
     async fn save(
         &self,
         scope: &SnapshotScope,
