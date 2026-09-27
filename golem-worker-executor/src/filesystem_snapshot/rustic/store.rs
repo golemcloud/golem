@@ -473,7 +473,7 @@ impl RusticSnapshotStore {
     /// Cancels each operation, so each running storage call ends and no new call starts, and later
     /// operations give `Storage`. Some calls run after the cancel by design, because no cancel
     /// ends them: a publish that started before the cancel runs to its end, and a claim guard
-    /// writes the release of its claim, or the final marker of a prune that started. A save that
+    /// releases its claim, or writes the final marker of a prune that started. A save that
     /// reaches its publish after the cancel publishes nothing and gives `Storage`. The call waits
     /// until no blocking task, backend, blob call of the store, publish, delete of a dropped
     /// publish, claim guard, or release or final marker of a claim guard remains. A blob call that is not polled holds the wait
