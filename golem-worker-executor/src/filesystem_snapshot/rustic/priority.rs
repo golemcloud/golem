@@ -50,17 +50,13 @@ impl LowPriority {
 
     /// Runs the work at nice 19 on a new thread with the name, inside a new rayon pool, and waits
     /// for it. The threads that the work starts get the same nice value. On a platform other than
-    /// Linux the work runs as it is.
+    /// Linux the priority stays as it is, and the work still runs on its own thread in its own pool.
     pub(super) fn run<T: Send + 'static>(
         self,
         name: &'static str,
         work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     ) -> anyhow::Result<T> {
-        if cfg!(target_os = "linux") {
-            self.on_own_thread(name, work)
-        } else {
-            work()
-        }
+        self.on_own_thread(name, work)
     }
 
     /// Runs the work on a new thread that first lowers its priority and builds the pool. A failure
@@ -166,6 +162,7 @@ fn lower_own_priority() -> std::io::Result<()> {
     }
 }
 
+/// Keeps the priority of the calling thread on a platform other than Linux.
 #[cfg(not(target_os = "linux"))]
 fn lower_own_priority() -> std::io::Result<()> {
     Ok(())
