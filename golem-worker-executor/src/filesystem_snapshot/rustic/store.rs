@@ -574,8 +574,10 @@ impl RusticSnapshotStore {
     /// that delete can delay that prune by up to the hold of a claim. A prune that found a snapshot
     /// file gone at each attempt changed nothing, so it counts as an error before the prune ran.
     /// After a prune that started, the claim stays on each outcome, also when the prune or its
-    /// ledger write fails, so the next prune waits the hold of a claim from the end of this one. A
-    /// prune that succeeds deletes each claim of its ledger.
+    /// ledger write fails, or when the lease skips its ledger write. So the next prune waits a full
+    /// hold from the newest claim marker that was written, which is the end of the prune unless the
+    /// final marker write failed. Two prunes never run at once; when writes fail, only the gap
+    /// between them can be shorter. A prune that succeeds deletes each claim of its ledger.
     async fn prune_when_due(
         &self,
         scope: &SnapshotScope,
