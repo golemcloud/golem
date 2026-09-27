@@ -5243,3 +5243,62 @@ async fn two_deletes_make_at_most_one_prune_in_random_orders_with_a_failed_call(
     println!("{SWEEP_CASES} random orders in {:?}", started.elapsed());
     assert!(matches!(outcome, Ok(Ok(()))), "{outcome:?}");
 }
+
+/// The name and the thread count of each pool that [`recording_pool`] built.
+static BUILT_POOLS: std::sync::Mutex<Vec<(&'static str, Option<NonZeroUsize>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Builds a rayon pool with the name and the thread count, and records both. Only the store of
+/// one test uses it, so the record holds only the pools of that store.
+fn recording_pool(
+    name: &'static str,
+    threads: Option<NonZeroUsize>,
+) -> Result<rayon::ThreadPool, rayon::ThreadPoolBuildError> {
+    BUILT_POOLS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((name, threads));
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads.map_or(0, NonZeroUsize::get))
+        .build()
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_restore_builds_its_pool_with_the_restore_reader_threads() {
+    // The save threads and the restore reader threads differ, so the count of the pool tells
+    // which setting the restore took.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let policy = StorePolicy {
+        save_threads: NonZeroUsize::new(2),
+        restore_reader_threads: NonZeroUsize::new(3).unwrap(),
+        ..policy(LONG_DEADLINE, NEVER, Duration::ZERO)
+    };
+    let store = RusticSnapshotStore {
+        low_priority: super::super::priority::LowPriority {
+            build_pool: recording_pool,
+            ..super::super::priority::LowPriority::new(policy.save_threads)
+        },
+        ..RusticSnapshotStore::with_policy(storage, key(), policy)
+    };
+    let scope = new_scope();
+    let tree = one_file_tree("restored");
+    store
+        .save(&scope, &name("p-1"), tree.path(), None)
+        .await
+        .unwrap();
+
+    let restored = restored_listing(&store, &scope, &name("p-1")).await;
+    let restore_pools = BUILT_POOLS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|(name, _)| *name == "fs-snap-restore")
+        .map(|(_, threads)| *threads)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (restored.ok(), restore_pools),
+        (Some(listing(tree.path())), vec![NonZeroUsize::new(3)])
+    );
+}
