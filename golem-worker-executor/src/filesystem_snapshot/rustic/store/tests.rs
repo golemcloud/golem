@@ -1278,6 +1278,101 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &Snapshot
 
 #[test]
 #[timeout("60s")]
+async fn a_prune_refreshes_the_claim_with_its_own_number() {
+    // Old claims 0 and 1 with markers older than the hold stay in the claim directory, so the
+    // delete takes claim 2. The gate holds the prune at its listing of the packs while the claim
+    // gets new markers.
+    let grace = Duration::from_millis(400);
+    let claimed = Arc::new(AtomicBool::new(false));
+    let held = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let (claimed, held) = (claimed.clone(), held.clone());
+        move |op_label, path| {
+            if op_label == "write_claim" {
+                claimed.store(true, Ordering::SeqCst);
+            }
+            if op_label == "list"
+                && path == Path::new("data")
+                && claimed.load(Ordering::SeqCst)
+                && !held.swap(true, Ordering::SeqCst)
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(storage.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+    let old = golem_common::model::Timestamp::now_utc()
+        .to_millis()
+        .saturating_sub(2 * 3_600_000);
+    futures::stream::iter([
+        "golem/prune-claims/none/0".to_string(),
+        format!("golem/prune-claims/none/0@{old}-old"),
+        "golem/prune-claims/none/1".to_string(),
+        format!("golem/prune-claims/none/1@{old}-old"),
+    ])
+    .for_each(|path| {
+        let (storage, scope) = (storage.clone(), scope.clone());
+        async move {
+            storage
+                .put_raw("test", "test", scope.0.clone(), Path::new(&path), &[])
+                .await
+                .unwrap();
+        }
+    })
+    .await;
+    let pruning = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &name("p-1")).await }
+    });
+    let refreshes = || {
+        storage
+            .calls()
+            .iter()
+            .filter(|(op_label, _)| *op_label == "refresh_claim")
+            .count()
+    };
+    let refreshed = eventually(|| held.load(Ordering::SeqCst) && refreshes() >= 2).await;
+
+    let entries = claim_entries(&storage, &scope).await;
+    storage.open_gate();
+    let pruned = tokio::time::timeout(LIMIT, pruning).await;
+    let young = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            ClaimEntry::Marker(number, at) if at.to_millis() > old => Some(*number),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let live_markers = entries
+        .iter()
+        .filter(|entry| matches!(entry, ClaimEntry::Marker(2, _)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let hold = claim_hold(grace, LONG_DEADLINE);
+
+    assert!(matches!(pruned, Ok(Ok(Ok(())))), "{pruned:?}");
+    assert_eq!(
+        (
+            refreshed,
+            entries.contains(&ClaimEntry::Claim(2)),
+            young.len() >= 3,
+            young.iter().all(|number| *number == 2),
+            next_claim(
+                &live_markers,
+                golem_common::model::Timestamp::now_utc(),
+                hold
+            ),
+        ),
+        (true, true, true, true, ClaimChoice::Held)
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
     // The gate holds the prune at its listing of the packs for longer than the grace period.
     let grace = Duration::from_millis(400);
