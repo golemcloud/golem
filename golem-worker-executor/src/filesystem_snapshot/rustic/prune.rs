@@ -1473,6 +1473,47 @@ mod tests {
     }
 
     #[test]
+    fn a_record_line_parses_only_when_it_has_64_characters_that_are_each_hex() {
+        // A record whose content does not parse names no snapshot file, so it counts as zero
+        // bytes and stays.
+        let hex = "0123456789abcdef".repeat(4);
+        let parsed = [
+            parse_record("g".repeat(64).as_bytes()),
+            parse_record(b"abcdef0123"),
+            parse_record(hex.as_bytes()),
+        ];
+        let records = parsed
+            .iter()
+            .enumerate()
+            .map(|(index, snapshots)| FreedRecord {
+                path: Path::new(FREED_PATH)
+                    .join(format!("10-{index}"))
+                    .into_boxed_path(),
+                bytes: 10,
+                snapshots: snapshots.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (
+                parsed.clone(),
+                settle(&records, &std::collections::HashSet::new()),
+            ),
+            (
+                [
+                    None,
+                    None,
+                    Some(Box::new([hex.clone().into_boxed_str()]) as Box<[Box<str>]>)
+                ],
+                FreedRecords {
+                    bytes: 10,
+                    counted: Box::new([Path::new(FREED_PATH).join("10-2").into_boxed_path()]),
+                },
+            )
+        );
+    }
+
+    #[test]
     #[timeout("60s")]
     async fn a_record_of_freed_bytes_is_written_and_listed() {
         let files = new_files();
