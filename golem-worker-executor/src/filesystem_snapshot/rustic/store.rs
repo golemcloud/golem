@@ -76,8 +76,10 @@ const PRUNE_THRESHOLD: Percent = Percent(10);
 
 /// How long a pack that a prune marks stays before a later prune deletes it. It must be longer than
 /// the longest save and the longest restore. Two prunes of one scope never run at once. The next
-/// prune waits a full hold from the newest claim marker that was written, and the hold starts from
-/// this time. When writes fail, only the gap between two prunes can be shorter.
+/// prune waits a full hold from the newest claim marker that was written. The hold follows from
+/// this time: this time less one storage call deadline, but at least one deadline, plus the margin
+/// for clock skew, plus two deadlines. When writes fail, only the gap between two prunes can be
+/// shorter.
 const PRUNE_GRACE: Duration = Duration::from_secs(15 * 60);
 
 /// The settings of the store: the rustic settings of each operation, and the prune threshold.
@@ -92,9 +94,10 @@ pub(super) struct StorePolicy {
     pub(super) save_threads: Option<NonZeroUsize>,
     /// The number of threads that read packs in a restore.
     pub(super) restore_reader_threads: NonZeroUsize,
-    /// The settings of a prune. Two prunes never run at once. The next prune waits a full hold,
-    /// which starts from `keep_delete`, from the newest claim marker that was written. When writes
-    /// fail, only the gap between two prunes can be shorter.
+    /// The settings of a prune. Two prunes never run at once. The next prune waits a full hold from
+    /// the newest claim marker that was written. The hold follows from `keep_delete`: that time
+    /// less one storage call deadline, but at least one deadline, plus the margin for clock skew,
+    /// plus two deadlines. When writes fail, only the gap between two prunes can be shorter.
     pub(super) prune: PruneSettings,
     /// The share of the size of the repository that deleted snapshots must free before a delete
     /// prunes.
@@ -487,15 +490,17 @@ impl RusticSnapshotStore {
     /// until no blocking task, check of a local path, backend, blob call of the store, publish,
     /// delete of a dropped publish, claim guard, or release or final marker of a claim guard
     /// remains. A blob call that is not polled holds the wait until it is polled again, and then
-    /// it ends at once. The runtime must not drop before it
-    /// returns, because a storage call after its time driver stops aborts the process.
+    /// it ends at once. The runtime must not drop before it returns, because a storage call after
+    /// its time driver stops aborts the process.
     pub(crate) async fn shut_down(&self) {
         self.root.cancel();
         self.tracker.close();
         self.tracker.wait().await;
     }
 
-    /// Gives the number of blocking tasks, backends and deletes of the store that have not ended.
+    /// Gives the number of blocking tasks, checks of local paths, backends, blob calls of the store,
+    /// publishes, deletes of dropped publishes, and claim guards with their release and
+    /// final-marker tasks that have not ended.
     #[cfg(test)]
     pub(super) fn work_in_flight(&self) -> usize {
         self.tracker.len()

@@ -472,8 +472,9 @@ fn forgotten_at(log: &[Step], who: usize) -> Option<usize> {
 /// Gives each claim, or marker of a claim, that a delete wrote and that stays, when the first
 /// failed call of that delete, or its drop, came after it took its claim and before its prune
 /// started: before it called for the listing of the packs, and when it made no final marker call.
-/// A claim that the other delete wrote later at the same path is not the claim of the delete. A blob whose own delete failed is left out, because no call can remove it then, and a
-/// claim or a marker that stays only delays a prune.
+/// A claim that the other delete wrote later at the same path is not the claim of the delete. A
+/// blob whose own delete failed is left out, because no call can remove it then, and a claim or a
+/// marker that stays only delays a prune.
 fn kept_claims(log: &[Step], claims: &[String]) -> Vec<String> {
     [0, 1]
         .into_iter()

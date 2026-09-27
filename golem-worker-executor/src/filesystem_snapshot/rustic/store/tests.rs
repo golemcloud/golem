@@ -2994,22 +2994,19 @@ async fn a_prune_that_fails_keeps_its_claim_so_no_second_prune_runs_within_the_h
 
 #[test]
 #[timeout("60s")]
-async fn a_claim_older_than_the_grace_period_does_not_block_a_prune() {
+async fn a_claim_without_a_marker_does_not_block_a_prune() {
     let grace = Duration::from_secs(3600);
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(storage.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
-    let old = golem_common::model::Timestamp::now_utc()
-        .to_millis()
-        .saturating_sub(2 * 3_600_000);
     storage
         .put_raw(
             "test",
             "test",
             scope.0.clone(),
             Path::new("golem/prune-claims/none/0"),
-            old.to_string().as_bytes(),
+            &[],
         )
         .await
         .unwrap();
@@ -3078,7 +3075,7 @@ async fn a_delete_below_the_threshold_does_not_prune() {
 
 #[test]
 #[timeout("60s")]
-async fn no_second_prune_runs_within_the_grace_period() {
+async fn no_second_prune_runs_within_the_hold_after_a_prune() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
