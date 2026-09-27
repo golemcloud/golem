@@ -5508,8 +5508,8 @@ async fn two_deletes_make_at_most_one_prune_in_each_order_with_up_to_two_switche
 #[timeout("60s")]
 async fn two_deletes_make_at_most_one_prune_when_one_is_dropped_at_its_first_step() {
     // A drop right after the first step cancels the forget of the delete while its storage call
-    // can already wait for a step. The order ran into that race in a random case, so the test
-    // runs it many times.
+    // can already wait for a step. The race depends on timing, so the test runs the order many
+    // times.
     let (shared, prepared) = prepared_scope().await;
     let schedule = sweep::Schedule {
         first: 0,
@@ -5532,8 +5532,7 @@ async fn two_deletes_make_at_most_one_prune_when_one_is_dropped_at_its_first_ste
 async fn two_deletes_make_at_most_one_prune_when_one_is_dropped_as_its_prune_starts() {
     // A drop right after the second read of the ledger can come just after the prune started. The
     // listing of the packs then waits for a step until the cancel ends it, and the guard writes
-    // the final marker. The order ran into that race in a random case, so the test runs it many
-    // times.
+    // the final marker. The race depends on timing, so the test runs the order many times.
     let (shared, prepared) = prepared_scope().await;
     let schedule = sweep::Schedule {
         first: 1,
