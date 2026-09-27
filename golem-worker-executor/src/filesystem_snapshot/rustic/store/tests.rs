@@ -298,6 +298,7 @@ fn a_save_time_is_the_first_whole_millisecond_that_is_not_before_the_call() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
     use std::os::fd::AsRawFd;
     let storage = Arc::new(InMemoryBlobStorage::new());
@@ -345,6 +346,7 @@ async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_whose_index_write_fails_publishes_nothing_and_leaves_the_name_free() {
     let refuse = Arc::new(AtomicBool::new(true));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
@@ -436,6 +438,7 @@ async fn a_publish_that_reaches_the_deadline_and_lands_late_publishes_nothing() 
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_second_save_of_an_unchanged_tree_writes_no_pack() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
@@ -606,6 +609,7 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_restore_whose_pack_reads_fail_gives_a_retryable_storage_error() {
     let refuse = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
@@ -642,6 +646,7 @@ async fn a_restore_whose_pack_reads_fail_gives_a_retryable_storage_error() {
 
 #[cfg(unix)]
 #[test]
+#[timeout("60s")]
 async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_denied() {
     use std::os::unix::fs::PermissionsExt;
     // SAFETY: `geteuid` has no preconditions.
@@ -677,6 +682,7 @@ async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_d
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn a_restore_that_cannot_set_an_extended_attribute_gives_destination() {
     // A file on tmpfs takes a user attribute of 6,000 bytes. A file on ext4 with 4 KiB blocks
     // does not, so the restore cannot set it. The test checks nothing on a host where the source
@@ -744,6 +750,7 @@ fn xattr_set(path: &Path, name: &str, value: &[u8]) -> std::io::Result<()> {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_unknown_name_corrupt()
  {
     let storage = Arc::new(InMemoryBlobStorage::new());
@@ -788,6 +795,7 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_period() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -906,6 +914,7 @@ async fn put_ledger_entry<S: BlobStorage + 'static>(
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
     // The ledger has no marked packs, so only the grace period keeps the first delete from a
     // listing. The second delete comes after the grace period and lists the packs one time.
@@ -948,6 +957,7 @@ async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_failed_listing_of_the_packs_gives_storage_and_records_no_prune() {
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
         if op_label == "list_data" {
@@ -1114,6 +1124,7 @@ async fn a_record_that_a_delete_adds_during_a_prune_stays_for_the_next_prune() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_late_older_ledger_entry_does_not_win() {
     // The newer entry is inside the grace period, so a delete does not prune.
     let storage =
@@ -1866,6 +1877,7 @@ async fn a_backend_that_does_not_build_after_the_claim_releases_it() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_forget_that_fails_after_the_record_write_leaves_the_record() {
     // The forget deletes the snapshot file, and the storage refuses that call.
     let storage =
@@ -2092,6 +2104,7 @@ async fn a_record_whose_snapshot_still_exists_counts_nothing_and_does_not_make_a
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_record_write_that_answers_already_exists_counts_as_written() {
     // A new try of a record write whose first answer was lost finds the record of the first try.
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
@@ -3030,6 +3043,7 @@ async fn a_prune_that_succeeds_deletes_the_claims_and_the_counted_records_of_fre
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_delete_below_the_threshold_does_not_prune() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -3063,6 +3077,7 @@ async fn a_delete_below_the_threshold_does_not_prune() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn no_second_prune_runs_within_the_grace_period() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -3101,6 +3116,7 @@ async fn no_second_prune_runs_within_the_grace_period() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
     let refuse = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
@@ -3159,6 +3175,7 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_deleted_scope_holds_no_blob() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -3273,6 +3290,7 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
     // The in-memory storage answers at the first poll, so only the check before the call keeps
     // the call from the storage.
@@ -3474,6 +3492,7 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_copy_leaves_out_a_snapshot_file_that_a_delete_removed_after_the_listing() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
@@ -3690,6 +3709,7 @@ async fn a_save_that_reaches_its_publish_after_shut_down_publishes_nothing() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn delete_scope_and_copy_scope_after_shut_down_give_storage() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
@@ -3909,6 +3929,7 @@ fn id_of(files: &[rustic_core::repofile::SnapshotFile], name: &str) -> Option<Sn
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
     // A copy gives each file a new inode and a new change time, and keeps its size and its
     // modification time, as a capture does.
@@ -3945,6 +3966,7 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_full_save_reads_each_file() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -3973,6 +3995,7 @@ async fn a_full_save_reads_each_file() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn the_parent_of_a_save_is_the_named_snapshot_also_when_a_newer_snapshot_exists() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -4011,6 +4034,7 @@ async fn the_parent_of_a_save_is_the_named_snapshot_also_when_a_newer_snapshot_e
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_without_a_parent_or_with_a_parent_that_the_scope_does_not_hold_reads_each_file() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -4046,6 +4070,7 @@ async fn a_save_without_a_parent_or_with_a_parent_that_the_scope_does_not_hold_r
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_whose_read_of_the_snapshot_files_fails_while_it_finds_the_parent_gives_storage_and_publishes_nothing()
  {
     let refuse = Arc::new(AtomicBool::new(false));
@@ -4098,6 +4123,7 @@ async fn a_save_whose_read_of_the_snapshot_files_fails_while_it_finds_the_parent
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_failed_read_of_a_snapshot_file_fails_stat_and_list_with_a_retryable_storage_error() {
     let refuse = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
@@ -4134,6 +4160,7 @@ async fn a_failed_read_of_a_snapshot_file_fails_stat_and_list_with_a_retryable_s
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
     let gone = format!("snapshots/{}", "cd".repeat(32));
     let inner = Arc::new(InMemoryBlobStorage::new());
@@ -4167,6 +4194,7 @@ async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_delete_that_frees_nothing_writes_no_ledger() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -4198,6 +4226,7 @@ fn a_prune_that_marks_only_a_pack_that_no_index_lists_leaves_marked_packs() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_due_prune_that_marks_a_pack_that_no_index_lists_records_the_marked_pack() {
     // The pack of the kept snapshot stays in use, so the pack that no index lists is the only pack
     // that the prune marks. The ledger holds freed bytes from an earlier delete, so a delete of an
@@ -4270,6 +4299,7 @@ fn a_prune_leaves_marked_packs_when_it_marks_repacks_or_keeps_marked_packs() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_of_a_relative_directory_path_gives_source_and_writes_nothing() {
     // Cargo runs the tests in the directory of the crate, so the path names a directory.
     let relative = Path::new("src/filesystem_snapshot/contract_tests");
@@ -4296,6 +4326,7 @@ async fn a_save_of_a_relative_directory_path_gives_source_and_writes_nothing() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_save_of_a_regular_file_gives_source_and_writes_nothing() {
     // The store refuses the tree before it makes a repository, so the scope stays unused.
     let tree = one_file_tree("a file, not a tree");
@@ -4318,6 +4349,7 @@ async fn a_save_of_a_regular_file_gives_source_and_writes_nothing() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -4343,6 +4375,7 @@ async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
@@ -4369,6 +4402,7 @@ async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_retryable() {
     // Packs of zeros with the sizes of the index give the prune a decryption error, not a failed
     // storage call. The forget before the prune has succeeded, so the delete gives `Storage`.
@@ -4476,6 +4510,7 @@ fn taken_threads(calls: &NiceCalls, op_label: &str, directory: &str) -> Vec<(Str
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn the_forget_of_a_delete_runs_its_storage_calls_in_a_rayon_pool_of_its_own() {
     let (storage, calls) = nice_recording_storage();
     let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
@@ -4500,6 +4535,7 @@ async fn the_forget_of_a_delete_runs_its_storage_calls_in_a_rayon_pool_of_its_ow
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn the_index_load_of_a_restore_runs_its_storage_calls_in_a_rayon_pool_of_its_own() {
     let (storage, calls) = nice_recording_storage();
     let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
@@ -4543,6 +4579,7 @@ fn labels_and_calls_not_at_nice_19(
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn the_storage_calls_of_a_save_run_at_nice_19() {
     // The publish of the snapshot file runs on the async runtime after the work, so it keeps
     // the normal priority. The second save reads the config, the index, the snapshot files and
@@ -4580,6 +4617,7 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn the_storage_calls_of_a_prune_run_at_nice_19() {
     // The forget of a delete runs before the ledger read at the normal priority. The ledger calls,
     // the calls of the freed records, the listing of the packs and the claim calls run on the
@@ -4636,6 +4674,7 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
     let process_nice = super::super::priority::own_nice();
     let (storage, calls) = nice_recording_storage();
@@ -4718,6 +4757,7 @@ async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_nice_19() {
     // The deleted snapshot shares a pack with the kept one, so the prune repacks that pack. The
     // prune reads the index files and repacks with rayon, on the workers of the pool of the prune.
@@ -4795,6 +4835,7 @@ fn no_pool(
 
 #[cfg(target_os = "linux")]
 #[test]
+#[timeout("60s")]
 async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_without_their_pool()
 {
     // Without its own pool, the rayon work of a save goes to the global pool from a thread at
