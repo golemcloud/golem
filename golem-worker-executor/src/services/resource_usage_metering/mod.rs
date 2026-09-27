@@ -205,6 +205,86 @@ enum MeterLifecycle {
 pub struct ResourceUsageMeteringWindow {
     shared: Option<Arc<WindowShared>>,
     permit: Option<ConcurrentAgentPermit>,
+    retained_meter: Option<Arc<MeterShared>>,
+    #[cfg(feature = "test-utils")]
+    lose_settlement_observer: bool,
+}
+
+impl ResourceUsageMeteringWindow {
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn lose_settlement_observer_for_test(&mut self) {
+        self.lose_settlement_observer = true;
+    }
+
+    /// Stop allocation reads while the drained filesystem still exists. The last authoritative
+    /// allocation remains billable until this window releases its permit, including deletion retries.
+    pub(crate) async fn freeze_allocation(&mut self) -> Result<(), MeteringCloseError> {
+        let Some(shared) = &self.shared else {
+            return Ok(());
+        };
+        self.retained_meter = shared.meter.upgrade();
+        shared.begin_close();
+        loop {
+            let changed = shared.sampler_changed.notified();
+            if !shared.state.lock().unwrap().sampling {
+                break;
+            }
+            changed.await;
+        }
+        let result = if shared.state.lock().unwrap().storage.is_some() {
+            let Some(observation) = shared.start_observation(WindowStatus::Closing) else {
+                return Err(MeteringCloseError::ObserverLost);
+            };
+            match observation.receiver.await {
+                Ok(result) => {
+                    let error = result
+                        .as_ref()
+                        .err()
+                        .map(|error| MeteringCloseError::Faulted(error.to_string()));
+                    shared.finish_observation(
+                        observation.active,
+                        result,
+                        shared.clock.time(),
+                        true,
+                    );
+                    error.map_or(Ok(()), Err)
+                }
+                Err(_) => {
+                    shared.suspend_observation(observation.active);
+                    shared.clear_observation(observation.active);
+                    Err(MeteringCloseError::ObserverLost)
+                }
+            }
+        } else {
+            Ok(())
+        };
+        let mut state = shared.state.lock().unwrap();
+        state.allocation_frozen = true;
+        if let Some(storage) = &mut state.storage {
+            storage.last_accepted_at = None;
+        }
+        result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn track_permit_for_test(&mut self, held: Arc<std::sync::atomic::AtomicBool>) {
+        self.permit = self.permit.take().map(|permit| permit.track_held(held));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn settlement_observer(&self) -> impl Fn() -> bool + Send + 'static {
+        let shared = self.shared.clone();
+        move || {
+            shared
+                .as_ref()
+                .is_some_and(|shared| shared.state.lock().unwrap().status == WindowStatus::Closed)
+        }
+    }
+
+    pub(crate) fn usage_flusher(&self) -> Option<Weak<dyn ResourceUsageFlusher>> {
+        let meter: Arc<dyn ResourceUsageFlusher> = self.shared.as_ref()?.meter.upgrade()?;
+        Some(Arc::downgrade(&meter))
+    }
 }
 
 impl Debug for ResourceUsageMeteringWindow {
@@ -232,6 +312,7 @@ struct WindowShared {
 struct WindowState {
     status: WindowStatus,
     sampling: bool,
+    allocation_frozen: bool,
     next_observation: u64,
     active_observation: Option<ActiveObservation>,
     storage: Option<StorageState>,
@@ -471,6 +552,9 @@ pub(crate) fn open_window(
             Ok(ResourceUsageMeteringWindow {
                 shared: None,
                 permit: Some(permit),
+                retained_meter: None,
+                #[cfg(feature = "test-utils")]
+                lose_settlement_observer: false,
             })
         });
     };
@@ -525,6 +609,7 @@ pub(crate) fn open_window(
             state: Mutex::new(WindowState {
                 status: WindowStatus::Active,
                 sampling: false,
+                allocation_frozen: false,
                 next_observation: 0,
                 active_observation: None,
                 storage: meter.filesystem_enabled.then(|| StorageState::new(opened)),
@@ -540,6 +625,9 @@ pub(crate) fn open_window(
         Ok(ResourceUsageMeteringWindow {
             shared: Some(shared),
             permit: Some(permit),
+            retained_meter: None,
+            #[cfg(feature = "test-utils")]
+            lose_settlement_observer: false,
         })
     })
 }
@@ -550,31 +638,66 @@ pub fn close_window(
 ) -> Pin<
     Box<dyn Future<Output = Result<ResourceUsageSettlement, MeteringCloseError>> + Send + 'static>,
 > {
+    if window
+        .shared
+        .as_ref()
+        .is_some_and(|shared| shared.state.lock().unwrap().allocation_frozen)
+    {
+        let shared = window.shared.take().unwrap();
+        let settlement = shared.settle_close(shared.clock.time());
+        shared.account.record_settlement(&settlement);
+        shared.clear_meter();
+        drop(window);
+        return Box::pin(std::future::ready(Ok(settlement)));
+    }
+    let closing = close_window_retaining_permit(window, deadline);
+    Box::pin(async move {
+        let (result, permit) = closing.await;
+        drop(permit);
+        result
+    })
+}
+
+type RetainedPermitSettlement = (
+    Result<ResourceUsageSettlement, MeteringCloseError>,
+    Option<ConcurrentAgentPermit>,
+);
+
+pub(crate) fn close_window_retaining_permit(
+    mut window: ResourceUsageMeteringWindow,
+    deadline: Instant,
+) -> Pin<Box<dyn Future<Output = RetainedPermitSettlement> + Send + 'static>> {
     let Some(shared) = window.shared.take() else {
         let permit = window
             .permit
             .take()
             .expect("unmetered resource window lost its permit");
-        return Box::pin(async move {
-            drop(permit);
-            Ok(ResourceUsageSettlement::default())
-        });
+        return Box::pin(async move { (Ok(ResourceUsageSettlement::default()), Some(permit)) });
     };
     let permit = window
         .permit
         .take()
         .expect("metering window lost its permit");
+    let retained_meter = window.retained_meter.take();
+    #[cfg(feature = "test-utils")]
+    let lose_observer = window.lose_settlement_observer;
     shared.begin_close();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_metering_task(async move {
         let result = Arc::clone(&shared).complete_close(deadline).await;
-        drop(permit);
-        let _ = sender.send(result);
+        #[cfg(feature = "test-utils")]
+        if lose_observer {
+            drop((permit, retained_meter));
+            drop(sender);
+            return;
+        }
+        let _ = sender.send((result, Some(permit)));
+        drop(retained_meter);
     });
     Box::pin(async move {
         receiver
             .await
-            .unwrap_or(Err(MeteringCloseError::ObserverLost))
+            .unwrap_or((Err(MeteringCloseError::ObserverLost), None))
     })
 }
 
@@ -929,7 +1052,11 @@ impl WindowShared {
         self: Arc<Self>,
         deadline: Instant,
     ) -> Result<ResourceUsageSettlement, MeteringCloseError> {
-        if self.state.lock().unwrap().storage.is_some() {
+        let observe = {
+            let state = self.state.lock().unwrap();
+            state.storage.is_some() && !state.allocation_frozen
+        };
+        if observe {
             let final_deadline = deadline.min(self.clock.now() + FILESYSTEM_CLOSE_BUDGET);
             self.run_final_observation_sequence(final_deadline).await;
         }

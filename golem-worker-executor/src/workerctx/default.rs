@@ -230,6 +230,12 @@ impl FuelTracker {
         self.last_borrow_was_ephemeral_overdraft
     }
 
+    fn active_account_reservation_generation(&self, current_level: u64) -> Option<u64> {
+        (!self.needs_borrow(current_level) && !self.last_borrow_was_ephemeral_overdraft)
+            .then_some(self.account_borrow_generation)
+            .flatten()
+    }
+
     pub(self) fn consumed_ephemeral_overdraft(&mut self, unused: u64) -> Vec<(u64, u64)> {
         if self.last_borrow_was_ephemeral_overdraft
             && let Some((_, prepaid)) = self.ephemeral_overdraft_borrows.last_mut()
@@ -393,6 +399,7 @@ pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
     resource_limit_entry: Arc<AtomicResourceEntry>,
     fuel_tracker: Option<FuelTracker>,
+    fuel_reservation: Option<crate::worker::instance::StoreFuelReservationPublication>,
 }
 
 impl Context {
@@ -400,11 +407,35 @@ impl Context {
         golem_ctx: DurableWorkerCtx<Context>,
         config: Arc<GolemConfig>,
         resource_limit_entry: Arc<AtomicResourceEntry>,
+        owner_resources: &crate::worker::instance::OwnerRuntimeResources,
     ) -> Self {
+        let fuel_tracker = configured_fuel_tracker(&config);
+        let fuel_reservation = fuel_tracker
+            .as_ref()
+            .map(|_| owner_resources.register_store_fuel_reservation());
         Self {
             durable_ctx: golem_ctx,
             resource_limit_entry,
-            fuel_tracker: configured_fuel_tracker(&config),
+            fuel_tracker,
+            fuel_reservation,
+        }
+    }
+
+    fn update_fuel_reservation<R>(
+        &mut self,
+        current_level: u64,
+        update: impl FnOnce(&mut FuelTracker, &AtomicResourceEntry) -> R,
+    ) -> Option<R> {
+        match (&mut self.fuel_tracker, &self.fuel_reservation) {
+            (Some(tracker), Some(publication)) => Some(publication.update(|| {
+                let result = update(tracker, &self.resource_limit_entry);
+                (
+                    result,
+                    tracker.active_account_reservation_generation(current_level),
+                )
+            })),
+            (None, None) => None,
+            _ => unreachable!("fuel tracker and publication must be configured together"),
         }
     }
 
@@ -481,25 +512,30 @@ impl FuelManagement for Context {
 
     fn ensure_fuel(&mut self, current_level: u64) -> Result<(), AgentError> {
         let agent_mode = self.agent_mode();
-        ensure_monthly_resource_capacity(
-            &self.resource_limit_entry,
-            self.fuel_tracker.as_mut(),
-            agent_mode,
-            current_level,
-        )
+        self.update_fuel_reservation(current_level, |tracker, entry| {
+            ensure_monthly_resource_capacity(entry, Some(tracker), agent_mode, current_level)
+        })
+        .unwrap_or_else(|| {
+            ensure_monthly_resource_capacity(
+                &self.resource_limit_entry,
+                None,
+                agent_mode,
+                current_level,
+            )
+        })
     }
 
     fn return_fuel(&mut self, current_level: u64) -> u64 {
-        let Some(fuel_tracker) = &mut self.fuel_tracker else {
-            return 0;
-        };
-        fuel_tracker.return_fuel(&self.resource_limit_entry, current_level)
+        self.update_fuel_reservation(current_level, |tracker, entry| {
+            tracker.return_fuel(entry, current_level)
+        })
+        .unwrap_or(0)
     }
 
     fn settle_fuel(&mut self, current_level: u64) {
-        if let Some(fuel_tracker) = &mut self.fuel_tracker {
-            fuel_tracker.settle_fuel(&self.resource_limit_entry, current_level);
-        }
+        self.update_fuel_reservation(current_level, |tracker, entry| {
+            tracker.settle_fuel(entry, current_level)
+        });
     }
 }
 
@@ -577,13 +613,14 @@ impl InvocationHooks for Context {
         self.durable_ctx.on_agent_invocation_finished().await
     }
 
-    async fn on_invocation_failure(
+    async fn on_invocation_failure_with_origin(
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+        origin: crate::worker::InvocationFailureOrigin,
     ) -> RetryDecision {
         self.durable_ctx
-            .on_invocation_failure(full_function_name, trap_type)
+            .on_invocation_failure_with_origin(full_function_name, trap_type, origin)
             .await
     }
 
@@ -1142,7 +1179,7 @@ impl WorkerCtx for Context {
             runtime,
             entity_execution_mode,
             owner_execution,
-            owner_resources,
+            owner_resources.clone(),
             None,
             None,
             filesystem_capability,
@@ -1150,7 +1187,12 @@ impl WorkerCtx for Context {
             entity_activation,
         )
         .await?;
-        Ok(Self::new(golem_ctx, config, account_resource_limits))
+        Ok(Self::new(
+            golem_ctx,
+            config,
+            account_resource_limits,
+            &owner_resources,
+        ))
     }
 
     fn as_wasi_view(&mut self) -> impl WasiView {

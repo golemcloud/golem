@@ -15,7 +15,7 @@
 use crate::services::byte_time_accumulator::{
     ByteTimeAccumulator, MeteringTime, PeriodByteTimeSettlement,
 };
-use crate::services::resource_limits::AtomicResourceEntry;
+use crate::services::resource_limits::{AtomicResourceEntry, ResourceUsageFlusher};
 use golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND;
 use golem_common::model::agent::AgentMode;
 use std::sync::{Arc, Mutex, Weak};
@@ -54,6 +54,11 @@ struct State {
 }
 
 impl AgentMemoryMeter {
+    pub(crate) fn usage_flusher(&self) -> Weak<dyn ResourceUsageFlusher> {
+        let inner: Arc<dyn ResourceUsageFlusher> = self.inner.clone();
+        Arc::downgrade(&inner)
+    }
+
     pub fn new(
         mode: AgentMode,
         bytes: u64,
@@ -171,6 +176,17 @@ impl AgentMemoryMeter {
         let mut state = self.inner.state.lock().unwrap();
         state.accrue(now);
         state.take_settlement()
+    }
+}
+
+impl ResourceUsageFlusher for Inner {
+    fn flush_usage(&self) {
+        let settlement = {
+            let mut state = self.state.lock().unwrap();
+            state.accrue(MeteringTime::now());
+            state.take_settlement()
+        };
+        self.record_settlement(settlement);
     }
 }
 

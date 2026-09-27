@@ -38,6 +38,25 @@ async fn tcp_collect(port: u16) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&collected).to_string())
 }
 
+#[agent_definition(ephemeral)]
+pub trait EphemeralNetworking {
+    fn new(name: String) -> Self;
+    async fn tcp_collect_p3(&self, port: u16) -> Result<String, String>;
+}
+
+pub struct EphemeralNetworkingImpl;
+
+#[agent_implementation]
+impl EphemeralNetworking for EphemeralNetworkingImpl {
+    fn new(_name: String) -> Self {
+        Self
+    }
+
+    async fn tcp_collect_p3(&self, port: u16) -> Result<String, String> {
+        tcp_collect(port).await
+    }
+}
+
 #[agent_definition]
 pub trait Networking {
     fn new(name: String) -> Self;

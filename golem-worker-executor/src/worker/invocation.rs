@@ -550,6 +550,8 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
     let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
     let fun = {
         let drain_started = drain_started.clone();
+        #[cfg(feature = "test-utils")]
+        let tail_observer = (store.data().get_public_state().worker(), tracker.clone());
         async move |accessor: &Accessor<Ctx>| {
             let result = fun(accessor).await;
             // The root future has completed: everything from here on is the (bounded) drain
@@ -557,6 +559,8 @@ pub(crate) async fn run_guest_call_settled<Ctx: WorkerCtx, R>(
             // predicate is only consulted at idle observation points, which are never reached
             // if e.g. a guest task lingers, and the drain must stay bounded even then.
             drain_started.notify_one();
+            #[cfg(feature = "test-utils")]
+            tail_observer.0.notify_tail_drain_for_test(tail_observer.1);
             result
         }
     };

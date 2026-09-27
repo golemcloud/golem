@@ -30,6 +30,11 @@ pub mod instance;
 pub mod invocation;
 mod invocation_loop;
 mod lifecycle;
+mod monthly;
+#[cfg(feature = "test-utils")]
+pub use monthly::{
+    MonthlyAcceptanceForTest, MonthlyClockForTest, MonthlyProposalForTest, MonthlyTimerPollForTest,
+};
 pub mod owner_lane;
 pub mod read_only_cache;
 mod state_actor;
@@ -678,6 +683,31 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
+    stop_progress: StopProgress,
+    self_ref: std::sync::Weak<Worker<Ctx>>,
+    monthly_window: StdMutex<Option<Arc<monthly::MonthlyWindowTarget>>>,
+    #[cfg(feature = "test-utils")]
+    monthly_clock: StdMutex<Option<Arc<MonthlyClockForTest>>>,
+    #[cfg(feature = "test-utils")]
+    monthly_acceptance_observer:
+        StdMutex<Option<tokio::sync::mpsc::UnboundedSender<MonthlyAcceptanceForTest>>>,
+    resident_generation: AtomicU64,
+    invocation_outcome: StdMutex<Option<SelectedInvocationOutcome>>,
+    #[cfg(feature = "test-utils")]
+    monthly_acceptance_gate: StdMutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
+    #[cfg(feature = "test-utils")]
+    deletion_stage_gate: StdMutex<Option<DeletionStageTestGate>>,
+    monthly_stop: StdMutex<
+        Option<(
+            InterruptKind,
+            crate::services::resource_limits::MonthlyResourceExhaustion,
+        )>,
+    >,
     oom_retry_config: RetryConfig,
     snapshot_policy: SnapshotPolicy,
 
@@ -719,6 +749,217 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     owner_retirement_requested: CancellationToken,
     durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler,
     durable_topology_recovery: Arc<Mutex<DurableTopologyRecoveryCache>>,
+}
+
+#[cfg(feature = "test-utils")]
+struct DeletionStageTestGate {
+    stage: WorkerDeletionStage,
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[derive(Clone, Copy)]
+pub enum InvocationFailureOrigin {
+    Independent,
+    InvocationDeadline,
+    Lifecycle,
+}
+
+struct SelectedInvocationOutcome {
+    generation: u64,
+    key: Option<IdempotencyKey>,
+    failure: Option<TrapType>,
+    writer_claimed: bool,
+    writer_completion: Option<StopCompletion>,
+}
+
+pub(crate) struct InvocationOutcomeWrite(Option<oneshot::Sender<Result<(), WorkerExecutorError>>>);
+
+impl InvocationOutcomeWrite {
+    fn new() -> (Self, StopCompletion) {
+        let (sender, receiver) = oneshot::channel();
+        let completion = async move {
+            receiver.await.unwrap_or_else(|_| {
+                Err(WorkerExecutorError::runtime(
+                    "Invocation outcome writer was lost",
+                ))
+            })
+        }
+        .boxed()
+        .shared();
+        (Self(Some(sender)), completion)
+    }
+
+    pub(crate) fn complete(mut self) {
+        let _ = self.0.take().unwrap().send(Ok(()));
+    }
+}
+
+struct StopPublication {
+    cause: std::sync::OnceLock<PendingWorkerInterrupt>,
+    receipt: Arc<tokio::sync::broadcast::Sender<()>>,
+    signal: Option<Arc<tokio::sync::broadcast::Sender<InterruptKind>>>,
+    published: tokio::sync::Notify,
+}
+
+type StopCompletion = Shared<BoxFuture<'static, Result<(), WorkerExecutorError>>>;
+type StopProgress = Arc<StdMutex<StopProgressState>>;
+
+#[derive(Default)]
+struct StopProgressState {
+    tasks: Vec<StopCompletion>,
+    // New drivers belong to the successor and cannot touch the resident runtime until
+    // the preceding permit owner has physically finished. Errors remain retained here.
+    release: Option<StopCompletion>,
+    retired: bool,
+    publication: Option<(Arc<StopPublication>, StopCompletion)>,
+    #[cfg(feature = "test-utils")]
+    close_gate: Option<StopTestGate>,
+    #[cfg(feature = "test-utils")]
+    driver_gates: VecDeque<(tokio::sync::oneshot::Sender<()>, StopTestGate)>,
+    #[cfg(feature = "test-utils")]
+    publication_gate: Option<StopTestGate>,
+    #[cfg(feature = "test-utils")]
+    freeze_gate: Option<StopTestGate>,
+    #[cfg(feature = "test-utils")]
+    invocation_admission_gate: Option<StopTestGate>,
+    #[cfg(feature = "test-utils")]
+    completed_replay_gate: Option<CompletedReplayTestGate>,
+    #[cfg(feature = "test-utils")]
+    tail_drain_observer:
+        Option<tokio::sync::oneshot::Sender<crate::durable_host::tail_work::TailWorkTracker>>,
+    #[cfg(feature = "test-utils")]
+    publication_wait_observer: Option<tokio::sync::oneshot::Sender<()>>,
+    #[cfg(feature = "test-utils")]
+    outcome_gates: [Option<StopTestGate>; 2],
+    #[cfg(feature = "test-utils")]
+    teardown_fence_gate: Option<OwnerFenceTestGate>,
+    #[cfg(feature = "test-utils")]
+    lose_settlement_observer: bool,
+    #[cfg(feature = "test-utils")]
+    idle_close_gate: Option<StopTestGate>,
+    #[cfg(feature = "test-utils")]
+    unload_succeeded: bool,
+    #[cfg(feature = "test-utils")]
+    permit_acquisitions: usize,
+    #[cfg(test)]
+    window_close_tasks: usize,
+    #[cfg(feature = "test-utils")]
+    invocation_deadline: Option<tokio::sync::watch::Sender<tokio::time::Instant>>,
+}
+
+#[cfg(feature = "test-utils")]
+#[derive(Debug)]
+pub struct OwnerFenceTestSnapshot {
+    pub generation: u64,
+    pub proposed_owner_failure: String,
+    pub final_interrupt: Option<InterruptKind>,
+    pub pending: Option<InterruptKind>,
+    pub frozen: Option<InterruptKind>,
+    pub selected_owner_failure: Option<String>,
+}
+
+#[cfg(feature = "test-utils")]
+struct CompletedReplayTestGate {
+    key: IdempotencyKey,
+    entered: tokio::sync::oneshot::Sender<(OplogIndex, OplogIndex)>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(feature = "test-utils")]
+struct OwnerFenceTestGate {
+    generation: u64,
+    entered: tokio::sync::oneshot::Sender<OwnerFenceTestSnapshot>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(feature = "test-utils")]
+type StopTestGate = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<bool>,
+);
+
+impl StopProgressState {
+    fn ready(&self) -> Option<Result<(), WorkerExecutorError>> {
+        let mut result = Ok(());
+        for task in self.tasks.iter().chain(self.release.iter()) {
+            result = result.and(task.clone().now_or_never()?);
+        }
+        Some(result)
+    }
+}
+
+struct StopAdmissionSeal {
+    completion: Vec<StopCompletion>,
+    release: Option<oneshot::Sender<Result<(), WorkerExecutorError>>>,
+    health: Result<(), WorkerExecutorError>,
+    #[cfg(feature = "test-utils")]
+    close_gate: Option<StopTestGate>,
+}
+
+impl StopAdmissionSeal {
+    fn new(progress: &StopProgress) -> Self {
+        Self::seal(progress, false)
+    }
+
+    fn seal(progress: &StopProgress, retire: bool) -> Self {
+        // Acceptance and transfer to the successor use this same synchronous lock.
+        // The seal owns every earlier driver; later drivers await its release result.
+        let mut progress = progress.lock().unwrap();
+        progress.retired |= retire;
+        let mut completion = progress.tasks.clone();
+        completion.extend(progress.release.clone());
+        let (sender, receiver) = oneshot::channel();
+        let release = async move {
+            receiver.await.unwrap_or_else(|_| {
+                Err(WorkerExecutorError::runtime(
+                    "Stop admission seal lost its physical completion",
+                ))
+            })
+        }
+        .boxed()
+        .shared();
+        progress.release = Some(release);
+        Self {
+            completion,
+            release: Some(sender),
+            health: Ok(()),
+            #[cfg(feature = "test-utils")]
+            close_gate: progress.close_gate.take(),
+        }
+    }
+
+    async fn join(&mut self) -> Result<(), WorkerExecutorError> {
+        let mut result = Ok(());
+        for task in &self.completion {
+            result = result.and(task.clone().await);
+        }
+        self.health = result.clone();
+        #[cfg(feature = "test-utils")]
+        if let Some((entered, release)) = self.close_gate.take() {
+            let _ = entered.send(());
+            assert!(!release.await.unwrap_or(false), "injected stop seal panic");
+        }
+        result
+    }
+
+    fn complete(mut self, result: Result<(), WorkerExecutorError>) {
+        let _ = self.release.take().unwrap().send(self.health.and(result));
+    }
+}
+
+async fn join_accepted_stops(progress: &StopProgress) -> Result<(), WorkerExecutorError> {
+    let tasks = {
+        let progress = progress.lock().unwrap();
+        let mut tasks = progress.tasks.clone();
+        tasks.extend(progress.release.clone());
+        tasks
+    };
+    let mut result = Ok(());
+    for task in tasks {
+        result = result.and(task.await);
+    }
+    result
 }
 
 #[derive(Default, PartialEq, Eq)]
@@ -1313,6 +1554,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
         }
+        let mut seal = StopAdmissionSeal::seal(&self.stop_progress, true);
+        let stopped = seal.join().await;
+        seal.complete(stopped.clone());
+        stopped?;
         self.durable_stream_attachment_reconciler.stop().await;
         retirement.await?;
         self.state_actor.drain_lifecycle().await?;
@@ -2124,6 +2369,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
+            stop_progress: Arc::default(),
+            self_ref: Arc::downgrade(self),
+            monthly_window: StdMutex::new(None),
+            #[cfg(feature = "test-utils")]
+            monthly_acceptance_observer: StdMutex::new(None),
+            #[cfg(feature = "test-utils")]
+            monthly_clock: StdMutex::new(None),
+            resident_generation: AtomicU64::new(0),
+            invocation_outcome: StdMutex::new(None),
+            #[cfg(feature = "test-utils")]
+            monthly_acceptance_gate: StdMutex::new(None),
+            #[cfg(feature = "test-utils")]
+            deletion_stage_gate: StdMutex::new(None),
+            monthly_stop: StdMutex::new(None),
             execution_status,
             initial_worker_metadata,
             resource_entry,
@@ -2376,6 +2635,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         );
         if let Some(meter) = linear_memory.meter_if_enabled() {
             meter.resume(initial_linear_memory, std::time::Instant::now());
+            self.owner_runtime_resources
+                .register_resource_usage_flusher(meter.usage_flusher());
         }
 
         Ctx::create(
@@ -2463,7 +2724,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             *this.last_resume_request.lock().await = Timestamp::now_utc();
         }
 
-        let mut instance_guard = this.lock_non_stopping_worker().await;
+        let mut instance_guard = loop {
+            let guard = this.lock_non_stopping_worker().await;
+            if matches!(&*guard, WorkerInstance::Unloaded { .. }) {
+                let ready = this.stop_progress.lock().unwrap().ready();
+                match ready {
+                    Some(result) => result?,
+                    None => {
+                        drop(guard);
+                        this.join_stop_progress().await?;
+                        continue;
+                    }
+                }
+            }
+            break guard;
+        };
         instance_guard.ensure_not_deleting()?;
         if this.durable_stream_producer.is_retired() {
             return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
@@ -2973,10 +3248,49 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
+    #[cfg(feature = "test-utils")]
+    pub fn pause_next_deletion_stage_for_test(
+        &self,
+        stage: WorkerDeletionStage,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, observe) = tokio::sync::oneshot::channel();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        assert!(
+            self.deletion_stage_gate
+                .lock()
+                .unwrap()
+                .replace(DeletionStageTestGate {
+                    stage,
+                    entered,
+                    release: wait,
+                })
+                .is_none()
+        );
+        (observe, release)
+    }
+
     async fn before_deletion_stage(
         &self,
         stage: WorkerDeletionStage,
     ) -> Result<(), WorkerExecutorError> {
+        #[cfg(feature = "test-utils")]
+        {
+            let gate = {
+                let mut gate = self.deletion_stage_gate.lock().unwrap();
+                if gate.as_ref().is_some_and(|gate| gate.stage == stage) {
+                    gate.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(gate) = gate {
+                let _ = gate.entered.send(());
+                let _ = gate.release.await;
+            }
+        }
         if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
             hook.before_stage(&self.owned_agent_id, stage).await?;
         }
@@ -3117,11 +3431,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     fn mark_as_loading(&self, start_attempt: Uuid) {
         self.startup_attempt.begin(Some(start_attempt));
+        self.monthly_stop.lock().unwrap().take();
+        self.stop_progress.lock().unwrap().publication = None;
         let mut execution_status = self.execution_status.write().unwrap();
-        *execution_status = ExecutionStatus::Loading {
-            agent_mode: execution_status.agent_mode(),
-            timestamp: Timestamp::now_utc(),
-        };
+        *execution_status = ExecutionStatus::loading(execution_status.agent_mode());
     }
 
     fn publish_startup_result(&self, start_attempt: Uuid, result: Result<(), WorkerExecutorError>) {
@@ -3374,107 +3687,355 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         unload_reason: UnloadReason,
         allow_deleting: bool,
     ) -> Option<Receiver<()>> {
-        if !self
-            .queue_interrupt(
-                interrupt_kind,
-                reacquire_permits,
-                unload_reason,
-                allow_deleting,
-            )
-            .await
-        {
-            return None;
-        }
-        let active_agent = self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await
-            .filter(|active_agent| std::ptr::eq(active_agent.primary().as_ref(), self));
-        if let Some(active_agent) = &active_agent {
-            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Beginning entity fence for worker interruption");
-            active_agent
-                .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
-                .await;
-        }
-        let receiver = self.notify_queued_interrupt(interrupt_kind).await;
-        if let Some(active_agent) = active_agent {
-            active_agent.drain_fenced_entity_bodies().await;
-        }
-        debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Worker interruption entity drain completed");
-        receiver
-    }
-
-    async fn notify_queued_interrupt(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
-        let instance_guard = self.lock_non_stopping_worker().await;
-        if let WorkerInstance::Running(running) = instance_guard.deletion_runtime() {
-            let _ = running.sender.send(WorkerCommand::WorkAvailable);
-        }
-        drop(instance_guard);
-
-        {
-            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Signalling primary Store interruption");
-            let mut execution_status = self.execution_status.write().unwrap();
-            let current_execution_status = execution_status.clone();
-            match current_execution_status {
-                ExecutionStatus::Running {
-                    interrupt_signal, ..
-                } => {
-                    let _ = interrupt_signal.send(interrupt_kind);
-                    let (sender, receiver) = tokio::sync::broadcast::channel(1);
-                    *execution_status = ExecutionStatus::Interrupting {
-                        interrupt_kind,
-                        await_interruption: Arc::new(sender),
-                        agent_mode: execution_status.agent_mode(),
-                        timestamp: Timestamp::now_utc(),
-                    };
-                    Some(receiver)
-                }
-                ExecutionStatus::Suspended { .. } => None,
-                ExecutionStatus::Interrupting {
-                    interrupt_kind: current_kind,
-                    await_interruption,
-                    agent_mode,
-                    timestamp,
-                } => {
-                    let receiver = await_interruption.subscribe();
-                    if matches!(current_kind, InterruptKind::Restart)
-                        && !matches!(interrupt_kind, InterruptKind::Restart)
-                    {
-                        *execution_status = ExecutionStatus::Interrupting {
-                            interrupt_kind,
-                            await_interruption,
-                            agent_mode,
-                            timestamp,
-                        };
-                    }
-                    Some(receiver)
-                }
-                ExecutionStatus::Loading { .. } => None,
-            }
-        }
-    }
-
-    async fn queue_interrupt(
-        &self,
-        interrupt_kind: InterruptKind,
-        reacquire_permits: bool,
-        unload_reason: UnloadReason,
-        allow_deleting: bool,
-    ) -> bool {
         loop {
             let lifecycle = self.instance.lock().await;
             if !allow_deleting && lifecycle.ensure_not_deleting().is_err() {
-                return false;
+                return None;
             }
             if let Some(mut state) = self.interrupt_signal.try_lock() {
-                return state.queue(PendingWorkerInterrupt {
-                    kind: interrupt_kind,
-                    reacquire_permits,
-                    unload_request: UnloadRequest::ordinary(unload_reason),
-                });
+                let admission = self.stop_progress.lock().unwrap();
+                if admission.retired
+                    || !state.queue(PendingWorkerInterrupt {
+                        kind: interrupt_kind,
+                        reacquire_permits,
+                        unload_request: UnloadRequest::ordinary(unload_reason),
+                    })
+                {
+                    return None;
+                }
+                return self.accept_interrupt(&lifecycle, interrupt_kind, admission);
             }
             drop(lifecycle);
             tokio::task::yield_now().await;
+        }
+    }
+
+    // Teardown and the retained driver must fence with the same elected cause,
+    // even when admission stopped the invocation before any signal was published.
+    async fn terminal_teardown_cause(&self, kind: InterruptKind) -> InterruptKind {
+        self.set_interrupting(kind).await;
+        let mut interrupts = self.interrupt_signal.lock().await;
+        let admission = self.stop_progress.lock().unwrap();
+        let Some((publication, _)) = &admission.publication else {
+            return kind;
+        };
+        if let Some(pending) = publication.cause.get() {
+            return pending.kind;
+        }
+        if let Some(pending) = interrupts.freeze() {
+            publication.cause.set(pending).expect("one stop cause");
+            pending.kind
+        } else {
+            kind
+        }
+    }
+
+    fn accept_interrupt(
+        &self,
+        lifecycle: &WorkerInstance,
+        _kind: InterruptKind,
+        mut admission: std::sync::MutexGuard<'_, StopProgressState>,
+    ) -> Option<Receiver<()>> {
+        let worker = self
+            .self_ref
+            .upgrade()
+            .expect("accepted stop retains its Worker");
+        let waiting = match lifecycle.deletion_runtime() {
+            WorkerInstance::WaitingForPermit(waiting) => waiting
+                .handle
+                .lock()
+                .unwrap()
+                .take()
+                .map(|task| (waiting.start_attempt, task)),
+            _ => None,
+        };
+        // Taking the exact handle also prevents its permit handoff from publishing Running.
+        let was_waiting = waiting.is_some();
+        let resident_generation = self.resident_generation.load(Ordering::Acquire);
+        let predecessor = admission.release.clone();
+        let (publication, leader) = match &admission.publication {
+            Some((publication, completion)) => (publication.clone(), Some(completion.clone())),
+            None => (
+                Arc::new(StopPublication {
+                    cause: std::sync::OnceLock::new(),
+                    receipt: Arc::new(tokio::sync::broadcast::channel(1).0),
+                    signal: match &*self.execution_status.read().unwrap() {
+                        ExecutionStatus::Loading {
+                            interrupt_signal, ..
+                        }
+                        | ExecutionStatus::Running {
+                            interrupt_signal, ..
+                        } => Some(interrupt_signal.clone()),
+                        _ => None,
+                    },
+                    published: tokio::sync::Notify::new(),
+                }),
+                None,
+            ),
+        };
+        let receiver = (!matches!(
+            *self.execution_status.read().unwrap(),
+            ExecutionStatus::Suspended { .. }
+        ))
+        .then(|| publication.receipt.subscribe());
+        let driver_publication = publication.clone();
+        let is_leader = leader.is_none();
+        #[cfg(feature = "test-utils")]
+        let gate = admission.driver_gates.pop_front();
+        let progress = tokio::spawn(async move {
+            #[cfg(feature = "test-utils")]
+            let gate = gate.map(|(polled, gate)| {
+                let _ = polled.send(());
+                gate
+            });
+            if let Some(predecessor) = predecessor {
+                predecessor.await?;
+            }
+            #[cfg(feature = "test-utils")]
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(());
+                assert!(
+                    !release.await.unwrap_or(false),
+                    "injected stop driver panic"
+                );
+            }
+            let publication = driver_publication;
+            let mut acknowledge_without_store = false;
+            if let Some(leader) = leader {
+                leader.await?;
+                // A later terminal demand can retire the old runtime, but cannot
+                // revise the already published cause or fence winner.
+                let mut interrupts = worker.interrupt_signal.lock().await;
+                if interrupts.freeze().is_some() {
+                    interrupts.publish();
+                }
+            } else {
+                let (pending, writer) = {
+                    let mut interrupts = worker.interrupt_signal.lock().await;
+                    let pending = match publication.cause.get() {
+                        Some(pending) => *pending,
+                        None => {
+                            let pending = interrupts.freeze().ok_or_else(|| {
+                                WorkerExecutorError::runtime("Accepted stop lost its pending cause")
+                            })?;
+                            publication.cause.set(pending).expect("one stop cause");
+                            pending
+                        }
+                    };
+                    let writer = worker
+                        .invocation_outcome
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .filter(|selected| selected.generation == resident_generation)
+                        .and_then(|selected| selected.writer_completion.clone());
+                    (pending, writer)
+                };
+                #[cfg(feature = "test-utils")]
+                worker.wait_stop_freeze_for_test().await;
+                // Result selection precedes its writer receipt and notification.
+                // Neither the queue lock nor the instance lock is held here.
+                if let Some(writer) = writer {
+                    writer.await?;
+                }
+                if let Some(active) = worker
+                    .active_agents()
+                    .try_get_active_agent(&worker.owned_agent_id)
+                    .await
+                    && Arc::ptr_eq(&active.primary(), &worker)
+                    && worker.resident_generation.load(Ordering::Acquire) == resident_generation
+                {
+                    active
+                        .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(pending.kind))
+                        .await;
+                    if !matches!(active.execution().tool_operations().selected_owner_failure(),
+                        Some(OwnerFailureWinner::Lifecycle(kind)) if kind == pending.kind)
+                    {
+                        return Err(WorkerExecutorError::runtime(
+                            "Stop lost the owner failure election",
+                        ));
+                    }
+                    {
+                        let lifecycle = worker.instance.lock().await;
+                        if worker.resident_generation.load(Ordering::Acquire) != resident_generation
+                        {
+                            return Err(WorkerExecutorError::runtime(
+                                "Stop runtime changed before publication",
+                            ));
+                        }
+                        let mut interrupts = worker.interrupt_signal.lock().await;
+                        let mut status = worker.execution_status.write().unwrap();
+                        acknowledge_without_store = !status.publish_interrupt(
+                            pending.kind,
+                            publication.receipt.clone(),
+                            publication.signal.as_ref(),
+                        );
+                        interrupts.publish();
+                        publication.published.notify_waiters();
+                        if let WorkerInstance::Running(running) = lifecycle.deletion_runtime() {
+                            let _ = running.sender.send(WorkerCommand::WorkAvailable);
+                        }
+                    }
+                    #[cfg(feature = "test-utils")]
+                    {
+                        let gate = worker.stop_progress.lock().unwrap().publication_gate.take();
+                        if let Some((entered, release)) = gate {
+                            let _ = entered.send(());
+                            assert!(
+                                !release.await.unwrap_or(false),
+                                "injected publication panic"
+                            );
+                        }
+                    }
+                    active.drain_fenced_entity_bodies().await;
+                } else {
+                    worker.interrupt_signal.lock().await.publish();
+                    publication.published.notify_waiters();
+                }
+            }
+            let waiting_stop = if let Some((attempt, task)) = waiting {
+                worker.finish_waiting_stop(attempt, task).await?
+            } else {
+                None
+            };
+            if !is_leader {
+                let lifecycle = worker.instance.lock().await;
+                if let WorkerInstance::Running(running) = lifecycle.deletion_runtime() {
+                    let _ = running.sender.send(WorkerCommand::WorkAvailable);
+                }
+            }
+            let restart = waiting_stop.as_ref().is_some_and(|(_, kind, _)| {
+                matches!(kind, InterruptKind::Restart | InterruptKind::Jump)
+            });
+            if let Some((attempt, kind, receipt)) = waiting_stop {
+                worker.complete_startup(attempt, Err(WorkerExecutorError::Interrupted { kind }));
+                let mut status = worker.execution_status.write().unwrap();
+                if matches!(&*status, ExecutionStatus::Interrupting { await_interruption, .. } if Arc::ptr_eq(await_interruption, &receipt))
+                {
+                    *status = ExecutionStatus::Suspended {
+                        agent_mode: status.agent_mode(),
+                        timestamp: Timestamp::now_utc(),
+                    };
+                }
+                let _ = receipt.send(());
+            }
+            if acknowledge_without_store {
+                let _ = publication.receipt.send(());
+            }
+            Ok(restart)
+        });
+        let progress = async move {
+            progress.await.map_err(|error| {
+                WorkerExecutorError::runtime(format!("Stop cleanup failed: {error}"))
+            })?
+        }
+        .boxed()
+        .shared();
+        let completion = progress
+            .clone()
+            .map(|result| result.map(|_| ()))
+            .boxed()
+            .shared();
+        if is_leader {
+            admission.publication = Some((publication, completion.clone()));
+        }
+        admission.tasks.push(completion);
+        drop(admission);
+        if was_waiting {
+            let worker = self.self_ref.upgrade().unwrap();
+            tokio::spawn(async move {
+                if matches!(progress.await, Ok(true)) {
+                    let _ = Worker::start_if_needed(worker).await;
+                }
+            });
+        }
+        receiver
+    }
+
+    async fn finish_waiting_stop(
+        &self,
+        attempt: Uuid,
+        task: JoinHandle<()>,
+    ) -> Result<
+        Option<(Uuid, InterruptKind, Arc<tokio::sync::broadcast::Sender<()>>)>,
+        WorkerExecutorError,
+    > {
+        task.abort();
+        if let Err(error) = task.await
+            && !error.is_cancelled()
+        {
+            return Err(WorkerExecutorError::runtime(format!(
+                "Waiting worker failed: {error}"
+            )));
+        }
+        let mut lifecycle = self.instance.lock().await;
+        if !matches!(lifecycle.deletion_runtime(), WorkerInstance::WaitingForPermit(waiting) if waiting.start_attempt == attempt)
+        {
+            return Ok(None);
+        }
+        let Some(pending) = self.interrupt_signal.lock().await.take() else {
+            return Ok(None);
+        };
+        let kind = pending.kind;
+        let receipt = match &*self.execution_status.read().unwrap() {
+            ExecutionStatus::Interrupting {
+                await_interruption, ..
+            } => await_interruption.clone(),
+            _ => {
+                return Err(WorkerExecutorError::runtime(
+                    "Waiting stop lost its receipt",
+                ));
+            }
+        };
+        match kind {
+            InterruptKind::Suspend(_) => {
+                self.add_and_commit_oplog(OplogEntry::suspend()).await;
+            }
+            InterruptKind::Interrupt(_) => {
+                self.add_and_commit_oplog(OplogEntry::interrupted()).await;
+            }
+            InterruptKind::Restart | InterruptKind::Jump => {}
+        }
+        let disposition = if matches!(kind, InterruptKind::Interrupt(_)) {
+            PendingLiveInvocationDisposition::Fail
+        } else {
+            PendingLiveInvocationDisposition::Preserve
+        };
+        let result = self
+            .stop_internal_locked(
+                &mut lifecycle,
+                false,
+                None,
+                pending.unload_request,
+                FinalWorkerState::Unloaded {
+                    startup_failure: None,
+                },
+                disposition,
+            )
+            .await;
+        drop(lifecycle);
+        self.handle_stop_result(result).await;
+        Ok(Some((attempt, kind, receipt)))
+    }
+
+    async fn join_stop_progress(&self) -> Result<(), WorkerExecutorError> {
+        join_accepted_stops(&self.stop_progress).await
+    }
+
+    async fn begin_resident_generation(&self) -> Result<(), WorkerExecutorError> {
+        // Recheck while holding the acceptance lock order, but join without either lock.
+        // No old driver can pass its identity check and then fence the new generation.
+        loop {
+            let lifecycle = self.instance.lock().await;
+            let ready = self.stop_progress.lock().unwrap().ready();
+            if let Some(result) = ready {
+                result?;
+                self.resident_generation.fetch_add(1, Ordering::AcqRel);
+                self.stop_progress.lock().unwrap().publication = None;
+                return Ok(());
+            }
+            drop(lifecycle);
+            self.join_stop_progress().await?;
         }
     }
 
@@ -8654,6 +9215,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await;
 
+        // Startup can stop before a prepared Store exists to acknowledge interruption.
+        // Keep the lifecycle lock until the retiring execution's receipt is delivered.
+        if called_from_invocation_loop {
+            let mut status = self.execution_status.write().unwrap();
+            if let ExecutionStatus::Interrupting {
+                agent_mode,
+                await_interruption,
+                ..
+            } = &*status
+            {
+                let receipt = await_interruption.clone();
+                *status = ExecutionStatus::Suspended {
+                    agent_mode: *agent_mode,
+                    timestamp: Timestamp::now_utc(),
+                };
+                let _ = receipt.send(());
+            }
+        }
+
         // IMPORTANT: drop the lock here as the invocation loop might reenter this method after we drop a running worker.
         drop(instance_guard);
 
@@ -8673,6 +9253,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         final_state: FinalWorkerState,
         pending_live_invocations: PendingLiveInvocationDisposition,
     ) -> StopResult {
+        if called_from_invocation_loop {
+            // A request accepted after outcome selection still retires this runtime, but must
+            // not survive its retirement and block a later start attempt.
+            self.interrupt_signal.lock().await.claim_pending_terminal();
+        }
         // Temporarily set the instance to unloaded so we can work with the old value.
         // This is not visible to anyone as long as we are holding the lock.
         let runtime = match &mut **instance_guard {
@@ -9463,10 +10048,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(waiting_worker)
                 if waiting_worker.start_attempt == start_attempt =>
             {
-                this.interrupt_signal
-                    .lock()
-                    .await
-                    .reset_terminal_for_new_generation();
+                let mut interrupt = this.interrupt_signal.lock().await;
+                if waiting_worker.handle.lock().unwrap().is_none()
+                    || matches!(*interrupt, WorkerInterruptState::Pending(pending) | WorkerInterruptState::Unpublished(pending) | WorkerInterruptState::Freezing(pending) if pending.is_terminal())
+                {
+                    return;
+                }
+                interrupt.reset_terminal_for_new_generation();
+                drop(interrupt);
                 let running = RunningWorker::new(
                     this.owned_agent_id.clone(),
                     this.queue.clone(),
@@ -9660,7 +10249,7 @@ pub struct WorkerTrace {
 
 #[derive(Debug)]
 struct WaitingWorker {
-    handle: Option<JoinHandle<()>>,
+    handle: StdMutex<Option<JoinHandle<()>>>,
     start_attempt: Uuid,
 }
 
@@ -9772,7 +10361,7 @@ impl WaitingWorker {
         });
 
         WaitingWorker {
-            handle: Some(handle),
+            handle: StdMutex::new(Some(handle)),
             start_attempt,
         }
     }
@@ -9780,7 +10369,7 @@ impl WaitingWorker {
 
 impl Drop for WaitingWorker {
     fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
+        if let Some(handle) = self.handle.lock().unwrap().take() {
             handle.abort();
         }
     }
@@ -9840,7 +10429,12 @@ impl UnloadRequest {
 enum WorkerInterruptState {
     #[default]
     Idle,
+    /// Published to the runtime and ready for the invocation loop to take.
     Pending(PendingWorkerInterrupt),
+    /// Replaceable until the retained publisher claims the cause.
+    Unpublished(PendingWorkerInterrupt),
+    /// The cause is fixed; entity fencing must finish before typed publication.
+    Freezing(PendingWorkerInterrupt),
     /// A terminal request has been taken by the invocation loop and remains authoritative until
     /// that worker generation stops. This prevents a late permit-reacquisition restart from
     /// superseding an interrupt that is already being handled.
@@ -9876,22 +10470,40 @@ impl WorkerInterruptState {
     fn queue(&mut self, mut interrupt: PendingWorkerInterrupt) -> bool {
         match self {
             Self::TerminalClaimed if interrupt.is_terminal() => {
-                *self = Self::Pending(interrupt);
+                *self = Self::Unpublished(interrupt);
                 true
             }
             Self::TerminalClaimed => false,
-            Self::Pending(current) if current.is_terminal() => false,
-            Self::Pending(current) => {
+            Self::Freezing(_) | Self::Pending(_) => false,
+            Self::Unpublished(current) if current.is_terminal() => false,
+            Self::Unpublished(current) => {
                 if matches!(interrupt.kind, InterruptKind::Restart) {
                     interrupt.reacquire_permits |= current.reacquire_permits;
                 }
-                *self = Self::Pending(interrupt);
+                *self = Self::Unpublished(interrupt);
                 true
             }
             Self::Idle => {
-                *self = Self::Pending(interrupt);
+                *self = Self::Unpublished(interrupt);
                 true
             }
+        }
+    }
+
+    fn freeze(&mut self) -> Option<PendingWorkerInterrupt> {
+        match self {
+            Self::Unpublished(interrupt) => {
+                let interrupt = *interrupt;
+                *self = Self::Freezing(interrupt);
+                Some(interrupt)
+            }
+            _ => None,
+        }
+    }
+
+    fn publish(&mut self) {
+        if let Self::Freezing(interrupt) = self {
+            *self = Self::Pending(*interrupt);
         }
     }
 
@@ -10117,7 +10729,7 @@ impl RunningWorker {
     ) -> Result<
         (
             WorkerRunningAgent<Ctx>,
-            crate::services::resource_usage_metering::ResourceUsageMeteringWindow,
+            monthly::ExecutionWindow,
             Option<RetryDecision>,
         ),
         CreateWorkerInstanceError,
@@ -10373,6 +10985,7 @@ impl RunningWorker {
                         filesystem_cleanup_failure: Some(UnloadCleanupFailure::Filesystem {
                             failure: cleanup_error,
                             close_error: None,
+                            accounting: None,
                         }),
                     },
                 });
@@ -10393,6 +11006,7 @@ impl RunningWorker {
                     .await);
                 }
             };
+        let window = monthly::ExecutionWindow::new(&parent, window).await;
         let prepared = match prepare_initial_files(
             &parent.file_loader(),
             parent.owned_agent_id.environment_id,
@@ -10631,6 +11245,10 @@ impl RunningWorker {
         start_attempt: Uuid,
         worker_trace: WorkerTrace,
     ) {
+        #[cfg(feature = "test-utils")]
+        {
+            parent.stop_progress.lock().unwrap().permit_acquisitions += 1;
+        }
         let mut invocation_loop = InvocationLoop {
             receiver,
             active,
@@ -10709,7 +11327,7 @@ async fn create_filesystem_context(
 
 async fn cleanup_reconstructing_agent_filesystem(
     filesystem: ReconstructingFilesystem,
-    window: crate::services::resource_usage_metering::ResourceUsageMeteringWindow,
+    window: monthly::ExecutionWindow,
     startup_error: WorkerExecutorError,
 ) -> CreateWorkerInstanceError {
     cleanup_open_agent_filesystem(abort_reconstruction(filesystem), window, startup_error).await
@@ -10730,22 +11348,10 @@ fn reconstruction_startup_error(
 
 async fn cleanup_open_agent_filesystem(
     filesystem: SealedFilesystem,
-    window: crate::services::resource_usage_metering::ResourceUsageMeteringWindow,
+    window: monthly::ExecutionWindow,
     startup_error: WorkerExecutorError,
 ) -> CreateWorkerInstanceError {
-    crate::services::agent_filesystem::drain_sealed_filesystem(&filesystem).await;
-    let close_error = crate::services::resource_usage_metering::close_window(
-        window,
-        std::time::Instant::now() + Duration::from_secs(30),
-    )
-    .await
-    .err()
-    .map(|error| WorkerExecutorError::runtime(error.to_string()));
-    let startup_error = match &close_error {
-        Some(error) => WorkerExecutorError::runtime(format!("{startup_error}; {error}")),
-        None => startup_error,
-    };
-    cleanup_typed_agent_filesystem(filesystem, startup_error, close_error).await
+    invocation_loop::cleanup_startup_filesystem(filesystem, window, startup_error).await
 }
 
 async fn cleanup_typed_agent_filesystem<Adapter: SandboxFilesystemAdapter>(
@@ -10768,6 +11374,7 @@ async fn cleanup_typed_agent_filesystem<Adapter: SandboxFilesystemAdapter>(
                 filesystem_cleanup_failure: Some(UnloadCleanupFailure::Filesystem {
                     failure: cleanup_error,
                     close_error,
+                    accounting: None,
                 }),
             }
         }
@@ -12343,6 +12950,10 @@ mod tests {
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
         }));
+        assert!(state.take().is_none());
+        assert!(state.freeze().is_some());
+        assert!(state.take().is_none());
+        state.publish();
         assert!(state.take().is_some());
         assert!(!state.queue(PendingWorkerInterrupt {
             kind: InterruptKind::Restart,
@@ -12375,9 +12986,9 @@ mod tests {
             unload_request: UnloadRequest::ordinary(UnloadReason::Deleting),
         };
         assert!(state.queue(delete_interrupt));
-        assert!(matches!(state, WorkerInterruptState::Pending(_)));
+        assert!(matches!(state, WorkerInterruptState::Unpublished(_)));
         state.reset_terminal_for_new_generation();
-        assert!(matches!(state, WorkerInterruptState::Pending(_)));
+        assert!(matches!(state, WorkerInterruptState::Unpublished(_)));
     }
 }
 

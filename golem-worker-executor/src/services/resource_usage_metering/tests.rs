@@ -489,6 +489,7 @@ async fn sampler_uses_immediate_ten_millisecond_and_anchored_hundred_millisecond
     baseline.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(10)).await;
     clock.set(Duration::from_millis(9)).await;
     for _ in 0..10 {
         tokio::task::yield_now().await;
@@ -499,6 +500,7 @@ async fn sampler_uses_immediate_ten_millisecond_and_anchored_hundred_millisecond
     first.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&window).await;
+    clock.wait_for_sleep_until(Duration::from_millis(100)).await;
     clock.set(Duration::from_millis(99)).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);
     clock.set(Duration::from_millis(100)).await;
@@ -783,6 +785,102 @@ async fn account_batch_flushes_active_memory_and_storage_without_close_duplicati
         .unwrap();
     assert_eq!(entry.memory_gb_seconds_delta(AgentMode::Durable), 0);
     assert_eq!(entry.durable_byte_seconds_delta(), 0);
+}
+
+#[test]
+#[timeout("5s")]
+async fn frozen_disposal_allocation_accrues_through_release_across_month_boundary() {
+    for memory in [false, true] {
+        for filesystem in [false, true] {
+            let base = Utc
+                .with_ymd_and_hms(2030, 1, 31, 23, 59, 59)
+                .single()
+                .unwrap()
+                + chrono::Duration::milliseconds(500);
+            let clock = TestClock::new_at(Instant::now(), base);
+            let reader = ScriptedUsageReader::new(vec![
+                ObservationGate::ready(authoritative(100)),
+                ObservationGate::ready(authoritative(100)),
+            ]);
+            let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
+            let (account, _tracker) = configured_account_at(&entry, GIB, memory, clock.time());
+            let meter = create_configured_meter_with_clock(
+                ResourceUsageMeteringConfig {
+                    compute: false,
+                    memory,
+                    filesystem,
+                },
+                || FilesystemUsageSource::scripted(reader.clone()),
+                account,
+                clock.clone(),
+            );
+            let (_, _, permit) = permit(&entry).await;
+            let mut window = open_window(&meter, permit).await.unwrap();
+            if filesystem {
+                wait_for_calls(&reader, 1).await;
+                wait_for_observation_state(&window).await;
+            }
+            window.freeze_allocation().await.unwrap();
+            let flusher = window.usage_flusher();
+            drop(meter);
+            if memory || filesystem {
+                assert!(
+                    flusher.as_ref().unwrap().upgrade().is_some(),
+                    "disposal must retain policy-boundary settlement after the filesystem drops its meter"
+                );
+            }
+            // The owning deletion or its explicit repair is still pending beyond sample staleness.
+            clock.set(Duration::from_secs(2)).await;
+            let settlement = close_window(window, clock.now() + Duration::from_secs(1))
+                .await
+                .unwrap();
+            assert!(
+                flusher
+                    .as_ref()
+                    .is_none_or(|flusher| flusher.upgrade().is_none())
+            );
+            assert_eq!(
+                reader.calls.load(Ordering::Acquire),
+                if filesystem { 2 } else { 0 }
+            );
+            let january = settlement
+                .periods
+                .get(&AccountUsagePeriod {
+                    year: 2030,
+                    month: 1,
+                })
+                .copied()
+                .unwrap_or_default();
+            let february = settlement
+                .periods
+                .get(&AccountUsagePeriod {
+                    year: 2030,
+                    month: 2,
+                })
+                .copied()
+                .unwrap_or_default();
+            assert_eq!(january.storage.units, if filesystem { 50 } else { 0 });
+            assert_eq!(february.storage.units, if filesystem { 150 } else { 0 });
+            assert_eq!(january.memory.units, 0);
+            assert_eq!(
+                january.memory.remainder,
+                if memory {
+                    BYTE_NANOSECONDS_PER_GB_SECOND / 2
+                } else {
+                    0
+                }
+            );
+            assert_eq!(february.memory.units, u128::from(memory));
+            assert_eq!(
+                february.memory.remainder,
+                if memory {
+                    BYTE_NANOSECONDS_PER_GB_SECOND / 2
+                } else {
+                    0
+                }
+            );
+        }
+    }
 }
 
 #[test]

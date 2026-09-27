@@ -217,10 +217,87 @@ before publishing reclaimable `LoadedIdle` or `WarmRunnable` state. This ends th
 design; it does not mean every cached allocation is physically freed immediately. Released-permit
 durable sleep, reclaimable cache time and unloaded time do not accrue memory or storage byte-time.
 
-Interruption delivery is separate from that billing rationale. The default 10 ms epoch increment
-is a cooperative guest checkpoint, not a timer that wakes pending host futures. Compute, memory
-and storage share this limitation. Bounded monthly enforcement during such waits remains unresolved;
-do not infer a universal 10 ms bound or change the billing window to hide it.
+`worker/monthly.rs` attaches one monitor to an enabled, permit-held execution window. It checks
+local capacity every 30 seconds and on applied Registry updates, settling owner-scoped byte-time
+first and reading published fuel reservations without locking the Store. It neither scans other
+account owners nor changes Registry refresh cadence. All-off windows have no monthly monitor or
+capacity subscription. Window closure invalidates its target and joins the monitor and registered
+stop cleanup. During unload, the filesystem drains before its final allocation read. That allocation
+is frozen while deletion runs; enabled memory and storage meters continue until actual permit
+release. Failed deletion retains the permit and frozen window with the filesystem's explicit repair
+obligation. A successful repair settles through release without reading the deleted filesystem.
+Ordinary startup rollback after a window opens uses the same unload path. This does not cover
+independent startup panic or cancellation: the filesystem and execution-window Drop fallbacks
+have separate physical tasks, and the panic notification does not join them.
+
+Initial idle settlement precedes startup readiness. Monitor, accepted-stop driver and settlement
+errors at either idle boundary survive successful filesystem deletion as `CleanupFailed`; they
+neither request immediate reconstruction nor acquire a replacement permit. The monitor treats a
+closed lifecycle channel or lost send as an infrastructure error, retains that health, and requests
+a cooperative Worker stop. If status work then panics because the actor has stopped, the invocation
+loop retains its resident agent across the borrowed inner-loop failure and runs ordinary unload
+without submitting more actor work. Tests in `tests/api/monthly_health.rs` cover both idle boundaries
+and a pending silent-TCP invocation. Other panic paths still use the outer panic boundary.
+
+Worker stop registration and window closure share a synchronous admission lock. Closure seals
+its accepted drivers and installs a retained successor. Later accepted drivers wait for the old
+permit's physical release, including any retained filesystem repair, before touching the runtime.
+New startup and resident-generation publication join prior drivers outside the instance lock and
+recheck under the acceptance lock order. Loading never clears unfinished work or retained errors.
+Owner retirement closes further stop admission before joining the last drivers.
+
+An accepted stop in `WaitingForPermit` takes that attempt's exact task handle before signalling
+Loading subscribers. The driver cancels and joins the task without acquiring its blocked permit,
+then settles the matching startup tracker and `WorkerLoaded` event before resolving the existing
+stop receipt. Restart and Jump preserve pending work without lifecycle or invocation-finished
+markers and request ordinary reconstruction. Dropping the receipt does not cancel the driver.
+If core initialization stops before a prepared Store exists, the invocation-loop-owned Worker
+stop acknowledges the published interruption under the lifecycle lock. No Store callback remains
+to send that receipt. The real initializer tests in `tests/api/monthly_preparation.rs` verify
+cleanup and one receipt, durable Suspend and reconstruction, and an ephemeral typed resource
+error recorded as Recovery before any guest invocation starts.
+
+The monitor submits a proposal to the existing Worker state actor. Worker acceptance revalidates
+the cached owner, fingerprint, startup attempt, resident generation, held permit, exact active
+window, policy revision, period, fuel generation and current exhaustion. Acceptance registers
+retained progress before any signal. Restart/Jump remain replaceable until the retained driver
+or terminal invocation-loop teardown freezes the queue's elected cause under the interrupt guard.
+Teardown registers its terminal demand through the same Worker election. Admission-driven
+`TryStop` uses its actual Suspend timestamp rather than synthesizing an Interrupt. An earlier
+accepted monitor stop wins even if teardown reaches the owner fence before its driver. Both use
+the retained frozen cause; only the driver publishes it. Later accepted proposals join that
+publisher; they cannot publish a provisional kind. The driver fences the exact owner
+with the frozen kind, verifies the physical owner-failure winner, then publishes that kind to
+existing Loading/Running subscribers and the late-subscriber projection. A conflicting independent
+owner failure remains authoritative and fails stop cleanup rather than becoming a quota error.
+The invocation loop remains the sole primary-Store owner. Tests in
+`tests/api/monthly_admission_owner_election.rs` gate a real Context Worker's loaded Compute
+admission teardown and monitor driver in both fence orders, then verify one pending invocation
+executes after physical unload and reconstruction.
+
+Outcome selection shares the interrupt guard. Success, a typed invocation-deadline failure and
+a lifecycle candidate wait for an unpublished terminal stop accepted before selection; the selected
+failure keeps the typed interrupt and applicable ephemeral monthly error. The primary invocation
+loop passes `InvocationFailureOrigin::InvocationDeadline` from `InvokeResult::Failed.timed_out`
+and `Lifecycle` from `InvokeResult::Interrupted`, including monthly admission's Suspend. A frozen
+explicit Interrupt therefore cannot lose the invocation marker to a later admission Suspend.
+Neither classification depends on error text. Independent guest traps, owner infrastructure failures
+and tail-work failures keep their original classification. Tests in
+`tests/api/monthly_lifecycle_regressions.rs` gate the frozen publisher against real monthly admission
+and verify that a consumed Suspend cannot survive joined unload into the next activation. A timeout selected before stop acceptance remains authoritative.
+Real Worker tests in `tests/api/monthly_deadline.rs` expire the actual invocation timer while
+silent TCP receive is pending and the accepted stop driver is held before publication. A result
+selected first retains its writer completion through the existing commit receipt and waiter
+notification. A later stop waits for that completion before fencing or signalling, and cannot
+write a competing result. Durable success still uses `Always`; ephemeral success still uses
+`Deferred`, without waiting for the status fold. Tests in `tests/api/monthly_cause.rs`,
+`tests/api/monthly_cutoff.rs` and `tests/resource_limits/stop_cause.rs` gate publication and
+selection on real Workers, including silent TCP and a blocked concurrent-agent permit.
+
+The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
+cover monthly-memory detection by both the local tick and applied Registry update, cooperative
+socket closure, durable reconstruction and ephemeral resource failure. This is not a universal
+bound for compute, storage or every host wait; preserve the permit-owned billing window.
 
 Explicit interruption retires the cached owner and fences its replacement startup. Automatic
 shard-assignment recovery leaves `Interrupted` workers stopped, even with queued invocations or

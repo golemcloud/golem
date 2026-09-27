@@ -47,6 +47,7 @@ use tracing::{Instrument, error, info_span};
 pub struct AtomicResourceEntry {
     metering: ResourceUsageMeteringConfig,
     usage_revision_state: Mutex<UsageRevisionState>,
+    capacity_updates: tokio::sync::watch::Sender<u64>,
     // any local fuel consumption that was not yet sent to the server
     delta: AtomicI64,
     // any fuel consumption that is currently in flight to the server
@@ -310,6 +311,14 @@ fn retain_unaccepted_delivery(
         }
     }
     None
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MonthlyCapacity {
+    pub(crate) exhaustion: Option<MonthlyResourceExhaustion>,
+    pub(crate) policy_revision: u64,
+    pub(crate) period: AccountUsagePeriod,
+    pub(crate) fuel_generation: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -855,6 +864,7 @@ impl AtomicResourceEntry {
                         settled_generation: refresh_generation,
                     }),
             }),
+            capacity_updates: tokio::sync::watch::channel(0).0,
             delta: AtomicI64::new(0),
             in_flight_delta: AtomicI64::new(0),
             in_flight_memory_gb_seconds_delta: AtomicI64::new(0),
@@ -1241,6 +1251,54 @@ impl AtomicResourceEntry {
                 period,
             }
         }
+    }
+
+    pub(crate) fn monthly_metering_enabled(&self) -> bool {
+        self.metering.compute || self.metering.memory || self.metering.filesystem
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn monthly_capacity_is_exhausted_for_test(&self, mode: AgentMode) -> bool {
+        self.with_monthly_capacity(mode, None, |capacity| capacity.exhaustion.is_some())
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn monthly_observer_count_for_test(&self) -> usize {
+        self.capacity_updates.receiver_count()
+    }
+
+    pub(crate) fn subscribe_capacity_updates(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.capacity_updates.subscribe()
+    }
+
+    pub(crate) fn with_monthly_capacity<R>(
+        &self,
+        agent_mode: AgentMode,
+        fuel_generation: Option<u64>,
+        read: impl FnOnce(MonthlyCapacity) -> R,
+    ) -> R {
+        let mut state = self.usage_revision_state.lock().unwrap();
+        self.update_usage_period_locked(&mut state, AccountUsagePeriod::current());
+        let exhaustion = state.monthly_policy.as_ref().and_then(|gate| {
+            if gate.mode != MonthlyUsageMode::HardLimit || gate.period != state.current_period {
+                return None;
+            }
+            if gate.available_fuel.is_some()
+                && self.effective_fuel_with_revision_state(&state) == 0
+                && fuel_generation.is_none_or(|generation| gate.settled_generation > generation)
+            {
+                Some(MonthlyResourceExhaustion::Compute)
+            } else {
+                self.monthly_memory_and_storage_capacity_with_revision_state(&state, agent_mode)
+                    .err()
+            }
+        });
+        read(MonthlyCapacity {
+            exhaustion,
+            policy_revision: state.current_policy_revision,
+            period: state.current_period,
+            fuel_generation,
+        })
     }
 
     pub(crate) fn monthly_resource_capacity(
@@ -2166,6 +2224,9 @@ impl AtomicResourceEntry {
         if let Some(captured) = retry {
             revision_state.pending.push_front(captured);
         }
+        drop(revision_state);
+        self.capacity_updates
+            .send_modify(|version| *version = version.wrapping_add(1));
         true
     }
 
@@ -2292,6 +2353,20 @@ impl AtomicResourceEntry {
             captured.update.memory_gb_seconds_delta,
             captured.update.durable_storage_byte_seconds_delta,
         )
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn hard_limit_memory_overshoot_for_test(&self) -> u128 {
+        self.usage_revision_state
+            .lock()
+            .unwrap()
+            .monthly_policy
+            .as_ref()
+            .map_or(0, |gate| {
+                gate.hard_limit_memory_overshoot_byte_nanoseconds
+                    .values()
+                    .sum()
+            })
     }
 
     pub fn record_memory_gb_seconds(&self, mode: AgentMode, amount: i64) {
@@ -2839,6 +2914,26 @@ impl ResourceLimitsGrpc {
         .await
     }
 
+    #[cfg(feature = "test-utils")]
+    pub async fn run_batch_for_test(&self) {
+        self.send_batch(0).await;
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub async fn initialized_policy_revision_for_test(&self, account_id: AccountId) -> Option<u64> {
+        let cell = self
+            .entries
+            .read_async(&account_id, |_, entry| entry.clone())
+            .await?;
+        let entry = cell.get()?.clone();
+        let revision = entry
+            .usage_revision_state
+            .lock()
+            .unwrap()
+            .current_policy_revision;
+        Some(revision)
+    }
+
     async fn update_last_known_limits(
         &self,
         account_id: AccountId,
@@ -3045,6 +3140,224 @@ mod tests {
     use uuid::Uuid;
 
     test_r::enable!();
+
+    #[test]
+    fn monthly_capacity_rechecks_same_revision_restoration_and_period() {
+        let period = AccountUsagePeriod::current();
+        let entry = memory_entry(period, MonthlyUsageMode::HardLimit, 0);
+        let read = || entry.with_monthly_capacity(AgentMode::Durable, None, |capacity| capacity);
+        let exhausted = read();
+        assert_eq!(
+            exhausted.exhaustion,
+            Some(MonthlyResourceExhaustion::Memory)
+        );
+        assert!(entry.apply_monthly_snapshot_for_test(
+            1,
+            memory_policy(period, MonthlyUsageMode::HardLimit, 10),
+            7
+        ));
+        let restored = read();
+        assert_eq!(restored.policy_revision, exhausted.policy_revision);
+        assert_ne!(restored, exhausted);
+        assert_eq!(restored.exhaustion, None);
+
+        let old = memory_entry(usage_period(2000, 1), MonthlyUsageMode::HardLimit, 0);
+        let rolled = old.with_monthly_capacity(AgentMode::Durable, None, |capacity| capacity);
+        assert_eq!(rolled.period, period);
+        assert_eq!(rolled.exhaustion, None);
+    }
+
+    #[test]
+    fn monthly_snapshot_revision_predicate_control() {
+        let period = AccountUsagePeriod::current();
+        let policy = memory_policy(period, MonthlyUsageMode::HardLimit, 0);
+        let entry = memory_entry(period, MonthlyUsageMode::HardLimit, 0);
+        let read = || entry.with_monthly_capacity(AgentMode::Durable, None, |capacity| capacity);
+        let original = read();
+        assert_eq!(original.exhaustion, Some(MonthlyResourceExhaustion::Memory));
+        assert!(entry.apply_monthly_snapshot_for_test(1, policy.clone(), 7));
+        assert_eq!(
+            read(),
+            original,
+            "refresh generation alone is not proposal identity"
+        );
+
+        entry.begin_monthly_refresh_for_test(2, 0);
+        assert!(entry.apply_monthly_snapshot_with_policy_revision(2, policy.clone(), 7, 8, true));
+        let revised = read();
+        assert_eq!(revised.policy_revision, 8);
+        assert_eq!(
+            revised,
+            MonthlyCapacity {
+                policy_revision: 8,
+                ..original
+            }
+        );
+        assert_ne!(
+            revised, original,
+            "equal exhaustion does not erase revision identity"
+        );
+
+        entry.begin_monthly_refresh_for_test(3, 0);
+        assert!(!entry.apply_monthly_snapshot_with_policy_revision(3, policy, 7, 7, true));
+        assert_eq!(
+            read(),
+            revised,
+            "stale Registry revision cannot restore the proposal"
+        );
+    }
+
+    #[test]
+    fn monthly_snapshot_period_predicate_control() {
+        let period = AccountUsagePeriod::current();
+        let next_period = if period.month == 12 {
+            usage_period(period.year + 1, 1)
+        } else {
+            usage_period(period.year, period.month + 1)
+        };
+        let entry = memory_entry(period, MonthlyUsageMode::HardLimit, 0);
+        let read = || entry.with_monthly_capacity(AgentMode::Durable, None, |capacity| capacity);
+        let original = read();
+        assert_eq!(original.exhaustion, Some(MonthlyResourceExhaustion::Memory));
+        // Inject a later account period rather than waiting for the wall clock to cross a month.
+        assert!(entry.apply_monthly_snapshot_for_test(
+            1,
+            memory_policy(next_period, MonthlyUsageMode::HardLimit, 0),
+            7
+        ));
+        let rolled = read();
+        assert_eq!(
+            rolled,
+            MonthlyCapacity {
+                period: next_period,
+                ..original
+            }
+        );
+        assert_ne!(
+            rolled, original,
+            "equal exhaustion does not erase period identity"
+        );
+        assert!(entry.apply_monthly_snapshot_for_test(
+            2,
+            memory_policy(period, MonthlyUsageMode::HardLimit, 0),
+            7
+        ));
+        let stale_period = read();
+        assert_eq!(
+            stale_period.period, next_period,
+            "account period never moves backward"
+        );
+        assert_eq!(
+            stale_period.exhaustion, None,
+            "a mismatched policy period cannot stop a worker"
+        );
+    }
+
+    #[test]
+    fn monthly_snapshot_fuel_generation_predicate_control() {
+        let entry = compute_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            0,
+        );
+        let read = |generation| {
+            entry.with_monthly_capacity(AgentMode::Durable, generation, |capacity| capacity)
+        };
+        let unreserved = read(None);
+        assert_eq!(
+            unreserved.exhaustion,
+            Some(MonthlyResourceExhaustion::Compute)
+        );
+        assert_eq!(read(Some(0)).exhaustion, None);
+        assert!(entry.apply_monthly_snapshot_for_test(1, monthly_policy(0), 7));
+        assert_eq!(read(None), unreserved);
+        let expired = read(Some(0));
+        assert_eq!(
+            expired,
+            MonthlyCapacity {
+                fuel_generation: Some(0),
+                ..unreserved
+            }
+        );
+        assert_ne!(
+            expired, unreserved,
+            "even exhausted snapshots require exact reservation identity"
+        );
+        assert_eq!(
+            read(Some(1)).exhaustion,
+            None,
+            "equal settled generation remains prepaid"
+        );
+        assert_eq!(
+            read(Some(2)).exhaustion,
+            None,
+            "newer reservation remains prepaid"
+        );
+        assert!(entry.apply_monthly_snapshot_for_test(2, monthly_policy(0), 7));
+        assert_eq!(
+            read(Some(1)).exhaustion,
+            Some(MonthlyResourceExhaustion::Compute)
+        );
+        assert_eq!(read(Some(2)).exhaustion, None);
+    }
+
+    #[test]
+    fn monthly_capacity_updates_signal_only_applied_snapshots() {
+        let period = AccountUsagePeriod::current();
+        let entry = memory_entry(period, MonthlyUsageMode::HardLimit, 0);
+        let mut updates = entry.subscribe_capacity_updates();
+        assert!(!updates.has_changed().unwrap());
+        assert!(entry.apply_monthly_snapshot_for_test(
+            1,
+            memory_policy(period, MonthlyUsageMode::HardLimit, 10),
+            7
+        ));
+        assert!(updates.has_changed().unwrap());
+        updates.borrow_and_update();
+        assert!(!entry.apply_monthly_snapshot_for_test(
+            2,
+            memory_policy(period, MonthlyUsageMode::HardLimit, 0),
+            6
+        ));
+        assert!(!updates.has_changed().unwrap());
+        assert!(entry.apply_monthly_snapshot_for_test(
+            3,
+            memory_policy(period, MonthlyUsageMode::HardLimit, 0),
+            7
+        ));
+        assert!(updates.has_changed().unwrap());
+    }
+
+    #[test]
+    fn monthly_capacity_uses_prepaid_generation_without_account_scan() {
+        #[derive(Debug)]
+        struct ForbiddenFlusher;
+        impl ResourceUsageFlusher for ForbiddenFlusher {
+            fn flush_usage(&self) {
+                panic!("monthly monitor must not scan account flushers");
+            }
+        }
+        let period = AccountUsagePeriod::current();
+        let entry = compute_entry(period, MonthlyUsageMode::HardLimit, 0);
+        let flusher: Arc<dyn ResourceUsageFlusher> = Arc::new(ForbiddenFlusher);
+        entry.register_resource_usage_flusher(Arc::downgrade(&flusher));
+        let prepaid = entry.with_monthly_capacity(AgentMode::Durable, Some(0), |capacity| capacity);
+        assert_eq!(prepaid.exhaustion, None);
+        let unreserved = entry.with_monthly_capacity(AgentMode::Durable, None, |capacity| capacity);
+        assert_eq!(
+            unreserved.exhaustion,
+            Some(MonthlyResourceExhaustion::Compute)
+        );
+        drop(flusher);
+        assert!(entry.apply_monthly_snapshot_for_test(1, monthly_policy(0), 7));
+        let invalidated =
+            entry.with_monthly_capacity(AgentMode::Durable, Some(0), |capacity| capacity);
+        assert_eq!(
+            invalidated.exhaustion,
+            Some(MonthlyResourceExhaustion::Compute)
+        );
+        assert_ne!(prepaid, invalidated);
+    }
 
     fn metered_entry_with_revision(revision: u64) -> AtomicResourceEntry {
         AtomicResourceEntry::new_with_all_limits_metering_and_revision(

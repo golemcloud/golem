@@ -952,6 +952,12 @@ impl TestWorkerExecutor {
 
     pub async fn commit_oplog(&self, agent_id: &AgentId) -> anyhow::Result<()> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        if let Some(active) = self.production_active_agent(&owned_agent_id).await {
+            golem_worker_executor::services::HasOplog::oplog(active.primary().as_ref())
+                .commit(CommitLevel::Always)
+                .await;
+            return Ok(());
+        }
         let worker = self
             .additional_test_deps
             .try_get_worker(&owned_agent_id)
@@ -1069,6 +1075,16 @@ impl TestWorkerExecutor {
             .get()?
             .try_get_active_agent(owned_agent_id)
             .await
+    }
+
+    pub async fn concurrent_agent_permit_is_held(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        if let Some(active) = self.active_agent(owned_agent_id).await {
+            active.primary().concurrent_agent_permit_is_held().await
+        } else if let Some(active) = self.production_active_agent(owned_agent_id).await {
+            active.primary().concurrent_agent_permit_is_held().await
+        } else {
+            false
+        }
     }
 
     pub async fn production_active_agent(
@@ -2432,13 +2448,14 @@ impl InvocationHooks for TestWorkerCtx {
         self.durable_ctx.on_agent_invocation_finished().await
     }
 
-    async fn on_invocation_failure(
+    async fn on_invocation_failure_with_origin(
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+        origin: golem_worker_executor::worker::InvocationFailureOrigin,
     ) -> RetryDecision {
         self.durable_ctx
-            .on_invocation_failure(full_function_name, trap_type)
+            .on_invocation_failure_with_origin(full_function_name, trap_type, origin)
             .await
     }
 

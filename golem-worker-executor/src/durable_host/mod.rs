@@ -4515,7 +4515,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let timer = duration.map(|duration| {
             let latch = latch.clone();
             let execution_status = self.execution_status.clone();
+            #[cfg(feature = "test-utils")]
+            let deadline = self
+                .public_state
+                .worker()
+                .invocation_deadline_for_test(duration);
             tokio::spawn(async move {
+                #[cfg(feature = "test-utils")]
+                deadline.await;
+                #[cfg(not(feature = "test-utils"))]
                 tokio::time::sleep(duration).await;
                 latch.store(true, Ordering::Release);
                 let interrupt_signal = {
@@ -5152,9 +5160,11 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Loading { agent_mode, .. } => {
-                let (tx, _) = tokio::sync::broadcast::channel(128);
-                let interrupt_signal = Arc::new(tx);
+            ExecutionStatus::Loading {
+                agent_mode,
+                interrupt_signal,
+                ..
+            } => {
                 *execution_status = ExecutionStatus::Running {
                     agent_mode,
                     timestamp: Timestamp::now_utc(),
@@ -5257,10 +5267,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         self.clear_invocation_scope_card().await;
     }
 
-    async fn on_invocation_failure(
+    async fn on_invocation_failure_with_origin(
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+        origin: crate::worker::InvocationFailureOrigin,
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
@@ -5271,6 +5282,34 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             error!("failed to drain dropped durable calls before invocation failure entry: {err}");
             return RetryDecision::None;
         }
+
+        #[cfg(feature = "test-utils")]
+        self.public_state
+            .worker()
+            .wait_outcome_gate_for_test(false)
+            .await;
+        let selected_trap;
+        let mut outcome_writer = None;
+        let trap_type = if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
+            trap_type
+        } else {
+            let Some((selected, writer)) = self
+                .public_state
+                .worker()
+                .claim_invocation_failure(current_idempotency_key.clone(), trap_type, origin)
+                .await
+            else {
+                return RetryDecision::None;
+            };
+            #[cfg(feature = "test-utils")]
+            self.public_state
+                .worker()
+                .wait_outcome_gate_for_test(true)
+                .await;
+            outcome_writer = Some(writer);
+            selected_trap = selected;
+            &selected_trap
+        };
 
         if let TrapType::Error { error, .. } = trap_type {
             match error {
@@ -5414,6 +5453,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             latest_status_before.current_retry_state, decision
         );
 
+        if let Some(writer) = outcome_writer {
+            writer.complete();
+        }
         decision
     }
 
@@ -5543,6 +5585,22 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
+            #[cfg(feature = "test-utils")]
+            self.public_state
+                .worker()
+                .wait_outcome_gate_for_test(false)
+                .await;
+            let outcome_writer = self
+                .public_state
+                .worker()
+                .claim_invocation_success(self.state.get_current_idempotency_key())
+                .await?;
+            #[cfg(feature = "test-utils")]
+            self.public_state
+                .worker()
+                .wait_outcome_gate_for_test(true)
+                .await;
+
             let finished_index = self
                 .public_state
                 .worker()
@@ -5603,6 +5661,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     is_live,
                 );
             }
+            outcome_writer.complete();
         }
         debug!("Function {full_function_name} finished");
 
@@ -6114,6 +6173,12 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 .clear_invocation_scope_card().await;
                             break Err(error);
                         }
+                        #[cfg(feature = "test-utils")]
+                        worker.wait_completed_replay_for_test(
+                            &idempotency_key,
+                            oplog_index,
+                            &store.as_context().data().durable_ctx().state.replay_state,
+                        ).await;
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
