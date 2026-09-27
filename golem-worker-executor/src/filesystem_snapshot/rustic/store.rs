@@ -20,7 +20,7 @@
 //! next storage call. The store counts each blocking task and each backend in a task tracker, and
 //! [`RusticSnapshotStore::shut_down`] waits for them.
 
-use super::backend::{BlobBackend, Lease};
+use super::backend::{BlobBackend, Lease, within_lease};
 use super::fault::{
     Operation, classify, is_file_missing, is_snapshot_missing, is_storage_failure, storage_failure,
 };
@@ -671,7 +671,11 @@ impl RusticSnapshotStore {
         claim.guard.finish().await;
         let marked_packs = pruned?;
         let ended = Timestamp::now_utc();
-        write_ledger(&files, ended, marked_packs)
+        // The lease fences the ledger write as it fences the calls of rustic. A write that would
+        // start after the lease ran out is not sent, and a write that starts before is bounded by
+        // the time left, so the entry never lands after another delete can take the claim over.
+        // A prune whose ledger write the lease skipped keeps its claim and runs no cleanup.
+        within_lease(&claim.lease, write_ledger(&files, ended, marked_packs))
             .await
             .map_err(storage_failure)?;
         remove_older_ledgers(&files, ended).await;

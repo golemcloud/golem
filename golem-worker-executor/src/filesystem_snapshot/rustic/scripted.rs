@@ -47,6 +47,8 @@ pub(super) enum Script {
     WaitForGate,
     /// Waits for the time, and then passes the call.
     Delay(std::time::Duration),
+    /// Waits for the time, and then gives an error and does not pass the call.
+    RefuseAfter(std::time::Duration),
     /// Gives no blob to a read of a whole blob, as a delete after a listing does. Each other call
     /// passes.
     Vanish,
@@ -247,6 +249,10 @@ impl ScriptedBlobStorage {
             Script::Delay(time) => {
                 tokio::time::sleep(time).await;
                 call.await
+            }
+            Script::RefuseAfter(time) => {
+                tokio::time::sleep(time).await;
+                Err(anyhow::anyhow!("the storage refused the call"))
             }
             Script::Step { refuse, .. } => {
                 let _stepped = self.wait_for_step(op_label, path).await;

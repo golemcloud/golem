@@ -1531,6 +1531,95 @@ async fn a_marker_ahead_within_the_margin_after_a_slow_claim_listing_holds_the_c
 
 #[test]
 #[timeout("60s")]
+async fn a_ledger_write_after_the_lease_ran_out_is_not_sent_and_the_claim_stays() {
+    // A zero grace period and a deadline of 1 s give a lease of 999 ms. Each refresh fails, and
+    // the final marker takes longer than its deadline, so it fails at 1 s, after the end of the
+    // lease. The prune itself ends well within the lease.
+    let deadline = Duration::from_secs(1);
+    let storage =
+        ScriptedBlobStorage::new(
+            Arc::new(InMemoryBlobStorage::new()),
+            |op_label, _| match op_label {
+                "refresh_claim" => Script::Refuse,
+                "final_marker" => Script::RefuseAfter(Duration::from_millis(1200)),
+                _ => Script::Pass,
+            },
+        );
+    let store = store(storage.clone(), policy(deadline, ALWAYS, Duration::ZERO));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+    let calls = storage.calls();
+    let entries = claim_entries(&storage, &scope).await;
+
+    assert!(
+        matches!(
+            &deleted,
+            Err(SnapshotStoreError::Storage { source, .. }) if is_lease_expired(source.as_ref())
+        ),
+        "{deleted:?}"
+    );
+    assert_eq!(
+        (
+            prunes(&calls),
+            calls
+                .iter()
+                .filter(|(op_label, _)| *op_label == "write_ledger")
+                .count(),
+            ledger(&storage, &scope).await.last_prune,
+            entries.contains(&ClaimEntry::Claim(0)),
+        ),
+        (1, 0, None, true)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_ledger_write_that_starts_within_the_lease_ends_at_the_end_of_the_lease() {
+    // A zero grace period and a deadline of 2 s give a lease of 1999 ms. The final marker takes
+    // 1.5 s, so the ledger write starts with about 0.5 s of the lease left. The ledger write takes
+    // 10 s, so the end of the lease ends it before its own deadline.
+    let deadline = Duration::from_secs(2);
+    let storage =
+        ScriptedBlobStorage::new(
+            Arc::new(InMemoryBlobStorage::new()),
+            |op_label, _| match op_label {
+                "final_marker" => Script::Delay(Duration::from_millis(1500)),
+                "write_ledger" => Script::Delay(Duration::from_secs(10)),
+                _ => Script::Pass,
+            },
+        );
+    let store = store(storage.clone(), policy(deadline, ALWAYS, Duration::ZERO));
+    let scope = new_scope();
+    save_each(&store, &scope, &["p-1", "p-2"]).await;
+
+    let deleted = store.delete(&scope, &name("p-1")).await;
+    let calls = storage.calls();
+    let entries = claim_entries(&storage, &scope).await;
+
+    assert!(
+        matches!(
+            &deleted,
+            Err(SnapshotStoreError::Storage { source, .. }) if is_lease_expired(source.as_ref())
+        ),
+        "{deleted:?}"
+    );
+    assert_eq!(
+        (
+            calls
+                .iter()
+                .filter(|(op_label, _)| *op_label == "write_ledger")
+                .count(),
+            ledger(&storage, &scope).await.last_prune,
+            entries.contains(&ClaimEntry::Claim(0)),
+        ),
+        (1, None, true)
+    );
+}
+
+#[test]
+#[timeout("60s")]
 async fn the_lease_of_a_prune_starts_at_its_first_marker_so_a_prune_without_a_refresh_prunes() {
     // A grace period of one hour gives a refresh period of fifteen minutes, so the prune ends
     // before its first refresh, and only the first marker gives the lease.

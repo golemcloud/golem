@@ -240,7 +240,7 @@ impl BlobBackend {
 
 /// Gives the output of the future, or [`LeaseExpired`] when the lease runs out first. A call does
 /// not start when the lease has run out.
-async fn within_lease<T>(
+pub(super) async fn within_lease<T>(
     lease: &Lease,
     future: impl Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {
