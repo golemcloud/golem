@@ -3797,14 +3797,21 @@ async fn delete_scope_and_copy_scope_after_shut_down_give_storage() {
 #[test]
 #[timeout("60s")]
 async fn shut_down_ends_running_operations_before_it_returns() {
-    let storage =
-        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+    // The first pack write of the save waits at the gate, and it cancels `reached`, so the test
+    // shuts the store down only when the save holds a running storage call. The save runs at a low
+    // priority, so the test waits for that point without a bound of its own.
+    let reached = tokio_util::sync::CancellationToken::new();
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let reached = reached.clone();
+        move |op_label, path| {
             if op_label == "write" && path.starts_with("data") {
+                reached.cancel();
                 Script::WaitForGate
             } else {
                 Script::Pass
             }
-        });
+        }
+    });
     let store = store(
         storage.clone(),
         policy(LONG_DEADLINE, NEVER, Duration::ZERO),
@@ -3817,13 +3824,7 @@ async fn shut_down_ends_running_operations_before_it_returns() {
         let path = tree.path().to_path_buf();
         async move { store.save(&scope, &name("p-held"), &path, None).await }
     });
-    let held = eventually(|| {
-        storage
-            .calls()
-            .iter()
-            .any(|(op_label, path)| *op_label == "write" && path.starts_with("data"))
-    })
-    .await;
+    reached.cancelled().await;
 
     let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
     let saved = tokio::time::timeout(LIMIT, saving).await;
@@ -3838,7 +3839,7 @@ async fn shut_down_ends_running_operations_before_it_returns() {
         later.as_ref().is_err_and(|error| is_storage(error, false)),
         "{later:?}"
     );
-    assert_eq!((held, stopped, store.work_in_flight()), (true, true, 0));
+    assert_eq!((stopped, store.work_in_flight()), (true, 0));
 }
 
 /// The operation of the store that a test drops.
