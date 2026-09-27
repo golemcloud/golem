@@ -539,8 +539,9 @@ pub(super) async fn write_marker(
     Ok(path)
 }
 
-/// Writes a marker of the claim with the number, and moves the end of the lease to `span` after
-/// the start of the write when the write succeeds.
+/// Writes a marker of the claim with the number. A write that succeeds and started before the end
+/// of the lease moves the end to `span` after the start of the write, when that is later. A write
+/// that started at or after the end does not move it.
 async fn write_leased_marker(
     files: &SnapshotFiles,
     op_label: &'static str,
@@ -600,8 +601,9 @@ pub(super) fn refresh_period(grace: Duration, deadline: Duration) -> Duration {
 
 /// Writes a new marker of the claim with the number at each period, until the caller drops the
 /// future or the operation of the files is cancelled, and adds the path of each written marker to
-/// `written`. Each write that succeeds moves the end of the lease to `span` after its start. A
-/// failed write gives a warning, and the next period tries again.
+/// `written`. A write that succeeds and started before the end of the lease moves the end to
+/// `span` after its start, when that is later. A write that started at or after the end does not
+/// move it. A failed write gives a warning, and the next period tries again.
 pub(super) async fn keep_claim_fresh(
     files: &SnapshotFiles,
     directory: &Path,
