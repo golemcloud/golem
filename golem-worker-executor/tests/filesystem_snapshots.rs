@@ -1655,3 +1655,253 @@ async fn managed_xfs_manual_update_brings_the_files_into_the_target_revision(
     assert_eq!(updated_agent.describe(&restarted).await?, after_update);
     Ok(())
 }
+
+#[test]
+#[timeout("4m")]
+async fn a_manual_update_during_an_upload_waits_for_the_upload_and_succeeds(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "update-waits",
+        &[],
+    )
+    .await?;
+    store.set_save_delay(Duration::from_secs(2));
+    agent
+        .apply_all(&executor, &[("write", "state.db", "rows")])
+        .await?;
+    eventually(Duration::from_secs(30), || async {
+        let records = agent.records(&executor).await?;
+        Ok(records.snapshots.iter().flatten().next().cloned())
+    })
+    .await?;
+    let updated = executor
+        .update_component_with_files(
+            &agent.component.id,
+            AGENT_TYPE,
+            "it_initial_file_system_release",
+            vec![],
+        )
+        .await?;
+
+    executor
+        .manual_update_worker(&agent.worker_id, updated.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&agent.worker_id, updated.revision, Duration::from_secs(60))
+        .await?;
+    store.set_save_delay(Duration::ZERO);
+    let updated_agent = Agent {
+        component: updated,
+        agent: agent.agent.clone(),
+        worker_id: agent.worker_id.clone(),
+    };
+    let tree = updated_agent.describe(&executor).await?;
+    let records = updated_agent.records(&executor).await?;
+
+    assert!(records.failed_updates.is_empty(), "{records:?}");
+    assert_eq!(
+        tree,
+        [r#"state.db file links=1 writable=true content="rows""#].map(String::from)
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_newest_record_whose_filesystem_does_not_restore_falls_back_to_the_older_record(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let operations = [("write", "a.txt", "a"), ("write", "b.txt", "b")];
+    let expected =
+        tree_without_snapshots(deps, last_unique_id, initial_file_system, &operations).await?;
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "restore-fails",
+        &[],
+    )
+    .await?;
+    let (_, older_name) = agent.apply_and_confirm(&executor, operations[0]).await?;
+    let (_, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
+    store.fail_restores_of(&newer_name);
+    agent.stop(&executor, &context).await?;
+    let restores = store.restore_count();
+
+    let tree = agent.describe(&executor).await?;
+    let applied = agent.applied(&executor).await?;
+
+    assert_eq!(store.restored_names()[restores..], [newer_name, older_name]);
+    assert_eq!((tree, applied), expected);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_start_during_an_upload_waits_for_it_and_then_confirms_its_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(&executor, &context, initial_file_system, "start-waits", &[]).await?;
+    store.set_save_delay(Duration::from_secs(3));
+    agent
+        .apply_all(&executor, &[("write", "file.txt", "content")])
+        .await?;
+    let live = agent.describe(&executor).await?;
+    let named = eventually(Duration::from_secs(30), || async {
+        let records = agent.records(&executor).await?;
+        Ok(records.snapshots.iter().rev().flatten().next().cloned())
+    })
+    .await?;
+    agent.stop(&executor, &context).await?;
+    let stored_at_start = store
+        .snapshot_names(&agent.owned(&context))
+        .await
+        .contains(&named);
+    let restores = store.restore_count();
+
+    let started = std::time::Instant::now();
+    executor.resume(&agent.worker_id, false).await?;
+    let after_start = agent.describe(&executor).await?;
+    let waited = started.elapsed();
+    let records = agent.records(&executor).await?;
+    store.set_save_delay(Duration::ZERO);
+
+    assert!(!stored_at_start);
+    assert!(records.confirmations.contains(&named), "{records:?}");
+    assert_eq!(store.restored_names()[restores..], [named]);
+    assert_eq!(after_start, live);
+    assert!(
+        waited < Duration::from_secs(20),
+        "the start waited {waited:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn an_invocation_during_the_stop_of_an_agent_with_an_upload_is_not_held_by_the_upload(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let upload = Duration::from_secs(60);
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor = start_snapshotting(deps, &context, &store, Duration::from_secs(2), None).await?;
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "stop-no-wait",
+        &[],
+    )
+    .await?;
+    store.set_save_delay(upload);
+    agent
+        .apply_all(&executor, &[("write", "file.txt", "content")])
+        .await?;
+    let live = agent.describe(&executor).await?;
+    eventually(Duration::from_secs(30), || async {
+        let records = agent.records(&executor).await?;
+        Ok(records.snapshots.iter().flatten().next().cloned())
+    })
+    .await?;
+
+    let started = std::time::Instant::now();
+    let (stopped, tree) = futures::join!(agent.stop(&executor, &context), async {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        agent.describe(&executor).await
+    });
+    let waited = started.elapsed();
+
+    stopped?;
+    assert_eq!(tree?, live);
+    assert!(waited < upload / 4, "the invocation waited {waited:?}");
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_named_manual_update_record_fails_a_start_without_filesystem_snapshots_visibly(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "disabled-start",
+        &[],
+    )
+    .await?;
+    agent
+        .apply_all(&executor, &[("write", "state.db", "rows")])
+        .await?;
+    agent.confirmed(&executor).await?;
+    let updated = executor
+        .update_component_with_files(
+            &agent.component.id,
+            AGENT_TYPE,
+            "it_initial_file_system_release",
+            vec![],
+        )
+        .await?;
+    executor
+        .manual_update_worker(&agent.worker_id, updated.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&agent.worker_id, updated.revision, Duration::from_secs(60))
+        .await?;
+    drop(executor);
+
+    let root = tempfile::tempdir()?;
+    let disabled = start_replaying(deps, &context, root.path()).await?;
+    let started = agent.describe(&disabled).await;
+    let metadata = disabled.get_worker_metadata(&agent.worker_id).await?;
+
+    let error = format!("{:?}", started.err());
+    assert!(
+        error.contains("filesystem snapshots are disabled on this executor"),
+        "{error}"
+    );
+    assert!(
+        metadata
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("filesystem snapshots are disabled")),
+        "{metadata:?}"
+    );
+    Ok(())
+}

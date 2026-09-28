@@ -38,6 +38,7 @@ struct Faults {
     failing_saves: AtomicUsize,
     save_delay: Mutex<Duration>,
     restores_fail: AtomicBool,
+    failing_restore_names: Mutex<std::collections::HashSet<String>>,
     saves: AtomicUsize,
     restored: Mutex<Vec<String>>,
     stats: AtomicUsize,
@@ -73,6 +74,15 @@ impl TestFilesystemSnapshotStore {
     /// Makes each restore fail with an error that allows no retry, or not.
     pub fn fail_restores(&self, fail: bool) {
         self.faults.restores_fail.store(fail, Ordering::SeqCst);
+    }
+
+    /// Makes each restore of the snapshot `name` fail with an error that allows no retry.
+    pub fn fail_restores_of(&self, name: &str) {
+        self.faults
+            .failing_restore_names
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_string());
     }
 
     /// The number of saves that started.
@@ -189,7 +199,14 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(name.as_str().to_string());
-        if self.faults.restores_fail.load(Ordering::SeqCst) {
+        if self.faults.restores_fail.load(Ordering::SeqCst)
+            || self
+                .faults
+                .failing_restore_names
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(name.as_str())
+        {
             return Err(SnapshotStoreError::Corrupt(anyhow::anyhow!(
                 "an injected restore failure"
             )));
