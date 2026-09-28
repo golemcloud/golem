@@ -204,8 +204,7 @@ object StreamSession {
     parameters: () => SchemaValue,
     constructorCodec: PublicValueCodec.Codec,
     inputCodec: PublicValueCodec.Codec,
-    outputCodec: Option[PublicValueCodec.Codec],
-    configCodecs: List[(List[String], PublicValueCodec.Codec)]
+    outputCodec: Option[PublicValueCodec.Codec]
   ): Future[AgentInvocationResult] = {
     implicit val ec: ExecutionContext = resolved.configuration.executionContext
     val session = new Session(resolved)
@@ -730,10 +729,8 @@ object StreamSession {
     }
     val base = resolved.configuration.server.url.stripSuffix("/").replaceFirst("^http", "ws")
     val selector = Json.obj("agentType" -> Json.string(resolved.agentTypeName), "application" -> Json.string(resolved.configuration.appName), "constructorParameters" -> constructorCodec.encode(resolved.parameters), "environment" -> Json.string(resolved.configuration.envName), "method" -> Json.string(method))
-    val codecsByPath = configCodecs.toMap
     val config = Json.arr(resolved.config.map { e =>
-      val codec = codecsByPath.getOrElse(e.path, throw BridgeException(s"missing public config codec for ${e.path.mkString(".")}"))
-      Json.obj("path" -> Json.arr(e.path.map(Json.string).toVector), "value" -> codec.encode(e.value))
+      Json.obj("path" -> Json.arr(e.path.map(Json.string).toVector), "value" -> e.codec.encode(e.value))
     }.toVector)
     pendingAttempt = UUID.randomUUID.toString
     pendingDescriptor = StreamSessionProtocol.message("invocationStart", Vector("attemptId" -> Json.string(pendingAttempt), "config" -> config, "idempotencyKey" -> Json.string(idempotencyKey), "methodParameters" -> inputCodec.encode(encodedParameters), "selector" -> selector))

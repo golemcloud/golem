@@ -231,9 +231,13 @@ canonical `grep`/`git` examples for the complete annotation surface.
 
 `@reflection.get_tool_type(name)` returns the tool descriptor visible to the caller. Select a
 command with `tool.command(path)`; path segments may use command aliases, and the returned
-`ToolCommand.path` contains their canonical names. Its `arguments`, `input_schema`, and `result`
+`ToolCommand.path()` contains their canonical names. Its `arguments()`, `input_schema()`, and `result()`
 describe the selected command. Supply every canonical input field in declaration order. An absent
 optional argument is an option value of `None`, while a defaulted argument carries its default.
+
+Discovery returns opaque immutable snapshots. Array and graph accessors return defensive copies,
+and a snapshot changes only after explicit rediscovery. Use `SchemaRef::typed_value` to validate a
+schema-native value and create the self-contained graph required by a fully dynamic invocation.
 
 Use `command.pack_json(input)` and `command.invoke_json(input)` for canonical JSON, or
 `command.invoke_value(input)` for schema-native values. The command validates inputs locally before

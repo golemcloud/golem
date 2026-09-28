@@ -87,6 +87,20 @@ object RichTypesSpec extends ZIOSpecDefault {
         FromSchema[Quantity[Bytes]].fromValue(IntoSchema[Quantity[Bytes]].toValue(quantity)) == Right(quantity)
       )
     },
+    test("native Java time schemas use rich structural values") {
+      val duration     = JDuration.ofNanos(Long.MaxValue)
+      val instant      = Instant.ofEpochSecond(1234L, 567)
+      val durationInto = IntoSchema.derived[JDuration](using Schema.duration)
+      val durationFrom = FromSchema.derived[JDuration](using Schema.duration)
+      val instantInto  = IntoSchema.derived[Instant](using Schema.instant)
+      val instantFrom  = FromSchema.derived[Instant](using Schema.instant)
+      assertTrue(
+        durationInto.toValue(duration) == SchemaValue.DurationValue(Long.MaxValue),
+        durationFrom.fromValue(SchemaValue.DurationValue(Long.MaxValue)) == Right(duration),
+        instantInto.toValue(instant) == SchemaValue.DatetimeValue(Datetime(1234L, 567)),
+        instantFrom.fromValue(SchemaValue.DatetimeValue(Datetime(1234L, 567))) == Right(instant)
+      )
+    },
     test("derived record fields use rich nodes and roundtrip") {
       val record = RichRecord(
         GolemPath("/workspace/data"),

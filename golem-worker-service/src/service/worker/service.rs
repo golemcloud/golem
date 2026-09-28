@@ -44,8 +44,9 @@ use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentMode, AgentTypeName, GolemUserPrincipal, InvocationFreshnessDisposition, OwnerKind,
-    ParsedAgentId, Principal, ephemeral_invocation_phantom_id,
+    AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal,
+    InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal,
+    ephemeral_invocation_phantom_id,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
@@ -64,7 +65,8 @@ use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadHead, validate_file_read_path,
 };
 use golem_common::model::invocation_session_public::{
-    InvocationSelector, PublicConfigEntry, PublicNativeToolTarget, PublicTypedValue,
+    InvocationSelector, PublicConfigEntry, PublicErrorCode, PublicNativeToolTarget,
+    PublicTypedValue,
 };
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
@@ -73,6 +75,7 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
@@ -144,6 +147,54 @@ fn public_input_graph(graph: &SchemaGraph, input_schema: &InputSchema) -> Schema
         defs: graph.defs.clone(),
         root: SchemaType::record(fields),
     }
+}
+
+fn decode_public_agent_config(
+    graph: &SchemaGraph,
+    declarations: &[AgentConfigDeclarationSchema],
+    entries: Vec<PublicConfigEntry>,
+) -> Result<Vec<AgentConfigEntryDto>, PublicSchemaValueError> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let declaration = declarations
+                .iter()
+                .find(|declaration| {
+                    declaration.source == AgentConfigSource::Local && declaration.path == entry.path
+                })
+                .ok_or_else(|| {
+                    PublicSchemaValueError::new(
+                        PublicErrorCode::ValidationError,
+                        format!(
+                            "agent type does not declare local config {}",
+                            entry.path.join(".")
+                        ),
+                    )
+                })?;
+            let value = decode_public_json_schema_value(
+                graph,
+                &declaration.value_type,
+                &entry.value,
+                PublicStreamReferencePolicy::None,
+                |_, _| unreachable!("configuration stream references are disabled by policy"),
+            )?;
+            let value =
+                golem_schema::schema::render::to_json_value(graph, &declaration.value_type, &value)
+                    .map_err(|error| {
+                        PublicSchemaValueError::new(
+                            PublicErrorCode::ValidationError,
+                            format!(
+                                "config value for path {} cannot be encoded canonically: {error}",
+                                entry.path.join(".")
+                            ),
+                        )
+                    })?;
+            Ok(AgentConfigEntryDto {
+                path: entry.path,
+                value: NormalizedJsonValue::new(value),
+            })
+        })
+        .collect()
 }
 
 fn public_invocation_graph(
@@ -2011,15 +2062,6 @@ impl WorkerService {
         let agent_type_name = AgentTypeName(start.selector.agent_type);
         let method_name = start.selector.method;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
-        let config = start
-            .config
-            .into_iter()
-            .map(|entry| AgentConfigEntryDto {
-                path: entry.path,
-                value: NormalizedJsonValue::new(entry.value),
-            })
-            .collect::<Vec<_>>();
-
         let resolved = self
             .agent_resolution_cache
             .resolve(&app_name, &env_name, &agent_type_name, None, &auth)
@@ -2029,6 +2071,8 @@ impl WorkerService {
         let environment_id = resolved.environment_id;
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
+        let config =
+            decode_public_agent_config(&agent_type.schema, &agent_type.config, start.config)?;
         let constructor_graph =
             public_input_graph(&agent_type.schema, &agent_type.constructor.input_schema);
         let constructor_parameters = decode_public_json_schema_value(
@@ -3525,7 +3569,8 @@ mod tests {
     use super::{
         PublicAgentSessionStart, PublicAgentSessionStartError, WorkerService,
         agent_verb_for_invocation_mode, build_public_agent_id, build_public_invocation_agent_id,
-        decode_public_schema_value, normalize_agent_invocation_identity,
+        decode_public_agent_config, decode_public_schema_value,
+        normalize_agent_invocation_identity,
     };
     use crate::api::agents::{
         AgentInvocationMode, AgentInvocationRequest, CreateAgentRequest, NativeToolDescribeRequest,
@@ -3550,7 +3595,7 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
-        AgentMode, AgentTypeName, GolemUserPrincipal, HttpEndpointDetails,
+        AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal, HttpEndpointDetails,
         InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal, RegisteredAgentType,
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
         ephemeral_invocation_phantom_id,
@@ -3573,7 +3618,7 @@ mod tests {
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
-    use golem_common::model::invocation_session_public::InvocationSelector;
+    use golem_common::model::invocation_session_public::{InvocationSelector, PublicConfigEntry};
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::tool::{ToolBindingOwner, ToolName};
@@ -3584,6 +3629,7 @@ mod tests {
     use golem_common::model::{
         AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, ScanCursor, Timestamp,
     };
+    use golem_common::schema::agent::AgentConfigDeclarationSchema;
     use golem_common::schema::public_json::PublicStreamReference;
     use golem_common::schema::stream::SchemaValueStream;
     use golem_common::schema::{
@@ -3607,6 +3653,77 @@ mod tests {
             SchemaGraph::anonymous(golem_common::schema::SchemaType::record(vec![])),
             golem_common::schema::SchemaValue::Record { fields: vec![] },
         )
+    }
+
+    #[test]
+    fn public_agent_config_is_transcoded_to_canonical_json() {
+        let graph = SchemaGraph::anonymous(SchemaType::string());
+        let declarations = vec![
+            AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path: vec!["optional".to_string()],
+                value_type: SchemaType::option(SchemaType::string()),
+            },
+            AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path: vec!["result".to_string()],
+                value_type: SchemaType::result(golem_common::schema::ResultSpec {
+                    ok: Some(Box::new(SchemaType::string())),
+                    err: None,
+                }),
+            },
+            AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path: vec!["variant".to_string()],
+                value_type: SchemaType::variant(vec![golem_common::schema::VariantCaseType {
+                    name: "payload".to_string(),
+                    payload: Some(SchemaType::string()),
+                    metadata: Default::default(),
+                }]),
+            },
+            AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path: vec!["union".to_string()],
+                value_type: SchemaType::union(golem_common::schema::UnionSpec {
+                    branches: vec![golem_common::schema::UnionBranch {
+                        tag: "command".to_string(),
+                        body: SchemaType::string(),
+                        discriminator: golem_common::schema::DiscriminatorRule::Prefix {
+                            prefix: "cmd:".to_string(),
+                        },
+                        metadata: Default::default(),
+                    }],
+                }),
+            },
+        ];
+        let config = decode_public_agent_config(
+            &graph,
+            &declarations,
+            vec![
+                PublicConfigEntry {
+                    path: vec!["optional".to_string()],
+                    value: serde_json::json!({"$option": "some", "value": "west"}),
+                },
+                PublicConfigEntry {
+                    path: vec!["result".to_string()],
+                    value: serde_json::json!({"$result": "ok", "value": "ready"}),
+                },
+                PublicConfigEntry {
+                    path: vec!["variant".to_string()],
+                    value: serde_json::json!({"$case": "payload", "value": "value"}),
+                },
+                PublicConfigEntry {
+                    path: vec!["union".to_string()],
+                    value: serde_json::json!({"$union": "command", "value": "cmd:run"}),
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(config[0].value.0, serde_json::json!("west"));
+        assert_eq!(config[1].value.0, serde_json::json!({"ok": "ready"}));
+        assert_eq!(config[2].value.0, serde_json::json!({"payload": "value"}));
+        assert_eq!(config[3].value.0, serde_json::json!("cmd:run"));
     }
 
     struct TestAgentTypeResolver(AgentMode);
