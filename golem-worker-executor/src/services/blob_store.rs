@@ -180,7 +180,14 @@ impl DefaultBlobStoreService {
 
     fn object_path(container: &Path, object_name: &str) -> Result<PathBuf, BlobStoreError> {
         let object = Path::new(object_name);
-        if blob_path_is_root(object) {
+        if object.is_absolute() {
+            Err(BlobStoreError::InvalidInput(
+                BlobNameError::NotRelative {
+                    path: object.to_path_buf(),
+                }
+                .to_string(),
+            ))
+        } else if blob_path_is_root(object) {
             Err(BlobStoreError::InvalidInput(
                 BlobNameError::NoName {
                     path: PathBuf::new(),
@@ -1099,6 +1106,13 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(BlobStoreError::Other(_))));
+    }
+
+    #[test]
+    fn object_path_rejects_an_absolute_object_name() {
+        let result = DefaultBlobStoreService::object_path(Path::new("container"), "/object");
+
+        assert!(matches!(result, Err(BlobStoreError::InvalidInput(_))));
     }
 
     #[test]
