@@ -18,7 +18,8 @@
 //! against an in-memory double. What is only provable here is that the same lifecycle survives a
 //! real store: that a registration is durable, that a renewal moves the stored expiry rather than
 //! only the returned grant, that a lapsed lease is reclaimed from state that was read back out of
-//! the backend, and that a write refused by the compare-and-swap stops the loop on every backend.
+//! the backend and its shards handed to a live executor at a new epoch, and that a write refused by
+//! the compare-and-swap stops the loop on every backend.
 //!
 //! Every test is multiplied over the `persistence` dimension declared below, so each one runs as
 //! `<name>_sqlite`, `<name>_postgres` and `<name>_etcd`. The fixtures behind the dimension live in
@@ -31,15 +32,15 @@ use crate::etcd_backed::persistence::{
 use crate::shard_management::{TestHealthCheck, TestWorkerExecutors, executor, pod, shard_ids};
 use golem_common::model::ShardId;
 use golem_shard_manager::{
-    ExecutorAddr, RoutingTablePersistence, ShardEpoch, ShardLeaseState, ShardManagement,
-    ShardManagerError,
+    ExecutorAddr, ExecutorId, RoutingTablePersistence, ShardEpoch, ShardLeaseState,
+    ShardManagement, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{define_matrix_dimension, inherit_test_dep, test};
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
 
 inherit_test_dep!(Arc<DockerEtcd>);
@@ -119,6 +120,35 @@ fn all_shards() -> BTreeSet<ShardId> {
 
 fn holds_every_shard(shard_state: &ShardLeaseState) -> bool {
     shard_state.shards_for_executor(executor(1)) == Some(all_shards())
+}
+
+/// Executors 1 and 2 both hold shards, and none is unassigned or waiting to move.
+fn split_between_both(shard_state: &ShardLeaseState) -> bool {
+    let holds_some = |id| {
+        shard_state
+            .shards_for_executor(id)
+            .is_some_and(|shards| !shards.is_empty())
+    };
+    holds_some(executor(1))
+        && holds_some(executor(2))
+        && shard_state.get_unassigned_shards().is_empty()
+        && shard_state.pending_rebalance.is_empty()
+}
+
+/// Renews `executor_id`'s lease every half second until aborted, each time claiming the set the
+/// previous grant carried - which is how an executor adopts the shards the manager moved to it.
+fn keep_renewing(shard_management: ShardManagement, executor_id: ExecutorId) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut claimed = BTreeMap::new();
+        loop {
+            claimed = shard_management
+                .renew_shard_lease(executor_id, claimed)
+                .await
+                .expect("a live executor's renewal should have been accepted")
+                .shard_epochs;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
 }
 
 #[test]
@@ -267,6 +297,74 @@ async fn a_lapsed_lease_is_reclaimed_from_the_store(
         "the stored state broke its own invariants: {reclaimed}"
     );
 
+    join_set.abort_all();
+}
+
+#[test]
+#[tracing::instrument]
+// An executor that stops renewing must not keep its shards away from one that is still alive.
+// Nothing reports its departure - no deregistration, no failed health check - so the lapse alone
+// has to free the shards, and the loop's next tick has to hand them to the survivor at a new epoch.
+// Moving them at the old epoch would leave the executor that went silent able to write under it.
+async fn a_lapsed_lease_is_re_homed_to_a_live_executor(
+    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
+) {
+    let store = persistence.new_store().await;
+    let reader = client(&store).await;
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let (shard_management, mut join_set) = start(
+        client(&store).await,
+        worker_executors.clone(),
+        RECLAIM_LEASE_TTL,
+    )
+    .await;
+
+    for (idx, registering) in [(1, pod(1, 9000)), (2, pod(2, 9001))] {
+        shard_management
+            .register_executor(executor(idx), ExecutorAddr::from(registering), None)
+            .await
+            .expect("the registration should have been persisted");
+    }
+
+    // Both stay alive until the rebalance has settled, so what follows is decided by the lapse
+    // alone and not by how quickly this machine got through the registrations.
+    let lapsing = keep_renewing(shard_management.clone(), executor(1));
+    let surviving = keep_renewing(shard_management.clone(), executor(2));
+
+    let settled = wait_for_stored(&reader, "the shards to be split", split_between_both).await;
+    let lapsed_epochs: BTreeMap<ShardId, ShardEpoch> = settled
+        .shard_assignments
+        .iter()
+        .filter(|(_, entry)| entry.executor_id == executor(1))
+        .map(|(shard_id, entry)| (*shard_id, entry.epoch))
+        .collect();
+
+    lapsing.abort();
+
+    let re_homed = wait_for_stored(
+        &reader,
+        "the lapsed executor's shards to reach the survivor",
+        |s| s.executor_count() == 1 && s.shards_for_executor(executor(2)) == Some(all_shards()),
+    )
+    .await;
+
+    assert!(
+        !surviving.is_finished(),
+        "the surviving executor stopped renewing, so the outcome says nothing about re-homing"
+    );
+    for (shard_id, before) in &lapsed_epochs {
+        let after = re_homed.shard_assignments[shard_id].epoch;
+        assert!(
+            after > *before,
+            "shard {shard_id} reached the survivor without a new epoch ({before:?} -> {after:?})"
+        );
+    }
+    assert!(
+        re_homed.check_invariants().is_ok(),
+        "the stored state broke its own invariants: {re_homed}"
+    );
+
+    surviving.abort();
     join_set.abort_all();
 }
 

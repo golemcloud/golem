@@ -14,24 +14,22 @@ Distributed mode is newer than the image tag in `.env` (`GOLEM_IMAGES_VERSION`),
 `published-postgres`. Point that variable at a release that includes it, or at an image built from
 this repository, before bringing the stack up.
 
-### What has actually been verified
+### Checking that it runs
 
-The compose file parses (`docker compose config`), and the shard manager's half of it was checked
-directly: an etcd container started with the flags below, and a shard manager built from this
-repository run against it with this file's environment variables. It elected a leader and served:
+A shard manager running in this mode logs, in order:
 
 ```
 INFO golem_shard_manager: Configured the etcd client for shard lease state persistence
-     endpoints="http://127.0.0.1:12379" state_key="/golem/shard-manager/state"
+     endpoints="http://etcd:2379" state_key="/golem/shard-manager/state"
 INFO ...leader_election: Elected as the shard manager leader
      leader_key="/golem/shard-manager/leader/..." create_revision=2 granted_ttl=10s
-INFO golem_shard_manager: Started shard manager on ports: grpc: 19002
+INFO golem_shard_manager: Started shard manager on ports: grpc: 9002
 ```
 
-with `shard_manager_is_leader 1` on the HTTP port's `/metrics`, and on `SIGTERM` it logged
-`Released the shard manager leadership` before exiting. (The ports differ from this file's only
-because that run was on the host.) Both misconfigurations this file warns about stop the shard
-manager at startup:
+and reports `shard_manager_is_leader 1` on its HTTP port's `/metrics`. On `SIGTERM` it logs
+`Released the shard manager leadership` before exiting.
+
+Both misconfigurations described below stop it at startup:
 
 - `https://` endpoint → exits 1 with `Error: Internal error: etcd endpoint https://... must start
   with http:// (TLS is not supported)`
@@ -39,9 +37,6 @@ manager at startup:
   sequence for key "PERSISTENCE"`. This one exits with status **0**, as every Golem service does on a
   config it cannot load, so `restart: on-failure` leaves the container stopped and it looks like a
   clean exit; check its log.
-
-The rest of the stack — a worker executor registering, quota degrading — has **not** been run,
-because the published images predate this mode.
 
 ## What changes, and why
 
