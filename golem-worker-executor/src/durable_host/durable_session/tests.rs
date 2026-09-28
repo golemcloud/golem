@@ -355,6 +355,7 @@ async fn assert_fork_consumer_payloads(overlay_before_fork: bool) {
             timestamp: golem_common::model::Timestamp::now_utc(),
             entity_parent_start_index: None,
             record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+            summary: None,
         })
         .await;
     let stale = StreamSession::new(
@@ -544,6 +545,7 @@ async fn session_payload_reader_rejects_malformed_records_and_wrong_locators() {
             timestamp: golem_common::model::Timestamp::now_utc(),
             entity_parent_start_index: None,
             record: OplogPayload::Inline(Box::new(StreamSessionRecord::Prepared(prepared))),
+            summary: None,
         })
         .await;
     assert!(
@@ -9565,6 +9567,7 @@ async fn session_control_metadata_pages_history_and_reads_only_raw_suffix_after_
                     attempt_id,
                 },
             ))),
+            summary: None,
         })
         .await;
     // No commit: another local append must already be visible.
@@ -9760,6 +9763,7 @@ async fn finalization_after_retirement_requires_matching_committed_finished() {
                         result: Err(vec![1, 2, 3]),
                     },
                 ))),
+                summary: None,
             })
             .await;
         if committed {
@@ -9823,6 +9827,7 @@ async fn finished_in_raw_suffix_is_visible_and_cached() {
                     result: Err(vec![1, 2, 3]),
                 },
             ))),
+            summary: None,
         })
         .await;
 

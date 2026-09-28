@@ -14,8 +14,7 @@
 
 use golem_common::base_model::oplog::PublicSnapshotData;
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
-    PublicUpdateDescription, StringAttributeValue,
+    PluginInstallationDescription, PublicAgentInvocation, PublicOplogEntry, PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
 use golem_common::schema::render::value_to_cli_text;
@@ -66,6 +65,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     typed_schema_value_to_string(request)
                 );
             }
+            if let Some(span) = &params.span_started {
+                let _ = writeln!(result, "{pad}span started:      {span:?}");
+            }
         }
         PublicOplogEntry::End(params) => {
             let _ = writeln!(result, "END");
@@ -81,6 +83,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             if params.forced_commit {
                 let _ = writeln!(result, "{pad}forced commit:     true");
             }
+            if let Some(span) = &params.span_finished {
+                let _ = writeln!(result, "{pad}span finished:     {span:?}");
+            }
+            if let Some(attributes) = &params.span_attributes {
+                let _ = writeln!(result, "{pad}span attributes:   {attributes:?}");
+            }
         }
         PublicOplogEntry::Cancelled(params) => {
             let _ = writeln!(result, "CANCELLED");
@@ -92,6 +100,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     "{pad}partial result:    {}",
                     typed_schema_value_to_string(partial)
                 );
+            }
+            if let Some(span) = &params.span_finished {
+                let _ = writeln!(result, "{pad}span finished:     {span:?}");
             }
         }
         PublicOplogEntry::CompletionDiscarded(params) => {
@@ -359,46 +370,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "CANCEL INVOCATION");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}idempotency key:   {}", params.idempotency_key,);
-        }
-        PublicOplogEntry::StartSpan(params) => {
-            let _ = writeln!(result, "START SPAN");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}span id:           {}", params.span_id);
-            if let Some(parent_id) = &params.parent_id {
-                let _ = writeln!(result, "{pad}parent span:       {}", parent_id,);
-            }
-            if let Some(linked_id) = &params.linked_context {
-                let _ = writeln!(result, "{pad}linked span:       {}", linked_id,);
-            }
-            let _ = writeln!(result, "{pad}attributes:");
-            for attr in &params.attributes {
-                let _ = writeln!(
-                    result,
-                    "{pad}  - {}: {}",
-                    attr.key,
-                    match &attr.value {
-                        PublicAttributeValue::String(StringAttributeValue { value }) => value,
-                    }
-                );
-            }
-        }
-        PublicOplogEntry::FinishSpan(params) => {
-            let _ = writeln!(result, "FINISH SPAN");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}span id:           {}", params.span_id);
-        }
-        PublicOplogEntry::SetSpanAttribute(params) => {
-            let _ = writeln!(result, "SET SPAN ATTRIBUTE");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}span id:           {}", params.span_id);
-            let _ = writeln!(result, "{pad}key:               {}", params.key);
-            let _ = writeln!(
-                result,
-                "{pad}value:             {}",
-                match &params.value {
-                    PublicAttributeValue::String(StringAttributeValue { value }) => value,
-                }
-            );
         }
         PublicOplogEntry::BeginRemoteTransaction(params) => {
             let _ = writeln!(result, "BEGIN REMOTE TRANSACTION");

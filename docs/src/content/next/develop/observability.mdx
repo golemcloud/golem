@@ -29,6 +29,8 @@ The following plugin configuration keys are available:
 | `headers` | Custom HTTP headers |
 | `service-name-mode` | Either `agent-id` or `agent-type` |
 
+With `agent-type`, `service.name` is the agent type only. Constructor parameters and a phantom-agent instance ID are excluded, while `golem.agent.id` still identifies the full agent. This keeps service grouping stable and avoids unbounded service names.
+
 ### Custom spans
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
@@ -100,6 +102,8 @@ The following plugin configuration keys are available:
 
 Trace and span IDs are automatically propagated from inbound HTTP requests through code-first routes, and outgoing HTTP requests include standard **W3C trace headers** (`traceparent` / `tracestate`).
 
+Span openings, attribute changes, and completed or cancelled terminals are recorded with durable operations. A span may remain open across invocations and retains the trace context from where it started; closing it from a later invocation does not move it into that invocation's trace. Failed or retrying attempts do not close a surviving logical span.
+
 ### TypeScript `diagnostics_channel` integration
 
 For TypeScript agents, invocation context is wired to `node:diagnostics_channel`, enabling integration with Node.js tracing utilities:
@@ -129,7 +133,9 @@ const context = Effect.gen(function* () {
 
 ### Logs
 
-When log exporting is enabled via the `signals` parameter, `stdout`/`stderr` output and dedicated log calls are forwarded to the OTLP collector. Standard logging APIs work out of the box — `console.log` in TypeScript, `println!` in Rust, and so on.
+When log exporting is enabled via the `signals` parameter, `stdout`/`stderr` output and dedicated log calls are forwarded to the OTLP collector. Standard logging APIs work out of the box — `console.log` in TypeScript, `println!` in Rust, and so on. Exported logs use the trace context recorded with the log rather than the invocation current when the exporter processes it.
+
+P3 standard output is buffered. Its context is captured when the host emits the buffered chunk, which can be later than the guest write and can use a different current span.
 
 ### Metrics
 
@@ -137,23 +143,35 @@ The following metrics are exported per agent:
 
 | Metric Name | Type | Description |
 | --- | --- | --- |
-| `golem_invocation_count` | Counter | Number of agent method invocations |
-| `golem_invocation_duration_ns` | Counter | Invocation duration in nanoseconds |
-| `golem_invocation_fuel_consumed` | Counter | Fuel consumed per invocation |
-| `golem_invocation_pending_count` | Counter | Pending invocations |
-| `golem_exit_count` | Counter | Process exit signals |
-| `golem_restart_count` | Counter | Fresh state creations |
-| `golem_resources_created` | Counter | Internal resources created |
-| `golem_resources_dropped` | Counter | Internal resources dropped |
-| `golem_resources_active` | Gauge | Active internal resources |
-| `golem_update_success_count` | Counter | Successful updates |
-| `golem_update_failure_count` | Counter | Failed updates |
+| `golem.invocation.count` | Counter | Number of agent invocations |
+| `golem.invocation.duration_ns` | Counter | Invocation duration in nanoseconds |
+| `golem.invocation.fuel_consumed` | Counter | Fuel consumed per invocation |
+| `golem.invocation.pending_count` | Counter | Pending invocation records |
+| `golem.exit.count` | Counter | Process exit signals |
+| `golem.restart.count` | Counter | Restart records |
+| `golem.resources.created` | Counter | Internal resources created |
+| `golem.resources.dropped` | Counter | Internal resources dropped |
+| `golem.resources.active` | Gauge | Active internal resources |
+| `golem.memory.total_bytes` | Gauge | Current total linear memory |
+| `golem.update.success_count` | Counter | Successful updates |
+| `golem.update.failure_count` | Counter | Failed updates |
+| `golem.durable_stream.event_count` | Counter | Stream lifecycle records and logical items, distinguished by the `event` attribute |
 
-Each metric includes the following labels: `service.name`, `golem.agent.id`, `golem.component.id`, and `golem.component.version`.
+Each metric resource includes `service.name`, `golem.agent.id`, `golem.component.id`, and `golem.component.version`. Collector backends may normalize dotted metric names to underscores.
+
+Metric data-point dimensions are intentionally bounded. Active resource and memory values are gauges; individual resource IDs, stream IDs, and payload values are not data-point attributes. The agent identity remains a resource attribute.
+
+### Delivery and history semantics
+
+OTLP delivery is best effort. Once a source batch is accepted, exporter lifecycle state advances even if the collector rejects a request. Traces, logs, and metrics are attempted independently, so one failed signal does not prevent attempts for the others. A later batch is not a reliable retry of failed collector delivery, and a collector may observe duplicates after an ambiguous request or crash.
+
+Exactly-once oplog batch delivery to a plugin is **not** exactly-once delivery to the collector. Switching the plugin instance can currently lose in-memory state for spans opened before the switch; continuity across plugin instances is deferred to GOL-667. Do not switch instances while relying on open-span continuity.
+
+Fork and revert update pending state to match retained history, but OpenTelemetry cannot retract telemetry a collector already accepted. Source deletion sends no terminal lifecycle signal to the exporter, so it does not fabricate a successful close for open spans.
 
 ### Oplog processor plugins
 
-The OTLP exporter is a built-in **oplog processor plugin**. Custom oplog processor plugins can be written in Rust by implementing the `process-oplog-entries` interface. Golem guarantees **exactly-once delivery** of oplog entries to plugins.
+The OTLP exporter is a built-in **oplog processor plugin**. Custom oplog processor plugins can be written in Rust by implementing the `process-oplog-entries` interface. Golem guarantees **exactly-once delivery** of oplog entries to plugins. This guarantee ends at the plugin boundary; OTLP collector delivery is described above.
 
 Plugins can be installed per-component and activated or deactivated per-agent via the CLI:
 

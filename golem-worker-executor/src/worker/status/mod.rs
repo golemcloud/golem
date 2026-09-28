@@ -886,15 +886,6 @@ fn calculate_latest_worker_status(
             OplogEntry::DeactivatePlugin { .. } => {}
             OplogEntry::Revert { .. } => {}
             OplogEntry::CancelPendingInvocation { .. } => {}
-            OplogEntry::StartSpan { .. } => {
-                current_status = AgentStatus::Running;
-            }
-            OplogEntry::FinishSpan { .. } => {
-                current_status = AgentStatus::Running;
-            }
-            OplogEntry::SetSpanAttribute { .. } => {
-                current_status = AgentStatus::Running;
-            }
             OplogEntry::BeginRemoteTransaction { .. } => {
                 current_status = AgentStatus::Running;
             }

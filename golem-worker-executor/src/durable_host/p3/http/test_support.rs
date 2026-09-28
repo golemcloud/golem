@@ -132,17 +132,17 @@ impl Oplog for FrameTestOplog {
         Box::pin(async move { index })
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> crate::services::oplog::OplogAddPairReceipt {
         let mut entries = self.entries.lock().unwrap();
         entries.push(start);
         let first_idx = OplogIndex::from_u64(entries.len() as u64);
         entries.push(make_second(first_idx));
         let second_idx = OplogIndex::from_u64(entries.len() as u64);
-        (first_idx, second_idx)
+        Box::pin(async move { (first_idx, second_idx) })
     }
 
     async fn add_start_with_reserved_raw_payload(

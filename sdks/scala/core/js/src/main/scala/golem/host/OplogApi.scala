@@ -68,6 +68,31 @@ object OplogApi {
     wrappedFunctionType: DurabilityApi.DurableFunctionType
   )
 
+  enum SpanKind {
+    case Internal, Client, Server
+  }
+
+  enum SpanOutcome {
+    case Completed, Failed, Cancelled, Abandoned, Denied
+  }
+
+  final case class SpanLink(traceId: String, spanId: String, traceStates: List[String])
+
+  final case class SpanStarted(
+    spanId: String,
+    traceId: String,
+    traceStates: List[String],
+    parentSpanId: Option[String],
+    links: List[SpanLink],
+    startedAt: ContextApi.DateTime,
+    attributes: List[ContextApi.Attribute],
+    kind: SpanKind
+  )
+
+  final case class SpanFinished(spanId: String, finishedAt: ContextApi.DateTime, outcome: SpanOutcome)
+
+  final case class SpanAttributes(spanId: String, attributes: List[ContextApi.Attribute])
+
   final case class StartParameters(
     timestamp: ContextApi.DateTime,
     parentStartIndex: Option[OplogIndex],
@@ -75,20 +100,24 @@ object OplogApi {
     invocationId: Option[Uuid],
     observationalOwner: Option[OplogIndex],
     request: Option[TypedSchemaValue],
-    wrappedFunctionType: DurabilityApi.DurableFunctionType
+    wrappedFunctionType: DurabilityApi.DurableFunctionType,
+    spanStarted: Option[SpanStarted] = None
   )
 
   final case class EndParameters(
     timestamp: ContextApi.DateTime,
     startIndex: OplogIndex,
     response: Option[TypedSchemaValue],
-    forcedCommit: Boolean
+    forcedCommit: Boolean,
+    spanFinished: Option[SpanFinished] = None,
+    spanAttributes: Option[SpanAttributes] = None
   )
 
   final case class CancelledParameters(
     timestamp: ContextApi.DateTime,
     startIndex: OplogIndex,
-    partial: Option[TypedSchemaValue]
+    partial: Option[TypedSchemaValue],
+    spanFinished: Option[SpanFinished] = None
   )
 
   final case class CompletionDiscardedParameters(
@@ -280,11 +309,14 @@ object OplogApi {
     }
   }
 
+  final case class LogTraceContext(traceId: String, spanId: String)
+
   final case class LogParameters(
     timestamp: ContextApi.DateTime,
     level: LogLevel,
     context: String,
-    message: String
+    message: String,
+    traceContext: Option[LogTraceContext]
   )
 
   final case class ActivatePluginParameters(
@@ -306,26 +338,6 @@ object OplogApi {
   final case class CancelPendingInvocationParameters(
     timestamp: ContextApi.DateTime,
     idempotencyKey: String
-  )
-
-  final case class StartSpanParameters(
-    timestamp: ContextApi.DateTime,
-    spanId: String,
-    parent: Option[String],
-    linkedContext: Option[String],
-    attributes: List[ContextApi.Attribute]
-  )
-
-  final case class FinishSpanParameters(
-    timestamp: ContextApi.DateTime,
-    spanId: String
-  )
-
-  final case class SetSpanAttributeParameters(
-    timestamp: ContextApi.DateTime,
-    spanId: String,
-    key: String,
-    value: ContextApi.AttributeValue
   )
 
   final case class BeginRemoteTransactionParameters(
@@ -449,15 +461,6 @@ object OplogApi {
     final case class CancelPendingInvocation(params: CancelPendingInvocationParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
-    final case class StartSpan(params: StartSpanParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
-    final case class FinishSpan(params: FinishSpanParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
-    final case class SetSpanAttribute(params: SetSpanAttributeParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
     final case class BeginRemoteTransaction(params: BeginRemoteTransactionParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
@@ -565,10 +568,6 @@ object OplogApi {
           CancelPendingInvocation(
             parseCancelPendingInvocationParameters(v.asInstanceOf[JsCancelPendingInvocationParameters])
           )
-        case "start-span"         => StartSpan(parseStartSpanParameters(v.asInstanceOf[JsStartSpanParameters]))
-        case "finish-span"        => FinishSpan(parseFinishSpanParameters(v.asInstanceOf[JsFinishSpanParameters]))
-        case "set-span-attribute" =>
-          SetSpanAttribute(parseSetSpanAttributeParameters(v.asInstanceOf[JsSetSpanAttributeParameters]))
         case "begin-remote-transaction" =>
           BeginRemoteTransaction(
             parseBeginRemoteTransactionParameters(v.asInstanceOf[JsBeginRemoteTransactionParameters])
@@ -664,7 +663,8 @@ object OplogApi {
         raw.invocationId.toOption.map(id => Uuid(BigInt(id.highBits.toString), BigInt(id.lowBits.toString))),
       observationalOwner = raw.observationalOwner.toOption.map(index => BigInt(index.toString)),
       request = raw.request.toOption.map(typedFromJs),
-      wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
+      wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType),
+      spanStarted = raw.spanStarted.toOption.map(parseSpanStarted)
     )
 
   private def parseEndParameters(raw: JsEndParameters): EndParameters =
@@ -672,15 +672,39 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
       response = raw.response.toOption.map(typedFromJs),
-      forcedCommit = raw.forcedCommit
+      forcedCommit = raw.forcedCommit,
+      spanFinished = raw.spanFinished.toOption.map(parseSpanFinished),
+      spanAttributes = raw.spanAttributes.toOption.map(parseSpanAttributes)
     )
 
   private def parseCancelledParameters(raw: JsCancelledParameters): CancelledParameters =
     CancelledParameters(
       timestamp = parseDateTime(raw.timestamp),
       startIndex = BigInt(raw.startIndex.toString),
-      partial = raw.partial.toOption.map(typedFromJs)
+      partial = raw.partial.toOption.map(typedFromJs),
+      spanFinished = raw.spanFinished.toOption.map(parseSpanFinished)
     )
+
+  private def parseAttributes(raw: js.Array[JsAttribute]): List[ContextApi.Attribute] =
+    raw.toList.map(a => ContextApi.Attribute(a.key, ContextApi.AttributeValue.fromJs(a.value)))
+
+  private def parseSpanStarted(raw: JsSpanStarted): SpanStarted =
+    SpanStarted(
+      raw.spanId,
+      raw.traceId,
+      raw.traceStates.toList,
+      raw.parentSpanId.toOption,
+      raw.links.toList.map(l => SpanLink(l.traceId, l.spanId, l.traceStates.toList)),
+      parseDateTime(raw.startedAt),
+      parseAttributes(raw.attributes),
+      SpanKind.valueOf(raw.kind.capitalize)
+    )
+
+  private def parseSpanFinished(raw: JsSpanFinished): SpanFinished =
+    SpanFinished(raw.spanId, parseDateTime(raw.finishedAt), SpanOutcome.valueOf(raw.outcome.capitalize))
+
+  private def parseSpanAttributes(raw: JsSpanAttributes): SpanAttributes =
+    SpanAttributes(raw.spanId, parseAttributes(raw.attributes))
 
   private def parseCompletionDiscardedParameters(
     raw: JsCompletionDiscardedParameters
@@ -984,7 +1008,8 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       level = LogLevel.fromString(raw.level),
       context = raw.context,
-      message = raw.message
+      message = raw.message,
+      traceContext = raw.traceContext.toOption.map(context => LogTraceContext(context.traceId, context.spanId))
     )
 
   private def parseActivatePluginParameters(raw: JsActivatePluginParameters): ActivatePluginParameters =
@@ -1012,31 +1037,6 @@ object OplogApi {
     CancelPendingInvocationParameters(
       timestamp = parseDateTime(raw.timestamp),
       idempotencyKey = raw.idempotencyKey
-    )
-
-  private def parseStartSpanParameters(raw: JsStartSpanParameters): StartSpanParameters =
-    StartSpanParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      spanId = raw.spanId,
-      parent = raw.parent.toOption,
-      linkedContext = raw.linkedContextId.toOption,
-      attributes = raw.attributes.toList.map { a =>
-        ContextApi.Attribute(a.key, ContextApi.AttributeValue.fromJs(a.value))
-      }
-    )
-
-  private def parseFinishSpanParameters(raw: JsFinishSpanParameters): FinishSpanParameters =
-    FinishSpanParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      spanId = raw.spanId
-    )
-
-  private def parseSetSpanAttributeParameters(raw: JsSetSpanAttributeParameters): SetSpanAttributeParameters =
-    SetSpanAttributeParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      spanId = raw.spanId,
-      key = raw.key,
-      value = ContextApi.AttributeValue.fromJs(raw.value)
     )
 
   private def parseBeginRemoteTransactionParameters(

@@ -426,12 +426,12 @@ mod tests {
             Box::pin(async { unreachable!("oplog is unused by promise waits") })
         }
 
-        async fn add_pair(
+        fn enqueue_add_pair(
             &self,
             _start: OplogEntry,
             _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        ) -> (OplogIndex, OplogIndex) {
-            unreachable!("oplog is unused by promise waits")
+        ) -> crate::services::oplog::OplogAddPairReceipt {
+            Box::pin(async { unreachable!("oplog is unused by promise waits") })
         }
 
         async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
@@ -678,12 +678,12 @@ mod tests {
             Box::pin(async { unreachable!("oplog writes are unused by wakeup scheduling") })
         }
 
-        async fn add_pair(
+        fn enqueue_add_pair(
             &self,
             _start: OplogEntry,
             _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-        ) -> (OplogIndex, OplogIndex) {
-            unreachable!("oplog writes are unused by wakeup scheduling")
+        ) -> crate::services::oplog::OplogAddPairReceipt {
+            Box::pin(async { unreachable!("oplog writes are unused by wakeup scheduling") })
         }
 
         async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
