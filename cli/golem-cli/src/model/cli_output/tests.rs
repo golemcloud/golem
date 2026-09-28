@@ -5666,7 +5666,7 @@ fn arb_environment_setup_plan() -> BoxedStrategy<crate::model::deploy::Environme
                         secret_value: json!("generated-secret"),
                     },
                 ],
-                skipped_existing_agent_secret_defaults: vec![
+                replaceable_agent_secret_defaults: vec![
                     golem_common::model::deployment::DeploymentAgentSecretDefault {
                         path: secret_path,
                         secret_value: json!("existing-secret"),

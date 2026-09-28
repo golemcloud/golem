@@ -6139,7 +6139,7 @@
       "required": [
         "display",
         "agentSecretDefaults",
-        "skippedExistingAgentSecretDefaults",
+        "replaceableAgentSecretDefaults",
         "retryPolicyDefaults",
         "resourceDefaults"
       ],
@@ -6149,7 +6149,7 @@
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
-        "skippedExistingAgentSecretDefaults": {
+        "replaceableAgentSecretDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
