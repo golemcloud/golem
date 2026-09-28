@@ -3262,6 +3262,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     None => None,
                 };
                 let record = PeriodicSnapshotRecord::new(capture);
+                if record.skipped() {
+                    record.abandon().await;
+                    return CommandOutcome::Continue;
+                }
                 let serialized = golem_common::serialization::serialize(&snapshot.data);
                 match serialized {
                     Ok(serialized_bytes) => {
@@ -3502,7 +3506,7 @@ impl PeriodicSnapshotRecord {
     /// The filesystem snapshot name of the record.
     fn name(&self) -> Option<FilesystemSnapshotName> {
         match &self.plan {
-            PeriodicRecord::WithoutName => None,
+            PeriodicRecord::Skipped | PeriodicRecord::WithoutName => None,
             PeriodicRecord::Uploaded { .. } => self
                 .upload
                 .as_ref()
@@ -3515,8 +3519,15 @@ impl PeriodicSnapshotRecord {
     fn confirmed_at_once(&self) -> Option<FilesystemSnapshotName> {
         match &self.plan {
             PeriodicRecord::Reused(name) => Some(name.clone()),
-            PeriodicRecord::WithoutName | PeriodicRecord::Uploaded { .. } => None,
+            PeriodicRecord::Skipped
+            | PeriodicRecord::WithoutName
+            | PeriodicRecord::Uploaded { .. } => None,
         }
+    }
+
+    /// Whether no record is written.
+    fn skipped(&self) -> bool {
+        self.plan == PeriodicRecord::Skipped
     }
 
     /// Drops the admission and discards the capture of a record that was not written.

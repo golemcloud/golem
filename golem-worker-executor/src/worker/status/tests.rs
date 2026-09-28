@@ -1733,9 +1733,12 @@ async fn a_new_snapshot_after_an_unconfirmed_candidate_keeps_the_older_usable_sn
 
 #[test]
 async fn a_record_that_reuses_a_confirmed_name_is_confirmed_and_keeps_the_older_record() {
+    let older = FilesystemSnapshotName::periodic();
     let name = FilesystemSnapshotName::periodic();
 
     let test_case = TestCase::builder(1)
+        .snapshot_with_filesystem(Some(older.clone()))
+        .snapshot_confirmed(older.clone(), true)
         .snapshot_with_filesystem(Some(name.clone()))
         .snapshot_confirmed(name.clone(), true)
         .snapshot_with_filesystem(Some(name.clone()))
@@ -1745,15 +1748,15 @@ async fn a_record_that_reuses_a_confirmed_name_is_confirmed_and_keeps_the_older_
 
     assert_eq!(
         final_status.last_automatic_snapshot_index,
-        Some(OplogIndex::from_u64(4))
+        Some(OplogIndex::from_u64(6))
     );
     assert!(final_status.last_automatic_snapshot_confirmed);
     assert_eq!(
         final_status
             .previous_usable_automatic_snapshot
             .as_ref()
-            .map(|snapshot| snapshot.index),
-        Some(OplogIndex::from_u64(2))
+            .map(|snapshot| (snapshot.index, snapshot.filesystem_snapshot.clone())),
+        Some((OplogIndex::from_u64(2), Some(older)))
     );
     run_test_case(test_case).await;
 }
@@ -2242,11 +2245,14 @@ impl TestCaseBuilder {
                 filesystem_snapshot: filesystem_snapshot.clone(),
             },
             move |mut status| {
+                let reuses_name = filesystem_snapshot.is_some()
+                    && filesystem_snapshot == status.last_automatic_snapshot_filesystem_snapshot;
                 if let (Some(index), Some(component_revision)) = (
                     status.last_automatic_snapshot_index,
                     status.last_automatic_snapshot_component_revision,
-                ) && (status.last_automatic_snapshot_confirmed
-                    || status.last_automatic_snapshot_filesystem_snapshot.is_none())
+                ) && !reuses_name
+                    && (status.last_automatic_snapshot_confirmed
+                        || status.last_automatic_snapshot_filesystem_snapshot.is_none())
                 {
                     status.previous_usable_automatic_snapshot = Some(UsableAutomaticSnapshot {
                         index,

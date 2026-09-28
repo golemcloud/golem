@@ -128,6 +128,9 @@ pub(crate) enum CaptureFinding {
 /// The name that a periodic snapshot record gets.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PeriodicRecord {
+    /// No record is written: the capture found no change against a confirmed snapshot that it
+    /// did not have.
+    Skipped,
     /// The record has no name. Nothing is uploaded.
     WithoutName,
     /// The record has the name of the admission, and the capture is uploaded with `parent`.
@@ -146,9 +149,8 @@ pub(crate) fn plan_periodic_record(
 ) -> PeriodicRecord {
     match (finding, since) {
         (CaptureFinding::Unchanged, Some(since)) => PeriodicRecord::Reused(since.name.clone()),
-        (CaptureFinding::Unchanged, None) | (CaptureFinding::InitialFiles, _) => {
-            PeriodicRecord::WithoutName
-        }
+        (CaptureFinding::Unchanged, None) => PeriodicRecord::Skipped,
+        (CaptureFinding::InitialFiles, _) => PeriodicRecord::WithoutName,
         (CaptureFinding::Captured(ChangeDetection::SizeMtime), Some(since)) => {
             PeriodicRecord::Uploaded {
                 parent: Some((since.name.clone(), StoreChangeDetection::SizeMtime)),
@@ -274,6 +276,7 @@ mod tests {
 
         let cases = [
             plan_periodic_record(CaptureFinding::Unchanged, Some(&since)),
+            plan_periodic_record(CaptureFinding::Unchanged, None),
             plan_periodic_record(CaptureFinding::InitialFiles, Some(&since)),
             plan_periodic_record(CaptureFinding::InitialFiles, None),
             plan_periodic_record(
@@ -291,6 +294,7 @@ mod tests {
             cases,
             [
                 PeriodicRecord::Reused(name.clone()),
+                PeriodicRecord::Skipped,
                 PeriodicRecord::WithoutName,
                 PeriodicRecord::WithoutName,
                 PeriodicRecord::Uploaded {

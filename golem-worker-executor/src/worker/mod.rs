@@ -4368,10 +4368,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// start first waits for its decision, for at most `confirmation_wait`. Then, unless the
     /// upload gave `Superseded`, the start asks the store once whether it holds the whole
     /// snapshot, for at most what is left of `confirmation_wait` after a wait, or at most
-    /// `store_check_limit` without one. When it does, the start writes the confirmation record as the owner of the
-    /// agent, while the instance waits for its permits with this start attempt. A terminal
-    /// interrupt ends the wait and the check. This start holds no slot, no memory and no lock
-    /// while it waits.
+    /// `store_check_limit` without one. When it does, the start writes the confirmation record
+    /// as the owner of the agent: while the instance waits for its permits with this start
+    /// attempt, the status is attached, no retirement of the owner is requested, and the shard
+    /// admits the agent. A terminal interrupt ends the wait and the check. This start holds no
+    /// slot, no memory and no lock while it waits.
     async fn confirm_filesystem_snapshot_before_start(self: &Arc<Self>, start_attempt: Uuid) {
         let snapshots = self.agent_filesystem_snapshots();
         let Some((limit, check_limit)) = snapshots
@@ -4469,6 +4470,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             WorkerInstance::WaitingForPermit(waiting) if waiting.start_attempt == start_attempt
         ) || self.terminal_interrupt_pending().await
             || self.last_known_status_detached.load(Ordering::Acquire)
+            || self.owner_retirement_requested.is_cancelled()
             || self
                 .shard_service()
                 .check_admission(&self.owned_agent_id.agent_id)

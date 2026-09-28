@@ -1497,11 +1497,16 @@ fn calculate_update_fields(
                 filesystem_snapshot,
                 ..
             } => {
+                // A record that reuses the name of the candidate holds the same tree, so the
+                // older usable record stays the fallback.
+                let reuses_name = filesystem_snapshot.is_some()
+                    && *filesystem_snapshot == last_automatic_snapshot_filesystem_snapshot;
                 if let (Some(index), Some(component_revision)) = (
                     last_automatic_snapshot_index,
                     last_automatic_snapshot_component_revision,
-                ) && (last_automatic_snapshot_confirmed
-                    || last_automatic_snapshot_filesystem_snapshot.is_none())
+                ) && !reuses_name
+                    && (last_automatic_snapshot_confirmed
+                        || last_automatic_snapshot_filesystem_snapshot.is_none())
                 {
                     previous_usable_automatic_snapshot = Some(UsableAutomaticSnapshot {
                         index,
