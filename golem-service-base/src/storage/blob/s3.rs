@@ -149,15 +149,7 @@ impl S3BlobStorage {
             }
         };
 
-        if self.config.object_prefix.is_empty() {
-            namespace_prefix
-        } else {
-            format!(
-                "{}/{}",
-                self.config.object_prefix.trim_end_matches('/'),
-                namespace_prefix
-            )
-        }
+        join_blob_key(&self.config.object_prefix, &namespace_prefix)
     }
 
     fn key_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> Result<String, Error> {
@@ -168,10 +160,6 @@ impl S3BlobStorage {
         } else {
             Ok(join_blob_key(&namespace_root, &path))
         }
-    }
-
-    fn child_key(parent: &str, child: &str) -> String {
-        join_blob_key(parent, child)
     }
 
     fn listed_path(namespace_root: &str, directory_key: &str, object_key: &str) -> Option<PathBuf> {
@@ -531,7 +519,7 @@ impl BlobStorage for S3BlobStorage {
             .checked_add(length - 1)
             .ok_or_else(|| anyhow!("Blob range overflow"))?;
         let bucket = self.bucket_of(&namespace);
-        let key = blob_path_to_string(&self.prefix_of(&namespace).join(path))?;
+        let key = self.key_of(&namespace, path)?;
         let result = with_retries_customized(
             target_label,
             op_label,
@@ -683,7 +671,7 @@ impl BlobStorage for S3BlobStorage {
             })),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
-                    let marker = Self::child_key(&key, "__dir_marker");
+                    let marker = join_blob_key(&key, "__dir_marker");
                     let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
@@ -939,7 +927,7 @@ impl BlobStorage for S3BlobStorage {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.key_of(&namespace, path)?;
-        let marker = Self::child_key(&key, "__dir_marker");
+        let marker = join_blob_key(&key, "__dir_marker");
 
         with_retries_customized(
             target_label,
@@ -1085,7 +1073,7 @@ impl BlobStorage for S3BlobStorage {
             Ok(_) => Ok(ExistsResult::File),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
-                    let marker = Self::child_key(&key, "__dir_marker");
+                    let marker = join_blob_key(&key, "__dir_marker");
                     let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
@@ -1484,7 +1472,7 @@ mod tests {
             storage
                 .key_of(
                     &namespace,
-                    &crate::storage::blob::join_blob_path("photos", "cat.png")
+                    &crate::storage::blob::join_blob_path("photos", "cat.png").unwrap()
                 )
                 .unwrap(),
             "root/prefix/4c8c5ff4-2a42-4e81-ac48-e63005f609fd/photos/cat.png"
@@ -1515,13 +1503,13 @@ mod tests {
             "photos/cat.png"
         );
         assert_eq!(
-            S3BlobStorage::child_key(&trailing_slash_key, "__dir_marker"),
+            join_blob_key(&trailing_slash_key, "__dir_marker"),
             format!("{directory_key}/__dir_marker")
         );
         let root_key = storage.key_of(&namespace, Path::new("")).unwrap();
         assert_eq!(root_key, namespace_root);
         assert_eq!(
-            S3BlobStorage::child_key(&root_key, "__dir_marker"),
+            join_blob_key(&root_key, "__dir_marker"),
             format!("{namespace_root}/__dir_marker")
         );
 

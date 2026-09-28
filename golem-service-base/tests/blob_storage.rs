@@ -980,7 +980,7 @@ async fn create_delete_exists_dir_and_file(
             "create_delete_exists_dir_and_file",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file"),
+            &join_blob_path("test-dir", "test-file").unwrap(),
             &Bytes::from("test-data"),
         )
         .await
@@ -999,7 +999,7 @@ async fn create_delete_exists_dir_and_file(
             "create_delete_exists_dir_and_file",
             "exists-3",
             namespace.clone(),
-            &path.join("test-file"),
+            &join_blob_path("test-dir", "test-file").unwrap(),
         )
         .await
         .unwrap();
@@ -1046,7 +1046,7 @@ async fn list_dir(
             "list_dir",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file1"),
+            &join_blob_path("test-dir", "test-file1").unwrap(),
             &Bytes::from("test-data1"),
         )
         .await
@@ -1056,7 +1056,7 @@ async fn list_dir(
             "list_dir",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file2"),
+            &join_blob_path("test-dir", "test-file2").unwrap(),
             &Bytes::from("test-data2"),
         )
         .await
@@ -1066,7 +1066,7 @@ async fn list_dir(
             "list_dir",
             "create-dir",
             namespace.clone(),
-            &path.join("inner-dir"),
+            &join_blob_path("test-dir", "inner-dir").unwrap(),
         )
         .await
         .unwrap();
@@ -1105,7 +1105,7 @@ async fn delete_many(
             "delete_many",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file1"),
+            &join_blob_path("test-dir", "test-file1").unwrap(),
             &Bytes::from("test-data1"),
         )
         .await
@@ -1115,7 +1115,7 @@ async fn delete_many(
             "delete_many",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file2"),
+            &join_blob_path("test-dir", "test-file2").unwrap(),
             &Bytes::from("test-data2"),
         )
         .await
@@ -1125,7 +1125,7 @@ async fn delete_many(
             "delete_many",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file3"),
+            &join_blob_path("test-dir", "test-file3").unwrap(),
             &Bytes::from("test-data3"),
         )
         .await
@@ -1135,7 +1135,7 @@ async fn delete_many(
             "delete_many",
             "create-dir",
             namespace.clone(),
-            &path.join("inner-dir"),
+            &join_blob_path("test-dir", "inner-dir").unwrap(),
         )
         .await
         .unwrap();
@@ -1144,7 +1144,10 @@ async fn delete_many(
             "delete_many",
             "delete-many",
             namespace.clone(),
-            &[path.join("test-file1"), path.join("test-file3")],
+            &[
+                join_blob_path("test-dir", "test-file1").unwrap(),
+                join_blob_path("test-dir", "test-file3").unwrap(),
+            ],
         )
         .await
         .unwrap();
@@ -1320,7 +1323,7 @@ async fn list_dir_same_prefix(
             "list_dir_same_prefix",
             "put-raw",
             namespace.clone(),
-            &path1.join("test-file1"),
+            &join_blob_path("test-dir", "test-file1").unwrap(),
             &Bytes::from("test-data1"),
         )
         .await
@@ -1330,7 +1333,7 @@ async fn list_dir_same_prefix(
             "list_dir_same_prefix",
             "put-raw",
             namespace.clone(),
-            &path1.join("test-file2"),
+            &join_blob_path("test-dir", "test-file2").unwrap(),
             &Bytes::from("test-data2"),
         )
         .await
@@ -1340,7 +1343,7 @@ async fn list_dir_same_prefix(
             "list_dir_same_prefix",
             "create-dir",
             namespace.clone(),
-            &path1.join("inner-dir"),
+            &join_blob_path("test-dir", "inner-dir").unwrap(),
         )
         .await
         .unwrap();
@@ -1370,14 +1373,13 @@ async fn delete_dir_must_not_delete_siblings(
     let storage = test.get_blob_storage().await;
 
     let dir_a = Path::new("dir-a");
-    let dir_b = Path::new("dir-b");
 
     storage
         .put_raw(
             "delete_dir_must_not_delete_siblings",
             "put-a",
             namespace.clone(),
-            &dir_a.join("file-a"),
+            &join_blob_path("dir-a", "file-a").unwrap(),
             &Bytes::from("data-a"),
         )
         .await
@@ -1388,7 +1390,7 @@ async fn delete_dir_must_not_delete_siblings(
             "delete_dir_must_not_delete_siblings",
             "put-b",
             namespace.clone(),
-            &dir_b.join("file-b"),
+            &join_blob_path("dir-b", "file-b").unwrap(),
             &Bytes::from("data-b"),
         )
         .await
@@ -1409,7 +1411,7 @@ async fn delete_dir_must_not_delete_siblings(
             "delete_dir_must_not_delete_siblings",
             "get-b",
             namespace.clone(),
-            &dir_b.join("file-b"),
+            &join_blob_path("dir-b", "file-b").unwrap(),
         )
         .await
         .unwrap();
@@ -1461,6 +1463,168 @@ async fn reject_parent_traversal_in_put_raw(
 
 #[test]
 #[tracing::instrument]
+async fn backslash_is_not_a_contract_path_separator(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let directory = Path::new("photos");
+    let object = Path::new(r"photos/animals\cat.png");
+
+    storage
+        .put_raw(
+            "backslash_is_not_a_contract_path_separator",
+            "put-raw",
+            namespace.clone(),
+            object,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .list_dir(
+                "backslash_is_not_a_contract_path_separator",
+                "list-dir",
+                namespace.clone(),
+                directory,
+            )
+            .await
+            .unwrap(),
+        vec![object.to_path_buf()]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn filesystem_codec_preserves_long_and_casefold_colliding_names(
+    #[tagged_as("fs")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let directory = Path::new("photos");
+    let long_name = "a".repeat(255);
+    let objects = [
+        join_blob_path("photos", "AAA").unwrap(),
+        join_blob_path("photos", "AA[").unwrap(),
+        join_blob_path("photos", &long_name).unwrap(),
+    ];
+
+    for (index, object) in objects.iter().enumerate() {
+        storage
+            .put_raw(
+                "filesystem_codec_preserves_long_and_casefold_colliding_names",
+                "put-raw",
+                namespace.clone(),
+                object,
+                index.to_string().as_bytes(),
+            )
+            .await
+            .unwrap();
+    }
+
+    let copy_source = join_blob_path("photos", "copy-source").unwrap();
+    let move_source = join_blob_path("photos", "move-source").unwrap();
+    let copy_destination = join_blob_path("photos", &"b".repeat(121)).unwrap();
+    let move_destination = join_blob_path("photos", &"c".repeat(255)).unwrap();
+    storage
+        .put_raw(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "put-copy-source",
+            namespace.clone(),
+            &copy_source,
+            b"copy",
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "put-move-source",
+            namespace.clone(),
+            &move_source,
+            b"move",
+        )
+        .await
+        .unwrap();
+    storage
+        .copy(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "copy",
+            namespace.clone(),
+            &copy_source,
+            &copy_destination,
+        )
+        .await
+        .unwrap();
+    storage
+        .r#move(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "move",
+            namespace.clone(),
+            &move_source,
+            &move_destination,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_raw(
+                "filesystem_codec_preserves_long_and_casefold_colliding_names",
+                "get-copy-destination",
+                namespace.clone(),
+                &copy_destination,
+            )
+            .await
+            .unwrap(),
+        Some(b"copy".to_vec())
+    );
+    assert_eq!(
+        storage
+            .get_raw(
+                "filesystem_codec_preserves_long_and_casefold_colliding_names",
+                "get-move-destination",
+                namespace.clone(),
+                &move_destination,
+            )
+            .await
+            .unwrap(),
+        Some(b"move".to_vec())
+    );
+    assert_eq!(
+        storage
+            .get_raw(
+                "filesystem_codec_preserves_long_and_casefold_colliding_names",
+                "get-move-source",
+                namespace.clone(),
+                &move_source,
+            )
+            .await
+            .unwrap(),
+        None
+    );
+
+    let mut listed = storage
+        .list_dir(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "list-dir",
+            namespace.clone(),
+            directory,
+        )
+        .await
+        .unwrap();
+    listed.sort();
+
+    let mut expected = objects.to_vec();
+    expected.extend([copy_source, copy_destination, move_destination]);
+    expected.sort();
+    assert_eq!(listed, expected);
+}
+
+#[test]
+#[tracing::instrument]
 async fn delete_dir_escapes_like_wildcards(
     #[tagged_as("sqlite")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
@@ -1468,14 +1632,13 @@ async fn delete_dir_escapes_like_wildcards(
     let storage = test.get_blob_storage().await;
 
     let wildcard_dir = Path::new("dir%name");
-    let sibling_dir = Path::new("dirXname");
 
     storage
         .put_raw(
             "delete_dir_escapes_like_wildcards",
             "put-a",
             namespace.clone(),
-            &wildcard_dir.join("file-a"),
+            &join_blob_path("dir%name", "file-a").unwrap(),
             &Bytes::from("data-a"),
         )
         .await
@@ -1486,7 +1649,7 @@ async fn delete_dir_escapes_like_wildcards(
             "delete_dir_escapes_like_wildcards",
             "put-b",
             namespace.clone(),
-            &sibling_dir.join("file-b"),
+            &join_blob_path("dirXname", "file-b").unwrap(),
             &Bytes::from("data-b"),
         )
         .await
@@ -1507,7 +1670,7 @@ async fn delete_dir_escapes_like_wildcards(
             "delete_dir_escapes_like_wildcards",
             "get-b",
             namespace.clone(),
-            &sibling_dir.join("file-b"),
+            &join_blob_path("dirXname", "file-b").unwrap(),
         )
         .await
         .unwrap();
@@ -1634,7 +1797,7 @@ async fn clear_then_list_objects(
             "clear_then_list_objects",
             "put-raw-1",
             namespace.clone(),
-            &container.join("obj1"),
+            &join_blob_path("my-container", "obj1").unwrap(),
             &Bytes::from("data1"),
         )
         .await
@@ -1644,7 +1807,7 @@ async fn clear_then_list_objects(
             "clear_then_list_objects",
             "put-raw-2",
             namespace.clone(),
-            &container.join("obj2"),
+            &join_blob_path("my-container", "obj2").unwrap(),
             &Bytes::from("data2"),
         )
         .await

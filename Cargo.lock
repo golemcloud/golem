@@ -4263,6 +4263,7 @@ dependencies = [
  "tower 0.5.3",
  "tracing",
  "tryhard",
+ "typed-path",
  "url",
  "uuid",
  "wasmtime",

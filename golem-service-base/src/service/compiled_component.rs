@@ -17,7 +17,7 @@ use crate::metrics::storage::{
     record_compilation_cache_bytes_written, record_compilation_cache_objects_written,
 };
 use crate::storage::blob::{
-    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, join_blob_path,
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, join_blob_key,
 };
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
@@ -117,10 +117,10 @@ impl DefaultCompiledComponentService {
         component_revision: ComponentRevision,
         artifact_fingerprint: &str,
     ) -> PathBuf {
-        join_blob_path(
+        PathBuf::from(join_blob_key(
             &format!("{component_id}/{component_revision}"),
             &format!("{artifact_fingerprint}.cwasm"),
-        )
+        ))
     }
 }
 
