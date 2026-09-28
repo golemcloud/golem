@@ -42,6 +42,7 @@ use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_session::{
     DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, strip_typed_streams,
 };
+use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::entity::{
     EntityInvocationDurability, EntityInvocationKeyContext, IncompleteLiveRepairBeforeBody,
     RecordedEntityTerminal, ToolInvocationReplayOutcome, encode_tool_terminal,
@@ -3967,13 +3968,13 @@ where
                 || result_streams
                     .persisted_result()
                     .await
-                    .map_err(anyhow::Error::msg)?
+                    .map_err(SessionError::into_trap)?
                     .is_some()
             {
                 result_streams
                     .complete()
                     .await
-                    .map_err(anyhow::Error::msg)?;
+                    .map_err(SessionError::into_trap)?;
             }
             if (stage_attachments || stdout_completion_only)
                 && let Some(stdout) = &stdout_controller
@@ -4024,13 +4025,13 @@ where
                 || result_streams
                     .persisted_result()
                     .await
-                    .map_err(anyhow::Error::msg)?
+                    .map_err(SessionError::into_trap)?
                     .is_some()
             {
                 result_streams
                     .fail("tool invocation was cancelled".to_string())
                     .await
-                    .map_err(anyhow::Error::msg)?;
+                    .map_err(SessionError::into_trap)?;
             }
             operation.settle().await;
             if no_body {
@@ -4653,7 +4654,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                         SchemaType::u8(),
                     )
                     .await
-                    .map_err(anyhow::Error::msg)?;
+                    .map_err(SessionError::into_trap)?;
             }
             Ok::<_, anyhow::Error>(())
         };
@@ -4687,7 +4688,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     prepared.attempt.invocation.target_component_revision,
                 )
                 .await
-                .map_err(wasmtime::Error::msg)?;
+                .map_err(|error| wasmtime::Error::from_anyhow(error.into_trap()))?;
         }
         result
             .send(response)

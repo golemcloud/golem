@@ -637,7 +637,11 @@ async fn completed_tool_positional_replay_errors(
     )?;
     live.await_result(&parent_id).await?;
     drop(primary);
-    active_agent.execution().commit(CommitLevel::Always).await;
+    active_agent
+        .execution()
+        .commit(CommitLevel::Always)
+        .await
+        .unwrap();
     let before = active_agent.execution().oplog().current_oplog_index().await;
 
     active_agent
@@ -881,7 +885,11 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
     )?;
     live.await_result(&parent_id).await?;
     drop(primary);
-    active_agent.execution().commit(CommitLevel::Always).await;
+    active_agent
+        .execution()
+        .commit(CommitLevel::Always)
+        .await
+        .unwrap();
 
     let live_tip = active_agent.execution().oplog().current_oplog_index().await;
     let live_entries = active_agent
@@ -1119,7 +1127,11 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
     )?;
     live.await_result(&parent_id).await?;
     drop(primary);
-    active_agent.execution().commit(CommitLevel::Always).await;
+    active_agent
+        .execution()
+        .commit(CommitLevel::Always)
+        .await
+        .unwrap();
     let live_tip = active_agent.execution().oplog().current_oplog_index().await;
     let entries = active_agent
         .execution()
@@ -2492,7 +2504,11 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
     )?;
     let live_result = live.await_result(&parent_id).await?;
     drop(primary);
-    active_agent.execution().commit(CommitLevel::Always).await;
+    active_agent
+        .execution()
+        .commit(CommitLevel::Always)
+        .await
+        .unwrap();
 
     active_agent
         .execution()

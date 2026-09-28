@@ -23,6 +23,7 @@ use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFu
 use crate::durable_host::durable_session::{
     StreamSession, durable_stream_mapping_from_proto, strip_streams,
 };
+use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::permissions::resolve_invocation_scope_card;
 use crate::durable_host::secrets::secret_hold_targets_for_value;
 use crate::durable_host::suspendable_wait::{
@@ -37,7 +38,7 @@ use crate::preview2::golem::agent::host::{
     RpcError, ScheduledInvocationReceipt,
 };
 use crate::services::environment_state::EnvironmentStateService;
-use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::oplog::{CommitLevel, OplogFence, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
 use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
@@ -789,7 +790,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     caller_revision,
                 )
                 .await
-                .map_err(anyhow::Error::msg)?;
+                .map_err(SessionError::into_trap)?;
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(persisted) => {
@@ -797,7 +798,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             Ok(scalar) => Ok(streams
                                 .replay_remote_result()
                                 .await
-                                .map_err(anyhow::Error::msg)?
+                                .map_err(SessionError::into_trap)?
                                 .unwrap_or(scalar)),
                             Err(error) => Err(InternalRpcError::from(error)),
                         };
@@ -827,7 +828,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let attempt_id = streams
                 .caller_attempt_id()
                 .await
-                .map_err(anyhow::Error::msg)?;
+                .map_err(SessionError::into_trap)?;
             let input_mappings = input.proto_mappings();
             let (accepted_inputs, acceptance) = tokio::sync::oneshot::channel();
             let interrupt_signal = self.create_interrupt_signal();
@@ -865,7 +866,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     ),
                 ));
                 match futures::future::select(call, interrupt_signal).await {
-                    Either::Left((result, _)) => result,
+                    Either::Left((Ok(result), _)) => result,
+                    Either::Left((Err(fence), _)) => {
+                        return Err(handle.trap(SessionError::Fenced(fence).into_trap()));
+                    }
                     Either::Right((error, _)) => {
                         return Err(handle.trap(error));
                     }
@@ -894,7 +898,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         );
                         tokio::pin!(materialize);
                         match futures::future::select(materialize, interrupt_signal).await {
-                            Either::Left((result, _)) => result.map_err(anyhow::Error::msg)?,
+                            Either::Left((result, _)) => result.map_err(SessionError::into_trap)?,
                             Either::Right((error, _)) => {
                                 return Err(handle.trap(error));
                             }
@@ -1478,11 +1482,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     caller_revision,
                 )
                 .await
-                .map_err(anyhow::Error::msg)?;
+                .map_err(SessionError::into_trap)?;
             let attempt_id = streams
                 .caller_attempt_id()
                 .await
-                .map_err(anyhow::Error::msg)?;
+                .map_err(SessionError::into_trap)?;
             let params = DurableStreamingTaskParams {
                 streams,
                 input_mappings: input.proto_mappings(),
@@ -1699,7 +1703,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 self.public_state
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await;
+                    .await?;
             }
 
             let auth_ctx = handle.take_agent_auth_ctx();
@@ -3102,7 +3106,7 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
     streams
         .recover_session_mappings()
         .await
-        .map_err(anyhow::Error::msg)?;
+        .map_err(SessionError::into_trap)?;
     Ok((streams, origin_invocation))
 }
 
@@ -3343,7 +3347,7 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
                 ctx.public_state
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await;
+                    .await?;
             }
 
             let result = {
@@ -3473,7 +3477,7 @@ async fn run_invoke<Ctx: WorkerCtx>(
                 ctx.public_state
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::DurableOnly)
-                    .await;
+                    .await?;
             }
 
             let result = ctx
@@ -4001,7 +4005,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         .streams
                         .replay_remote_result()
                         .await
-                        .map_err(anyhow::Error::msg)?
+                        .map_err(SessionError::into_trap)?
                 {
                     response.result = Ok(value);
                 }
@@ -4932,6 +4936,9 @@ struct DurableStreamingTaskParams {
     output_root: SchemaType,
 }
 
+/// Awaits a streaming RPC and settles the inputs it did not bind. The outer error is this caller's
+/// own session write refused by the fence, which traps rather than reaching the guest as an RPC
+/// failure; the inner result is the RPC's.
 async fn await_streaming_rpc_acceptance(
     streams: &StreamSession,
     mut acceptance: tokio::sync::oneshot::Receiver<
@@ -4940,7 +4947,8 @@ async fn await_streaming_rpc_acceptance(
     invocation: impl std::future::Future<
         Output = Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>,
     >,
-) -> Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError> {
+) -> Result<Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>, OplogFence>
+{
     tokio::pin!(invocation);
     let (accepted, result) = tokio::select! {
         biased;
@@ -4948,21 +4956,27 @@ async fn await_streaming_rpc_acceptance(
         accepted = &mut acceptance => (accepted.ok(), None),
     };
     if let Some(accepted) = accepted {
-        let mappings = accepted
+        let mappings = match accepted
             .stream_mappings
             .into_iter()
             .map(durable_stream_mapping_from_proto)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|details| InternalRpcError::ProtocolError { details })?;
-        streams
-            .cancel_unbound_rpc_inputs(&mappings)
-            .await
-            .map_err(|details| InternalRpcError::ProtocolError { details })?;
+        {
+            Ok(mappings) => mappings,
+            Err(details) => return Ok(Err(InternalRpcError::ProtocolError { details })),
+        };
+        match streams.cancel_unbound_rpc_inputs(&mappings).await {
+            Ok(()) => {}
+            Err(SessionError::Fenced(fence)) => return Err(fence),
+            Err(SessionError::Failed(details)) => {
+                return Ok(Err(InternalRpcError::ProtocolError { details }));
+            }
+        }
     }
-    match result {
+    Ok(match result {
         Some(result) => result,
         None => invocation.await,
-    }
+    })
 }
 
 fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
@@ -5034,7 +5048,8 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                         scope_card,
                     ),
                 )
-                .await;
+                .await
+                .map_err(|fence| SessionError::Fenced(fence).into_trap())?;
                 let result = match result {
                     Ok(result) => {
                         let mappings = result
@@ -5044,7 +5059,7 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(|details| InternalRpcError::ProtocolError { details });
                         match mappings {
-                            Ok(mappings) => params
+                            Ok(mappings) => match params
                                 .streams
                                 .materialize_remote_result(
                                     result.value,
@@ -5053,7 +5068,16 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                                     &params.output_root,
                                 )
                                 .await
-                                .map_err(|details| InternalRpcError::ProtocolError { details }),
+                            {
+                                Ok(value) => Ok(value),
+                                // This caller's own write refused: a lost shard, not an RPC failure.
+                                Err(error @ SessionError::Fenced(_)) => {
+                                    return Err(error.into_trap());
+                                }
+                                Err(SessionError::Failed(details)) => {
+                                    Err(InternalRpcError::ProtocolError { details })
+                                }
+                            },
                             Err(error) => Err(error),
                         }
                     }

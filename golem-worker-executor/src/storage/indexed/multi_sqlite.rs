@@ -22,6 +22,7 @@ use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
+use golem_common::model::ShardEpoch;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -262,6 +263,34 @@ impl Debug for MultiSqliteIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for MultiSqliteIndexedStorage {
+    async fn set_key_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        new_epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .set_key_epoch(svc_name, api_name, namespace, key, new_epoch)
+            .await
+    }
+
+    async fn delete_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
+            .await
+    }
+
     async fn number_of_replicas(
         &self,
         _svc_name: &'static str,
@@ -367,13 +396,27 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
-            .append(svc_name, api_name, entity_name, namespace, key, id, value)
+            .append(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                id,
+                value,
+                expected_epoch,
+            )
             .await
     }
 
+    /// Overridden rather than inherited. The trait default loops [`Self::append`], which would
+    /// resolve the per-agent database and re-check the fence once per entry, in a separate
+    /// transaction each time - so a batch could land half-written, and the contract that the
+    /// fence is checked once per call would not hold.
     async fn append_many(
         &self,
         svc_name: &'static str,
@@ -382,10 +425,19 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(namespace)
             .await?
-            .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
+            .append_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                pairs,
+                expected_epoch,
+            )
             .await
     }
 
@@ -574,6 +626,7 @@ mod tests {
                 &first_namespace,
                 "shared-key",
                 vec![(1, Bytes::from_static(b"first-agent-value"))].into(),
+                None,
             )
             .await
             .unwrap();
@@ -585,6 +638,7 @@ mod tests {
                 &second_namespace,
                 "shared-key",
                 vec![(1, Bytes::from_static(b"second-agent-value"))].into(),
+                None,
             )
             .await
             .unwrap();

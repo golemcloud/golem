@@ -55,8 +55,19 @@ impl LeaseEpoch {
         Self(0)
     }
 
+    /// The next epoch, or `None` when there is none left.
+    ///
+    /// The fallible one is the one to use where the counter is advanced: an epoch that cannot
+    /// advance is a stuck lease, and refusing that one operation keeps the process up, while
+    /// [`Self::next`]'s panic takes the whole shard manager down and does it again on every retry.
+    pub fn checked_next(self) -> Option<Self> {
+        self.0.checked_add(1).map(Self)
+    }
+
+    /// Panics at the ceiling. Only for a caller that has no way to refuse - prefer
+    /// [`Self::checked_next`].
     pub fn next(self) -> Self {
-        Self(self.0.checked_add(1).expect("LeaseEpoch overflow"))
+        self.checked_next().expect("LeaseEpoch overflow")
     }
 }
 
