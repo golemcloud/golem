@@ -217,11 +217,14 @@ mod tests {
             OplogEntry::stream_end(None, external()),
             OplogEntry::stream_cancel(None, external()),
             OplogEntry::stream_session(None, external()),
-            OplogEntry::pending_update(UpdateDescription::SnapshotBased {
-                target_revision: golem_common::model::component::ComponentRevision::INITIAL,
-                payload: external(),
-                mime_type: "application/octet-stream".to_string(),
-            }),
+            OplogEntry::pending_update(
+                UpdateDescription::SnapshotBased {
+                    target_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                    payload: external(),
+                    mime_type: "application/octet-stream".to_string(),
+                },
+                None,
+            ),
         ];
         for entry in &mut entries {
             let mut copies = 0;

@@ -1075,7 +1075,7 @@ impl WorkerService {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<()> {
+    ) -> WorkerResult<OplogIndex> {
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
@@ -1098,9 +1098,7 @@ impl WorkerService {
                 component.environment_id,
                 auth_ctx,
             )
-            .await?;
-
-        Ok(())
+            .await
     }
 
     pub async fn get_oplog(
@@ -4375,9 +4373,9 @@ mod tests {
             _: bool,
             _: EnvironmentId,
             _: AuthCtx,
-        ) -> WorkerResult<()> {
+        ) -> WorkerResult<OplogIndex> {
             self.effects.lock().unwrap().push("update");
-            Ok(())
+            Ok(OplogIndex::INITIAL)
         }
 
         async fn get_oplog(

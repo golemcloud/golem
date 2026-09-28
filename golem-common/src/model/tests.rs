@@ -1271,6 +1271,7 @@ fn agent_status_record_has_pending_work_for_pending_updates() {
     status.pending_updates.push_back(PendingUpdateRef {
         timestamp: Timestamp::now_utc(),
         oplog_index: OplogIndex::INITIAL,
+        admission_index: OplogIndex::INITIAL,
         target_revision: ComponentRevision::INITIAL,
         kind: PendingUpdateKind::Automatic,
     });

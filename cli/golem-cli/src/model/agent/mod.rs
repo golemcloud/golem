@@ -588,14 +588,9 @@ impl MessageWithFields for AgentGetView {
                                 .map(|reason| format!(", snapshot ineligible: {reason}"))
                         })
                         .unwrap_or_default();
-                    let replay = details
-                        .replay_range
-                        .as_ref()
-                        .map(|range| format!(", replay {}..={}", range.start, range.end))
-                        .unwrap_or_default();
                     format!(
-                        ", source revision {}, source epoch {}{snapshot}{replay}",
-                        details.source_component_revision, details.source_update_epoch
+                        ", source revision {}, source revision start index {}{snapshot}",
+                        details.source_component_revision, details.source_revision_start_index
                     )
                 })
                 .unwrap_or_default();

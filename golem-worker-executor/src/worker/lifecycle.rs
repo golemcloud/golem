@@ -299,7 +299,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         principal: Principal,
-    ) -> Result<(), WorkerExecutorError>
+    ) -> Result<OplogIndex, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
@@ -384,7 +384,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let decision = update_decision(&metadata.last_known_status.status, mode, disable_wakeup);
         match (mode, decision) {
             (UpdateMode::Automatic, UpdateDecision::Ignore) => {
-                warn!("Attempted updating worker which already exited");
+                return Err(WorkerExecutorError::invalid_request(
+                    "Cannot update an exited worker",
+                ));
             }
             (UpdateMode::Automatic, decision) => {
                 debug!("Enqueuing update");
@@ -394,7 +396,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .snapshot_exclusion_through_at_admission()
                         .await?,
                 };
-                worker.enqueue_update(description).await?;
+                let update_attempt_index = worker.enqueue_update(description).await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -411,9 +413,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     UpdateDecision::Ignore => unreachable!(),
                 }
+                Ok(update_attempt_index)
             }
             (UpdateMode::Manual, decision) => {
-                worker.enqueue_manual_update(target_revision).await?;
+                let update_attempt_index = worker.enqueue_manual_update(target_revision).await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -424,10 +427,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     UpdateDecision::Ignore | UpdateDecision::QueueAndRestart => unreachable!(),
                 }
+                Ok(update_attempt_index)
             }
         }
-
-        Ok(())
     }
 
     pub async fn revert<T>(
@@ -608,6 +610,7 @@ mod tests {
         status.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(5),
+            admission_index: OplogIndex::from_u64(5),
             target_revision,
             kind: PendingUpdateKind::Automatic,
         });
@@ -617,10 +620,11 @@ mod tests {
         status.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(6),
+            admission_index: OplogIndex::from_u64(6),
             target_revision,
             kind: PendingUpdateKind::SnapshotAssistedAutomatic {
                 source_component_revision: ComponentRevision::new(2).unwrap(),
-                source_update_epoch: OplogIndex::INITIAL,
+                source_revision_start_index: OplogIndex::INITIAL,
                 selection: SnapshotAssistedUpdateSelection::Selected {
                     snapshot_index: OplogIndex::from_u64(4),
                     snapshot_revision: ComponentRevision::new(2).unwrap(),

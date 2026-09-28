@@ -14,10 +14,7 @@
 
 use super::*;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
-use crate::durable_host::{
-    ActiveAtomicRegion, SnapshotAssistedFinalizationGate, commit_replay_jumps,
-    register_atomic_region_call,
-};
+use crate::durable_host::{ActiveAtomicRegion, commit_replay_jumps, register_atomic_region_call};
 use crate::workerctx::ReplayAdmissionStage;
 use golem_common::model::entity::{
     AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
@@ -328,7 +325,6 @@ struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx>
     local_live_tail: Arc<AtomicBool>,
     replay_state: crate::durable_host::replay_state::ReplayState,
     linear_memory: crate::services::linear_memory::LinearMemoryTracker,
-    snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
     execution_scope: BegunCallExecutionScope,
     entity_parent_start_index: Option<OplogIndex>,
     retry: InFunctionRetryController,
@@ -377,7 +373,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
         let replay_state = self.replay_state.clone();
         let role = self.replay_to_live_role();
         let local_live_tail = self.local_live_tail.clone();
-        let snapshot_assisted_finalization = self.snapshot_assisted_finalization.clone();
         async move {
             crate::durable_host::begin_replay_to_live(
                 replaying_incomplete_entity,
@@ -388,7 +383,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
                 &replay_state,
                 role,
                 local_live_tail,
-                snapshot_assisted_finalization,
             )
             .await
         }
@@ -406,7 +400,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
         let replay_state = self.replay_state.clone();
         let role = self.replay_to_live_role();
         let local_live_tail = self.local_live_tail.clone();
-        let snapshot_assisted_finalization = self.snapshot_assisted_finalization.clone();
         async move {
             crate::durable_host::finish_replay_to_live_from_settling(
                 replaying_incomplete_entity,
@@ -418,7 +411,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
                 role,
                 local_live_tail,
                 replay_target,
-                snapshot_assisted_finalization,
             )
             .await
         }
@@ -433,7 +425,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
         let tool_operation = self.tool_operation.clone();
         let public_state = self.public_state.clone();
         let linear_memory = self.linear_memory.clone();
-        let replay_state = self.replay_state.clone();
         let role = self.replay_to_live_role();
         let local_live_tail = self.local_live_tail.clone();
         let replay_target = self.replay_state.replay_target();
@@ -444,7 +435,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
                 tool_operation,
                 &public_state,
                 &linear_memory,
-                &replay_state,
                 role,
                 local_live_tail,
                 replay_target,
@@ -469,9 +459,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> PreparedAccessStart<P
         &mut self,
         replay_ended: bool,
     ) -> Result<(), WorkerExecutorError> {
-        if replay_ended
-            && !(self.replaying_incomplete_entity && self.snapshot_assisted_finalization.is_some())
-        {
+        if replay_ended {
             self.switch_to_live().await?;
         } else {
             self.begin_local_live_continuation()
@@ -502,7 +490,6 @@ where
         tool_entity,
         tool_operation,
         public_state,
-        snapshot_assisted_finalization,
     ) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
@@ -521,7 +508,6 @@ where
             ),
             ctx.entity_tool_operation(),
             ctx.public_state.clone(),
-            ctx.state.snapshot_assisted_finalization.clone(),
         )
     });
     let pending = match crate::durable_host::begin_replay_to_live(
@@ -533,7 +519,6 @@ where
         &replay_state,
         role,
         local_live_tail,
-        snapshot_assisted_finalization,
     )
     .await?
     {
@@ -546,6 +531,9 @@ where
     };
     let outcome = pending.finish().await?;
     if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
+        // Publishing live and committing the replay-finalization records form one boundary for
+        // primary accessors. Live durable-call Starts take the same lock, so a sibling cannot
+        // expose target-only effects before an automatic update has succeeded or failed.
         let boundary_lock = store.with(|mut access| {
             get_ctx(access.data_mut())
                 .state
@@ -1156,6 +1144,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let is_live =
             store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live());
         if !is_live {
+            let boundary_lock = store.with(|mut access| {
+                get_ctx(access.data_mut())
+                    .state
+                    .card_event_boundary_lock
+                    .clone()
+            });
+            let _boundary_guard = boundary_lock.lock_owned().await;
             process_pending_replay_events_access(store, get_ctx).await?;
         }
         let prepared = store.with(|mut access| {
@@ -1262,7 +1257,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     &replay_state,
                     ReplayToLiveRole::NonPrimary,
                     local_live_tail,
-                    None,
                 )
                 .await?
                 {
@@ -1288,7 +1282,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ))
             };
         }
+        let boundary_lock = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .state
+                .card_event_boundary_lock
+                .clone()
+        });
+        let _boundary_guard = boundary_lock.lock_owned().await;
         process_pending_replay_events_access(store, get_ctx).await?;
+        drop(_boundary_guard);
         let mut prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
@@ -1401,7 +1403,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         &replay_state,
                         transition_role,
                         prepared.local_live_tail.clone(),
-                        prepared.snapshot_assisted_finalization.clone(),
                     )
                     .await?
                     {
@@ -1419,7 +1420,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         tool_operation,
                         &public_state,
                         &linear_memory,
-                        &replay_state,
                         transition_role,
                         prepared.local_live_tail.clone(),
                         prepared.replay_state.replay_target(),
@@ -1612,7 +1612,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             local_live_tail: ctx.state.local_live_tail(),
             replay_state: ctx.state.replay_state.clone(),
             linear_memory: ctx.linear_memory.clone(),
-            snapshot_assisted_finalization: ctx.state.snapshot_assisted_finalization.clone(),
             execution_scope,
             entity_parent_start_index: ctx.entity_parent_start_index(),
             retry,
@@ -1860,7 +1859,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 &replay_state,
                                 transition_role,
                                 prepared.local_live_tail.clone(),
-                                prepared.snapshot_assisted_finalization.clone(),
                             )
                             .await
                             .map_err(|error| {
@@ -1881,7 +1879,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 tool_operation.clone(),
                                 &public_state,
                                 &linear_memory,
-                                &replay_state,
                                 transition_role,
                                 prepared.local_live_tail.clone(),
                                 prepared.replay_state.replay_target(),

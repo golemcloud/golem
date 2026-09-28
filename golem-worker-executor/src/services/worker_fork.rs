@@ -768,7 +768,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // Track unmatched work so the fork can cancel unrelated queued invocations and
         // updates. Export forks retain their selected invocation and its constructor.
         let mut pending_invocation_keys: Vec<(IdempotencyKey, OplogIndex)> = Vec::new();
-        let mut pending_update_revisions: Vec<ComponentRevision> = Vec::new();
+        let mut pending_updates: Vec<(ComponentRevision, OplogIndex)> = Vec::new();
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
         let mut copied_bytes = initial_size;
         let external_payload_bytes = Arc::new(AtomicU64::new(0));
@@ -867,14 +867,28 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             }
             let entry = read_source(oplog_index).await;
             match &entry {
-                OplogEntry::PendingUpdate { description, .. } => {
-                    pending_update_revisions.push(*description.target_revision());
+                OplogEntry::PendingUpdate {
+                    description,
+                    update_attempt_index,
+                    ..
+                } => {
+                    pending_updates.push((
+                        *description.target_revision(),
+                        update_attempt_index.unwrap_or(oplog_index),
+                    ));
                 }
-                OplogEntry::SuccessfulUpdate { .. } | OplogEntry::FailedUpdate { .. }
-                    // Pop front to match calculate_update_fields semantics
-                    if !pending_update_revisions.is_empty() => {
-                        pending_update_revisions.remove(0);
-                    }
+                OplogEntry::SuccessfulUpdate { .. } if !pending_updates.is_empty() => {
+                    pending_updates.remove(0);
+                }
+                OplogEntry::FailedUpdate {
+                    target_revision,
+                    update_attempt_index,
+                    ..
+                } => remove_failed_pending_fork_update(
+                    &mut pending_updates,
+                    *target_revision,
+                    *update_attempt_index,
+                ),
                 _ => {}
             }
         }
@@ -920,7 +934,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 .await;
         }
 
-        for target_revision in pending_update_revisions {
+        for (target_revision, update_attempt_index) in pending_updates {
             tracing::debug!(
                 "Cancelling pending update to revision {target_revision} in forked worker"
             );
@@ -930,6 +944,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     target_revision,
                     details: Some("cancelled by fork".to_string()),
                     snapshot_assisted_details: None,
+                    update_attempt_index: Some(update_attempt_index),
                 })
                 .await;
         }
@@ -1216,6 +1231,25 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     }
 }
 
+fn remove_failed_pending_fork_update(
+    pending_updates: &mut Vec<(ComponentRevision, OplogIndex)>,
+    target_revision: ComponentRevision,
+    update_attempt_index: Option<OplogIndex>,
+) {
+    let position = match update_attempt_index {
+        Some(attempt_index) => pending_updates
+            .iter()
+            .position(|(_, index)| *index == attempt_index),
+        None => pending_updates
+            .first()
+            .is_some_and(|(pending_target, _)| *pending_target == target_revision)
+            .then_some(0),
+    };
+    if let Some(position) = position {
+        pending_updates.remove(position);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1309,5 +1343,25 @@ mod tests {
             }
             other => panic!("expected transfer start, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn early_manual_failure_does_not_consume_automatic_fork_update() {
+        let target_revision = ComponentRevision::new(2).unwrap();
+        let automatic_admission = OplogIndex::from_u64(2);
+        let manual_admission = OplogIndex::from_u64(3);
+        let mut pending_updates = vec![(target_revision, automatic_admission)];
+
+        remove_failed_pending_fork_update(
+            &mut pending_updates,
+            target_revision,
+            Some(manual_admission),
+        );
+
+        assert_eq!(
+            pending_updates,
+            vec![(target_revision, automatic_admission)],
+            "the fork must retain the Automatic request so it receives its own cancellation"
+        );
     }
 }

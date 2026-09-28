@@ -891,6 +891,7 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
             mime_type: "application/octet-stream".to_string(),
@@ -908,6 +909,7 @@ fn pending_update_serialization_poem_serde_equivalence_2() {
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::Automatic(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -933,9 +935,8 @@ fn successful_update_serialization_poem_serde_equivalence() {
         snapshot_assisted_details: Some(PublicSnapshotAssistedUpdateDetails {
             pending_update_index: OplogIndex::from_u64(5),
             source_component_revision: ComponentRevision::new(1).unwrap(),
-            source_update_epoch: OplogIndex::INITIAL,
+            source_revision_start_index: OplogIndex::INITIAL,
             snapshot_index: OplogIndex::from_u64(3),
-            replay_range: OplogRegion::from_range(4..=8),
         }),
     });
     let serialized = entry.to_json_string();
@@ -951,12 +952,12 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: Some("test".to_string()),
+        update_attempt_index: Some(OplogIndex::from_u64(7)),
         snapshot_assisted_details: Some(PublicFailedSnapshotAssistedUpdateDetails {
             pending_update_index: OplogIndex::from_u64(5),
             source_component_revision: ComponentRevision::new(1).unwrap(),
-            source_update_epoch: OplogIndex::INITIAL,
+            source_revision_start_index: OplogIndex::INITIAL,
             snapshot_index: Some(OplogIndex::from_u64(3)),
-            replay_range: Some(OplogRegion::from_range(4..=8)),
             ineligibility_reason: None,
         }),
     });
@@ -973,6 +974,7 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: None,
+        update_attempt_index: None,
         snapshot_assisted_details: None,
     });
     let serialized = entry.to_json_string();

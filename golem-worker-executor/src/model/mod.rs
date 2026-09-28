@@ -101,7 +101,7 @@ pub struct AgentConfig {
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
     pub last_snapshot_source: Option<SnapshotSource>,
-    pub snapshot_assisted_source_epoch: Option<OplogIndex>,
+    pub snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
     pub agent_effective_surface: EffectiveSurface,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
@@ -116,7 +116,7 @@ impl AgentConfig {
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
         last_snapshot_source: Option<SnapshotSource>,
-        snapshot_assisted_source_epoch: Option<OplogIndex>,
+        snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
         agent_effective_surface: EffectiveSurface,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
@@ -129,7 +129,7 @@ impl AgentConfig {
             initial_agent_config,
             last_snapshot_index,
             last_snapshot_source,
-            snapshot_assisted_source_epoch,
+            snapshot_assisted_source_revision_start_index,
             agent_effective_surface,
             owner_component_metadata,
         }

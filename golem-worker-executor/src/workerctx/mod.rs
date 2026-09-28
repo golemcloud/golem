@@ -556,6 +556,7 @@ pub trait UpdateManagement {
         target_revision: ComponentRevision,
         details: Option<String>,
         snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
+        update_attempt_index: Option<OplogIndex>,
     );
 
     /// Called when an update attempt succeeded

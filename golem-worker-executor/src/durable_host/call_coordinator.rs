@@ -816,6 +816,9 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    if store.with(|mut access| get_ctx(access.data_mut()).state.snapshotting_mode) {
+        return Ok(());
+    }
     let replay_state =
         store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
     let replay_events = replay_state.take_new_replay_events();
@@ -982,29 +985,9 @@ where
                 })?;
             }
             crate::durable_host::replay_state::ReplayEvent::ReplayFinished => {
-                let deferred = store.with(|mut access| {
-                    get_ctx(access.data_mut())
-                        .state
-                        .snapshot_assisted_finalization
-                        .as_ref()
-                        .is_some_and(|gate| !gate.can_finalize())
-                });
-                if deferred {
-                    replay_state.defer_replay_finished();
-                    continue;
-                }
                 tracing::debug!("Replaying oplog finished");
                 finalize_pending_automatic_update_access(store, get_ctx).await?;
                 check_post_replay_wallet_liveness_access(store, get_ctx).await?;
-                store.with(|mut access| {
-                    if let Some(gate) = &get_ctx(access.data_mut())
-                        .state
-                        .snapshot_assisted_finalization
-                        && gate.can_finalize()
-                    {
-                        gate.finish_finalization();
-                    }
-                });
             }
         }
     }
@@ -1417,6 +1400,7 @@ where
                         get_ctx,
                         target_revision,
                         format!("Applying worker update failed: {error}"),
+                        None,
                     )
                     .await?;
                     return Err(error);
@@ -1435,8 +1419,16 @@ where
         update_state_to_new_component_revision_access(store, get_ctx, target_revision).await
     {
         let stringified_error = format!("Applying worker update failed: {error}");
-        record_worker_update_failed_access(store, get_ctx, target_revision, stringified_error)
-            .await?;
+        record_worker_update_failed_access(
+            store,
+            get_ctx,
+            target_revision,
+            stringified_error,
+            snapshot_assisted_details
+                .as_ref()
+                .map(failed_snapshot_assisted_update_details),
+        )
+        .await?;
         return Err(error);
     }
 
@@ -1589,6 +1581,7 @@ async fn record_worker_update_failed_access<T, D, Ctx>(
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     target_revision: ComponentRevision,
     details: String,
+    snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
 ) -> Result<(), WorkerExecutorError>
 where
     T: 'static,
@@ -1601,6 +1594,7 @@ where
         .add_and_commit_oplog(OplogEntry::failed_update(
             target_revision,
             Some(details.clone()),
+            snapshot_assisted_details,
             None,
         ))
         .await;

@@ -163,7 +163,7 @@ fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         revoked_cards: status.revoked_cards.clone(),
         deleted_regions: DeletedRegions::new(),
         component_revision_for_replay: status.component_revision_for_replay,
-        component_revision_epoch: status.component_revision_epoch,
+        component_revision_start_index: status.component_revision_start_index,
         current_retry_state: status.current_retry_state.clone(),
         authoritative_snapshot: status.authoritative_snapshot,
         last_automatic_snapshot_index: status.last_automatic_snapshot_index,
@@ -4169,6 +4169,7 @@ mod tests {
             pending_updates: VecDeque::from([PendingUpdateRef {
                 timestamp: Timestamp::now_utc(),
                 oplog_index: OplogIndex::INITIAL,
+                admission_index: OplogIndex::INITIAL,
                 target_revision: golem_common::model::component::ComponentRevision::INITIAL,
                 kind: PendingUpdateKind::Automatic,
             }]),

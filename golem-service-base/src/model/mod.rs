@@ -78,7 +78,11 @@ pub struct InterruptResponse {}
 pub struct ResumeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct UpdateWorkerResponse {}
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct UpdateWorkerResponse {
+    pub update_attempt_index: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct ActivatePluginResponse {}

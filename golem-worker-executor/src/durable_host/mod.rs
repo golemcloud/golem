@@ -1250,7 +1250,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             original_phantom_id,
             worker_config.last_snapshot_index,
             worker_config.last_snapshot_source,
-            worker_config.snapshot_assisted_source_epoch,
+            worker_config.snapshot_assisted_source_revision_start_index,
             per_invocation_http_call_limit,
             per_invocation_rpc_call_limit,
             resource_limits.clone(),
@@ -2642,7 +2642,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ReplayToLiveRole::NonPrimary
             },
             self.state.local_live_tail(),
-            self.state.snapshot_assisted_finalization.clone(),
         )
         .await
     }
@@ -2652,15 +2651,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         pending: PendingReplayToLive,
     ) -> Result<FinishReplayToLive, WorkerExecutorError> {
         let role = pending.role();
-        let snapshot_assisted_primary = pending.is_snapshot_assisted_primary();
-        if snapshot_assisted_primary {
-            self.process_pending_replay_events().await?;
-        }
         let outcome = pending.finish().await?;
-        if outcome == FinishReplayToLive::Live
-            && role == ReplayToLiveRole::PrimaryAgent
-            && !snapshot_assisted_primary
-        {
+        if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
             self.process_pending_replay_events().await?;
         }
         Ok(outcome)
@@ -2693,7 +2685,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         );
         let tool_operation = self.entity_tool_operation();
         let local_live_tail = self.state.local_live_tail();
-        let snapshot_assisted_finalization = self.state.snapshot_assisted_finalization.clone();
         let role = if self.runtime == OwnerRuntime::Agent {
             ReplayToLiveRole::PrimaryAgent
         } else {
@@ -2719,7 +2710,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     &replay_state,
                     role,
                     local_live_tail,
-                    snapshot_assisted_finalization,
                 )
                 .await
             } else {
@@ -2729,7 +2719,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     tool_operation,
                     &public_state,
                     &linear_memory,
-                    &replay_state,
                     role,
                     local_live_tail,
                     replay_state.replay_target(),
@@ -2798,22 +2787,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             BeginReplayToLive::Pending(pending) => pending,
         };
         self.finish_switch_to_live(pending).await?.require_live()
-    }
-
-    pub(crate) fn snapshot_assisted_finalization_gate(
-        &self,
-    ) -> Option<Arc<SnapshotAssistedFinalizationGate>> {
-        self.state
-            .snapshot_assisted_finalization
-            .as_ref()
-            .filter(|gate| !gate.is_finalized())
-            .cloned()
-    }
-
-    pub(crate) async fn complete_requested_snapshot_assisted_finalization(
-        &mut self,
-    ) -> Result<(), WorkerExecutorError> {
-        self.switch_to_live().await
     }
 
     fn cleanup_custom_durability_state(&mut self) {
@@ -4026,6 +3999,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             "Manual update failed to lower load-snapshot invocation: {err}"
                                         )),
                                         None,
+                                        None,
                                     )
                                     .await;
                                 return Ok(Some(RetryDecision::Immediate));
@@ -4049,6 +4023,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     Some(format!(
                                         "Manual update failed to install invocation context: {err}"
                                     )),
+                                    None,
                                     None,
                                 )
                                 .await;
@@ -4120,7 +4095,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             store
                                 .as_context_mut()
                                 .data_mut()
-                                .on_worker_update_failed(target_revision, Some(error), None)
+                                .on_worker_update_failed(target_revision, Some(error), None, None)
                                 .await;
                             Ok(Some(RetryDecision::Immediate))
                         } else {
@@ -4160,6 +4135,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 target_revision,
                                 Some("Failed to find snapshot data for update".to_string()),
                                 None,
+                                None,
                             )
                             .await;
                         Ok(Some(RetryDecision::Immediate))
@@ -4168,7 +4144,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         store
                             .as_context_mut()
                             .data_mut()
-                            .on_worker_update_failed(target_revision, Some(error), None)
+                            .on_worker_update_failed(target_revision, Some(error), None, None)
                             .await;
                         Ok(Some(RetryDecision::Immediate))
                     }
@@ -4501,22 +4477,27 @@ enum SnapshotRecoveryResult {
 fn build_snapshot_assisted_update_details(
     pending_update_index: OplogIndex,
     source_component_revision: ComponentRevision,
-    source_update_epoch: OplogIndex,
+    source_revision_start_index: OplogIndex,
     snapshot_index: OplogIndex,
-    replay_target: OplogIndex,
-) -> Result<SnapshotAssistedUpdateDetails, WorkerExecutorError> {
-    if replay_target <= snapshot_index {
-        return Err(WorkerExecutorError::runtime(format!(
-            "Snapshot-assisted automatic update replay target {replay_target} does not follow snapshot {snapshot_index}"
-        )));
-    }
-    Ok(SnapshotAssistedUpdateDetails {
+) -> SnapshotAssistedUpdateDetails {
+    SnapshotAssistedUpdateDetails {
         pending_update_index,
         source_component_revision,
-        source_update_epoch,
+        source_revision_start_index,
         snapshot_index,
-        replay_range: OplogRegion::from_index_range(snapshot_index.next()..=replay_target),
-    })
+    }
+}
+
+fn failed_snapshot_assisted_update_details(
+    details: &SnapshotAssistedUpdateDetails,
+) -> FailedSnapshotAssistedUpdateDetails {
+    FailedSnapshotAssistedUpdateDetails {
+        pending_update_index: details.pending_update_index,
+        source_component_revision: details.source_component_revision,
+        source_revision_start_index: details.source_revision_start_index,
+        snapshot_index: Some(details.snapshot_index),
+        ineligibility_reason: None,
+    }
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -4731,6 +4712,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
+        if self.state.snapshotting_mode {
+            return Ok(());
+        }
         loop {
             let boundary_guard = self
                 .state
@@ -4752,13 +4736,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         pending_update_index: OplogIndex,
     ) -> Result<SnapshotAssistedUpdateDetails, WorkerExecutorError> {
-        let source_update_epoch = self
+        let source_revision_start_index = self
             .state
-            .snapshot_assisted_source_epoch
+            .snapshot_assisted_source_revision_start_index
             .take()
             .ok_or_else(|| {
                 WorkerExecutorError::runtime(
-                    "Snapshot-assisted automatic update has no source epoch",
+                    "Snapshot-assisted automatic update has no source revision start index",
                 )
             })?;
         let snapshot_index = match (
@@ -4772,50 +4756,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         };
-        let replay_target = self.state.replay_state.replay_target();
-        build_snapshot_assisted_update_details(
+        Ok(build_snapshot_assisted_update_details(
             pending_update_index,
             self.component_metadata().revision,
-            source_update_epoch,
+            source_revision_start_index,
             snapshot_index,
-            replay_target,
-        )
-    }
-
-    async fn enable_snapshot_assisted_finalization(&mut self) -> Result<(), WorkerExecutorError> {
-        let gate = self
-            .state
-            .snapshot_assisted_finalization
-            .clone()
-            .ok_or_else(|| {
-                WorkerExecutorError::runtime(
-                    "Snapshot-assisted automatic update has no finalization gate",
-                )
-            })?;
-        let _boundary_guard = self
-            .state
-            .card_event_boundary_lock
-            .clone()
-            .lock_owned()
-            .await;
-        gate.begin_finalization();
-        self.process_pending_replay_events_locked().await?;
-        Ok(())
+        ))
     }
 
     async fn process_pending_replay_events_locked(&mut self) -> Result<(), WorkerExecutorError> {
-        let replay_events = if self
-            .state
-            .snapshot_assisted_finalization
-            .as_ref()
-            .is_some_and(|gate| gate.can_finalize() && !gate.is_finalized())
-        {
-            self.state
-                .replay_state
-                .take_new_replay_events_for_assisted_finalization()
-        } else {
-            self.state.replay_state.take_new_replay_events()
-        };
+        if self.state.snapshotting_mode {
+            return Ok(());
+        }
+        let replay_events = self.state.replay_state.take_new_replay_events();
         if !replay_events.is_empty() {
             debug!("Applying pending side effects accumulated during replay");
         }
@@ -4973,15 +4926,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     )?;
                 }
                 ReplayEvent::ReplayFinished => {
-                    if self
-                        .state
-                        .snapshot_assisted_finalization
-                        .as_ref()
-                        .is_some_and(|gate| !gate.can_finalize())
-                    {
-                        self.state.replay_state.defer_replay_finished();
-                        continue;
-                    }
                     debug!("Replaying oplog finished");
                     let pending_update = self.state.pending_update.lock().await.take();
                     if let Some(pending_update) = pending_update {
@@ -4997,6 +4941,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         self.on_worker_update_failed(
                                             target_revision,
                                             Some(format!("Applying worker update failed: {error}")),
+                                            None,
                                             None,
                                         )
                                         .await;
@@ -5023,17 +4968,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 self.on_worker_update_failed(
                                     target_revision,
                                     Some(stringified_error),
-                                    snapshot_assisted_details.as_ref().map(|details| {
-                                        FailedSnapshotAssistedUpdateDetails {
-                                            pending_update_index: details.pending_update_index,
-                                            source_component_revision: details
-                                                .source_component_revision,
-                                            source_update_epoch: details.source_update_epoch,
-                                            snapshot_index: Some(details.snapshot_index),
-                                            replay_range: Some(details.replay_range.clone()),
-                                            ineligibility_reason: None,
-                                        }
-                                    }),
+                                    snapshot_assisted_details
+                                        .as_ref()
+                                        .map(failed_snapshot_assisted_update_details),
+                                    None,
                                 )
                                 .await;
 
@@ -5063,11 +5001,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     }
 
                     self.check_post_replay_wallet_liveness().await?;
-                    if let Some(gate) = &self.state.snapshot_assisted_finalization
-                        && gate.can_finalize()
-                    {
-                        gate.finish_finalization();
-                    }
                 }
             }
         }
@@ -5873,9 +5806,14 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         target_revision: ComponentRevision,
         details: Option<String>,
         snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
+        update_attempt_index: Option<OplogIndex>,
     ) {
-        let entry =
-            OplogEntry::failed_update(target_revision, details.clone(), snapshot_assisted_details);
+        let entry = OplogEntry::failed_update(
+            target_revision,
+            details.clone(),
+            snapshot_assisted_details,
+            update_attempt_index,
+        );
         self.public_state.worker().add_and_commit_oplog(entry).await;
 
         warn!(
@@ -6520,7 +6458,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .as_context_mut()
                     .data_mut()
                     .durable_ctx_mut()
-                    .switch_to_live()
+                    .process_pending_replay_events()
                     .await?;
                 break Ok(None);
             }
@@ -6671,6 +6609,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                         "Automatic update failed: {error}"
                                                     )),
                                                     None,
+                                                    None,
                                                 )
                                                 .await;
 
@@ -6713,13 +6652,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     }
                                 }
 
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .durable_ctx_mut()
-                                    .enable_snapshot_assisted_finalization()
-                                    .await?;
-
                                 let result = Self::resume_replay(store, instance, true).await?;
                                 record_resume_worker(start.elapsed());
                                 Ok(result)
@@ -6751,13 +6683,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                 .data()
                                                 .component_metadata()
                                                 .revision;
-                                            let source_update_epoch = store
+                                            let source_revision_start_index = store
                                                 .as_context()
                                                 .data()
                                                 .durable_ctx()
                                                 .state
-                                                .snapshot_assisted_source_epoch
-                                                .expect("assisted update has a source epoch");
+                                                .snapshot_assisted_source_revision_start_index
+                                                .expect("assisted update has a source revision start index");
                                             store
                                                 .as_context_mut()
                                                 .data_mut()
@@ -6771,16 +6703,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                         pending_update_index: pending_update
                                                             .oplog_index,
                                                         source_component_revision,
-                                                        source_update_epoch,
+                                                        source_revision_start_index,
                                                         snapshot_index: Some(snapshot_index),
-                                                        replay_range: Some(
-                                                            OplogRegion::from_index_range(
-                                                                snapshot_index.next()
-                                                                    ..=replay_target,
-                                                            ),
-                                                        ),
                                                         ineligibility_reason: None,
                                                     }),
+                                                    None,
                                                 )
                                                 .await;
                                             Ok(Some(RetryDecision::Immediate))
@@ -7425,9 +7352,6 @@ impl FinishReplayToLive {
 pub(crate) struct PendingReplayToLive {
     replay_target: OplogIndex,
     role: ReplayToLiveRole,
-    local_continuation: bool,
-    replay_state: Option<ReplayState>,
-    snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
     replaying_incomplete_entity: bool,
     tool_entity: bool,
     tool_operation: Option<tool::operation::OwnerToolOperation>,
@@ -7441,10 +7365,6 @@ impl PendingReplayToLive {
 
     fn role(&self) -> ReplayToLiveRole {
         self.role
-    }
-
-    fn is_snapshot_assisted_primary(&self) -> bool {
-        self.role == ReplayToLiveRole::PrimaryAgent && self.snapshot_assisted_finalization.is_some()
     }
 
     pub(crate) async fn finish(self) -> Result<FinishReplayToLive, WorkerExecutorError> {
@@ -7470,18 +7390,8 @@ impl PendingReplayToLive {
             }
         }
 
-        if self.local_continuation || self.role == ReplayToLiveRole::NonPrimary {
+        if self.role == ReplayToLiveRole::NonPrimary {
             self.local_live_tail.store(true, Ordering::Release);
-        } else {
-            if let Some(gate) = &self.snapshot_assisted_finalization {
-                gate.request_owner_finalization();
-                gate.wait_finalized().await;
-            }
-            self.replay_state
-                .as_ref()
-                .expect("primary replay-to-live transition retains replay state")
-                .publish_primary_live(self.replay_target)
-                .await?;
         }
         Ok(FinishReplayToLive::Live)
     }
@@ -7537,7 +7447,6 @@ async fn begin_replay_to_live<Ctx: WorkerCtx>(
     replay_state: &ReplayState,
     role: ReplayToLiveRole,
     local_live_tail: Arc<AtomicBool>,
-    snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
 ) -> Result<BeginReplayToLive, WorkerExecutorError> {
     activate_incomplete_entity_linear_memory(
         replaying_incomplete_entity,
@@ -7545,18 +7454,12 @@ async fn begin_replay_to_live<Ctx: WorkerCtx>(
         linear_memory,
     )
     .await?;
-    match replay_state
-        .prepare_replay_to_live(linear_memory, role)
-        .await?
-    {
+    match replay_state.switch_to_live(linear_memory, role).await? {
         ReplayToLiveOutcome::ReplayResumed => Ok(BeginReplayToLive::ReplayResumed),
         ReplayToLiveOutcome::Live { replay_target } => {
             Ok(BeginReplayToLive::Pending(PendingReplayToLive {
                 replay_target,
                 role,
-                local_continuation: false,
-                replay_state: Some(replay_state.clone()),
-                snapshot_assisted_finalization,
                 replaying_incomplete_entity,
                 tool_entity,
                 tool_operation,
@@ -7576,7 +7479,6 @@ async fn finish_replay_to_live_from_settling<Ctx: WorkerCtx>(
     role: ReplayToLiveRole,
     local_live_tail: Arc<AtomicBool>,
     replay_target: OplogIndex,
-    snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
 ) -> Result<BeginReplayToLive, WorkerExecutorError> {
     activate_incomplete_entity_linear_memory(
         replaying_incomplete_entity,
@@ -7593,9 +7495,6 @@ async fn finish_replay_to_live_from_settling<Ctx: WorkerCtx>(
             Ok(BeginReplayToLive::Pending(PendingReplayToLive {
                 replay_target,
                 role,
-                local_continuation: false,
-                replay_state: Some(replay_state.clone()),
-                snapshot_assisted_finalization,
                 replaying_incomplete_entity,
                 tool_entity,
                 tool_operation,
@@ -7611,7 +7510,6 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
     tool_operation: Option<tool::operation::OwnerToolOperation>,
     public_state: &PublicDurableWorkerState<Ctx>,
     linear_memory: &LinearMemoryTracker,
-    replay_state: &ReplayState,
     role: ReplayToLiveRole,
     local_live_tail: Arc<AtomicBool>,
     replay_target: OplogIndex,
@@ -7626,9 +7524,6 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
     Ok(PendingReplayToLive {
         replay_target,
         role,
-        local_continuation: true,
-        replay_state: Some(replay_state.clone()),
-        snapshot_assisted_finalization: None,
         replaying_incomplete_entity,
         tool_entity,
         tool_operation,
@@ -7659,48 +7554,34 @@ mod tests {
     use std::task::{Context, Poll, Waker};
 
     #[test]
-    fn assisted_success_details_record_the_actual_replay_tail() {
+    fn assisted_success_details_preserve_snapshot_provenance() {
         let source_revision = ComponentRevision::new(4).unwrap();
         let details = build_snapshot_assisted_update_details(
             OplogIndex::from_u64(20),
             source_revision,
             OplogIndex::from_u64(8),
             OplogIndex::from_u64(12),
-            OplogIndex::from_u64(27),
-        )
-        .unwrap();
+        );
 
         assert_eq!(details.pending_update_index, OplogIndex::from_u64(20));
         assert_eq!(details.source_component_revision, source_revision);
-        assert_eq!(details.source_update_epoch, OplogIndex::from_u64(8));
+        assert_eq!(details.source_revision_start_index, OplogIndex::from_u64(8));
         assert_eq!(details.snapshot_index, OplogIndex::from_u64(12));
+
+        let failed = failed_snapshot_assisted_update_details(&details);
+        assert_eq!(failed.pending_update_index, details.pending_update_index);
         assert_eq!(
-            details.replay_range,
-            OplogRegion::from_index_range(OplogIndex::from_u64(13)..=OplogIndex::from_u64(27))
+            failed.source_component_revision,
+            details.source_component_revision
         );
+        assert_eq!(
+            failed.source_revision_start_index,
+            details.source_revision_start_index
+        );
+        assert_eq!(failed.snapshot_index, Some(details.snapshot_index));
+        assert_eq!(failed.ineligibility_reason, None);
     }
 
-    #[test]
-    async fn assisted_finalization_gate_opens_only_after_success_commit() {
-        let gate = Arc::new(SnapshotAssistedFinalizationGate::new());
-        assert!(!gate.can_finalize());
-        assert!(!gate.is_finalized());
-
-        gate.begin_finalization();
-        assert!(gate.can_finalize());
-        assert!(!gate.is_finalized());
-
-        let waiter = tokio::spawn({
-            let gate = gate.clone();
-            async move { gate.wait_finalized().await }
-        });
-        tokio::task::yield_now().await;
-        assert!(!waiter.is_finished());
-
-        gate.finish_finalization();
-        waiter.await.unwrap();
-        assert!(gate.is_finalized());
-    }
     use test_r::test;
 
     #[test]
@@ -7767,9 +7648,6 @@ mod tests {
         let pending = PendingReplayToLive {
             replay_target: OplogIndex::from_u64(42),
             role: ReplayToLiveRole::NonPrimary,
-            local_continuation: true,
-            replay_state: None,
-            snapshot_assisted_finalization: None,
             replaying_incomplete_entity: false,
             tool_entity: false,
             tool_operation: None,
@@ -7781,31 +7659,10 @@ mod tests {
         assert_eq!(pending.finish().await.unwrap(), FinishReplayToLive::Live);
         assert!(local_live_tail.load(Ordering::Acquire));
 
-        let primary_local_tail = Arc::new(AtomicBool::new(false));
-        let primary_local = PendingReplayToLive {
-            replay_target: OplogIndex::from_u64(42),
-            role: ReplayToLiveRole::PrimaryAgent,
-            local_continuation: true,
-            replay_state: None,
-            snapshot_assisted_finalization: None,
-            replaying_incomplete_entity: true,
-            tool_entity: false,
-            tool_operation: None,
-            local_live_tail: primary_local_tail.clone(),
-        };
-        assert_eq!(
-            primary_local.finish().await.unwrap(),
-            FinishReplayToLive::Live
-        );
-        assert!(primary_local_tail.load(Ordering::Acquire));
-
         let dropped_tail = Arc::new(AtomicBool::new(false));
         drop(PendingReplayToLive {
             replay_target: OplogIndex::from_u64(43),
             role: ReplayToLiveRole::NonPrimary,
-            local_continuation: true,
-            replay_state: None,
-            snapshot_assisted_finalization: None,
             replaying_incomplete_entity: false,
             tool_entity: false,
             tool_operation: None,
@@ -9363,6 +9220,7 @@ mod tests {
         status.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::INITIAL,
+            admission_index: OplogIndex::INITIAL,
             target_revision: ComponentRevision::INITIAL,
             kind: PendingUpdateKind::Automatic,
         });
@@ -9398,6 +9256,7 @@ mod tests {
         status.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::INITIAL.next(),
+            admission_index: OplogIndex::INITIAL.next(),
             target_revision: ComponentRevision::INITIAL,
             kind: PendingUpdateKind::Automatic,
         });
@@ -10651,70 +10510,6 @@ impl CardEventBoundaryScan {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct SnapshotAssistedFinalizationGate {
-    snapshot_validated: AtomicBool,
-    update_committed: AtomicBool,
-    owner_finalization_requested: AtomicBool,
-    owner_request: tokio::sync::Notify,
-    finalized: tokio::sync::Notify,
-}
-
-impl SnapshotAssistedFinalizationGate {
-    fn new() -> Self {
-        Self {
-            snapshot_validated: AtomicBool::new(false),
-            update_committed: AtomicBool::new(false),
-            owner_finalization_requested: AtomicBool::new(false),
-            owner_request: tokio::sync::Notify::new(),
-            finalized: tokio::sync::Notify::new(),
-        }
-    }
-
-    fn can_finalize(&self) -> bool {
-        self.snapshot_validated.load(Ordering::Acquire)
-    }
-
-    fn is_finalized(&self) -> bool {
-        self.update_committed.load(Ordering::Acquire)
-    }
-
-    fn begin_finalization(&self) {
-        self.snapshot_validated.store(true, Ordering::Release);
-    }
-
-    fn finish_finalization(&self) {
-        self.update_committed.store(true, Ordering::Release);
-        self.finalized.notify_waiters();
-    }
-
-    pub(crate) fn request_owner_finalization(&self) {
-        self.owner_finalization_requested
-            .store(true, Ordering::Release);
-        self.owner_request.notify_waiters();
-    }
-
-    pub(crate) async fn wait_owner_finalization_request(&self) {
-        while !self.owner_finalization_requested.load(Ordering::Acquire) {
-            let requested = self.owner_request.notified();
-            if self.owner_finalization_requested.load(Ordering::Acquire) {
-                return;
-            }
-            requested.await;
-        }
-    }
-
-    async fn wait_finalized(&self) {
-        while !self.is_finalized() {
-            let finalized = self.finalized.notified();
-            if self.is_finalized() {
-                return;
-            }
-            finalized.await;
-        }
-    }
-}
-
 struct PrivateDurableWorkerState {
     // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
@@ -10993,8 +10788,7 @@ struct PrivateDurableWorkerState {
     /// assisted-update attempt. Optional recovery may abandon a divergent snapshot; assisted replay
     /// must instead fail the update without recording an application failure.
     snapshot_replay_purpose: SnapshotReplayPurpose,
-    snapshot_assisted_source_epoch: Option<OplogIndex>,
-    snapshot_assisted_finalization: Option<Arc<SnapshotAssistedFinalizationGate>>,
+    snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
@@ -11098,7 +10892,7 @@ impl PrivateDurableWorkerState {
         original_phantom_id: Option<Uuid>,
         last_snapshot_index: Option<OplogIndex>,
         last_snapshot_source: Option<SnapshotSource>,
-        snapshot_assisted_source_epoch: Option<OplogIndex>,
+        snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
@@ -11188,14 +10982,8 @@ impl PrivateDurableWorkerState {
             ),
             last_snapshot_source,
         );
-        let snapshot_assisted_finalization = (snapshot_replay_purpose
-            == SnapshotReplayPurpose::AssistedUpdate)
-            .then(|| Arc::new(SnapshotAssistedFinalizationGate::new()));
-        let completion_marker_recorder = concurrent::CompletionMarkerRecorder::new(
-            oplog.clone(),
-            replay_state.clone(),
-            snapshot_assisted_finalization.clone(),
-        );
+        let completion_marker_recorder =
+            concurrent::CompletionMarkerRecorder::new(oplog.clone(), replay_state.clone());
         Ok(Self {
             oplog_service,
             oplog,
@@ -11300,8 +11088,7 @@ impl PrivateDurableWorkerState {
             last_snapshot_index,
             last_snapshot_source,
             snapshot_replay_purpose,
-            snapshot_assisted_source_epoch,
-            snapshot_assisted_finalization,
+            snapshot_assisted_source_revision_start_index,
             resource_limit_entry,
         })
     }

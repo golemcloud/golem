@@ -460,7 +460,7 @@ mod tests {
     fn successful_snapshot_update_boundary_is_validated() {
         let update = snapshot_update(2);
         let entries = BTreeMap::from([
-            (idx(3), OplogEntry::pending_update(update.clone())),
+            (idx(3), OplogEntry::pending_update(update.clone(), None)),
             (
                 idx(5),
                 OplogEntry::successful_update(
@@ -501,12 +501,13 @@ mod tests {
     fn failed_snapshot_update_boundary_is_rejected() {
         let update = snapshot_update(2);
         let entries = BTreeMap::from([
-            (idx(3), OplogEntry::pending_update(update.clone())),
+            (idx(3), OplogEntry::pending_update(update.clone(), None)),
             (
                 idx(5),
                 OplogEntry::failed_update(
                     *update.target_revision(),
                     Some("failed".to_string()),
+                    None,
                     None,
                 ),
             ),
@@ -535,12 +536,13 @@ mod tests {
                 ComponentRevision::new(2).unwrap(),
                 Some("failed".to_string()),
                 None,
+                None,
             ),
         ] {
             let entries = BTreeMap::from([
                 (
                     idx(3),
-                    OplogEntry::pending_update(snapshot_assisted_update(2)),
+                    OplogEntry::pending_update(snapshot_assisted_update(2), None),
                 ),
                 (idx(5), outcome),
             ]);
@@ -554,7 +556,7 @@ mod tests {
     #[test]
     fn unapplied_snapshot_update_can_be_fully_removed_or_retained() {
         let update = snapshot_update(2);
-        let entries = BTreeMap::from([(idx(3), OplogEntry::pending_update(update))]);
+        let entries = BTreeMap::from([(idx(3), OplogEntry::pending_update(update, None))]);
 
         assert_eq!(
             validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
@@ -573,7 +575,7 @@ mod tests {
             target_revision: ComponentRevision::new(3).unwrap(),
         };
         let entries = BTreeMap::from([
-            (idx(2), OplogEntry::pending_update(snapshot.clone())),
+            (idx(2), OplogEntry::pending_update(snapshot.clone(), None)),
             (
                 idx(3),
                 OplogEntry::successful_update(
@@ -584,7 +586,7 @@ mod tests {
                     None,
                 ),
             ),
-            (idx(5), OplogEntry::pending_update(automatic.clone())),
+            (idx(5), OplogEntry::pending_update(automatic.clone(), None)),
             (
                 idx(6),
                 OplogEntry::successful_update(

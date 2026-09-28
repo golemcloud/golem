@@ -509,10 +509,12 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 timestamp,
                 target_revision,
                 description,
+                update_attempt_index,
             }) => Self::PendingUpdate(oplog::PendingUpdateParameters {
                 timestamp: timestamp.into(),
                 target_revision: target_revision.into(),
                 description: description.into(),
+                update_attempt_index: update_attempt_index.into(),
             }),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
                 timestamp,
@@ -529,12 +531,8 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                     oplog::SnapshotAssistedUpdateDetails {
                         pending_update_index: details.pending_update_index.into(),
                         source_component_revision: details.source_component_revision.into(),
-                        source_update_epoch: details.source_update_epoch.into(),
+                        source_revision_start_index: details.source_revision_start_index.into(),
                         snapshot_index: details.snapshot_index.into(),
-                        replay_range: oplog::OplogRegion {
-                            start: details.replay_range.start.into(),
-                            end: details.replay_range.end.into(),
-                        },
                     }
                 }),
             }),
@@ -543,20 +541,18 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                 target_revision,
                 details,
                 snapshot_assisted_details,
+                update_attempt_index,
             }) => Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
                 target_revision: target_revision.into(),
                 details,
+                update_attempt_index: update_attempt_index.map(Into::into),
                 snapshot_assisted_details: snapshot_assisted_details.map(|details| {
                     oplog::FailedSnapshotAssistedUpdateDetails {
                         pending_update_index: details.pending_update_index.into(),
                         source_component_revision: details.source_component_revision.into(),
-                        source_update_epoch: details.source_update_epoch.into(),
+                        source_revision_start_index: details.source_revision_start_index.into(),
                         snapshot_index: details.snapshot_index.map(Into::into),
-                        replay_range: details.replay_range.map(|range| oplog::OplogRegion {
-                            start: range.start.into(),
-                            end: range.end.into(),
-                        }),
                         ineligibility_reason: details.ineligibility_reason,
                     }
                 }),
@@ -1513,6 +1509,9 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::PendingUpdate(params) => Ok(Self::PendingUpdate {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 description: params.description.try_into()?,
+                update_attempt_index: params
+                    .update_attempt_index
+                    .map(golem_common::model::oplog::OplogIndex::from_u64),
             }),
             oplog::OplogEntry::SuccessfulUpdate(params) => Ok(Self::SuccessfulUpdate {
                 timestamp: timestamp_from_datetime(params.timestamp),
@@ -1538,14 +1537,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                                 source_component_revision: details
                                     .source_component_revision
                                     .try_into()?,
-                                source_update_epoch: golem_common::model::oplog::OplogIndex::from_u64(
-                                    details.source_update_epoch,
+                                source_revision_start_index: golem_common::model::oplog::OplogIndex::from_u64(
+                                    details.source_revision_start_index,
                                 ),
                                 snapshot_index: golem_common::model::oplog::OplogIndex::from_u64(details.snapshot_index),
-                                replay_range: golem_common::model::regions::OplogRegion {
-                                    start: golem_common::model::oplog::OplogIndex::from_u64(details.replay_range.start),
-                                    end: golem_common::model::oplog::OplogIndex::from_u64(details.replay_range.end),
-                                },
                             },
                         )
                     })
@@ -1558,6 +1553,9 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 )
                 .map_err(|e| e.to_string())?,
                 details: params.details,
+                update_attempt_index: params
+                    .update_attempt_index
+                    .map(golem_common::model::oplog::OplogIndex::from_u64),
                 snapshot_assisted_details: params
                     .snapshot_assisted_details
                     .map(|details| {
@@ -1565,12 +1563,8 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                             pending_update_index: golem_common::model::oplog::OplogIndex::from_u64(details.pending_update_index),
                             source_component_revision: golem_common::model::component::ComponentRevision::try_from(details.source_component_revision)
                                 .map_err(|e| e.to_string())?,
-                            source_update_epoch: golem_common::model::oplog::OplogIndex::from_u64(details.source_update_epoch),
+                            source_revision_start_index: golem_common::model::oplog::OplogIndex::from_u64(details.source_revision_start_index),
                             snapshot_index: details.snapshot_index.map(golem_common::model::oplog::OplogIndex::from_u64),
-                            replay_range: details.replay_range.map(|range| golem_common::model::regions::OplogRegion {
-                                start: golem_common::model::oplog::OplogIndex::from_u64(range.start),
-                                end: golem_common::model::oplog::OplogIndex::from_u64(range.end),
-                            }),
                             ineligibility_reason: details.ineligibility_reason,
                         })
                     })
@@ -2370,9 +2364,11 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
             M::PendingUpdate {
                 timestamp,
                 description,
+                update_attempt_index,
             } => Ok(Self::PendingUpdate(oplog::RawPendingUpdateParameters {
                 timestamp: timestamp.into(),
                 description: description.try_into()?,
+                update_attempt_index: update_attempt_index.map(Into::into),
             })),
             M::SuccessfulUpdate {
                 timestamp,
@@ -2391,12 +2387,8 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                         oplog::SnapshotAssistedUpdateDetails {
                             pending_update_index: details.pending_update_index.into(),
                             source_component_revision: details.source_component_revision.into(),
-                            source_update_epoch: details.source_update_epoch.into(),
+                            source_revision_start_index: details.source_revision_start_index.into(),
                             snapshot_index: details.snapshot_index.into(),
-                            replay_range: oplog::OplogRegion {
-                                start: details.replay_range.start.into(),
-                                end: details.replay_range.end.into(),
-                            },
                         }
                     }),
                 },
@@ -2406,20 +2398,18 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 target_revision,
                 details,
                 snapshot_assisted_details,
+                update_attempt_index,
             } => Ok(Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
                 target_revision: target_revision.into(),
                 details,
+                update_attempt_index: update_attempt_index.map(Into::into),
                 snapshot_assisted_details: snapshot_assisted_details.map(|details| {
                     oplog::FailedSnapshotAssistedUpdateDetails {
                         pending_update_index: details.pending_update_index.into(),
                         source_component_revision: details.source_component_revision.into(),
-                        source_update_epoch: details.source_update_epoch.into(),
+                        source_revision_start_index: details.source_revision_start_index.into(),
                         snapshot_index: details.snapshot_index.map(Into::into),
-                        replay_range: details.replay_range.map(|range| oplog::OplogRegion {
-                            start: range.start.into(),
-                            end: range.end.into(),
-                        }),
                         ineligibility_reason: details.ineligibility_reason,
                     }
                 }),

@@ -2235,6 +2235,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(17),
             description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload: vec![7, 8, 9],
                 mime_type: "application/octet-stream".to_string(),
@@ -2243,11 +2244,13 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(18),
             description: PublicUpdateDescription::Automatic(Empty {}),
         }),
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(19),
             description: PublicUpdateDescription::SnapshotAssistedAutomatic(
                 SnapshotAssistedAutomaticUpdateParameters {},
             ),
@@ -2260,15 +2263,15 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             snapshot_assisted_details: Some(PublicSnapshotAssistedUpdateDetails {
                 pending_update_index: OplogIndex::from_u64(3),
                 source_component_revision: ComponentRevision::new(1).unwrap(),
-                source_update_epoch: OplogIndex::INITIAL,
+                source_revision_start_index: OplogIndex::INITIAL,
                 snapshot_index: OplogIndex::from_u64(2),
-                replay_range: OplogRegion::from_range(3..=4),
             }),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(3).unwrap(),
             details: None,
+            update_attempt_index: Some(OplogIndex::from_u64(20)),
             snapshot_assisted_details: None,
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
@@ -2449,6 +2452,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(8).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(21),
             description: PublicUpdateDescription::Automatic(Empty {}),
         }),
     ]

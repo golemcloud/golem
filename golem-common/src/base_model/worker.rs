@@ -112,10 +112,9 @@ declare_structs! {
 
     pub struct SnapshotAssistedUpdateMetadata {
         pub source_component_revision: ComponentRevision,
-        pub source_update_epoch: OplogIndex,
+        pub source_revision_start_index: OplogIndex,
         pub snapshot_index: Option<OplogIndex>,
         pub snapshot_revision: Option<ComponentRevision>,
-        pub replay_range: Option<OplogRegion>,
         pub ineligibility_reason: Option<String>,
     }
 

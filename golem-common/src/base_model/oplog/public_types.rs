@@ -18,7 +18,6 @@ use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
-use crate::base_model::regions::OplogRegion;
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::tool::{SerializableToolInvocationResult, SerializableToolRpcError};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
@@ -682,9 +681,8 @@ pub enum PublicUpdateDescription {
 pub struct PublicSnapshotAssistedUpdateDetails {
     pub pending_update_index: OplogIndex,
     pub source_component_revision: ComponentRevision,
-    pub source_update_epoch: OplogIndex,
+    pub source_revision_start_index: OplogIndex,
     pub snapshot_index: OplogIndex,
-    pub replay_range: OplogRegion,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -694,9 +692,8 @@ pub struct PublicSnapshotAssistedUpdateDetails {
 pub struct PublicFailedSnapshotAssistedUpdateDetails {
     pub pending_update_index: OplogIndex,
     pub source_component_revision: ComponentRevision,
-    pub source_update_epoch: OplogIndex,
+    pub source_revision_start_index: OplogIndex,
     pub snapshot_index: Option<OplogIndex>,
-    pub replay_range: Option<OplogRegion>,
     pub ineligibility_reason: Option<String>,
 }
 

@@ -690,15 +690,6 @@ async fn snapshot_assisted_update_skips_pre_snapshot_history_and_replays_in_flig
         .as_ref()
         .expect("assisted success must expose snapshot provenance");
     assert_eq!(details.snapshot_index, Some(snapshot_index));
-    let replay_range = details
-        .replay_range
-        .as_ref()
-        .expect("assisted success must expose the replayed suffix");
-    assert_eq!(replay_range.start, snapshot_index.next());
-    assert!(
-        replay_range.end >= pending_index,
-        "the replayed suffix must reach the admitted update before the in-flight continuation"
-    );
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_eq!(
@@ -1007,14 +998,6 @@ async fn snapshot_assisted_replay_mismatch_fails_once_and_preserves_source(
         .as_ref()
         .expect("suffix replay failure must expose attempted provenance");
     assert_eq!(details.snapshot_index, Some(snapshot_index));
-    assert_eq!(
-        details
-            .replay_range
-            .as_ref()
-            .expect("suffix replay failure must retain its replay range")
-            .start,
-        snapshot_index.next()
-    );
 
     let source = executor
         .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())

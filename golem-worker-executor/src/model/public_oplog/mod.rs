@@ -716,7 +716,7 @@ fn host_response_to_public_value(response: HostResponse) -> Result<TypedSchemaVa
 #[async_trait]
 impl PublicOplogEntryOps for PublicOplogEntry {
     async fn from_oplog_entry(
-        _oplog_index: OplogIndex,
+        oplog_index: OplogIndex,
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
@@ -1067,6 +1067,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::PendingUpdate {
                 timestamp,
                 description,
+                update_attempt_index,
             } => {
                 let target_revision = *description.target_revision();
                 let public_description = match description {
@@ -1094,6 +1095,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     timestamp,
                     target_revision,
                     description: public_description,
+                    update_attempt_index: update_attempt_index.unwrap_or(oplog_index),
                 }))
             }
             OplogEntry::SuccessfulUpdate {
@@ -1127,9 +1129,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         PublicSnapshotAssistedUpdateDetails {
                             pending_update_index: details.pending_update_index,
                             source_component_revision: details.source_component_revision,
-                            source_update_epoch: details.source_update_epoch,
+                            source_revision_start_index: details.source_revision_start_index,
                             snapshot_index: details.snapshot_index,
-                            replay_range: details.replay_range,
                         }
                     }),
                 }))
@@ -1139,17 +1140,18 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 target_revision,
                 details,
                 snapshot_assisted_details,
+                update_attempt_index,
             } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
                 timestamp,
                 target_revision,
                 details,
+                update_attempt_index,
                 snapshot_assisted_details: snapshot_assisted_details.map(|details| {
                     PublicFailedSnapshotAssistedUpdateDetails {
                         pending_update_index: details.pending_update_index,
                         source_component_revision: details.source_component_revision,
-                        source_update_epoch: details.source_update_epoch,
+                        source_revision_start_index: details.source_revision_start_index,
                         snapshot_index: details.snapshot_index,
-                        replay_range: details.replay_range,
                         ineligibility_reason: details.ineligibility_reason,
                     }
                 }),

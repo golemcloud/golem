@@ -1290,12 +1290,14 @@ pub struct AgentStatusRecord {
         HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
     pub revoked_cards: HashSet<CardId>,
     pub deleted_regions: DeletedRegions,
-    /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
-    /// if only automatic updates were used or the version of the latest snapshot-based update
+    /// Historical component revision used for replay metadata at the recovery baseline.
+    /// Initially the `Create` revision; successful manual snapshot updates set it to their target
+    /// revision, and successful snapshot-assisted automatic updates set it to their source revision.
+    /// Automatic updates without snapshot assistance leave it unchanged.
     pub component_revision_for_replay: ComponentRevision,
-    /// Oplog index that began the active component revision epoch (`Create` or the latest
+    /// Oplog index that established the active component revision (`Create` or the latest
     /// surviving `SuccessfulUpdate`).
-    pub component_revision_epoch: OplogIndex,
+    pub component_revision_start_index: OplogIndex,
     /// Semantic retry policy state per `retry_from` oplog index.
     pub current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
     /// Mandatory recovery snapshot established by a successful update. Agent will call
@@ -1347,7 +1349,7 @@ impl Default for AgentStatusRecord {
             revoked_cards: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
-            component_revision_epoch: OplogIndex::INITIAL,
+            component_revision_start_index: OplogIndex::INITIAL,
             current_retry_state: HashMap::new(),
             authoritative_snapshot: None,
             last_automatic_snapshot_index: None,
@@ -2644,7 +2646,7 @@ pub enum PendingUpdateKind {
     Automatic,
     SnapshotAssistedAutomatic {
         source_component_revision: ComponentRevision,
-        source_update_epoch: OplogIndex,
+        source_revision_start_index: OplogIndex,
         selection: SnapshotAssistedUpdateSelection,
     },
     SnapshotBased,
@@ -2653,7 +2655,7 @@ pub enum PendingUpdateKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum SnapshotAssistedUpdateIneligibilityReason {
-    NoSnapshotInSourceEpoch,
+    NoSnapshotSinceSourceRevisionStart,
     SnapshotExcluded {
         snapshot_index: OplogIndex,
         exclusion_through: OplogIndex,
@@ -2686,6 +2688,9 @@ pub struct PendingUpdateRef {
     pub timestamp: Timestamp,
     /// Index of the `PendingUpdate` oplog entry holding the full description.
     pub oplog_index: OplogIndex,
+    /// Durable admission identity returned to the caller. For manual updates this is the
+    /// originating `PendingAgentInvocation` index; otherwise it equals `oplog_index`.
+    pub admission_index: OplogIndex,
     pub target_revision: ComponentRevision,
     pub kind: PendingUpdateKind,
 }

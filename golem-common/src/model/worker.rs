@@ -388,10 +388,11 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 source_component_revision: value.source_component_revision.try_into()?,
-                source_update_epoch: OplogIndex::from_u64(value.source_update_epoch),
+                source_revision_start_index: OplogIndex::from_u64(
+                    value.source_revision_start_index,
+                ),
                 snapshot_index: value.snapshot_index.map(OplogIndex::from_u64),
                 snapshot_revision: value.snapshot_revision.map(TryInto::try_into).transpose()?,
-                replay_range: value.replay_range.map(Into::into),
                 ineligibility_reason: value.ineligibility_reason,
             })
         }
@@ -403,10 +404,9 @@ mod protobuf {
         fn from(value: SnapshotAssistedUpdateMetadata) -> Self {
             Self {
                 source_component_revision: value.source_component_revision.into(),
-                source_update_epoch: value.source_update_epoch.into(),
+                source_revision_start_index: value.source_revision_start_index.into(),
                 snapshot_index: value.snapshot_index.map(Into::into),
                 snapshot_revision: value.snapshot_revision.map(Into::into),
-                replay_range: value.replay_range.map(Into::into),
                 ineligibility_reason: value.ineligibility_reason,
             }
         }

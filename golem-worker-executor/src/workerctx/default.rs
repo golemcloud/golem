@@ -660,9 +660,15 @@ impl UpdateManagement for Context {
         target_revision: ComponentRevision,
         details: Option<String>,
         snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
+        update_attempt_index: Option<OplogIndex>,
     ) {
         self.durable_ctx
-            .on_worker_update_failed(target_revision, details, snapshot_assisted_details)
+            .on_worker_update_failed(
+                target_revision,
+                details,
+                snapshot_assisted_details,
+                update_attempt_index,
+            )
             .await
     }
 

@@ -249,6 +249,7 @@ message RawPendingAgentInvocationParameters {
 
 message RawPendingUpdateParameters {
   RawUpdateDescription description = 1;
+  optional uint64 update_attempt_index = 2;
 }
 
 message RawSuccessfulUpdateParameters {
@@ -262,24 +263,23 @@ message RawSuccessfulUpdateParameters {
 message RawSnapshotAssistedUpdateDetails {
   uint64 pending_update_index = 1;
   uint64 source_component_revision = 2;
-  uint64 source_update_epoch = 3;
+  uint64 source_revision_start_index = 3;
   uint64 snapshot_index = 4;
-  RawOplogRegion replay_range = 5;
 }
 
 message RawFailedUpdateParameters {
   uint64 target_revision = 1;
   optional string details = 2;
   optional RawFailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 3;
+  optional uint64 update_attempt_index = 4;
 }
 
 message RawFailedSnapshotAssistedUpdateDetails {
   uint64 pending_update_index = 1;
   uint64 source_component_revision = 2;
-  uint64 source_update_epoch = 3;
+  uint64 source_revision_start_index = 3;
   optional uint64 snapshot_index = 4;
-  optional RawOplogRegion replay_range = 5;
-  optional string ineligibility_reason = 6;
+  optional string ineligibility_reason = 5;
 }
 
 message RawGrowMemoryParameters {
