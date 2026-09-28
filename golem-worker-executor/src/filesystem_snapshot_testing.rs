@@ -22,7 +22,7 @@ use crate::filesystem_snapshot::{
     ChangeDetection, FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotScope, SnapshotStoreError,
 };
-use crate::services::agent_filesystem_snapshots::{AgentFilesystemSnapshots, TokioClock};
+use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use crate::services::golem_config::FilesystemSnapshotUploadConfig;
 use crate::services::shutdown::Shutdown;
 use async_trait::async_trait;
@@ -175,10 +175,9 @@ impl TestFilesystemSnapshotStore {
         uploads: FilesystemSnapshotUploadConfig,
         shutdown: &Shutdown,
     ) -> Arc<AgentFilesystemSnapshots> {
-        let snapshots = Arc::new(AgentFilesystemSnapshots::enabled(
+        let snapshots = Arc::new(AgentFilesystemSnapshots::enabled_without_storage_check(
             Arc::new(self.clone()),
             uploads,
-            Arc::new(TokioClock),
             Arc::new(crate::services::agent_filesystem_snapshots::UnlimitedRoom),
             shutdown.token(),
         ));

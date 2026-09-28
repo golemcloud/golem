@@ -394,12 +394,24 @@ impl AgentFilesystemSnapshots {
     }
 
     /// Makes a service that keeps no filesystem snapshots.
-    pub(crate) fn disabled() -> Self {
+    fn disabled() -> Self {
         Self { enabled: None }
     }
 
+    /// Makes an enabled service over `store` without the storage check of [`Self::bind`], so
+    /// that executor tests can keep filesystem snapshots on unmanaged storage.
+    #[cfg(feature = "test-utils")]
+    pub(crate) fn enabled_without_storage_check(
+        store: Arc<dyn FilesystemSnapshotStore>,
+        settings: FilesystemSnapshotUploadConfig,
+        room: Arc<dyn VolumeRoom>,
+        shutdown: CancellationToken,
+    ) -> Self {
+        Self::enabled(store, settings, Arc::new(TokioClock), room, shutdown)
+    }
+
     /// Makes a service over `store` with `settings`.
-    pub(crate) fn enabled(
+    fn enabled(
         store: Arc<dyn FilesystemSnapshotStore>,
         settings: FilesystemSnapshotUploadConfig,
         clock: Arc<dyn SnapshotClock>,
