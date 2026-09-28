@@ -792,3 +792,26 @@ fn capability_values_render_as_redacted_in_every_language() {
         assert!(!quota.contains("gpu-quota"), "lang={lang}");
     }
 }
+
+/// The host fills an auto-injected principal, so an agent id carries only the
+/// user-supplied constructor parameters.
+#[test]
+fn agent_id_params_skip_the_auto_injected_principal() {
+    let input_schema = InputSchema::parameters(vec![
+        NamedField::user_supplied("name", SchemaType::string()),
+        NamedField::auto_injected(
+            "owner",
+            golem_common::schema::agent::AutoInjectedKind::Principal,
+            SchemaType::record(vec![]),
+        ),
+    ]);
+    let graph = SchemaGraph::anonymous(SchemaType::string());
+    let parsed =
+        parse_agent_id_params("\"a\"", &graph, &input_schema, &SourceLanguage::Rust).unwrap();
+    assert_eq!(
+        parsed,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("a".to_string())]
+        }
+    );
+}
