@@ -65,7 +65,15 @@ object ToolRpcClient {
     }
 
   def wireTransport(toolName: String): WireToolRpcTransport =
-    new JsWireToolRpcTransport(new ToolHostApi.RawToolRpc(toolName))
+    try new JsWireToolRpcTransport(ToolHostApi.RawToolRpc.create(toolName))
+    catch {
+      case js.JavaScriptException(error) =>
+        throw new ToolRpcConstructionException(ToolHostApi.decodeRpcFailure(error))
+      case scala.util.control.NonFatal(error) =>
+        throw new ToolRpcConstructionException(
+          ToolRpcFailure.ProtocolError(String.valueOf(error.getMessage))
+        )
+    }
 }
 
 private[golem] final class JsWireToolRpcTransport(

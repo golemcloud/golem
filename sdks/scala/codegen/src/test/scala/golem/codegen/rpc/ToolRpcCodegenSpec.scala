@@ -114,6 +114,20 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(!content.contains("new _root_.golem.tool.AmbientToolCallBackend"))
   }
 
+  test("root-package tool clients use a resolvable macro type argument") {
+    val source =
+      """import golem.runtime.annotations._
+        |
+        |@toolDefinition
+        |trait RootTool {
+        |  def run(value: String): String
+        |}
+        |""".stripMargin
+
+    val content = generate("RootTool.scala" -> source).files.head.content
+    assert(content.contains("WireToolMacro.inputGraph[RootTool]"))
+  }
+
   test("drops Principal and stdout parameters and keeps stdin; stdout returns a started invocation") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
 
@@ -189,7 +203,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
         """WireToolClientRuntime.run(__wireTransport, _root_.scala.List("status"), __input"""
       )
     )
-    assert(content.contains("WireToolMacro.inputGraph[example.Git](_root_.scala.List(\"status\"))"))
+    assert(content.contains("WireToolMacro.inputGraph[_root_.example.Git](_root_.scala.List(\"status\"))"))
   }
 
   test("subtree methods return wrapper clients carrying concrete wire fields") {
@@ -392,7 +406,9 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
 
     assert(
-      content.contains("WireToolMacro.inputGraph[example.RootTool](_root_.scala.List(\"group\", \"nested\", \"run\"))")
+      content.contains(
+        "WireToolMacro.inputGraph[_root_.example.RootTool](_root_.scala.List(\"group\", \"nested\", \"run\"))"
+      )
     )
   }
 

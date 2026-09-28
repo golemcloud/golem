@@ -251,5 +251,5 @@ object ToolMiddlewareContractFixtures {
   )
 
   val ordinaryClientSnapshotSha256: String =
-    "bcb7e0213fe84632004f11b4a876b589dcf043cf1ea730dd22540e8602529873"
+    "37866258c53f168992a3f9773547d46fbf667a408309752d7adb8386f907e778"
 }

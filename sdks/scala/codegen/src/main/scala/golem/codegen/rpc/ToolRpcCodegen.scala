@@ -156,6 +156,9 @@ object ToolRpcCodegen {
         s"_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[$err], $ok]]"
     }
 
+    private def macroTypeRef(tool: Tool): String =
+      if (tool.pkg.isEmpty) tool.name else s"_root_.${tool.fqn}"
+
     private def wireField(tool: Tool, method: Method, param: Param): String = {
       val name  = canonicalValueName(tool, method, param)
       val codec =
@@ -247,7 +250,9 @@ object ToolRpcCodegen {
           else
             s"_root_.golem.tool.WireToolClientRuntime.complete(_root_.golem.tool.WireToolClientRuntime.run(__wireTransport, $commandPathExpr, __input, $stdinExpr, $errorDecoder))(__r => $wireDecode)"
         return s"""${indent}def ${m.name}(${kept.map(paramDecl).mkString(", ")}): $retType = {
-$indent  val __graph = _root_.golem.runtime.macros.WireToolMacro.inputGraph[${tool.fqn}](${ToolProjectionRendering
+$indent  val __graph = _root_.golem.runtime.macros.WireToolMacro.inputGraph[${macroTypeRef(
+            tool
+          )}](${ToolProjectionRendering
             .stringList(schemaPath)})
 $indent  val __input = _root_.golem.tool.WireToolClientRuntime.input($codec, __graph, $value)
 $indent  $call
@@ -270,7 +275,7 @@ $indent}"""
         else
           s"_root_.golem.tool.WireToolClientRuntime.complete(_root_.golem.tool.WireToolClientRuntime.run(__wireTransport, $commandPathExpr, __input, $stdinExpr, $errorDecoder))(__r => $wireDecode)"
       s"""${indent}def ${m.name}($paramDecls): $retType = {
-$indent  val __graph = _root_.golem.runtime.macros.WireToolMacro.inputGraph[${root.fqn}]($commandPathExpr)
+$indent  val __graph = _root_.golem.runtime.macros.WireToolMacro.inputGraph[${macroTypeRef(root)}]($commandPathExpr)
 $indent  val __input = _root_.golem.tool.WireToolClientRuntime.inputFields(__graph, __inheritedPrefix ++ ${listExpr(
           fields,
           s"$indent "
