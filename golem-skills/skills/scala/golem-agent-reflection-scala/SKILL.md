@@ -98,10 +98,6 @@ def invokeDiscoveredToolDynamically(
     tool    <- Reflection.getToolType(toolName).left.map(_.toString)
     command <- tool.command(path).left.map(_.toString)
     input   <- command.packJson(json).left.map(_.toString)
-    _       <- command.inputSchema
-                 .validateValue(input)
-                 .left
-                 .map(_.map(_.message).mkString("; "))
   } yield (tool, command, TypedSchemaValue(command.inputSchema.graph, input))
 
   prepared match {

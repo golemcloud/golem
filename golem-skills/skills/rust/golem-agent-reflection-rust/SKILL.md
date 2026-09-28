@@ -303,7 +303,6 @@ async fn search_dynamically() -> Result<Value, GolemReflectError> {
     let input = method
         .input()
         .pack_json(&json!({ "query": "golem", "cursor": null }))?;
-    method.input().validate_value(&input)?;
 
     let agent_id = agent_type.agent_id_json(&json!({ "tenant": "docs" }), None)?;
     let result = match agent_id

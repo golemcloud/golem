@@ -139,8 +139,6 @@ const dynamicSearch = Effect.scoped(Effect.gen(function* () {
     return yield* Effect.fail("SearchAgent.search is unavailable")
 
   const input = method.input.packJson({ query: "golem", cursor: null })
-  const inputCheck = method.input.validateValue(input)
-  if (!inputCheck.success) return yield* Effect.fail(inputCheck.issues)
 
   const identity = yield* type.agentId({ tenant: "docs" })
   const dynamic = yield* identity.dynamicClient()

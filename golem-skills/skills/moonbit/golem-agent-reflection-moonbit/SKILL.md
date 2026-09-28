@@ -127,9 +127,6 @@ async fn invoke_discovered_tool_dynamically() -> String {
     Ok(value) => value
     Err(error) => return "input:\{describe_dynamic_tool_error(error)}"
   }
-  command.input_schema().validate_value(packed) catch {
-    error => return "input:\{Repr(error)}"
-  }
   let typed_input = command.input_schema().typed_value(packed) catch {
     error => return "input:\{Repr(error)}"
   }

@@ -3,7 +3,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { SchemaRef, type JsonValue } from "../src/SchemaRef.js"
 import { field, t, type SchemaGraph, type SchemaType } from "../src/internal/schema-model/model.js"
 import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
-import { fromCanonicalJson } from "../src/internal/reflection/schemaRender.js"
+import { fromCanonicalJson, SchemaRenderError } from "../src/internal/reflection/schemaRender.js"
 import { schemaValueConforms } from "../src/internal/reflection/schemaValidation.js"
 
 interface ConformanceCase {
@@ -264,7 +264,7 @@ function executeCase(testCase: ConformanceCase): void {
         expect(
           () => schema.packJson(input),
           `${testCase.id}: direct packing accepted the input`,
-        ).toThrow()
+        ).toThrow(SchemaRenderError)
         let packed: ReturnType<typeof fromCanonicalJson>
         try {
           packed = fromCanonicalJson(schema.graph, schema.root, input)
