@@ -1655,7 +1655,7 @@ rm -rf build-out
 '''
 
 [tasks.build-benchmark-components]
-description = "Rebuilds only the benchmark test WASM components"
+description = "Rebuilds and verifies the test WASM components required by the CI benchmark suite"
 dependencies = ["wit", "build-sdk-ts"]
 script_runner = "@duckscript"
 script = '''
@@ -1668,6 +1668,8 @@ if ${golem_cli_empty}
 end
 cd test-components
 exec --fail-on-error ./build-components.sh benchmarks rebuild
+cd ..
+exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin benchmarks -- suite --check-artifacts integration-tests/benchmark_suites/ci.yaml spawned
 '''
 
 [tasks.run-benchmark-suite-orb]
