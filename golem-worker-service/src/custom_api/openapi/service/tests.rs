@@ -10,6 +10,20 @@ use golem_service_base::custom_api::{
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
+pub(in crate::custom_api) fn corpus_case(id: &str) -> serde_json::Value {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+    ))
+    .unwrap();
+    corpus["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["id"] == id)
+        .unwrap_or_else(|| panic!("missing shared vector {id}"))
+        .clone()
+}
+
 pub(in crate::custom_api) async fn inputs(providers: usize) -> Arc<OpenApiInputs> {
     test_resolver(provider_routes(providers))
         .resolve_matching_route(
@@ -84,6 +98,15 @@ pub(in crate::custom_api) fn controlled() -> (OpenApiService, mpsc::UnboundedRec
 
 #[test_r::test]
 fn provider_has_no_service_imposed_timeout() {
+    let case = corpus_case("openapi-provider-no-service-timeout");
+    let elapsed_ms = case["input"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|event| event.as_str().unwrap().strip_prefix("time:"))
+        .unwrap()
+        .parse::<u64>()
+        .unwrap();
     struct Delayed;
     #[async_trait]
     impl ProviderInvoker for Delayed {
@@ -103,13 +126,22 @@ fn provider_has_no_service_imposed_timeout() {
             let invocation =
                 tokio::spawn(async move { invoke_provider(Arc::new(Delayed), &route).await });
             tokio::task::yield_now().await;
-            tokio::time::advance(std::time::Duration::from_secs(60)).await;
-            assert_eq!(invocation.await.unwrap().unwrap(), document());
+            tokio::time::advance(std::time::Duration::from_millis(elapsed_ms)).await;
+            assert_eq!(
+                invocation.await.unwrap().unwrap(),
+                document(),
+                "{}",
+                case["id"]
+            );
         });
 }
 
 #[test_r::test]
 async fn provider_size_limit_is_checked() {
+    let case = corpus_case("openapi-byte-limit-exceeded");
+    let output_bytes = case["input"]["limit_check"]["output_bytes"]
+        .as_u64()
+        .unwrap() as usize;
     struct Oversized;
     #[async_trait]
     impl ProviderInvoker for Oversized {
@@ -117,13 +149,16 @@ async fn provider_size_limit_is_checked() {
             Ok("x".repeat(PROVIDER_BYTE_LIMIT + 1))
         }
     }
+    assert_eq!(output_bytes, PROVIDER_BYTE_LIMIT + 1, "{}", case["id"]);
     let route_inputs = inputs(1).await;
     assert_eq!(
         invoke_provider(Arc::new(Oversized), &route_inputs.routes[1])
             .await
             .unwrap_err()
             .category(),
-        "provider-size"
+        case["expect"]["error"].as_str().unwrap(),
+        "{}",
+        case["id"]
     );
 }
 

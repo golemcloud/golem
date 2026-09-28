@@ -201,7 +201,8 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
                     session_role: None,
                 })),
             })
-            .await,
+            .await
+            .unwrap(),
         index
     );
     Ok(handle)
@@ -579,7 +580,8 @@ async fn prepare_foreign_topology(
                 },
             ))),
         })
-        .await;
+        .await
+        .unwrap();
     Ok((attachment, mapping))
 }
 
@@ -646,7 +648,7 @@ async fn active_consumer_read_repairs_lost_producer_activation_without_a_timer(
                 ))),
                 None,
             ))
-            .await;
+            .await?;
         let request =
             DurableStreamReadRequest::AttachedConsumer(Box::new(AttachedStreamSegmentRequest {
                 format_version: 1,
@@ -683,7 +685,7 @@ async fn active_consumer_read_repairs_lost_producer_activation_without_a_timer(
                 ))),
                 None,
             ))
-            .await;
+            .await?;
         for _ in 0..2 {
             tokio::time::timeout(
                 Duration::from_secs(10),
@@ -778,7 +780,8 @@ async fn prepare_session(
                 summary: None,
                 record: OplogPayload::Inline(Box::new(record)),
             })
-            .await;
+            .await
+            .unwrap();
         if prepared {
             assert_eq!(
                 worker
@@ -789,7 +792,8 @@ async fn prepare_session(
                         trace_states.clone(),
                         invocation_context.clone(),
                     ))
-                    .await,
+                    .await
+                    .unwrap(),
                 pending_index
             );
         }
@@ -812,7 +816,8 @@ async fn prepare_session(
                     scope_card_id: None,
                 }),
             })
-            .await;
+            .await
+            .unwrap();
         worker
             .add_and_commit_oplog(OplogEntry::AgentInvocationFinished {
                 timestamp: Timestamp::now_utc(),
@@ -823,7 +828,8 @@ async fn prepare_session(
                 consumed_fuel: 0,
                 component_revision: metadata.last_known_status.component_revision,
             })
-            .await;
+            .await
+            .unwrap();
     }
     Ok(session_key)
 }
@@ -857,7 +863,8 @@ async fn completion_receipt_precedes_fifo_status_fold(
             context.trace_states.clone(),
             invocation_context.clone(),
         ))
-        .await;
+        .await
+        .unwrap();
     worker
         .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
@@ -875,7 +882,8 @@ async fn completion_receipt_precedes_fifo_status_fold(
                 scope_card_id: None,
             }),
         })
-        .await;
+        .await
+        .unwrap();
     let finished_index = worker
         .add_to_oplog(OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
@@ -886,7 +894,8 @@ async fn completion_receipt_precedes_fifo_status_fold(
             consumed_fuel: 0,
             component_revision: metadata.last_known_status.component_revision,
         })
-        .await;
+        .await
+        .unwrap();
 
     // Finishing changes Running to Idle, so the synchronous recovery-index update removes this
     // worker. Holding that write deterministically pauses the actor after its durable commit and
@@ -900,6 +909,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
                     golem_worker_executor::services::oplog::CommitLevel::Always,
                 )
                 .await
+                .unwrap()
         }
     });
     tokio::time::timeout(Duration::from_secs(20), fold.entered()).await?;

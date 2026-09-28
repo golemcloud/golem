@@ -2058,7 +2058,8 @@ mod tests {
                 durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
                 span_started: None,
             })
-            .await;
+            .await
+            .unwrap();
         let child_start = oplog
             .add(OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
@@ -2074,7 +2075,8 @@ mod tests {
                 )),
                 span_started: None,
             })
-            .await;
+            .await
+            .unwrap();
         oplog
             .add(OplogEntry::End {
                 timestamp: Timestamp::now_utc(),
@@ -2090,7 +2092,8 @@ mod tests {
                 span_finished: None,
                 span_attributes: None,
             })
-            .await;
+            .await
+            .unwrap();
         child_start
     }
 
