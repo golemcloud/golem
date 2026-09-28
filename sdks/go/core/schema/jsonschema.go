@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -105,8 +106,55 @@ func refPointer(id string) string {
 	return "#/$defs/" + escaped
 }
 
-func integerSchema(min, max int64) obj {
+// integerSchema renders a narrow signed integer: the type's own range,
+// narrowed by any signed bounds among its restrictions.
+func integerSchema(min, max int64, rs *NumericRestrictions) obj {
+	if rs != nil && rs.Min != nil && rs.Min.Kind == BoundSigned {
+		min = maxInt64(min, rs.Min.Signed)
+	}
+	if rs != nil && rs.Max != nil && rs.Max.Kind == BoundSigned {
+		max = minInt64(max, rs.Max.Signed)
+	}
 	return obj{"type": "integer", "minimum": min, "maximum": max}
+}
+
+// unsignedSchema renders a narrow unsigned integer the same way.
+func unsignedSchema(max uint64, rs *NumericRestrictions) obj {
+	var min uint64
+	if rs != nil && rs.Min != nil && rs.Min.Kind == BoundUnsigned {
+		min = rs.Min.Unsigned
+	}
+	if rs != nil && rs.Max != nil && rs.Max.Kind == BoundUnsigned && rs.Max.Unsigned < max {
+		max = rs.Max.Unsigned
+	}
+	return obj{"type": "integer", "minimum": min, "maximum": max}
+}
+
+// floatSchema renders a float, with minimum and maximum only where the
+// restrictions set float bounds.
+func floatSchema(lo, hi float64, rs *NumericRestrictions) obj {
+	out := obj{"type": "number"}
+	if rs != nil && rs.Min != nil && rs.Min.Kind == BoundFloatBits {
+		out["minimum"] = math.Max(math.Float64frombits(rs.Min.FloatBits), lo)
+	}
+	if rs != nil && rs.Max != nil && rs.Max.Kind == BoundFloatBits {
+		out["maximum"] = math.Min(math.Float64frombits(rs.Max.FloatBits), hi)
+	}
+	return out
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // integerStringSchema is the shape wide integers take: a canonical base-10
@@ -125,12 +173,26 @@ func integerStringSchema(min, max string, signed bool, format string) obj {
 	}
 }
 
-func signed64Schema() obj {
-	return integerStringSchema("-9223372036854775808", "9223372036854775807", true, "int64")
+func signed64Schema(rs *NumericRestrictions) obj {
+	min, max := int64(math.MinInt64), int64(math.MaxInt64)
+	if rs != nil && rs.Min != nil && rs.Min.Kind == BoundSigned {
+		min = rs.Min.Signed
+	}
+	if rs != nil && rs.Max != nil && rs.Max.Kind == BoundSigned {
+		max = rs.Max.Signed
+	}
+	return integerStringSchema(strconv.FormatInt(min, 10), strconv.FormatInt(max, 10), true, "int64")
 }
 
-func unsigned64Schema() obj {
-	return integerStringSchema("0", "18446744073709551615", false, "uint64")
+func unsigned64Schema(rs *NumericRestrictions) obj {
+	min, max := uint64(0), uint64(math.MaxUint64)
+	if rs != nil && rs.Min != nil && rs.Min.Kind == BoundUnsigned {
+		min = rs.Min.Unsigned
+	}
+	if rs != nil && rs.Max != nil && rs.Max.Kind == BoundUnsigned {
+		max = rs.Max.Unsigned
+	}
+	return integerStringSchema(strconv.FormatUint(min, 10), strconv.FormatUint(max, 10), false, "uint64")
 }
 
 // base64URLLength is the encoded length of n raw bytes in base64url with no
@@ -168,23 +230,25 @@ func (r Ref) renderBody(body SchemaTypeBody) (obj, error) {
 	case BoolType:
 		return obj{"type": "boolean"}, nil
 	case S8Type:
-		return integerSchema(math.MinInt8, math.MaxInt8), nil
+		return integerSchema(math.MinInt8, math.MaxInt8, b.Restrictions), nil
 	case S16Type:
-		return integerSchema(math.MinInt16, math.MaxInt16), nil
+		return integerSchema(math.MinInt16, math.MaxInt16, b.Restrictions), nil
 	case S32Type:
-		return integerSchema(math.MinInt32, math.MaxInt32), nil
+		return integerSchema(math.MinInt32, math.MaxInt32, b.Restrictions), nil
 	case S64Type:
-		return signed64Schema(), nil
+		return signed64Schema(b.Restrictions), nil
 	case U8Type:
-		return integerSchema(0, math.MaxUint8), nil
+		return unsignedSchema(math.MaxUint8, b.Restrictions), nil
 	case U16Type:
-		return integerSchema(0, math.MaxUint16), nil
+		return unsignedSchema(math.MaxUint16, b.Restrictions), nil
 	case U32Type:
-		return integerSchema(0, math.MaxUint32), nil
+		return unsignedSchema(math.MaxUint32, b.Restrictions), nil
 	case U64Type:
-		return unsigned64Schema(), nil
-	case F32Type, F64Type:
-		return obj{"type": "number"}, nil
+		return unsigned64Schema(b.Restrictions), nil
+	case F32Type:
+		return floatSchema(-math.MaxFloat32, math.MaxFloat32, b.Restrictions), nil
+	case F64Type:
+		return floatSchema(-math.MaxFloat64, math.MaxFloat64, b.Restrictions), nil
 	case CharType:
 		return obj{"type": "string", "minLength": 1, "maxLength": 1}, nil
 	case StringType:
@@ -347,7 +411,7 @@ func (r Ref) renderBody(body SchemaTypeBody) (obj, error) {
 	case DurationType:
 		return obj{
 			"type":                 "object",
-			"properties":           obj{"nanoseconds": signed64Schema()},
+			"properties":           obj{"nanoseconds": signed64Schema(nil)},
 			"required":             []string{"nanoseconds"},
 			"additionalProperties": false,
 			"title":                "Duration in nanoseconds",
@@ -367,17 +431,27 @@ func (r Ref) renderBody(body SchemaTypeBody) (obj, error) {
 		}
 		return obj{"oneOf": oneOf}, nil
 
+	// Reflection packs and unpacks JSON, and none of these has a JSON form:
+	// their schemas accept no value at all, as the host's reflection schemas
+	// do.
 	case SecretType:
-		return obj{"writeOnly": true, "x-golem-capability": "secret"}, nil
+		return hostManagedSchema("secret"), nil
 	case QuotaTokenType:
-		return obj{"writeOnly": true, "x-golem-capability": "quota-token"}, nil
+		return hostManagedSchema("quota-token"), nil
 	case PermissionCardType:
-		return obj{"writeOnly": true, "x-golem-capability": "permission-card"}, nil
+		return hostManagedSchema("permission-card"), nil
 
 	case FutureType, StreamType:
-		return obj{"type": "null", "description": "WASI P3 placeholder"}, nil
+		return obj{"not": obj{}}, nil
 	}
 	return nil, fmt.Errorf("golem: cannot render %T as JSON Schema", body)
+}
+
+func hostManagedSchema(kind string) obj {
+	return obj{
+		"not":         obj{},
+		"description": "Host-managed " + kind + " capabilities cannot be supplied externally",
+	}
 }
 
 // renderSide renders an optional result side; an absent side carries no value.
@@ -410,45 +484,46 @@ func textSchema(rs TextRestrictions) obj {
 	if rs.Regex != nil {
 		text["pattern"] = *rs.Regex
 	}
-	out := obj{
+	language := obj{"type": "string"}
+	if rs.Languages != nil {
+		language["enum"] = *rs.Languages
+	}
+	return obj{
 		"type":                 "object",
-		"properties":           obj{"text": text, "language": obj{"type": "string"}},
+		"properties":           obj{"text": text, "language": language},
 		"required":             []string{"text"},
 		"additionalProperties": false,
 	}
-	if rs.Languages != nil {
-		out["description"] = "Allowed languages: " + strings.Join(*rs.Languages, ", ")
-	}
-	return out
 }
 
-// mimeTypePattern constrains a MIME type to type/subtype with optional
-// parameters.
-const mimeTypePattern = `^[A-Za-z0-9!#$%&'*+.^_` + "`" + `|~-]+/[A-Za-z0-9!#$%&'*+.^_` + "`" + `|~-]+(?:;.*)?$`
+// mimeTypePattern is a bare type/subtype, without parameters — the form the
+// canonical encoding accepts.
+const mimeTypePattern = `^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$`
+
+// base64URLPattern matches canonical unpadded base64url: the unused low bits
+// of a final partial group are zero.
+const base64URLPattern = `^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$`
 
 func binarySchema(rs BinaryRestrictions) obj {
 	// The restrictions count raw bytes, but the JSON field carries them
 	// base64url-encoded, so the bounds are converted to encoded lengths.
-	bytesField := obj{"type": "string", "contentEncoding": "base64url"}
+	bytesField := obj{"type": "string", "contentEncoding": "base64url", "pattern": base64URLPattern}
 	if rs.MinBytes != nil {
 		bytesField["minLength"] = base64URLLength(*rs.MinBytes)
 	}
 	if rs.MaxBytes != nil {
 		bytesField["maxLength"] = base64URLLength(*rs.MaxBytes)
 	}
-	out := obj{
-		"type": "object",
-		"properties": obj{
-			"bytes":    bytesField,
-			"mimeType": obj{"type": "string", "pattern": mimeTypePattern},
-		},
+	mimeType := obj{"type": "string", "pattern": mimeTypePattern}
+	if rs.MimeTypes != nil {
+		mimeType["enum"] = *rs.MimeTypes
+	}
+	return obj{
+		"type":                 "object",
+		"properties":           obj{"bytes": bytesField, "mimeType": mimeType},
 		"required":             []string{"bytes"},
 		"additionalProperties": false,
 	}
-	if rs.MimeTypes != nil {
-		out["description"] = "Allowed MIME types: " + strings.Join(*rs.MimeTypes, ", ")
-	}
-	return out
 }
 
 func pathSchema(spec PathSpec) obj {
@@ -493,7 +568,7 @@ func quantitySchema(spec QuantitySpec) obj {
 	out := obj{
 		"type": "object",
 		"properties": obj{
-			"mantissa": signed64Schema(),
+			"mantissa": signed64Schema(nil),
 			"scale":    obj{"type": "integer"},
 			"unit":     obj{"type": "string"},
 		},

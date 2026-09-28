@@ -148,7 +148,7 @@ func TestJSONSchemaDraftMarkerIsOptional(t *testing.T) {
 func TestJSONSchemaCapabilitiesAreNotConstructible(t *testing.T) {
 	root := typ(SecretType{Inner: typ(StringType{})})
 	assertJSON(t, "secret", renderDoc(t, SchemaGraph{Root: root}, false),
-		`{"writeOnly":true,"x-golem-capability":"secret"}`)
+		`{"description":"Host-managed secret capabilities cannot be supplied externally","not":{}}`)
 }
 
 func TestJSONSchemaMetadataIsAttached(t *testing.T) {

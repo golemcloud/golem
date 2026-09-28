@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -451,12 +452,21 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 
 	case S8Type:
 		n, err := jsonInt(value, path, math.MinInt8, math.MaxInt8)
+		if err == nil {
+			err = checkNumeric(b.Restrictions, signedBound(n), path)
+		}
 		return S8Value{Value: int8(n)}, err
 	case S16Type:
 		n, err := jsonInt(value, path, math.MinInt16, math.MaxInt16)
+		if err == nil {
+			err = checkNumeric(b.Restrictions, signedBound(n), path)
+		}
 		return S16Value{Value: int16(n)}, err
 	case S32Type:
 		n, err := jsonInt(value, path, math.MinInt32, math.MaxInt32)
+		if err == nil {
+			err = checkNumeric(b.Restrictions, signedBound(n), path)
+		}
 		return S32Value{Value: int32(n)}, err
 	case S64Type:
 		raw, ok := value.(string)
@@ -464,16 +474,28 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 			return nil, typeErr(path, "canonical integer string", value)
 		}
 		n, err := checkedIntegerString(raw, pathOrRoot(path))
+		if err == nil {
+			err = checkNumeric(b.Restrictions, signedBound(n), path)
+		}
 		return S64Value{Value: n}, err
 
 	case U8Type:
 		n, err := jsonUint(value, path, math.MaxUint8)
+		if err == nil {
+			err = checkNumeric(b.Restrictions, unsignedBound(n), path)
+		}
 		return U8Value{Value: uint8(n)}, err
 	case U16Type:
 		n, err := jsonUint(value, path, math.MaxUint16)
+		if err == nil {
+			err = checkNumeric(b.Restrictions, unsignedBound(n), path)
+		}
 		return U16Value{Value: uint16(n)}, err
 	case U32Type:
 		n, err := jsonUint(value, path, math.MaxUint32)
+		if err == nil {
+			err = checkNumeric(b.Restrictions, unsignedBound(n), path)
+		}
 		return U32Value{Value: uint32(n)}, err
 	case U64Type:
 		raw, ok := value.(string)
@@ -481,13 +503,22 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 			return nil, typeErr(path, "canonical integer string", value)
 		}
 		n, err := checkedUnsignedString(raw, pathOrRoot(path))
+		if err == nil {
+			err = checkNumeric(b.Restrictions, unsignedBound(n), path)
+		}
 		return U64Value{Value: n}, err
 
 	case F32Type:
 		f, err := jsonFloat(value, path)
+		if err == nil {
+			err = checkNumeric(b.Restrictions, floatBound(float64(float32(f))), path)
+		}
 		return F32Value{Value: float32(f)}, err
 	case F64Type:
 		f, err := jsonFloat(value, path)
+		if err == nil {
+			err = checkNumeric(b.Restrictions, floatBound(f), path)
+		}
 		return F64Value{Value: f}, err
 
 	case CharType:
@@ -511,13 +542,13 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		if !ok {
 			return nil, typeErr(path, "string", value)
 		}
-		return PathValue{Value: raw}, nil
+		return PathValue{Value: raw}, checkPath(b.Spec, raw, path)
 	case UrlType:
 		raw, ok := value.(string)
 		if !ok {
 			return nil, typeErr(path, "string", value)
 		}
-		return UrlValue{Value: raw}, nil
+		return UrlValue{Value: raw}, checkURL(b.Restrictions, raw, path)
 
 	case DatetimeType:
 		raw, ok := value.(string)
@@ -535,6 +566,9 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		if !ok {
 			return nil, typeErr(path, `an object with "nanoseconds"`, value)
 		}
+		if err := onlyKeys(obj, path, "nanoseconds"); err != nil {
+			return nil, err
+		}
 		raw, ok := obj["nanoseconds"].(string)
 		if !ok {
 			return nil, typeErr(child(path, "nanoseconds"), "canonical integer string", obj["nanoseconds"])
@@ -546,6 +580,9 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		obj, ok := value.(map[string]any)
 		if !ok {
 			return nil, typeErr(path, "a quantity object", value)
+		}
+		if err := onlyKeys(obj, path, "mantissa", "scale", "unit"); err != nil {
+			return nil, err
 		}
 		rawMantissa, ok := obj["mantissa"].(string)
 		if !ok {
@@ -563,51 +600,59 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		if !ok {
 			return nil, typeErr(child(path, "unit"), "string", obj["unit"])
 		}
-		return QuantityValueNode{Value: QuantityValue{
-			Mantissa: mantissa, Scale: int32(scale), Unit: unit,
-		}}, nil
+		q := QuantityValue{Mantissa: mantissa, Scale: int32(scale), Unit: unit}
+		return QuantityValueNode{Value: q}, checkQuantity(b.Spec, q, path)
 
 	case TextType:
 		obj, ok := value.(map[string]any)
 		if !ok {
 			return nil, typeErr(path, `an object with "text"`, value)
 		}
+		if err := onlyKeys(obj, path, "text", "language"); err != nil {
+			return nil, err
+		}
 		text, ok := obj["text"].(string)
 		if !ok {
 			return nil, typeErr(child(path, "text"), "string", obj["text"])
 		}
 		out := TextValue{Text: text}
-		if lang, present := obj["language"]; present && lang != nil {
+		if lang, present := obj["language"]; present {
 			s, ok := lang.(string)
 			if !ok {
 				return nil, typeErr(child(path, "language"), "string", lang)
 			}
 			out.Language = &s
 		}
-		return out, nil
+		return out, checkText(b.Restrictions, out, path)
 
 	case BinaryType:
 		obj, ok := value.(map[string]any)
 		if !ok {
 			return nil, typeErr(path, `an object with "bytes"`, value)
 		}
+		if err := onlyKeys(obj, path, "bytes", "mimeType"); err != nil {
+			return nil, err
+		}
 		encoded, ok := obj["bytes"].(string)
 		if !ok {
 			return nil, typeErr(child(path, "bytes"), "base64url string", obj["bytes"])
 		}
-		raw, err := base64.RawURLEncoding.DecodeString(encoded)
+		raw, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
 		if err != nil {
 			return nil, fmt.Errorf("%s: not base64url without padding", pathOrRoot(child(path, "bytes")))
 		}
 		out := BinaryValue{Bytes: raw}
-		if mime, present := obj["mimeType"]; present && mime != nil {
+		if mime, present := obj["mimeType"]; present {
 			s, ok := mime.(string)
 			if !ok {
 				return nil, typeErr(child(path, "mimeType"), "string", mime)
 			}
+			if !mimeTypeRE.MatchString(s) {
+				return nil, fmt.Errorf("%s: %q is not a MIME type", pathOrRoot(child(path, "mimeType")), s)
+			}
 			out.MimeType = &s
 		}
-		return out, nil
+		return out, checkBinary(b.Restrictions, out, path)
 
 	case RecordType:
 		obj, ok := value.(map[string]any)
@@ -623,6 +668,13 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		for _, f := range b.Fields {
 			raw, present := obj[f.Name]
 			if !present {
+				// An optional field may be left out: it is then None.
+				if fb, err := p.ref.At(f.Body).body(); err == nil {
+					if _, optional := fb.(OptionType); optional {
+						fields = append(fields, OptionValue{})
+						continue
+					}
+				}
 				return nil, fmt.Errorf("%s: missing field %q", pathOrRoot(path), f.Name)
 			}
 			built, err := p.build(f.Body, raw, child(path, f.Name))
@@ -845,6 +897,18 @@ func (p *packer) buildResultArm(declared *SchemaType, value any, path string) (*
 	}
 	return &built, nil
 }
+
+// onlyKeys rejects keys a fixed-shape object does not define.
+func onlyKeys(obj map[string]any, path string, keys ...string) error {
+	for key := range obj {
+		if !slices.Contains(keys, key) {
+			return fmt.Errorf("%s: unknown field %q", pathOrRoot(path), key)
+		}
+	}
+	return nil
+}
+
+var mimeTypeRE = regexp.MustCompile(mimeTypePattern)
 
 func hasField(fields []NamedField, name string) bool {
 	for _, f := range fields {
