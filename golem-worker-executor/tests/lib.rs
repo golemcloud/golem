@@ -237,7 +237,7 @@ test_component!(
 test_component!(
     filesystem_tools,
     "filesystem_tools",
-    "../plugins/filesystem-tools",
+    "../builtin-tools/filesystem-tools",
     "golem:filesystem-tools"
 );
 test_component!(

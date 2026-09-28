@@ -4,8 +4,8 @@ Built-in tools are tool components shipped as bytes in the registry-service bina
 at registry startup. `BUILTIN_TOOLS` in
 `golem-registry-service/src/services/builtin_tool_provisioner.rs` is the production inventory.
 
-The filesystem tools are implemented in Rust under `plugins/filesystem-tools/` and built into
-`plugins/filesystem-tools.wasm`. The component provides the `read-file`, `write-file`, and
+The filesystem tools are implemented in Rust under `builtin-tools/filesystem-tools/` and built
+into `builtin-tools/filesystem-tools.wasm`. The component provides the `read-file`, `write-file`, and
 `edit-file` tools.
 
 ## Adding a component-implemented built-in tool
