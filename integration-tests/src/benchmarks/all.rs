@@ -32,7 +32,7 @@ use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use integration_tests::benchmarks::{
     self, cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -61,6 +61,23 @@ async fn main() {
     let benchmarks_by_name = benchmark_registry();
 
     let params = BenchmarkCliParameters::parse_from(std::env::args_os());
+
+    if let BenchmarkConfig::Suite {
+        path,
+        check_artifacts: true,
+        ..
+    } = &params.benchmark_config
+    {
+        let raw_suite = std::fs::read_to_string(path).expect("Failed to read benchmark suite");
+        let suite: BenchmarkSuite =
+            serde_yaml::from_str(&raw_suite).expect("Failed to parse benchmark suite");
+        validate_benchmark_names(&benchmarks_by_name, &suite);
+        check_suite_fixture_artifacts(params.benchmark_config.mode(), &suite)
+            .expect("Missing benchmark suite component artifacts");
+        println!("All benchmark suite component artifacts are present.");
+        return;
+    }
+
     let tracer_provider = BenchmarkTestDependencies::init_logging(&params);
 
     let failure_count = match &params.benchmark_config {
@@ -133,13 +150,7 @@ async fn main() {
             let suite: BenchmarkSuite =
                 serde_yaml::from_str(&raw_suite).expect("Failed to parse benchmark suite");
 
-            // Validate every benchmark name up-front so a typo exits immediately
-            // without running warmup or any prior benchmark.
-            for benchmark in &suite.benchmarks {
-                if !benchmarks_by_name.contains_key(benchmark.name.as_str()) {
-                    print_non_existing_benchmark(&benchmarks_by_name, &benchmark.name);
-                }
-            }
+            validate_benchmark_names(&benchmarks_by_name, &suite);
 
             // Pre-flight warmup runs after all names are validated.
             cloud_preflight_warmup(
@@ -419,40 +430,15 @@ async fn run_benchmark<B: Benchmark>(
 }
 
 fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<BenchmarkArtifacts> {
-    let component_directory = match mode {
-        TestMode::Spawned {
-            workspace_root,
-            component_directory,
-            ..
-        } => Path::new(workspace_root).join(component_directory),
-        TestMode::Provided {
-            component_directory,
-            ..
-        }
-        | TestMode::Cloud {
-            component_directory,
-            ..
-        } => PathBuf::from(component_directory),
-    };
+    let component_directory = component_directory(mode);
 
-    let mut fixtures = BTreeMap::new();
-    for benchmark in &suite.benchmarks {
-        let names: &[&str] = match benchmark.name.as_str() {
-            "streaming-tool" => &[
-                "golem_it_tool_streaming_rust_caller_release",
-                "golem_it_tool_streaming_rust_provider_release",
-            ],
-            name if name == "streaming-rpc" || name.starts_with("streaming-rpc-") => {
-                &["golem_it_agent_rpc_rust_release"]
-            }
-            _ => &["benchmark_agent_rust_release"],
-        };
-        for name in names {
-            fixtures
-                .entry((*name).to_string())
-                .or_insert_with(|| component_directory.join(format!("{name}.wasm")));
-        }
-    }
+    let fixtures = suite_fixture_names(suite)
+        .into_iter()
+        .map(|name| {
+            let path = component_directory.join(format!("{name}.wasm"));
+            (name.to_string(), path)
+        })
+        .collect();
 
     let mut services = BTreeMap::new();
     if let TestMode::Spawned {
@@ -477,6 +463,69 @@ fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<Be
     }
 
     BenchmarkArtifacts::collect(&std::env::current_exe()?, &services, &fixtures)
+}
+
+fn component_directory(mode: &TestMode) -> PathBuf {
+    match mode {
+        TestMode::Spawned {
+            workspace_root,
+            component_directory,
+            ..
+        } => Path::new(workspace_root).join(component_directory),
+        TestMode::Provided {
+            component_directory,
+            ..
+        }
+        | TestMode::Cloud {
+            component_directory,
+            ..
+        } => PathBuf::from(component_directory),
+    }
+}
+
+fn suite_fixture_names(suite: &BenchmarkSuite) -> BTreeSet<&'static str> {
+    let mut fixtures = BTreeSet::new();
+    for benchmark in &suite.benchmarks {
+        let names: &[&str] = match benchmark.name.as_str() {
+            "cold-start-unknown-medium" | "latency-medium" => &["benchmark_agent_ts"],
+            "throughput-echo" | "throughput-large-input" | "throughput-cpu-intensive" => {
+                &["benchmark_agent_rust_release", "benchmark_agent_ts"]
+            }
+            "streaming-tool" => &[
+                "golem_it_tool_streaming_rust_caller_release",
+                "golem_it_tool_streaming_rust_provider_release",
+            ],
+            name if name == "streaming-rpc" || name.starts_with("streaming-rpc-") => {
+                &["golem_it_agent_rpc_rust_release"]
+            }
+            _ => &["benchmark_agent_rust_release"],
+        };
+        fixtures.extend(names);
+    }
+    fixtures
+}
+
+fn check_suite_fixture_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<()> {
+    let component_directory = component_directory(mode);
+    for name in suite_fixture_names(suite) {
+        let path = component_directory.join(format!("{name}.wasm"));
+        let metadata = std::fs::metadata(&path)
+            .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+        if !metadata.is_file() || metadata.len() == 0 {
+            anyhow::bail!("{} is not a non-empty file", path.display());
+        }
+    }
+    Ok(())
+}
+
+fn validate_benchmark_names(registry: &BenchmarkRegistry, suite: &BenchmarkSuite) {
+    // Validate every benchmark name up-front so a typo exits immediately
+    // without running warmup or any prior benchmark.
+    for benchmark in &suite.benchmarks {
+        if !registry.contains_key(benchmark.name.as_str()) {
+            print_non_existing_benchmark(registry, &benchmark.name);
+        }
+    }
 }
 
 fn print_non_existing_benchmark(benchmarks_by_name: &BenchmarkRegistry, name: &String) -> ! {
