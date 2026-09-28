@@ -26,6 +26,7 @@
 //! different schemas produce the same Go type and the wrong wire encoding.
 
 use crate::bridge_gen::go::go_writer::GoWriter;
+use crate::sdk_overrides::GO_SDK_MODULE;
 use golem_common::schema::schema_type::SchemaType;
 
 /// The import path of the shared value vocabulary.
@@ -167,12 +168,22 @@ pub fn render<'a>(
             unreachable!("a ref is resolved to its body before it reaches here")
         }
 
+        // Only a guest client carries streams; the external bridge leaves
+        // stream-bearing methods, and so these types, out.
+        SchemaType::Stream {
+            inner: Some(inner), ..
+        } => {
+            let item = render(inner, named, resolve, writer)?;
+            writer.import(GO_SDK_MODULE);
+            format!("golem.AgentStream[{item}]")
+        }
+
         SchemaType::Quantity { .. }
         | SchemaType::Secret { .. }
         | SchemaType::QuotaToken { .. }
         | SchemaType::PermissionCard { .. }
         | SchemaType::Future { .. }
-        | SchemaType::Stream { .. } => {
+        | SchemaType::Stream { inner: None, .. } => {
             anyhow::bail!("the Go bridge does not yet spell this schema type: {resolved:?}")
         }
     })

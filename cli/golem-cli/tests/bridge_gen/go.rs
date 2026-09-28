@@ -769,10 +769,19 @@ fn assert_stream_methods_left_out(generated: &GeneratedGo) {
     assert!(!types.contains("MediaFeed"), "{types}");
 }
 
+/// A guest client calls stream-bearing methods over RPC, so it keeps them,
+/// spelling each stream as the SDK's `golem.AgentStream`.
 #[test]
-fn go_guest_client_leaves_out_stream_bearing_methods(env: &GoEnv) {
+fn go_guest_client_generates_stream_bearing_methods(env: &GoEnv) {
     let generated = GeneratedGo::guest(env, partly_streaming_agent());
-    assert_stream_methods_left_out(&generated);
+    let client = generated.read("client.go");
+    assert!(!client.contains("Not generated"), "{client}");
+    assert!(client.contains(") Count("), "{client}");
+    assert!(client.contains(") Upload("), "{client}");
+    assert!(client.contains(") Feed("), "{client}");
+    assert!(client.contains("golem.AgentStream[[]uint8]"), "{client}");
+    let types = generated.read("types.go");
+    assert!(types.contains("golem.AgentStream[string]"), "{types}");
     generated.assert_gofmt_clean(env);
     generated.assert_vets_for_wasip1(env);
 }

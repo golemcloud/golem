@@ -91,8 +91,8 @@ pub struct GoBridgeGenerator {
     mode: GoBridgeMode,
     type_naming: TypeNaming<GoTypeName>,
     names: AgentNames,
-    /// Methods left out of the client because they take or return a stream,
-    /// which the Go bridge does not generate yet.
+    /// Methods left out of an external client because they take or return a
+    /// stream, which the external Go bridge does not carry yet.
     omitted: Vec<String>,
 }
 
@@ -164,7 +164,7 @@ impl BridgeGenerator for GoBridgeGenerator {
         }
         if !self.omitted.is_empty() {
             log_warn(format!(
-                "The Go client for {} leaves out {}: they take or return a stream, which the Go bridge does not generate yet",
+                "The external Go client for {} leaves out {}: they take or return a stream, which the external Go bridge does not carry yet",
                 self.agent_type.type_name.as_str(),
                 self.omitted.join(", ")
             ));
@@ -203,14 +203,22 @@ impl GoBridgeGenerator {
                 agent_type.type_name.as_str()
             );
         }
-        // Stream-bearing methods are left out rather than failing the whole
-        // client, so the agent's other methods stay callable. Dropping them
-        // before naming also drops the types only they use.
-        let (methods, streaming): (Vec<_>, Vec<_>) = std::mem::take(&mut agent_type.methods)
-            .into_iter()
-            .partition(|m| !method_uses_streams(&agent_type.schema, m));
-        agent_type.methods = methods;
-        let omitted = streaming.into_iter().map(|m| m.name).collect::<Vec<_>>();
+        // The external bridge has no stream transport, so it leaves
+        // stream-bearing methods out rather than failing the whole client, and
+        // the agent's other methods stay callable. Dropping them before naming
+        // also drops the types only they use. A guest client calls them over
+        // RPC with `golem.AgentStream`.
+        let omitted = match mode {
+            GoBridgeMode::GuestWasmRpc => Vec::new(),
+            GoBridgeMode::ExternalRest => {
+                let (methods, streaming): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut agent_type.methods)
+                        .into_iter()
+                        .partition(|m| !method_uses_streams(&agent_type.schema, m));
+                agent_type.methods = methods;
+                streaming.into_iter().map(|m| m.name).collect::<Vec<_>>()
+            }
+        };
 
         let names = AgentNames::new(&agent_type);
         let same_language = agent_type.source_language.eq_ignore_ascii_case("go");
@@ -634,8 +642,8 @@ impl GoBridgeGenerator {
             return String::new();
         }
         format!(
-            "\n\nNot generated: {} — they take or return a stream, which the Go\n\
-             bridge does not generate yet.",
+            "\n\nNot generated: {} — they take or return a stream, which the external\n\
+             Go bridge does not carry yet.",
             self.omitted.join(", ")
         )
     }
