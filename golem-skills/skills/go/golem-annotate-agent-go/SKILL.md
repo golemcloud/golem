@@ -77,8 +77,10 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 Attach `golem.Desc("...")` to a method to set the description carried in the schema. Setting it more than once for the same method is a **definition error**, not a silent overwrite.
 
 ```go
+type CheckStockIn struct{ Sku string }
+
 var (
-	CheckStock = Agent.Method[string, uint32]("check-stock", golem.Desc("Returns the number of units in stock for the given SKU; 0 if unknown."))
+	CheckStock = Agent.Method[CheckStockIn, uint32]("check-stock", golem.Desc("Returns the number of units in stock for the given SKU; 0 if unknown."))
 
 	Restock = Agent.Method[RestockIn, uint32]("restock", golem.Desc("Increases the stock count for the given SKU by the amount; returns the new total."))
 
@@ -103,7 +105,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 	},
 })
 
-var CheckStock = Agent.Method[string, uint32]("check-stock", golem.Desc("Returns units in stock for the given SKU."), golem.HTTP(golem.GET("/stock/{sku}")))
+// {sku} binds CheckStockIn.Sku: a parameter is a field of the input struct.
+var CheckStock = Agent.Method[CheckStockIn, uint32]("check-stock", golem.Desc("Returns units in stock for the given SKU."), golem.HTTP(golem.GET("/stock/{sku}")))
 ```
 
 `golem.Mount` fields (`sdks/go/golem/http_mount.go:46`): `Path` (required), `Auth`, `CORS`, `PhantomAgent`, `WebhookSuffix`. Verb constructors are `golem.GET/POST/PUT/DELETE/PATCH/...` and `golem.Custom("VERB", "/path")`. For full route-binding rules (path/query/header/body, per-route auth and CORS) load `golem-add-http-endpoint-go`.

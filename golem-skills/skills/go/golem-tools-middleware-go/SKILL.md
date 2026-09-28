@@ -1,0 +1,128 @@
+---
+name: golem-tools-middleware-go
+description: "Defines Golem tool middleware in Go. Use for validation, policy, auditing, caching, or rewriting tool calls and results around any tool or one specific tool in a Go Golem project."
+---
+
+# Tool Middleware in Go
+
+A middleware wraps one tool invocation: it sees the call on its way in, hands it to the layer beneath with `ctx.Next`, and sees the outcome on its way back. It does not have the wrapped tool's Go types, so arguments and results arrive as `golem.TypedValue`, which carries its own schema.
+
+## Define and Handle
+
+```go
+package audit
+
+import (
+	"errors"
+	"io"
+	"log/slog"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+// Static configuration of one installation; its schema is published.
+type AuditParams struct {
+	Channel string
+	Deny    bool
+}
+
+var Audit = golem.DefineToolMiddleware[AuditParams]("audit", golem.ToolMiddlewareSpec{
+	Version: "1.0.0",
+	Summary: "Records every tool invocation",
+})
+
+var _ = golem.HandleToolMiddleware(Audit, func(ctx *golem.MiddlewareContext[AuditParams]) golem.MiddlewareOutcome {
+	p := ctx.Parameters()
+	slog.Info("tool call", "channel", p.Channel, "tool", ctx.ToolName(), "command", ctx.CommandPath())
+	if p.Deny {
+		return golem.Fail(errors.New("denied by audit policy")) // Next is never called
+	}
+
+	outcome := ctx.Next(ctx.Input())
+	if err := outcome.Err(); err != nil {
+		slog.Warn("tool call failed", "error", err)
+		return outcome // the tool's own error passes through unchanged
+	}
+	if result, ok := outcome.Result(); ok {
+		if value, err := result.JSON(); err == nil {
+			slog.Info("tool call returned", "result", value)
+		}
+	}
+	if out := outcome.Stdout(); out != nil {
+		if _, err := io.Copy(ctx.Stdout(), out); err != nil {
+			return golem.Fail(err)
+		}
+	}
+	return outcome
+})
+```
+
+Blank-import the package from `main.go`. Use `golem.Unit` as the parameter type for a middleware that takes none.
+
+## Outcomes
+
+| Return | Effect |
+|---|---|
+| `ctx.Next(input)` | Call the layer beneath; the original stdin is forwarded |
+| `golem.Succeed(v)` / `golem.SucceedWithNothing()` | Short-circuit with a result, e.g. from a cache |
+| `golem.Fail(err)` | Short-circuit or replace the outcome with a failure |
+| `outcome.WithResult(v)` | Keep the inner outcome but replace its value |
+
+Build values with `golem.EncodeTypedValue(goValue)`, read them with `v.JSON()` or `golem.DecodeTypedValue[T](v)`, and rewrite arguments with `ctx.Input().WithJSON(newArgs)` before passing them to `Next`. A failure from the layer beneath is a `*golem.UnderlyingError` (`errors.As`), whose `ToolError` is set when the tool itself reported the error. A panic in the handler fails the call.
+
+## Wrapping One Tool
+
+Without options a middleware is universal and applies to any tool; `ctx.ToolMetadata()` describes the tool it is wrapping. `golem.Wraps(presented, expected)` narrows it to one tool shape, published for installation checks:
+
+```go
+var Policy = golem.DefineToolMiddleware[golem.Unit]("greeter-policy",
+	golem.ToolMiddlewareSpec{Version: "1.0.0"},
+	golem.Wraps(greeter.Tool, greeter.Tool),
+)
+
+var _ = golem.HandleToolMiddleware(Policy, func(ctx *golem.MiddlewareContext[golem.Unit]) golem.MiddlewareOutcome {
+	outcome := ctx.Next(ctx.Input())
+	if result, ok := outcome.Result(); ok {
+		if greeting, err := golem.DecodeTypedValue[string](result); err == nil {
+			return outcome.WithResult(golem.Must(golem.EncodeTypedValue(greeting + "!")))
+		}
+	}
+	return outcome
+})
+```
+
+The handler still receives `golem.TypedValue`s; `Wraps` only declares the shape. Passing the same definition twice makes a transparent middleware; two different definitions make an adapter that translates between them.
+
+## Install
+
+Declare the middleware, then install it on a tool binding or for a whole environment:
+
+```yaml
+tools:
+  greeter: {}
+  middleware:
+    audit: {}
+
+agents:
+  AssistantAgent:
+    tools:
+      greeter:
+        middleware:
+          - name: audit
+            parameters: { channel: ops, deny: false }
+
+environments:
+  local:
+    tools:
+      middleware: [audit]
+```
+
+Parameter keys are the canonical field names (`Channel` → `channel`).
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-define-tool-go` | Defining the tools a middleware wraps |
+| `golem-call-tool-go` | Calling a tool through its middleware chain |
+| `golem-edit-manifest` | Tool bindings and middleware installation |

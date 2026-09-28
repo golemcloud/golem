@@ -1,0 +1,139 @@
+---
+name: golem-streaming-agent-go
+description: "Declares, implements, and calls streaming Go agent methods. Use for golem.AgentStream input or output, nested streams, ProduceStream, back-pressure, cancellation, forwarding, generated guest clients, or CLI streaming in a Go Golem project."
+---
+
+# Streaming Agent Methods in Go
+
+A `golem.AgentStream[T]` is a sequence of values streamed between agents. It is an ordinary schema value: a method input field, a result, a struct field, an `Option`, a slice element, or the item of another stream.
+
+```go
+package pipe
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+type ValuesIn struct {
+	Values golem.AgentStream[int32]
+}
+
+type Batch struct {
+	Label  string
+	Values golem.AgentStream[int32]
+}
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "PipeAgent"})
+
+var (
+	Sum     = Agent.Method[ValuesIn, int64]("sum")
+	Doubled = Agent.Method[ValuesIn, golem.AgentStream[int32]]("doubled")
+	Forward = Agent.Method[ValuesIn, golem.AgentStream[int32]]("forward")
+	Batches = Agent.Method[golem.Unit, golem.AgentStream[Batch]]("batches")
+)
+```
+
+A stream input is a field of the input struct, like any other parameter. `golem.AgentStream[byte]` is a byte stream; `golem.AgentStream[golem.Binary]` streams binary chunks.
+
+## Consume
+
+```go
+agent.Handle(pipe.Sum, func(_ *golem.Context[state], in pipe.ValuesIn) int64 {
+	var total int64
+	for v, err := range in.Values.All() {
+		if err != nil {
+			panic(err) // a failure, never the end of the stream
+		}
+		total += int64(v)
+	}
+	return total
+})
+```
+
+`Next()` returns `(value, ok, err)`: `ok == false` with a nil error is a clean end. `Collect()` reads everything and is only for bounded streams. `Close()` abandons a stream you stop reading; the producer sees it on its next write.
+
+## Produce
+
+```go
+agent.Handle(pipe.Doubled, func(_ *golem.Context[state], in pipe.ValuesIn) golem.AgentStream[int32] {
+	return golem.ProduceStream(func(w *golem.AgentStreamWriter[int32]) error {
+		for v, err := range in.Values.All() {
+			if err != nil {
+				return err // ends the output early
+			}
+			if err := w.Write(v * 2); err != nil {
+				return nil // the reader went away (golem.ErrReaderGone)
+			}
+		}
+		return nil // clean end of stream
+	})
+})
+```
+
+- `golem.ProduceStream` runs the producer on its own goroutine and returns the reading end at once.
+- `Write` blocks until the consumer has room: that is the back-pressure, so nothing piles up in memory.
+- `golem.NewAgentStream[T]()` returns a writer and a stream for producing by hand; `defer w.Close()` ends it cleanly.
+- `golem.StreamOf(items...)` is a stream of fixed values, handy for small results and tests.
+
+## Forward
+
+Return or pass on an unread stream to move its endpoint; no items pass through this agent:
+
+```go
+agent.Handle(pipe.Forward, func(_ *golem.Context[state], in pipe.ValuesIn) golem.AgentStream[int32] {
+	return in.Values
+})
+```
+
+A stream is affine: once returned, passed to a call or sent as an item, using it again fails with `golem.ErrStreamTransferred`. A stream that was already read from cannot be forwarded (`golem.ErrStreamPartiallyRead`).
+
+## Ordering and Errors
+
+- Items of one stream arrive in order. Sibling streams have no ordering between them; read them from separate goroutines when one producer could block on the other's back-pressure.
+- A bare stream has no error channel: a producer that returns an error just ends the stream, and a reader in another agent cannot tell that from a clean end. Model failures as items: `golem.AgentStream[golem.Result[T, E]]`.
+- A decode failure or a failed invocation is reported as an error by `Next`/`All`, never as a clean end.
+
+## Calling Streaming Methods
+
+Same-component calls use the method descriptors as usual:
+
+```go
+target := pipe.Agent.Get(pipe.ID{Name: "main"})
+out := pipe.Doubled.Call(target, pipe.ValuesIn{Values: golem.StreamOf[int32](1, 2, 3)})
+for v, err := range out.All() {
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(v)
+}
+```
+
+`CallAsync` works too. `Trigger` and `Schedule` panic for a method that carries a stream anywhere in its input or output: both return before the call completes, so no stream could be handed over.
+
+Guest clients that `golem build` generates for `dependencies.agents` (see `golem-call-another-agent-go`) include stream-bearing methods, spelling each stream as `golem.AgentStream[T]`, including nested ones:
+
+```go
+import provider "golem.local/bridge/stream-provider-guest-client"
+
+remote := provider.GetStreamProvider(provider.StreamProviderId{Name: "main"})
+total := remote.Sum(golem.StreamOf[int32](1, 2, 3))
+doubled := remote.Doubled(golem.ProduceStream(func(w *golem.AgentStreamWriter[int32]) error {
+	return w.WriteAll(1, 2, 3)
+}))
+```
+
+The external Go client generated for `bridge.go.external` (see `golem-call-from-external-go`) leaves stream-bearing methods out: its doc comment names them and `golem build` warns. The agent's other methods are generated as usual.
+
+## CLI and HTTP
+
+`golem agent invoke` accepts `-` as the value of exactly one direct stream parameter to read it from stdin, one value per line (`--stdin-format raw` for a direct byte stream). Streamed results are printed as they arrive; `--stdout-format raw` writes a direct byte stream as bytes. Ctrl-C detaches without cancelling the durable invocation; `--save-session` and `--resume-session` reconnect.
+
+Over HTTP, a stream-bearing endpoint is served through the Durable Streams protocol (see `golem-durable-streams-go`). MCP does not expose methods with streams; add a bounded, stream-free method for MCP callers.
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-durable-streams-go` | Exposing stream-bearing methods over HTTP |
+| `golem-call-another-agent-go` | Typed RPC and generated guest clients |
+| `golem-invoke-agent-go` | Invoking agents from the CLI |

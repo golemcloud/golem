@@ -43,12 +43,15 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-configure-durability-go` | Choosing durable vs ephemeral agents, and adding periodic snapshots |
 | `golem-custom-snapshot-go` | Snapshot-based recovery and customizing state save/load |
 | `golem-call-another-agent-go` | Calling one agent from another via typed RPC |
+| `golem-agent-reflection-go` | Discovering and calling agents at runtime without their Go definition (reflected, remote, dynamic clients) |
 | `golem-fire-and-forget-go` | Fire-and-forget agent invocations with `Trigger` |
 | `golem-parallel-workers-go` | Fanning out work to parallel agents and collecting results |
 | `golem-recurring-task-go` | Recurring / scheduled work (self-rescheduling via `Schedule`) |
 | `golem-schedule-future-call-go` | Scheduling a one-off future call from code, and canceling it |
 | `golem-wait-for-external-input-go` | Waiting for external input using Golem promises |
 | `golem-call-from-external-go` | Invoking agents from outside the platform (CLI, HTTP, worker REST API) |
+| `golem-streaming-agent-go` | Streaming method inputs and outputs with `golem.AgentStream` |
+| `golem-durable-streams-go` | Exposing stream-bearing methods over HTTP through the Durable Streams protocol |
 | `golem-add-http-endpoint-go` | Exposing an agent's methods over HTTP |
 | `golem-http-router-go` | Handling raw HTTP requests with a `net/http` handler, static files and OpenAPI |
 | `golem-http-params-go` | Mapping HTTP path/query/header/body to method inputs |
@@ -60,6 +63,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-atomic-block-go` | Atomic regions, custom durability (`DurableOp`), idempotence, oplog commit, idempotency keys |
 | `golem-retry-policies-go` | Configuring semantic retry policies |
 | `golem-add-transactions-go` | Saga-pattern transactions with compensation |
+| `golem-define-tool-go` | Defining and implementing a typed tool (`DefineTool` + `HandleCommand`) |
+| `golem-call-tool-go` | Calling a tool from an agent through the discovered tool client |
+| `golem-tools-middleware-go` | Wrapping tool invocations with middleware for policy, auditing or rewriting |
 | `golem-add-postgres-go` | Using PostgreSQL via the `golem/rdbms/postgres` wrapper |
 | `golem-add-mysql-go` | Using MySQL via the `golem/rdbms/mysql` wrapper |
 | `golem-add-config-go` | Adding typed configuration (`DefineConfiguredAgent` + `ctx.Config`) |

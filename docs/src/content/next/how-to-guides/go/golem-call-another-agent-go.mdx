@@ -125,7 +125,7 @@ forecast := weather.GetWeatherAgent(weather.WeatherAgentId{City: "London"}).Fore
 - Each method on the client calls `MethodDef.Call` underneath, so a failed call panics with the SDK's own error, exactly as a same-component call does.
 - The `.local` module path can never be fetched from a module proxy, so a missing `replace` fails the build rather than silently resolving something else.
 - The client's types are the callee's, generated from its schema: records become structs, variants sealed interfaces with one type per case, enums integer constants with a `String()` method.
-- Methods that take or return a stream are left out of the client for now; its doc comment names them, and `golem build` warns.
+- Methods that take or return streams are included, with each stream spelled `golem.AgentStream[T]` (see [`golem-streaming-agent-go`](/next/how-to-guides/go/golem-streaming-agent-go)).
 
 ## Key Constraints
 
@@ -140,3 +140,4 @@ forecast := weather.GetWeatherAgent(weather.WeatherAgentId{City: "London"}).Fore
 | [`golem-recurring-task-go`](/next/how-to-guides/go/golem-recurring-task-go) | An agent messages itself / schedules future work |
 | [`golem-multi-instance-agent-go`](/next/how-to-guides/go/golem-multi-instance-agent-go) | Address a specific instance (or a phantom) by ID |
 | [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) | Define the agent being called |
+| [`golem-agent-reflection-go`](/next/how-to-guides/go/golem-agent-reflection-go) | Call agents without their Go definition (runtime discovery, remote declarations, agent ids) |
