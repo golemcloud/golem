@@ -383,11 +383,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let decision = update_decision(&metadata.last_known_status.status, mode, disable_wakeup);
         match (mode, decision) {
-            (UpdateMode::Automatic, UpdateDecision::Ignore) => {
-                return Err(WorkerExecutorError::invalid_request(
-                    "Cannot update an exited worker",
-                ));
-            }
+            (UpdateMode::Automatic, UpdateDecision::Ignore) => Err(
+                WorkerExecutorError::invalid_request("Cannot update an exited worker"),
+            ),
             (UpdateMode::Automatic, decision) => {
                 debug!("Enqueuing update");
                 let description = UpdateDescription::SnapshotAssistedAutomatic {
