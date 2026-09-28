@@ -41,7 +41,7 @@ use golem_cli::bridge_gen::BridgeGenerator;
 use golem_cli::bridge_gen::go::{GoBridgeGenerator, GoBridgeMode};
 use golem_cli::model::app::ApplicationConfig;
 use golem_cli::sdk_overrides::workspace_root;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, CorsOptions, FileMapping, HttpMountDetails};
 use golem_common::schema::schema_type::{DiscriminatorRule, ResultSpec, UnionBranch, UnionSpec};
 use golem_common::schema::{AgentTypeSchema, SchemaType};
 use std::process::Command;
@@ -811,4 +811,79 @@ fn go_client_refuses_a_constructor_stream() {
         err.to_string().contains("its constructor takes a stream"),
         "{err}"
     );
+}
+
+/// The shared HTTP handler corpus decides which agents get clients: an ordinary
+/// agent that exposes files keeps its client, and a router never gets one —
+/// decided by the agent's kind, not its name.
+#[test]
+fn go_http_router_bridge_rejection_uses_kind_not_name() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+    ))
+    .unwrap();
+    let case = |id: &str| {
+        corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let regular_files = case("tooling-regular-files-still-callable");
+    let router = case("tooling-router-clients");
+    let dir = TempDir::new().unwrap();
+    let path = Utf8Path::from_path(dir.path()).unwrap();
+    for mode in [GoBridgeMode::ExternalRest, GoBridgeMode::GuestWasmRpc] {
+        let mut metadata = agent(
+            "HttpRouterLookingName",
+            "go",
+            vec![],
+            vec![],
+            vec![],
+            AgentMode::Durable,
+        );
+        metadata.http_mount = Some(HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: vec![],
+            },
+            webhook_suffix: vec![],
+            static_bindings: vec![],
+            filesystem_bindings: FileMapping::compile_list(
+                regular_files["input"]["filesystem_bindings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|mapping| (mapping[0].as_str().unwrap(), mapping[1].as_str().unwrap())),
+            )
+            .unwrap(),
+            openapi_provider_method: None,
+        });
+        assert_eq!(
+            GoBridgeGenerator::new_with_mode(metadata.clone(), path, mode).is_ok(),
+            regular_files["expect"]["included"].as_bool().unwrap(),
+            "tooling-regular-files-still-callable ({mode:?})"
+        );
+
+        metadata.type_name =
+            golem_common::model::agent::AgentTypeName("OrdinaryLookingName".into());
+        metadata.kind = golem_common::schema::agent::AgentTypeKind::HttpRouter;
+        let result = GoBridgeGenerator::new_with_mode(metadata, path, mode);
+        assert_eq!(
+            result.is_ok(),
+            router["expect"]["included"].as_bool().unwrap(),
+            "tooling-router-clients ({mode:?})"
+        );
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("HTTP routers do not have ordinary agent clients")
+        );
+    }
 }
