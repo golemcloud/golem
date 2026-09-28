@@ -16,6 +16,7 @@ use crate::base_model::agent::Principal;
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
+use crate::model::oplog::SpanStarted;
 use crate::model::tool::{
     CompiledToolBinding, HostToolId, SecretKeyScope, ToolFilesystemAccess, ToolName,
     ToolProvisionConfig,
@@ -951,6 +952,17 @@ pub struct EntityInvocationRequest {
 
 pub type CallingAgentPrincipal = Principal;
 
+#[derive(Clone, Debug)]
+struct ResidentEntitySpan(SpanStarted);
+
+impl PartialEq for ResidentEntitySpan {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for ResidentEntitySpan {}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityInvocationScope {
@@ -963,6 +975,9 @@ pub struct EntityInvocationScope {
     assume_idempotence: bool,
     logical_key_positions: bool,
     stream_session_idempotency_key: IdempotencyKey,
+    /// Resident tracing context restored from the immutable entity invocation `Start`.
+    #[serde(skip)]
+    span_started: Option<ResidentEntitySpan>,
 }
 
 impl EntityInvocationScope {
@@ -1017,6 +1032,7 @@ impl EntityInvocationScope {
             assume_idempotence,
             logical_key_positions,
             stream_session_idempotency_key,
+            span_started: None,
         })
     }
 
@@ -1058,6 +1074,15 @@ impl EntityInvocationScope {
 
     pub fn stream_session_idempotency_key(&self) -> &IdempotencyKey {
         &self.stream_session_idempotency_key
+    }
+
+    pub fn with_span_started(mut self, span_started: SpanStarted) -> Self {
+        self.span_started = Some(ResidentEntitySpan(span_started));
+        self
+    }
+
+    pub fn span_started(&self) -> Option<&SpanStarted> {
+        self.span_started.as_ref().map(|span| &span.0)
     }
 }
 

@@ -17,7 +17,9 @@ use axum::routing::post;
 use axum::{Json, Router};
 use golem_common::model::IdempotencyKey;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
-use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
+use golem_common::model::oplog::{
+    HostRequest, HostRequestP3HttpSpanCleanup, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
+};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
@@ -29,6 +31,7 @@ use golem_worker_executor_test_utils::{
 use http::HeaderMap;
 use log::info;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
 use tracing::Instrument;
@@ -130,6 +133,252 @@ async fn get_oplog_1(
         "Expected at least 3 AgentInvocationStarted entries with AgentMethodInvocation, got {invoke_count}"
     );
 
+    Ok(())
+}
+
+#[test]
+#[timeout("1m")]
+async fn p3_unread_response_cleanup_reconstructs_before_next_accessor(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let requests = Arc::new(AtomicUsize::new(0));
+    let server_requests = requests.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let server = tokio::spawn(async move {
+        let route = Router::new().route(
+            "/drop-unread",
+            post(move || {
+                let request = server_requests.fetch_add(1, Ordering::SeqCst) + 1;
+                async move {
+                    http::StatusCode::from_u16(200 + request as u16)
+                        .expect("test request count must fit an HTTP status")
+                }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("RawWasiHttp", "p3-unread-cleanup-reconstruction");
+    let worker = executor
+        .start_agent_with(
+            &component.id,
+            agent.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+
+    let first = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "drop_unread_response_then_wait",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u16>()?;
+    assert_eq!(first, 201);
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    let initial_oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let send_index = initial_oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.function_name == "http::client::send" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("P3 send Start");
+    let cleanup_request: HostRequest = HostRequestP3HttpSpanCleanup {
+        send_start_index: send_index,
+    }
+    .into();
+    let cleanup_request = cleanup_request.into_typed_schema_value()?;
+    let cleanup_index = initial_oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "http::client::span-cleanup"
+                    && start.request.as_ref() == Some(&cleanup_request) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("span cleanup Start referencing the P3 send");
+    let cleanup_end = initial_oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == cleanup_index => Some(end),
+            _ => None,
+        })
+        .expect("span cleanup End");
+    assert!(cleanup_end.span_finished.is_some());
+    assert!(!initial_oplog.iter().any(|entry| match &entry.entry {
+        PublicOplogEntry::CompletionDelivered(marker) => marker.start_index == cleanup_index,
+        PublicOplogEntry::CompletionDiscarded(marker) => marker.start_index == cleanup_index,
+        _ => false,
+    }));
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let second = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "drop_unread_response_then_wait",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u16>()?;
+    assert_eq!(second, 202);
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        2,
+        "completed replay must not redispatch the first P3 send"
+    );
+    let reconstructed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        reconstructed
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "http::client::span-cleanup" && start.request.as_ref() == Some(&cleanup_request)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        reconstructed
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == cleanup_index && end.span_finished.is_some()))
+            .count(),
+        1
+    );
+    server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn guest_span_reconstructs_completed_and_incomplete_operations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+
+    for cut in 0..7 {
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let agent = agent_id!("InvocationContext", format!("span-prefix-{cut}"));
+        let worker = executor.start_agent(&component.id, agent.clone()).await?;
+        let original = executor
+            .invoke_and_await_agent(&component, &agent, "span_roundtrip", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        let value: serde_json::Value = serde_json::from_str(&original)?;
+        assert_eq!(value["x"], "last");
+        assert_eq!(value["y"], "other");
+        let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let starts: Vec<_> = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name.starts_with("golem::api::context") =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts.len(), 3, "creation, attributes, and one finish only");
+        let boundaries: Vec<_> = oplog.iter().filter(|entry| starts.contains(&entry.oplog_index) || matches!(&entry.entry, PublicOplogEntry::End(end) if starts.contains(&end.start_index))).map(|entry| entry.oplog_index).collect();
+        assert_eq!(boundaries.len(), 6);
+        let mut retained = None;
+        if cut < boundaries.len() {
+            let index = boundaries[cut];
+            executor
+                .revert(
+                    &worker,
+                    RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                        last_oplog_index: index,
+                    }),
+                )
+                .await?;
+            let reverted = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            retained = Some((index, reverted.last().unwrap().oplog_index));
+        }
+        drop(executor);
+
+        let executor = start(deps, &context).await?;
+        let reconstructed = executor
+            .invoke_and_await_agent(&component, &agent, "last_span", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(
+            reconstructed, original,
+            "cut {cut} must preserve id, timestamp, parent, headers, and attributes"
+        );
+        let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let visible: Vec<_> = oplog
+            .iter()
+            .filter(|entry| {
+                retained.is_none_or(|(cut, revert)| {
+                    entry.oplog_index <= cut || entry.oplog_index > revert
+                })
+            })
+            .collect();
+        assert_eq!(visible.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.span_started.is_some())).count(), 1);
+        assert_eq!(visible.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.span_finished.is_some())).count(), 1);
+        for entry in &visible {
+            if let PublicOplogEntry::Start(start) = &entry.entry
+                && start.function_name.starts_with("golem::api::context")
+            {
+                assert_eq!(visible.iter().filter(|end| matches!(&end.entry, PublicOplogEntry::End(end) if end.start_index == entry.oplog_index)).count(), 1);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("1m")]
+async fn finished_guest_span_attribute_error_does_not_open_operation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_id!("InvocationContext", "finished-span-error");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "mutate_finished_span", data_value!())
+            .await
+            .is_err()
+    );
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::api::context::span::set-attributes")));
     Ok(())
 }
 

@@ -38,16 +38,20 @@ use golem_common::model::entity::{
     EntityInvocationRequestIdentity, EntityInvocationScope, InvocationExecutionMode,
     OwnedAgentEntityId, ToolInvocationClaimIdentity,
 };
+use golem_common::model::invocation_context::{AttributeValue, SpanId};
 use golem_common::model::oplog::host_functions::{GolemEntityInvoke, GolemToolInvocationRejected};
 use golem_common::model::oplog::payload::types::{
     SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestEntityInvocation,
+    AttributeMap, DurableFunctionType, HostPayloadPair, HostRequest, HostRequestEntityInvocation,
     HostRequestGolemToolInvocationRejected, HostResponseEntityInvocation, OplogEntry, OplogIndex,
+    SpanFinished, SpanKind, SpanOutcome, SpanStarted,
 };
 use golem_common::schema::{IntoTypedSchemaValue, TypedSchemaValue};
+use golem_schema::FromSchema;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
@@ -183,6 +187,74 @@ fn derive_entity_stream_session_key(
     golem_common::model::IdempotencyKey::derived_from_bytes(parent, &stream_name)
 }
 
+fn entity_span_started(
+    trace_id: golem_common::model::invocation_context::TraceId,
+    trace_states: Vec<String>,
+    parent_span_id: SpanId,
+    entity: &AgentEntity,
+    operation: &EntityInvocationDescriptor,
+) -> SpanStarted {
+    let command_path = match operation {
+        EntityInvocationDescriptor::Tool(tool) => tool.command_path.join("/"),
+    };
+    SpanStarted {
+        span_id: SpanId::generate(),
+        trace_id,
+        trace_states,
+        parent_span_id: Some(parent_span_id),
+        links: Vec::new(),
+        started_at: golem_common::model::Timestamp::now_utc(),
+        attributes: AttributeMap(HashMap::from([
+            (
+                "name".to_string(),
+                AttributeValue::String("entity-invocation".to_string()),
+            ),
+            (
+                "entity.kind".to_string(),
+                AttributeValue::String(entity.kind_label().to_string()),
+            ),
+            (
+                "entity.name".to_string(),
+                AttributeValue::String(entity.name().to_string()),
+            ),
+            (
+                "operation.command_path".to_string(),
+                AttributeValue::String(command_path),
+            ),
+        ])),
+        kind: SpanKind::Internal,
+    }
+}
+
+fn tool_terminal_outcome(
+    response: &HostResponseEntityInvocation,
+) -> Result<SpanOutcome, WorkerExecutorError> {
+    let value = response.result.as_ref().map_err(|error| {
+        WorkerExecutorError::runtime(format!("entity invocation terminal failed: {error}"))
+    })?;
+    let terminal =
+        SerializableToolOperationTerminal::from_value(value.value()).map_err(|error| {
+            WorkerExecutorError::runtime(format!("invalid durable tool terminal: {error}"))
+        })?;
+    Ok(match terminal.result {
+        Ok(_) => SpanOutcome::Completed,
+        Err(SerializableToolRpcError::Denied(_)) => SpanOutcome::Denied,
+        Err(SerializableToolRpcError::Cancelled) => SpanOutcome::Cancelled,
+        Err(_) => SpanOutcome::Failed,
+    })
+}
+
+fn entity_span_finished(
+    span_id: &SpanId,
+    response: &HostResponseEntityInvocation,
+) -> Result<SpanFinished, WorkerExecutorError> {
+    Ok(SpanFinished {
+        span_id: span_id.clone(),
+        finished_at: golem_common::model::Timestamp::now_utc(),
+        outcome: tool_terminal_outcome(response)?,
+    })
+}
+
 #[derive(Clone)]
 pub struct ResolvedEntityInvocationPosition {
     plan: Arc<EntityInvocationPlan>,
@@ -264,8 +336,22 @@ impl EntityInvocationDurability {
             stream_session_idempotency_key: key_context.stream_session_idempotency_key.clone(),
         };
         let started_input = request.input.clone();
-        let handle =
-            DurableCallSession::<GolemEntityInvoke, LeaveIncompleteOnDrop>::start_access_with_options(
+        let (trace_id, trace_states, parent_span_id) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.state.invocation_context.trace_id.clone(),
+                ctx.state.invocation_context.trace_states.clone(),
+                ctx.state.current_span_id.clone(),
+            )
+        });
+        let span_started = entity_span_started(
+            trace_id,
+            trace_states,
+            parent_span_id,
+            &entity,
+            &metadata.operation,
+        );
+        let handle = DurableCallSession::<GolemEntityInvoke, LeaveIncompleteOnDrop>::start_access_with_options_and_span(
                 store,
                 get_ctx,
                 DurableFunctionType::WriteLocal,
@@ -278,6 +364,7 @@ impl EntityInvocationDurability {
                     ..AccessClaimOptions::default()
                 },
                 async move |_| Ok(request),
+                span_started.clone(),
             )
             .await?;
         Self::from_started_request(
@@ -289,6 +376,7 @@ impl EntityInvocationDurability {
             handle,
             metadata,
             started_input,
+            Some(span_started),
         )
         .await
     }
@@ -347,6 +435,7 @@ impl EntityInvocationDurability {
             handle,
             metadata,
             request.input,
+            None,
         )
         .await
         .map(Some)
@@ -409,11 +498,18 @@ impl EntityInvocationDurability {
                         handle,
                         metadata,
                         request.input,
+                        None,
                     )
                     .await?,
                 )))
             }
             HostRequest::GolemToolInvocationRejected(request) => {
+                let span_started = handle
+                    .recorded_span_started_access(store, get_ctx)
+                    .await?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::runtime("tool rejection Start has no span metadata")
+                    })?;
                 let mut historical_reconstruction = handle
                     .take_historical_reconstruction()
                     .expect("replayed tool rejection claim must own a reconstruction claim");
@@ -429,10 +525,12 @@ impl EntityInvocationDurability {
                             "cancelled rejection terminal",
                         ));
                     }
-                    ReconstructionReplayOutcome::Incomplete(live) => live
-                        .complete_access(store, get_ctx, expected)
-                        .await
-                        .map_err(|error| error.source)?,
+                    ReconstructionReplayOutcome::Incomplete(live) => {
+                        let finished = entity_span_finished(&span_started.span_id, &expected)?;
+                        live.complete_access_with_span(store, get_ctx, expected, finished)
+                            .await
+                            .map_err(|error| error.source)?
+                    }
                     ReconstructionReplayOutcome::LiveAdmissionCancelled(mut live) => {
                         live.abandon_for_trap();
                         return Err(
@@ -458,6 +556,7 @@ impl EntityInvocationDurability {
         mut handle: DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
         metadata: EntityInvocationRequest,
         input: TypedSchemaValue,
+        span_started: Option<SpanStarted>,
     ) -> Result<Self, WorkerExecutorError>
     where
         T: 'static,
@@ -522,6 +621,16 @@ impl EntityInvocationDurability {
                 InvocationExecutionMode::ReplayingIncomplete
             }
         };
+        let span_started = match span_started {
+            Some(span_started) => span_started,
+            None => handle
+                .recorded_span_started_access(store, get_ctx)
+                .await?
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime("entity invocation Start has no span metadata")
+                })?,
+        };
+        handle.close_span_on_cancellation(span_started.span_id.clone());
         let scope = EntityInvocationScope::new(
             invocation_id,
             parent_start_index,
@@ -533,7 +642,8 @@ impl EntityInvocationDurability {
             logical_key_positions,
             stream_session_idempotency_key,
         )
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(WorkerExecutorError::runtime)?
+        .with_span_started(span_started);
         Ok(Self {
             handle,
             scope,
@@ -642,7 +752,13 @@ impl EntityInvocationDurability {
             scope.logical_key_positions(),
             scope.stream_session_idempotency_key().clone(),
         )
-        .map_err(WorkerExecutorError::runtime)?;
+        .map_err(WorkerExecutorError::runtime)?
+        .with_span_started(
+            scope
+                .span_started()
+                .expect("entity invocation scope must retain its recorded opening")
+                .clone(),
+        );
 
         let durability = Self {
             handle,
@@ -747,6 +863,12 @@ impl EntityInvocationDurability {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
+        let span_id = self
+            .scope
+            .span_started()
+            .expect("entity invocation scope must retain its recorded opening")
+            .span_id
+            .clone();
         let Self {
             handle,
             mut historical_reconstruction,
@@ -756,8 +878,9 @@ impl EntityInvocationDurability {
             reconstruction.body_settled();
         }
         let response = if handle.is_live() {
+            let span_finished = entity_span_finished(&span_id, &response)?;
             handle
-                .complete_access(store, get_ctx, response)
+                .complete_access_with_span(store, get_ctx, response, span_finished)
                 .await
                 .map_err(|error| error.source)?
         } else {
@@ -775,10 +898,12 @@ impl EntityInvocationDurability {
                         None,
                     ));
                 }
-                ReconstructionReplayOutcome::Incomplete(live) => live
-                    .complete_access(store, get_ctx, response)
-                    .await
-                    .map_err(|error| error.source)?,
+                ReconstructionReplayOutcome::Incomplete(live) => {
+                    let span_finished = entity_span_finished(&span_id, &response)?;
+                    live.complete_access_with_span(store, get_ctx, response, span_finished)
+                        .await
+                        .map_err(|error| error.source)?
+                }
                 ReconstructionReplayOutcome::LiveAdmissionCancelled(mut live) => {
                     live.abandon_for_trap();
                     return Err(
@@ -878,6 +1003,12 @@ impl EntityInvocationDurability {
         OnCompletedFailure: FnOnce(WorkerExecutorError) -> CompletedFailureFuture + Send + 'static,
         CompletedFailureFuture: Future<Output = ()> + Send + 'static,
     {
+        let span_id = self
+            .scope
+            .span_started()
+            .expect("entity invocation scope must retain its recorded opening")
+            .span_id
+            .clone();
         let Self {
             mut handle,
             scope,
@@ -1100,8 +1231,14 @@ impl EntityInvocationDurability {
                     });
                 }
             };
+            let span_finished = entity_span_finished(&span_id, &response).map_err(|error| {
+                EntityInvocationDurabilityFailure {
+                    error,
+                    resources: take_entity_resources(&body_resources),
+                }
+            })?;
             let response = handle
-                .complete_access(store, get_ctx, response)
+                .complete_access_with_span(store, get_ctx, response, span_finished)
                 .await
                 .map_err(|error| EntityInvocationDurabilityFailure {
                     error: error.source,
@@ -1187,8 +1324,14 @@ impl EntityInvocationDurability {
                 response,
                 handle: live_handle,
             } => {
+                let span_finished = entity_span_finished(&span_id, &response).map_err(|error| {
+                    EntityInvocationDurabilityFailure {
+                        error,
+                        resources: take_entity_resources(&body_resources),
+                    }
+                })?;
                 let response = live_handle
-                    .complete_access(store, get_ctx, response)
+                    .complete_access_with_span(store, get_ctx, response, span_finished)
                     .await
                     .map_err(|error| EntityInvocationDurabilityFailure {
                         error: error.source,
@@ -1264,7 +1407,43 @@ where
 {
     request.input = request.input.as_ref().map(strip_typed_streams);
     let response = skipped_tool_terminal(request.error.clone()).await?;
-    let handle = DurableCallSession::<GolemToolInvocationRejected, LeaveIncompleteOnDrop>::start_access_with_options(
+    let (trace_id, trace_states, parent_span_id) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.state.invocation_context.trace_id.clone(),
+            ctx.state.invocation_context.trace_states.clone(),
+            ctx.state.current_span_id.clone(),
+        )
+    });
+    let span_started = SpanStarted {
+        span_id: SpanId::generate(),
+        trace_id,
+        trace_states,
+        parent_span_id: Some(parent_span_id),
+        links: Vec::new(),
+        started_at: golem_common::model::Timestamp::now_utc(),
+        attributes: AttributeMap(HashMap::from([
+            (
+                "name".to_string(),
+                AttributeValue::String("entity-invocation".to_string()),
+            ),
+            (
+                "entity.kind".to_string(),
+                AttributeValue::String("tool".to_string()),
+            ),
+            (
+                "entity.name".to_string(),
+                AttributeValue::String(request.tool_name.clone()),
+            ),
+            (
+                "operation.command_path".to_string(),
+                AttributeValue::String(request.command_path.join("/")),
+            ),
+        ])),
+        kind: SpanKind::Internal,
+    };
+    let span_finished = entity_span_finished(&span_started.span_id, &response)?;
+    let handle = DurableCallSession::<GolemToolInvocationRejected, LeaveIncompleteOnDrop>::start_access_with_options_and_span(
         store,
         get_ctx,
         DurableFunctionType::WriteLocal,
@@ -1273,10 +1452,11 @@ where
             ..AccessClaimOptions::default()
         },
         async move |_| Ok(request),
+        span_started,
     )
     .await?;
     handle
-        .complete_access(store, get_ctx, response)
+        .complete_access_with_span(store, get_ctx, response, span_finished)
         .await
         .map_err(|error| error.source)
 }
@@ -1803,6 +1983,94 @@ mod tests {
             OplogIndex::from_u64(2),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn entity_span_descriptor_contains_only_safe_identity_fields() {
+        let trace_id = golem_common::model::invocation_context::TraceId::generate();
+        let parent = SpanId::generate();
+        let entity = AgentEntity::Tool(ToolName::try_from("search").unwrap());
+        let operation = EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+            attempt_ordinal: 19,
+            command_path: vec!["files".to_string(), "find".to_string()],
+            args: Vec::new(),
+            has_stdin: true,
+            has_stdout: true,
+            declares_stdout: true,
+            output_contract: ToolOutputContract {
+                result: None,
+                errors: Vec::new(),
+            },
+        });
+
+        let started = entity_span_started(
+            trace_id.clone(),
+            vec!["vendor=value".to_string()],
+            parent.clone(),
+            &entity,
+            &operation,
+        );
+
+        assert_eq!(started.trace_id, trace_id);
+        assert_eq!(started.parent_span_id, Some(parent));
+        assert!(started.links.is_empty());
+        assert_eq!(started.attributes.len(), 4);
+        assert_eq!(
+            started.attributes.get("entity.name"),
+            Some(&AttributeValue::String("search".to_string()))
+        );
+        assert_eq!(
+            started.attributes.get("operation.command_path"),
+            Some(&AttributeValue::String("files/find".to_string()))
+        );
+        assert_eq!(entity.name(), "search");
+    }
+
+    #[test]
+    fn typed_tool_terminal_classifies_span_outcomes() {
+        fn response(
+            result: Result<
+                golem_common::model::oplog::payload::types::SerializableToolStructuredResult,
+                SerializableToolRpcError,
+            >,
+        ) -> HostResponseEntityInvocation {
+            HostResponseEntityInvocation {
+                result: Ok(SerializableToolOperationTerminal {
+                    body_execution: SerializableEntityBodyExecution::Executed,
+                    result,
+                }
+                .into_typed_schema_value()
+                .unwrap()),
+            }
+        }
+
+        assert_eq!(
+            tool_terminal_outcome(&response(Ok(
+                golem_common::model::oplog::payload::types::SerializableToolStructuredResult {
+                    result: None,
+                }
+            )))
+            .unwrap(),
+            SpanOutcome::Completed
+        );
+        assert_eq!(
+            tool_terminal_outcome(&response(Err(SerializableToolRpcError::Denied(
+                "no".to_string()
+            ))))
+            .unwrap(),
+            SpanOutcome::Denied
+        );
+        assert_eq!(
+            tool_terminal_outcome(&response(Err(SerializableToolRpcError::ProtocolError(
+                "bad".to_string()
+            ))))
+            .unwrap(),
+            SpanOutcome::Failed
+        );
+        assert_eq!(
+            tool_terminal_outcome(&response(Err(SerializableToolRpcError::Cancelled))).unwrap(),
+            SpanOutcome::Cancelled
+        );
     }
 
     fn tool_definition() -> Tool {

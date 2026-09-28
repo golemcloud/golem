@@ -818,18 +818,35 @@ impl Oplog for EphemeralOplog {
             .await)
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> super::OplogAddPairReceipt {
         record_oplog_call("add_pair");
-        self.run_job(|done| EphemeralJob::AddPair {
-            start,
-            make_second,
-            done,
+        let (done, done_rx) = tokio::sync::oneshot::channel();
+        if self
+            .jobs
+            .send(EphemeralJob::AddPair {
+                start,
+                make_second,
+                done,
+            })
+            .is_err()
+        {
+            panic!(
+                "Ephemeral oplog actor for {:?} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+        let owned_agent_id = self.owned_agent_id.clone();
+        Box::pin(async move {
+            done_rx.await.unwrap_or_else(|_| {
+                panic!(
+                    "Ephemeral oplog actor for {owned_agent_id:?} dropped an add-pair request without replying"
+                )
+            })
         })
-        .await
     }
 
     async fn add_start_with_reserved_raw_payload(

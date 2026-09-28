@@ -86,10 +86,10 @@ Use `--max-count` to limit the number of results and `--scan-cursor` to paginate
 
 ```shell
 golem agent list --max-count 10
-golem agent list --max-count 10 --scan-cursor 0/5
+golem agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 ```
 
-The cursor is returned in the output when there are more results. Use it in the next call to get the next page.
+The cursor is an opaque value returned in the output when there are more results. Pass it back unchanged in the next call to get the next page.
 
 > **Note**: `--scan-cursor` requires a single component to be selected (either via `--component-name` or by being in a single-component application directory).
 
