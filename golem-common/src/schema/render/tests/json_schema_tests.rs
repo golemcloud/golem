@@ -373,7 +373,7 @@ fn binary_emits_canonical_object_shape() {
         schema["properties"]["mimeType"]["pattern"]
             .as_str()
             .unwrap(),
-        "^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$"
+        "^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$"
     );
     assert_eq!(schema["additionalProperties"], json!(false));
 }
@@ -1060,8 +1060,9 @@ mod agent_entry_points {
         // Canonical Text shape: `{ text, language? }`.
         assert_eq!(props["text"]["type"], json!("string"));
         assert!(props.contains_key("language"));
+        assert_eq!(props["language"]["enum"], json!(["en", "fr"]));
         assert_eq!(doc["required"], json!(["text"]));
-        assert_eq!(doc["description"], json!("Allowed languages: en, fr"));
+        assert!(doc.get("description").is_none());
     }
 
     #[test]

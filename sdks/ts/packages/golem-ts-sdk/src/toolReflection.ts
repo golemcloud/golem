@@ -37,6 +37,7 @@ import {
   v,
 } from './internal/schema-model';
 import { SchemaRef, type JsonValue } from './schema/ref';
+import { fromCanonicalJson } from './schema/render';
 import { ComponentId } from './ids';
 import {
   createToolClientRuntime,
@@ -189,7 +190,7 @@ export class ToolCommand {
   /** Validate and pack canonical JSON input before opening a tool RPC. */
   packJson(input: JsonValue): SchemaValue {
     if (!this.inputSchema) throw new TypeError(`Command '${this.path.join(' ')}' has no body`);
-    const value = this.inputSchema.packJson(input);
+    const value = fromCanonicalJson(this.inputSchema.graph, this.inputSchema.root, input);
     if (!this.inputSchema.validateValue(value).success) throw new TypeError('Invalid tool input');
     this.validateConstraints(value);
     return value;
