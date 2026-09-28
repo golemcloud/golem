@@ -154,7 +154,7 @@ This is exposed in each SDK's host bindings. The function returns immediately â€
 ## How Automatic Update Works
 
 1. Admission records the target and the current periodic-snapshot exclusion watermark.
-2. While folding that request, Golem selects the newest eligible periodic snapshot that precedes it in the current source update epoch. If none is eligible, Golem selects full replay from the authoritative recovery baseline.
+2. While folding that request, Golem selects the newest eligible periodic snapshot that precedes it and follows the oplog entry establishing the active source revision. If none is eligible, Golem selects full replay from the authoritative recovery baseline.
 3. The worker is restarted promptly, including when an invocation is in flight.
 4. The target loads the selected snapshot, if any, and replays the surviving committed history. The replay can extend beyond the request entry because source work may finish while execution is stopping.
 5. Success is recorded only after replay validation and before target live effects continue. An assisted snapshot then becomes the authoritative recovery baseline.

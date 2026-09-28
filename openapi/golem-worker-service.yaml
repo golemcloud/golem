@@ -6164,7 +6164,7 @@ components:
       required:
       - pendingUpdateIndex
       - sourceComponentRevision
-      - sourceUpdateEpoch
+      - sourceRevisionStartIndex
       properties:
         pendingUpdateIndex:
           type: integer
@@ -6172,14 +6172,12 @@ components:
         sourceComponentRevision:
           type: integer
           format: uint64
-        sourceUpdateEpoch:
+        sourceRevisionStartIndex:
           type: integer
           format: uint64
         snapshotIndex:
           type: integer
           format: uint64
-        replayRange:
-          $ref: '#/components/schemas/OplogRegion'
         ineligibilityReason:
           type: string
     PublicInvocationWalletPin:
@@ -7411,9 +7409,8 @@ components:
       required:
       - pendingUpdateIndex
       - sourceComponentRevision
-      - sourceUpdateEpoch
+      - sourceRevisionStartIndex
       - snapshotIndex
-      - replayRange
       properties:
         pendingUpdateIndex:
           type: integer
@@ -7421,14 +7418,12 @@ components:
         sourceComponentRevision:
           type: integer
           format: uint64
-        sourceUpdateEpoch:
+        sourceRevisionStartIndex:
           type: integer
           format: uint64
         snapshotIndex:
           type: integer
           format: uint64
-        replayRange:
-          $ref: '#/components/schemas/OplogRegion'
     PublicSnapshotData:
       type: object
       oneOf:
@@ -9290,12 +9285,12 @@ components:
       title: SnapshotAssistedUpdateMetadata
       required:
       - sourceComponentRevision
-      - sourceUpdateEpoch
+      - sourceRevisionStartIndex
       properties:
         sourceComponentRevision:
           type: integer
           format: uint64
-        sourceUpdateEpoch:
+        sourceRevisionStartIndex:
           type: integer
           format: uint64
         snapshotIndex:
@@ -9304,8 +9299,6 @@ components:
         snapshotRevision:
           type: integer
           format: uint64
-        replayRange:
-          $ref: '#/components/schemas/OplogRegion'
         ineligibilityReason:
           type: string
     SnapshotBasedUpdateParameters:
@@ -9623,6 +9616,12 @@ components:
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse
+      required:
+      - updateAttemptIndex
+      properties:
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     UrlRestrictions:
       type: object
       properties:
@@ -10307,6 +10306,9 @@ components:
           type: string
         snapshotAssistedDetails:
           $ref: '#/components/schemas/PublicFailedSnapshotAssistedUpdateDetails'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     r#FinishSpanParams:
       type: object
       title: r#FinishSpanParams
@@ -10445,6 +10447,7 @@ components:
       - timestamp
       - targetRevision
       - description
+      - updateAttemptIndex
       properties:
         timestamp:
           type: string
@@ -10454,6 +10457,9 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/PublicUpdateDescription'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     r#PreCommitRemoteTransactionParams:
       type: object
       title: r#PreCommitRemoteTransactionParams

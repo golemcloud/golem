@@ -298,9 +298,8 @@ pub(all) struct ExternalToolResultParameters {
 pub(all) struct FailedSnapshotAssistedUpdateDetails {
   pending_update_index : UInt64
   source_component_revision : UInt64
-  source_update_epoch : UInt64
+  source_revision_start_index : UInt64
   snapshot_index : UInt64?
-  replay_range : OplogRegion?
   ineligibility_reason : String?
 } derive(Eq, @debug.Debug)
 
@@ -309,6 +308,7 @@ pub(all) struct FailedUpdateParameters {
   target_revision : UInt64
   details : String?
   snapshot_assisted_details : FailedSnapshotAssistedUpdateDetails?
+  update_attempt_index : UInt64?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct FallibleResultParameters {
@@ -492,6 +492,7 @@ pub(all) struct PendingUpdateParameters {
   timestamp : @system-clock.Instant
   target_revision : UInt64
   description : UpdateDescription
+  update_attempt_index : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct PluginInstallationDescription {
@@ -728,6 +729,7 @@ pub(all) struct RawPendingAgentInvocationParameters {
 pub(all) struct RawPendingUpdateParameters {
   timestamp : @system-clock.Instant
   description : RawUpdateDescription
+  update_attempt_index : UInt64?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawSnapshotAssistedAutomaticUpdate {
@@ -826,9 +828,8 @@ pub(all) struct SetSpanAttributeParameters {
 pub(all) struct SnapshotAssistedUpdateDetails {
   pending_update_index : UInt64
   source_component_revision : UInt64
-  source_update_epoch : UInt64
+  source_revision_start_index : UInt64
   snapshot_index : UInt64
-  replay_range : OplogRegion
 } derive(Eq, @debug.Debug)
 
 pub(all) struct SnapshotData {

@@ -18419,20 +18419,18 @@ components:
         sourceComponentRevision:
           type: integer
           format: uint64
-        sourceUpdateEpoch:
+        sourceRevisionStartIndex:
           type: integer
           format: uint64
         snapshotIndex:
           type: integer
           format: uint64
-        replayRange:
-          $ref: '#/components/schemas/OplogRegion'
         ineligibilityReason:
           type: string
       required:
       - pendingUpdateIndex
       - sourceComponentRevision
-      - sourceUpdateEpoch
+      - sourceRevisionStartIndex
     PublicInvocationWalletPin:
       title: PublicInvocationWalletPin
       type: object
@@ -19666,20 +19664,17 @@ components:
         sourceComponentRevision:
           type: integer
           format: uint64
-        sourceUpdateEpoch:
+        sourceRevisionStartIndex:
           type: integer
           format: uint64
         snapshotIndex:
           type: integer
           format: uint64
-        replayRange:
-          $ref: '#/components/schemas/OplogRegion'
       required:
       - pendingUpdateIndex
       - sourceComponentRevision
-      - sourceUpdateEpoch
+      - sourceRevisionStartIndex
       - snapshotIndex
-      - replayRange
     PublicSnapshotData:
       discriminator:
         propertyName: type
@@ -21543,7 +21538,7 @@ components:
         sourceComponentRevision:
           type: integer
           format: uint64
-        sourceUpdateEpoch:
+        sourceRevisionStartIndex:
           type: integer
           format: uint64
         snapshotIndex:
@@ -21552,13 +21547,11 @@ components:
         snapshotRevision:
           type: integer
           format: uint64
-        replayRange:
-          $ref: '#/components/schemas/OplogRegion'
         ineligibilityReason:
           type: string
       required:
       - sourceComponentRevision
-      - sourceUpdateEpoch
+      - sourceRevisionStartIndex
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object
@@ -21874,6 +21867,12 @@ components:
     UpdateWorkerResponse:
       title: UpdateWorkerResponse
       type: object
+      properties:
+        updateAttemptIndex:
+          type: integer
+          format: uint64
+      required:
+      - updateAttemptIndex
     UrlRestrictions:
       type: object
       properties:
@@ -22555,6 +22554,9 @@ components:
           type: string
         snapshotAssistedDetails:
           $ref: '#/components/schemas/PublicFailedSnapshotAssistedUpdateDetails'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - targetRevision
@@ -22701,10 +22703,14 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/PublicUpdateDescription'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - targetRevision
       - description
+      - updateAttemptIndex
     r#PreCommitRemoteTransactionParams:
       title: r#PreCommitRemoteTransactionParams
       type: object

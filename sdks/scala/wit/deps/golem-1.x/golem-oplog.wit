@@ -455,7 +455,8 @@ interface oplog {
     record pending-update-parameters {
         timestamp: datetime,
         target-revision: component-revision,
-        description: update-description
+        description: update-description,
+        update-attempt-index: oplog-index,
     }
 
     record successful-update-parameters {
@@ -469,9 +470,8 @@ interface oplog {
     record snapshot-assisted-update-details {
         pending-update-index: oplog-index,
         source-component-revision: component-revision,
-        source-update-epoch: oplog-index,
+        source-revision-start-index: oplog-index,
         snapshot-index: oplog-index,
-        replay-range: oplog-region,
     }
 
     record failed-update-parameters {
@@ -479,14 +479,14 @@ interface oplog {
         target-revision: component-revision,
         details: option<string>,
         snapshot-assisted-details: option<failed-snapshot-assisted-update-details>,
+        update-attempt-index: option<oplog-index>,
     }
 
     record failed-snapshot-assisted-update-details {
         pending-update-index: oplog-index,
         source-component-revision: component-revision,
-        source-update-epoch: oplog-index,
+        source-revision-start-index: oplog-index,
         snapshot-index: option<oplog-index>,
-        replay-range: option<oplog-region>,
         ineligibility-reason: option<string>,
     }
 
@@ -783,7 +783,8 @@ interface oplog {
 
     record raw-pending-update-parameters {
         timestamp: datetime,
-        description: raw-update-description
+        description: raw-update-description,
+        update-attempt-index: option<oplog-index>,
     }
 
     record raw-successful-update-parameters {

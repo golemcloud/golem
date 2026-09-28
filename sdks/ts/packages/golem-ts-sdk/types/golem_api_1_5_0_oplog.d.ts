@@ -459,13 +459,13 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     description: UpdateDescription;
+    updateAttemptIndex: OplogIndex;
   };
   export type SnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
     sourceComponentRevision: ComponentRevision;
-    sourceUpdateEpoch: OplogIndex;
+    sourceRevisionStartIndex: OplogIndex;
     snapshotIndex: OplogIndex;
-    replayRange: OplogRegion;
   };
   export type SuccessfulUpdateParameters = {
     timestamp: Datetime;
@@ -477,9 +477,8 @@ declare module 'golem:api/oplog@1.5.0' {
   export type FailedSnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
     sourceComponentRevision: ComponentRevision;
-    sourceUpdateEpoch: OplogIndex;
+    sourceRevisionStartIndex: OplogIndex;
     snapshotIndex?: OplogIndex;
-    replayRange?: OplogRegion;
     ineligibilityReason?: string;
   };
   export type FailedUpdateParameters = {
@@ -487,6 +486,7 @@ declare module 'golem:api/oplog@1.5.0' {
     targetRevision: ComponentRevision;
     details?: string;
     snapshotAssistedDetails?: FailedSnapshotAssistedUpdateDetails;
+    updateAttemptIndex?: OplogIndex;
   };
   export type GrowMemoryParameters = {
     timestamp: Datetime;
@@ -876,6 +876,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawPendingUpdateParameters = {
     timestamp: Datetime;
     description: RawUpdateDescription;
+    updateAttemptIndex?: OplogIndex;
   };
   export type RawSuccessfulUpdateParameters = {
     timestamp: Datetime;

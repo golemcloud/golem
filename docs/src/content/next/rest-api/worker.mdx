@@ -124,13 +124,9 @@ precise|boolean|No|Precision in relation to worker status, if true, calculate th
           "mode": "automatic",
           "snapshotAssistedDetails": {
             "sourceComponentRevision": 0,
-            "sourceUpdateEpoch": 0,
+            "sourceRevisionStartIndex": 0,
             "snapshotIndex": 0,
             "snapshotRevision": 0,
-            "replayRange": {
-              "start": 0,
-              "end": 0
-            },
             "ineligibilityReason": "string"
           }
         }
@@ -319,13 +315,9 @@ Returns metadata about an existing worker:
       "mode": "automatic",
       "snapshotAssistedDetails": {
         "sourceComponentRevision": 0,
-        "sourceUpdateEpoch": 0,
+        "sourceRevisionStartIndex": 0,
         "snapshotIndex": 0,
         "snapshotRevision": 0,
-        "replayRange": {
-          "start": 0,
-          "end": 0
-        },
         "ineligibilityReason": "string"
       }
     }
@@ -557,13 +549,9 @@ Returns metadata about an existing component workers:
           "mode": "automatic",
           "snapshotAssistedDetails": {
             "sourceComponentRevision": 0,
-            "sourceUpdateEpoch": 0,
+            "sourceRevisionStartIndex": 0,
             "snapshotIndex": 0,
             "snapshotRevision": 0,
-            "replayRange": {
-              "start": 0,
-              "end": 0
-            },
             "ineligibilityReason": "string"
           }
         }
@@ -636,7 +624,9 @@ Path|Method|Protected
 **Example Response JSON**
 
 ```json copy
-{}
+{
+  "updateAttemptIndex": 0
+}
 ```
 
 ## Get the oplog of a worker

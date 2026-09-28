@@ -5044,13 +5044,12 @@
     },
     "SnapshotAssistedUpdateMetadata": {
       "type": "object",
-      "required": ["sourceComponentRevision", "sourceUpdateEpoch", "snapshotIndex", "snapshotRevision", "replayRange", "ineligibilityReason"],
+      "required": ["sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex", "snapshotRevision", "ineligibilityReason"],
       "properties": {
         "sourceComponentRevision": { "type": "integer", "minimum": 0 },
-        "sourceUpdateEpoch": { "type": "integer", "minimum": 0 },
+        "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 },
         "snapshotIndex": { "type": ["integer", "null"], "minimum": 0 },
         "snapshotRevision": { "type": ["integer", "null"], "minimum": 0 },
-        "replayRange": { "anyOf": [{ "$ref": "#/definitions/OplogRegion" }, { "type": "null" }] },
         "ineligibilityReason": { "type": ["string", "null"] }
       },
       "additionalProperties": false
@@ -5358,8 +5357,8 @@
     },
     "PublicOplogEntryPendingUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision", "description"],
-      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" } },
+      "required": ["type", "timestamp", "targetRevision", "description", "updateAttemptIndex"],
+      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" }, "updateAttemptIndex": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntrySuccessfulUpdate": {
@@ -5370,8 +5369,8 @@
     },
     "PublicOplogEntryFailedUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision"],
-      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicFailedSnapshotAssistedUpdateDetails" }, { "type": "null" }] } },
+      "required": ["type", "timestamp", "targetRevision", "updateAttemptIndex"],
+      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicFailedSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "updateAttemptIndex": { "type": ["integer", "null"], "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryGrowMemory": {
@@ -5700,14 +5699,14 @@
     },
     "PublicSnapshotAssistedUpdateDetails": {
       "type": "object",
-      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceUpdateEpoch", "snapshotIndex", "replayRange"],
-      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceUpdateEpoch": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": "integer", "minimum": 0 }, "replayRange": { "$ref": "#/definitions/OplogRegion" } },
+      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex"],
+      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicFailedSnapshotAssistedUpdateDetails": {
       "type": "object",
-      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceUpdateEpoch"],
-      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceUpdateEpoch": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": ["integer", "null"], "minimum": 0 }, "replayRange": { "anyOf": [{ "$ref": "#/definitions/OplogRegion" }, { "type": "null" }] }, "ineligibilityReason": { "type": ["string", "null"] } },
+      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex"],
+      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": ["integer", "null"], "minimum": 0 }, "ineligibilityReason": { "type": ["string", "null"] } },
       "additionalProperties": false
     },
     "LogLevel": { "type": "string", "enum": ["Stdout", "Stderr", "Trace", "Debug", "Info", "Warn", "Error", "Critical"] },

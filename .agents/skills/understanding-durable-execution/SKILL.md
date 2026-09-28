@@ -626,7 +626,7 @@ watermark. `prepare_instance`
 - Public `Automatic` admission records an internal snapshot-assisted candidate plus the current
   rejection/unavailability watermark. While folding that exact `PendingUpdate` (`P`), the reducer
   selects the newest eligible periodic snapshot `S` strictly before `P` in the active source
-  revision `R` and source update epoch `E`. If none is eligible, the derived pending kind is
+  revision `R`, after the oplog entry `E` that established that revision. If none is eligible, the derived pending kind is
   `Automatic`: `try_load_snapshot` loads the authoritative baseline, then `resume_replay` replays
   the remaining old history against the new component. If `S` is eligible, the derived internal
   kind is `SnapshotAssistedAutomatic`: the target loads required `S`, skips only through `S`, and replays the surviving
@@ -655,7 +655,7 @@ Assisted success is finalized through the existing replay-to-live settlement bou
 committed after historical invocation results and entity reconstruction validate but before target
 live effects or a target periodic snapshot can run. A mutable invocation may therefore span
 `Started < P < U < Finished`: the update completes without waiting for that invocation to finish,
-and the invocation continues on the target. `U` carries `P/R/E/S` and the actual replay range, so
+and the invocation continues on the target. `U` carries `P/R/E/S`, so
 both status and skipped-region folds derive promotion from the outcome itself. Promotion skips only
 `INITIAL.next()..=S`, preserves the suffix, switches active Wasm metadata to the target, and keeps
 source revision `R` as the historical replay metadata used when reconstructing the suffix.
