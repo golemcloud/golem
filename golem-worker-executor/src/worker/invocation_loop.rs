@@ -844,15 +844,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .await
                                             .current_idempotency_key
                                             .clone();
-                                        // A lost shard: the oplog is the new owner's to write, so
-                                        // no lifecycle entry and no failure is recorded for an
-                                        // invocation it runs. Any other pending interrupt was
-                                        // requested and is recorded, or refused by the fence
-                                        // once the new owner has claimed the oplog.
-                                        if matches!(kind, InterruptKind::ShardLost) {
-                                            self.stop_startup_retired().await;
-                                            break 'outer;
-                                        }
                                         let recorded = match kind {
                                             InterruptKind::Suspend(_) => {
                                                 self.parent.add_and_commit_oplog(OplogEntry::suspend()).await.map(|_| ())
@@ -991,14 +982,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             ?decision,
             "Invocation queue loop interrupted while unloaded"
         );
-        // A lost shard: the oplog is the new owner's to write, so no lifecycle entry and no
-        // failure is recorded for an invocation it runs, and nothing waits on here for a permit
-        // to restart it. Any other pending interrupt was requested and is recorded, or refused by
-        // the fence once the new owner has claimed the oplog.
-        if matches!(kind, InterruptKind::ShardLost) {
-            self.stop_startup_retired().await;
-            return true;
-        }
         if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
             let current_idempotency_key = self
                 .parent
