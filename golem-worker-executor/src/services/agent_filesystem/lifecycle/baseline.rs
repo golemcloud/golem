@@ -14,8 +14,8 @@
 
 use super::initial_files::{
     DeclarationView, Declarations, InitialFileSources, PathLookup, PathReader, RetryPreparation,
-    declaration_view, declarations_of, holds_golem_file, install, observe, sandbox_path,
-    seed_with_retry, validate_compatible,
+    declaration_view, declarations_of, directory_entries, holds_golem_file, install, observe,
+    sandbox_path, seed_with_retry, validate_compatible,
 };
 use super::*;
 use crate::sandbox_filesystem::HostPath;
@@ -64,6 +64,75 @@ impl Display for RestoreError {
 
 impl std::error::Error for RestoreError {}
 
+/// A restore that gives the tree of a start from the initial files of `files`: each file at its
+/// path with the content of its declaration, and the directories on the way to the files.
+///
+/// A baseline with this restore seeds the files of `files` and then applies the initial-file rule
+/// from `files` to the declarations of the start, as an update from `files` does. A start from a
+/// manual-update record without a name uses it with the declarations of the source revision, so
+/// the start gives what the update gives in a replay. Each declaration of `files` must be
+/// read-only, because only a read-only file comes from the initial-file cache.
+pub(crate) struct InitialFilesRestore {
+    files: Box<[InitialAgentFile]>,
+}
+
+impl InitialFilesRestore {
+    #[allow(dead_code)]
+    pub(crate) fn new(files: impl IntoIterator<Item = InitialAgentFile>) -> Self {
+        Self {
+            files: files.into_iter().collect(),
+        }
+    }
+}
+
+impl RestoreTree for InitialFilesRestore {
+    async fn restore(self, into: &Path) -> Result<(), RestoreError> {
+        let refused = |source: anyhow::Error| RestoreError {
+            retryable: false,
+            source,
+        };
+        if let Some(file) = self
+            .files
+            .iter()
+            .find(|file| file.permissions != AgentFilePermissions::ReadOnly)
+        {
+            return Err(refused(anyhow::anyhow!(
+                "the initial file {} is not read-only, so it has no content in the initial-file \
+                 cache",
+                file.path
+            )));
+        }
+        let paths = self
+            .files
+            .iter()
+            .map(|file| PathBuf::from(file.path.to_rel_string()).into_boxed_path())
+            .collect::<BTreeSet<_>>();
+        let tree = into.join(TREE_DIRECTORY);
+        let directories = paths
+            .iter()
+            .flat_map(|path| path.ancestors().skip(1))
+            .map(|directory| tree.join(directory))
+            .collect::<BTreeSet<PathBuf>>();
+        let record = CaptureRecord {
+            initial_files: sorted_files(&self.files),
+            provisioned_files: Box::new([]),
+            left_out: paths.into_iter().collect(),
+            link_groups: Box::new([]),
+        };
+        let bytes = serde_json::to_vec(&record)
+            .map_err(|error| refused(anyhow::Error::new(error).context("encode the record")))?;
+        futures::stream::iter(std::iter::once(tree.clone()).chain(directories))
+            .map(Ok)
+            .try_for_each(|directory| async move { tokio::fs::create_dir_all(directory).await })
+            .await
+            .and(tokio::fs::write(into.join(RECORD_FILE), bytes).await)
+            .map_err(|error| RestoreError {
+                retryable: true,
+                source: anyhow::Error::new(error).context("write the initial files of a restore"),
+            })
+    }
+}
+
 /// A copy of the files of an agent filesystem, with its record, in one host directory.
 ///
 /// The directory holds `tree/` and `record.json`. The capture does not depend on the generation
@@ -86,8 +155,55 @@ impl FilesystemCapture {
     }
 }
 
-/// Why a capture did not copy a filesystem.
+/// How a save of a capture can find the files that did not change since the tree of the mark
+/// that the capture compared with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChangeDetection {
+    /// Each file whose content changed since the mark has a modification time that the kernel
+    /// gave after the mark. So a file with the size and the modification time that it has in the
+    /// tree of the mark has the content of that tree.
+    SizeMtime,
+    /// The save must read each file.
+    Full,
+}
+
+/// What a capture found.
 #[allow(dead_code)]
+pub(crate) enum CaptureOutcome {
+    /// The tree is the tree of the mark that the caller gave. The capture copied nothing.
+    Unchanged,
+    /// The tree is what a start from the initial files of the generation gives. The capture
+    /// copied nothing.
+    InitialFiles,
+    /// The capture copied the tree. `mark` is the mark of the copied tree, and `detection` tells
+    /// how a save can compare it with the tree of the mark that the caller gave.
+    Captured {
+        capture: FilesystemCapture,
+        mark: TreeMark,
+        detection: ChangeDetection,
+    },
+}
+
+/// The time that a capture keeps the calls stopped after the last call ended, when it copied a
+/// changed tree. A change after the capture then never gets the modification time of a change
+/// before it. This is two ticks of a kernel with 100 ticks each second.
+const TIMESTAMP_SETTLE: Duration = Duration::from_millis(20);
+
+/// Gives the mark of the tree of `filesystem` now. Use it for the baseline of a start, before any
+/// call runs.
+#[allow(dead_code)]
+pub(crate) fn tree_mark<Stage: FilesystemStage, Adapter: SandboxFilesystemAdapter>(
+    filesystem: &AgentFilesystem<Stage, Adapter>,
+) -> TreeMark {
+    filesystem
+        .generation
+        .as_ref()
+        .expect("agent filesystem generation already consumed")
+        .registry
+        .baseline_mark()
+}
+
+/// Why a capture did not copy a filesystem.
 #[derive(Debug)]
 pub(crate) enum CaptureError {
     /// The generation is sealed or invalidated.
@@ -146,11 +262,29 @@ fn record_error(source: anyhow::Error) -> Error {
     }))
 }
 
-/// Copies a resident filesystem into a new host directory, and leaves the filesystem resident.
+/// Copies a resident filesystem into a new host directory when it changed, and leaves the
+/// filesystem resident.
 ///
 /// Use this only at a boundary. The capture stops new filesystem calls (`begin_transition`),
-/// waits for the calls that are open (`wait_for_calls`), copies the tree, and opens the filesystem
-/// again (`finish_transition`). The capture directory holds `tree/` and `record.json`. The tree is
+/// waits for the calls that are open (`wait_for_calls`), reads the counters of the generation, and
+/// then decides:
+///
+/// - When the counters equal `since`, the tree is the tree of `since`. The result is
+///   [`CaptureOutcome::Unchanged`], and the capture makes no host directory.
+/// - When the tree is what a start from the initial files gives, the result is
+///   [`CaptureOutcome::InitialFiles`], and the capture makes no host directory. That is true when
+///   each declaration is a read-only initial file, each of these files is Golem's file with a
+///   single name, the tree holds nothing else except the directories on the way to these files,
+///   and no call outside an install put a chosen modification time at a path. The check does not
+///   compare the modification times of the directories: a time that the kernel gave comes back
+///   from a replay as a new time too.
+/// - Otherwise the capture copies the tree. Then it keeps the calls stopped until 20 ms after the
+///   last call ended, and opens the filesystem again (`finish_transition`). The detection is
+///   [`ChangeDetection::SizeMtime`] when `since` is a mark of this generation with the times of a
+///   save, and only calls whose times the kernel gave ran since it. Otherwise it is
+///   [`ChangeDetection::Full`].
+///
+/// The capture directory holds `tree/` and `record.json`. The tree is
 /// the whole filesystem minus each read-only initial or entity-provisioned file that has a single
 /// name and is Golem's file at its declared path: a regular file with the declared content and
 /// without write permission. The tree holds a file with more than one name once. The record gives
@@ -177,7 +311,8 @@ fn record_error(source: anyhow::Error) -> Error {
 pub(crate) fn capture<Adapter: SandboxFilesystemAdapter>(
     filesystem: &ResidentFilesystem<Adapter>,
     wait: Duration,
-) -> impl Future<Output = Result<FilesystemCapture, CaptureError>> + Send + 'static {
+    since: Option<TreeMark>,
+) -> impl Future<Output = Result<CaptureOutcome, CaptureError>> + Send + 'static {
     let generation = Arc::clone(
         filesystem
             .generation
@@ -186,8 +321,11 @@ pub(crate) fn capture<Adapter: SandboxFilesystemAdapter>(
     );
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_module_task(async move {
-        let result = complete_capture(&generation, wait).await;
-        if let Err(Ok(unobserved)) = sender.send(result)
+        let result = complete_capture(&generation, wait, since).await;
+        if let Err(Ok(CaptureOutcome::Captured {
+            capture: unobserved,
+            ..
+        })) = sender.send(result)
             && let Err(error) = unobserved.discard().await
         {
             tracing::warn!(error = %error, "Failed to discard an unobserved filesystem capture");
@@ -203,7 +341,8 @@ pub(crate) fn capture<Adapter: SandboxFilesystemAdapter>(
 async fn complete_capture<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     wait: Duration,
-) -> Result<FilesystemCapture, CaptureError> {
+    since: Option<TreeMark>,
+) -> Result<CaptureOutcome, CaptureError> {
     generation
         .registry
         .begin_transition()
@@ -214,27 +353,73 @@ async fn complete_capture<Adapter: SandboxFilesystemAdapter>(
             }
         })?;
     let result = match tokio::time::timeout(wait, generation.registry.wait_for_calls()).await {
-        Ok(()) => capture_into_scratch(generation).await,
+        Ok(()) => capture_fenced(generation, since).await,
         Err(_) => Err(CaptureError::Busy),
     };
     generation.registry.finish_transition();
     result
 }
 
-/// Copies the tree into a new directory in the scratch directory.
+/// Decides and copies while no call runs.
+async fn capture_fenced<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+    since: Option<TreeMark>,
+) -> Result<CaptureOutcome, CaptureError> {
+    let mark = generation.registry.capture_mark();
+    if since.is_some_and(|since| mark.same_tree(&since)) {
+        return Ok(CaptureOutcome::Unchanged);
+    }
+    let captured = capture_into_scratch(generation).await?;
+    let Some(capture) = captured else {
+        return Ok(CaptureOutcome::InitialFiles);
+    };
+    settle_timestamps(generation).await;
+    Ok(CaptureOutcome::Captured {
+        capture,
+        mark,
+        detection: match since {
+            Some(since) if mark.fresh_since(&since) => ChangeDetection::SizeMtime,
+            _ => ChangeDetection::Full,
+        },
+    })
+}
+
+/// Waits until [`TIMESTAMP_SETTLE`] passed since the last call ended.
+async fn settle_timestamps<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+) {
+    let last = generation
+        .registry
+        .last_effect_completion_millis
+        .load(std::sync::atomic::Ordering::Acquire);
+    let settled = std::time::UNIX_EPOCH + Duration::from_millis(last) + TIMESTAMP_SETTLE;
+    if let Ok(remaining) = settled.duration_since(std::time::SystemTime::now()) {
+        tokio::time::sleep(remaining).await;
+    }
+}
+
+/// Copies the tree into a new directory in the scratch directory, or gives `None` when the tree
+/// is what a start from the initial files gives.
 ///
 /// The read guard of the sandbox is held for the whole copy. The deletion of the filesystem takes
 /// the write guard after the calls and nodes drain, and the copy holds no call or node lease, so
 /// the guard is what makes the deletion wait for the copy.
 async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
-) -> Result<FilesystemCapture, CaptureError> {
+) -> Result<Option<FilesystemCapture>, CaptureError> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or(CaptureError::Invalidated)?;
     let state = Arc::clone(&generation.initial_files.lock().unwrap());
     let left_out = left_out_files(sandbox.as_ref(), &state)
         .await
         .map_err(CaptureError::Sandbox)?;
+    if !generation.registry.has_chosen_times()
+        && holds_only_initial_files(sandbox.as_ref(), &state, &left_out)
+            .await
+            .map_err(CaptureError::Sandbox)?
+    {
+        return Ok(None);
+    }
     let directory = HostDirectory::create_in(
         generation.scratch.path(),
         OsStr::new(&uuid::Uuid::new_v4().to_string()),
@@ -242,7 +427,7 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     .await
     .map_err(CaptureError::Sandbox)?;
     match write_capture(sandbox.as_ref(), &state, left_out, directory.path()).await {
-        Ok(()) => Ok(FilesystemCapture { directory }),
+        Ok(()) => Ok(Some(FilesystemCapture { directory })),
         Err(error) => {
             if let Err(cleanup) = directory.discard().await {
                 tracing::warn!(error = %cleanup, "Failed to discard a failed filesystem capture");
@@ -289,6 +474,69 @@ async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
         .map(|(_, paths)| paths.into_boxed_slice())
 }
 
+/// Tells whether the tree holds only what a start from the initial files gives: each declaration is
+/// a read-only initial file, each declared path is in `left_out`, and the tree holds nothing else
+/// except the directories on the way to the declared paths.
+///
+/// The function reads each such directory one time, and stops at the first entry that is not a
+/// declared path or a directory on the way to one.
+async fn holds_only_initial_files<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    state: &InitialFileState,
+    left_out: &[Box<Path>],
+) -> Result<bool, FilesystemStorageError> {
+    let declarations = state.declarations();
+    if !state.provisioned.is_empty()
+        || declarations
+            .values()
+            .any(|file| file.permissions != AgentFilePermissions::ReadOnly)
+        || left_out.len() != declarations.len()
+    {
+        return Ok(false);
+    }
+    let directories = declarations
+        .keys()
+        .flat_map(|path| path.ancestors().skip(1))
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .collect::<HashSet<&Path>>();
+    let expected = |path: &Path, kind: SandboxObjectKind| match kind {
+        SandboxObjectKind::Directory => directories.contains(path),
+        _ => declarations.contains_key(path),
+    };
+    // The pending directories are a stack that the read pushes to and pops from.
+    futures::stream::try_unfold(vec![Box::<Path>::from(Path::new(""))], |mut pending| {
+        let expected = &expected;
+        async move {
+            let Some(directory) = pending.pop() else {
+                return Ok(None);
+            };
+            let entries = directory_entries(sandbox, &directory).await?;
+            let agrees = entries
+                .iter()
+                .all(|entry| expected(&directory.join(&entry.name), entry.kind));
+            // A directory that does not agree ends the read, so no other directory is read.
+            let pending = if agrees {
+                pending
+                    .into_iter()
+                    .chain(
+                        entries
+                            .into_iter()
+                            .filter(|entry| entry.kind == SandboxObjectKind::Directory)
+                            .map(|entry| directory.join(entry.name).into_boxed_path()),
+                    )
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            Ok::<_, FilesystemStorageError>(Some((agrees, pending)))
+        }
+    })
+    .try_fold(true, |holds, agrees| {
+        std::future::ready(Ok(holds && agrees))
+    })
+    .await
+}
+
 /// Copies the tree into `directory`, without the bytes of the files at the paths `left_out`, and
 /// writes the record next to it.
 async fn write_capture<Adapter: SandboxFilesystemAdapter>(
@@ -330,6 +578,16 @@ async fn write_capture<Adapter: SandboxFilesystemAdapter>(
                 error,
             )
         })
+}
+
+fn sorted_files(files: &[InitialAgentFile]) -> Box<[InitialAgentFile]> {
+    files
+        .iter()
+        .map(|file| (file.path.to_rel_string(), file))
+        .collect::<BTreeMap<_, _>>()
+        .into_values()
+        .cloned()
+        .collect()
 }
 
 fn sorted_declarations(declarations: &Declarations) -> Box<[InitialAgentFile]> {
@@ -551,6 +809,7 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
         .collect::<BTreeSet<&Path>>();
     restore_directory_times(sandbox, &tree, changed_directories).await?;
     let new = declaration_view([&initial, &provisioned]);
+    generation.registry.record_restore(old == new);
     let states = observe(sandbox, &old, &new, &seeded)
         .await
         .map_err(|source| classify_query_error(generation, source))?;

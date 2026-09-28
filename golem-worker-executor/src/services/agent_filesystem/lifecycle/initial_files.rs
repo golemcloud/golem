@@ -827,7 +827,7 @@ fn dropped_golem_file(
 
 /// Lists the entries of the directory at the root-relative `path`, without following a final
 /// symlink.
-async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
+pub(super) async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     path: &Path,
 ) -> Result<Vec<crate::sandbox_filesystem::SandboxDirectoryEntry>, FilesystemStorageError> {

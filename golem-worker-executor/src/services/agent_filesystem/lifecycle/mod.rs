@@ -56,7 +56,8 @@ mod initial_files;
 
 #[allow(unused_imports)]
 pub(crate) use baseline::{
-    CaptureError, FilesystemCapture, RestoreError, RestoreTree, capture, materialize_baseline,
+    CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore,
+    RestoreError, RestoreTree, capture, materialize_baseline, tree_mark,
 };
 pub(crate) use initial_files::InitialFileConflict;
 use initial_files::{InitialFileSources, InitialFileState};
@@ -657,7 +658,10 @@ pub(crate) fn provision_initial_files<Adapter: SandboxFilesystemAdapter>(
     files: Vec<InitialAgentFile>,
 ) -> Result<FilesystemCall<()>, Error> {
     let generation = admit(generation_handle).map_err(Error::Access)?;
-    let lease = generation.registry.lease_call().map_err(Error::Access)?;
+    let lease = generation
+        .registry
+        .lease_call(CallEffect::Installs)
+        .map_err(Error::Access)?;
     Ok(FilesystemCall::new(lease, async move {
         initial_files::provision(
             &generation,
@@ -687,7 +691,10 @@ pub(crate) fn update_initial_files<Adapter: SandboxFilesystemAdapter>(
     files: Vec<InitialAgentFile>,
 ) -> Result<FilesystemCall<()>, Error> {
     let generation = admit(generation_handle).map_err(Error::Access)?;
-    let lease = generation.registry.lease_call().map_err(Error::Access)?;
+    let lease = generation
+        .registry
+        .lease_call(CallEffect::Installs)
+        .map_err(Error::Access)?;
     Ok(FilesystemCall::new(lease, async move {
         initial_files::update(
             &generation,
@@ -1277,11 +1284,102 @@ struct GenerationRegistry {
     last_effect_completion_millis: std::sync::atomic::AtomicU64,
 }
 
+/// What an entry point of the lifecycle can do to the tree. Each entry point gives it when it
+/// takes its call lease.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CallEffect {
+    /// The call does not change the tree.
+    Read,
+    /// The call can change the tree, and the kernel gives each object that it changes the time of
+    /// the change.
+    Changes,
+    /// The call can put an existing or a chosen modification time at a path: a rename or a hard
+    /// link.
+    ChoosesTimes,
+    /// The call installs initial files. The seeds copy the modification times of the cached
+    /// files.
+    Installs,
+    /// The call decides after a check if it changes the tree, and records the change itself with
+    /// [`GenerationRegistry::record`] before its first change.
+    Decides,
+}
+
+/// A change that a call records after its check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TreeChange {
+    /// The kernel gives each changed object the time of the change.
+    Fresh,
+    /// The change puts a chosen modification time at a path.
+    ChosenTime,
+}
+
+/// The state of the tree of one generation at one moment, as the counters of the lifecycle give
+/// it.
+///
+/// The counters only grow, and each generation has its own number, so a mark never matches a
+/// later tree that differs from it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TreeMark {
+    generation: u64,
+    changes: u64,
+    carried: u64,
+    /// Whether the tree at this mark has the modification times that a save of the tree keeps. A
+    /// capture gives such a mark. A baseline gives one only when it is a restored tree that the
+    /// initial-file rule did not change.
+    saved_times: bool,
+}
+
+impl TreeMark {
+    /// Whether the tree of `self` is the tree of `since`.
+    fn same_tree(&self, since: &TreeMark) -> bool {
+        self.generation == since.generation && self.changes == since.changes
+    }
+
+    /// Whether each file that changed since `since` has a modification time that the kernel gave
+    /// after `since`.
+    fn fresh_since(&self, since: &TreeMark) -> bool {
+        since.saved_times && self.generation == since.generation && self.carried == since.carried
+    }
+
+    /// Whether `self` and `other` are marks of one generation.
+    #[allow(dead_code)]
+    pub(crate) fn same_generation(&self, other: &TreeMark) -> bool {
+        self.generation == other.generation
+    }
+}
+
+/// The source of the generation numbers of [`TreeMark`].
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 struct RegistryState {
     admission: AdmissionState,
     replay_access: bool,
     calls: usize,
     nodes: usize,
+    /// The number of the generation, unique in the process.
+    generation: u64,
+    /// The number of calls that could change the tree.
+    changes: u64,
+    /// The number of those calls that could put an existing or a chosen modification time at a
+    /// path.
+    carried: u64,
+    /// The number of changes that could put a chosen modification time at a path outside an
+    /// install of initial files: a rename, a hard link, a set of a given time, and a restore.
+    chosen: u64,
+    /// Whether the baseline is a restored tree with the modification times of its save.
+    restored_times: bool,
+}
+
+impl RegistryState {
+    fn count(&mut self, carried: bool, chosen: bool) {
+        self.changes += 1;
+        if carried {
+            self.carried += 1;
+        }
+        if chosen {
+            self.chosen += 1;
+        }
+    }
 }
 
 impl GenerationRegistry {
@@ -1292,13 +1390,20 @@ impl GenerationRegistry {
                 replay_access: false,
                 calls: 0,
                 nodes: 0,
+                generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                changes: 0,
+                carried: 0,
+                chosen: 0,
+                restored_times: false,
             }),
             changed: tokio::sync::Notify::new(),
             last_effect_completion_millis: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
-    fn lease_call(self: &Arc<Self>) -> Result<CallLease, AccessError> {
+    /// Admits a call, and counts its effect on the tree. A capture reads the counters only when no
+    /// call holds a lease, so it sees each change whose effect can be on disk.
+    fn lease_call(self: &Arc<Self>, effect: CallEffect) -> Result<CallLease, AccessError> {
         let mut state = self.state.lock().unwrap();
         match state.admission {
             AdmissionState::Open => {}
@@ -1311,9 +1416,59 @@ impl GenerationRegistry {
             .calls
             .checked_add(1)
             .expect("filesystem call count overflowed");
+        match effect {
+            CallEffect::Read | CallEffect::Decides => {}
+            CallEffect::Changes => state.count(false, false),
+            CallEffect::ChoosesTimes => state.count(true, true),
+            CallEffect::Installs => state.count(true, false),
+        }
         Ok(CallLease {
             registry: Arc::clone(self),
         })
+    }
+
+    /// Counts a change that a call with [`CallEffect::Decides`] makes. The call records it while
+    /// it holds its lease, before its first change.
+    fn record(&self, change: TreeChange) {
+        let mut state = self.state.lock().unwrap();
+        match change {
+            TreeChange::Fresh => state.count(false, false),
+            TreeChange::ChosenTime => state.count(true, true),
+        }
+    }
+
+    /// Records that the baseline is a restored tree. A restored tree holds the modification times
+    /// of its save, which a start without the restore does not give, so the restore counts as a
+    /// chosen time. `saved_times` tells whether the tree keeps the times of its save, which is
+    /// false when the initial-file rule changes it.
+    fn record_restore(&self, saved_times: bool) {
+        let mut state = self.state.lock().unwrap();
+        state.count(true, true);
+        state.restored_times = saved_times;
+    }
+
+    /// The mark of the tree now, for a tree that a capture copies.
+    fn capture_mark(&self) -> TreeMark {
+        TreeMark {
+            saved_times: true,
+            ..self.baseline_mark()
+        }
+    }
+
+    /// The mark of the tree now, for a tree that no capture copied.
+    fn baseline_mark(&self) -> TreeMark {
+        let state = self.state.lock().unwrap();
+        TreeMark {
+            generation: state.generation,
+            changes: state.changes,
+            carried: state.carried,
+            saved_times: state.restored_times,
+        }
+    }
+
+    /// Whether a change put a chosen modification time at a path outside an install.
+    fn has_chosen_times(&self) -> bool {
+        self.state.lock().unwrap().chosen != 0
     }
 
     fn lease_internal_call(self: &Arc<Self>) -> CallLease {
@@ -2092,7 +2247,13 @@ pub(crate) fn open<Adapter: SandboxFilesystemAdapter>(
     let generation = admit(generation_handle)?;
     validate_path_generation(&generation, &target)?;
     let opened_access = open_access(options);
-    let lease = generation.registry.lease_call()?;
+    let lease = generation
+        .registry
+        .lease_call(if open_changes_filesystem(options) {
+            CallEffect::Changes
+        } else {
+            CallEffect::Read
+        })?;
     Ok(FilesystemCall::new(lease, async move {
         execute_coordinated_open(generation, target.sandbox, options, opened_access).await
     }))
@@ -2109,7 +2270,7 @@ pub(crate) fn read_file<Adapter: SandboxFilesystemAdapter>(
     range: ReadRange,
 ) -> Result<FilesystemCall<ReadResult>, AccessError> {
     let generation = admit_node(generation_handle, file.ownership.generation_id)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let SandboxNode::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
@@ -2141,7 +2302,7 @@ pub(crate) fn attributes<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<Attributes>, AccessError> {
     let generation = admit(generation_handle)?;
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     Ok(FilesystemCall::new(lease, async move {
         let sandbox = generation.sandbox.read().await;
         let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
@@ -2168,7 +2329,7 @@ pub(crate) fn is_same_object<Adapter: SandboxFilesystemAdapter>(
     if right_ownership.generation_id != left_ownership.generation_id {
         return Err(AccessError::WrongGeneration);
     }
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let left = left_ownership.sandbox().clone();
     let right = right_ownership.sandbox().clone();
     Ok(FilesystemCall::new(lease, async move {
@@ -2191,7 +2352,7 @@ pub(crate) fn list_directory<Adapter: SandboxFilesystemAdapter>(
     directory: &Directory,
 ) -> Result<FilesystemCall<DirectoryEntries>, AccessError> {
     let generation = admit_node(generation_handle, directory.ownership.generation_id)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let SandboxNode::Directory(directory) = directory.ownership.sandbox() else {
         unreachable!("directory wrapper must contain a sandbox directory")
     };
@@ -2223,7 +2384,7 @@ pub(crate) fn symlink_target<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<SymlinkTarget>, AccessError> {
     let generation = admit(generation_handle)?;
     validate_path_generation(&generation, &target)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let path = target.sandbox.clone();
     Ok(FilesystemCall::new(lease, async move {
         let sandbox = generation.sandbox.read().await;
@@ -2248,7 +2409,7 @@ pub(crate) fn write<Adapter: SandboxFilesystemAdapter>(
     bytes: Bytes,
 ) -> Result<FilesystemCall<WriteResult>, AccessError> {
     let generation = admit_node(generation_handle, file.ownership.generation_id)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Changes)?;
     let SandboxNode::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
@@ -2275,7 +2436,7 @@ pub(crate) fn set_attributes<Adapter: SandboxFilesystemAdapter>(
         Target::Open(_) => None,
     };
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Decides)?;
     Ok(FilesystemCall::new(lease, async move {
         match coordinated_path {
             Some((target, follow)) => {
@@ -2299,7 +2460,7 @@ pub(crate) fn restore_times<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<()>, AccessError> {
     let generation = admit(generation_handle)?;
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Decides)?;
     Ok(FilesystemCall::new(lease, async move {
         execute_set_times(generation, target, times).await
     }))
@@ -2318,7 +2479,10 @@ pub(crate) fn edit_namespace<Adapter: SandboxFilesystemAdapter>(
     let generation = admit(generation_handle)?;
     validate_namespace_generation(&generation, &edit)?;
     authorize_namespace_edit(&edit)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(match edit {
+        NamespaceEdit::Insert { .. } | NamespaceEdit::Remove { .. } => CallEffect::Changes,
+        NamespaceEdit::Link { .. } | NamespaceEdit::Move { .. } => CallEffect::ChoosesTimes,
+    })?;
     Ok(FilesystemCall::new(lease, async move {
         execute_namespace_edit(generation, edit).await
     }))
@@ -2336,7 +2500,7 @@ pub(crate) fn flush<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<()>, AccessError> {
     let ownership = node_ownership(node);
     let generation = admit_node(generation_handle, ownership.generation_id)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let node = ownership.sandbox().clone();
     Ok(FilesystemCall::new(lease, async move {
         execute_flush(generation, node, level).await
@@ -2774,6 +2938,7 @@ async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(
     if before.size == size {
         return Ok(());
     }
+    generation.registry.record(TreeChange::Fresh);
     let growing = size > before.size;
     let mut budget = RetryBudget::new(2);
     loop {
@@ -2828,6 +2993,13 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
     let before = mutation_attributes(&generation, target.clone()).await?;
     if time_changes_satisfied(&before, &before, times, None) {
         return Ok(());
+    }
+    // A snapshot keeps no access time, so only a change of the modification time changes the tree.
+    if !time_change_satisfied(before.modified, before.modified, times.modified, None) {
+        generation.registry.record(match times.modified {
+            TimeChange::Set(_) => TreeChange::ChosenTime,
+            TimeChange::Now | TimeChange::Keep => TreeChange::Fresh,
+        });
     }
     let mut budget = RetryBudget::new(2);
     loop {
