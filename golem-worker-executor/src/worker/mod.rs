@@ -108,6 +108,7 @@ use crate::worker::invocation_loop::{
 };
 use crate::worker::snapshot_selection::{
     AutomaticSnapshotFilter, component_revision_for_replay, select_automatic_snapshot,
+    selects_the_last_record_once_confirmed,
 };
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, calculate_revert_validation_regions,
@@ -4304,7 +4305,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// write when the status is detached, when the instance does not run or runs another
     /// generation, when the owner retires, or when this executor no longer admits work of the
     /// agent. Otherwise one status job, which holds the instance lock, checks and appends. So a
-    /// stop waits for at most that one job.
+    /// stop waits for at most the status jobs already queued plus one confirm transaction.
     pub(crate) async fn confirm_filesystem_snapshot(
         self: &Arc<Self>,
         name: FilesystemSnapshotName,
@@ -4337,6 +4338,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Whether a terminal interrupt request waits for this worker.
+    /// Gives the filesystem snapshot name of the last successful manual update, which the status
+    /// keeps as the manual-update baseline.
+    pub(crate) async fn manual_update_baseline_name(&self) -> Option<FilesystemSnapshotName> {
+        let index = self
+            .last_known_status
+            .load()
+            .last_manual_update_snapshot_index?;
+        match self.oplog.read(index).await {
+            OplogEntry::PendingUpdate {
+                description:
+                    UpdateDescription::SnapshotBased {
+                        filesystem_snapshot,
+                        ..
+                    },
+                ..
+            } => filesystem_snapshot,
+            _ => None,
+        }
+    }
+
     async fn terminal_interrupt_pending(&self) -> bool {
         matches!(
             &*self.interrupt_signal.lock().await,
@@ -4382,10 +4403,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         };
         let status = self.last_known_status.load_full();
-        let (Some(name), Some(index)) = (
-            status.last_automatic_snapshot_filesystem_snapshot.clone(),
-            status.last_automatic_snapshot_index,
-        ) else {
+        let Some(name) = status.last_automatic_snapshot_filesystem_snapshot.clone() else {
             return;
         };
         if status.last_automatic_snapshot_confirmed {
@@ -4401,20 +4419,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let as_confirmed = AgentStatusRecord {
-            last_automatic_snapshot_confirmed: true,
-            ..(*status).clone()
-        };
-        let selected = select_automatic_snapshot(
-            &as_confirmed,
+        if !selects_the_last_record_once_confirmed(
+            &status,
             AutomaticSnapshotFilter {
                 has_pending_update: !status.pending_updates.is_empty(),
                 rejected: &rejected,
                 unavailable: &unavailable,
                 filesystem_snapshots_enabled: true,
             },
-        );
-        if selected.map(|selected| selected.index) != Some(index) {
+        ) {
             return;
         }
         let scope = crate::filesystem_snapshot::SnapshotScope::agent(&self.owned_agent_id);

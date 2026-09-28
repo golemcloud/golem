@@ -39,6 +39,10 @@ struct Faults {
     save_delay: Mutex<Duration>,
     restores_fail: AtomicBool,
     failing_restore_names: Mutex<std::collections::HashSet<String>>,
+    /// The time that the store adds to the time of each later save.
+    clock_offset: Mutex<Duration>,
+    /// The time of each saved name, with the offset of its save.
+    times: Mutex<std::collections::HashMap<String, golem_common::model::Timestamp>>,
     saves: AtomicUsize,
     restored: Mutex<Vec<String>>,
     stats: AtomicUsize,
@@ -74,6 +78,29 @@ impl TestFilesystemSnapshotStore {
     /// Makes each restore fail with an error that allows no retry, or not.
     pub fn fail_restores(&self, fail: bool) {
         self.faults.restores_fail.store(fail, Ordering::SeqCst);
+    }
+
+    /// Moves the clock of the store forward by `by`: each later save gets a time that much later,
+    /// as a save on an executor whose clock is ahead does.
+    pub fn advance_clock(&self, by: Duration) {
+        *self
+            .faults
+            .clock_offset
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) += by;
+    }
+
+    /// Gives `info` with the time that the store gave the save of `name`.
+    fn timed(&self, name: &SnapshotName, info: SnapshotInfo) -> SnapshotInfo {
+        let times = self
+            .faults
+            .times
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        SnapshotInfo {
+            created_at: times.get(name.as_str()).copied().unwrap_or(info.created_at),
+            ..info
+        }
     }
 
     /// Makes each restore of the snapshot `name` fail with an error that allows no retry.
@@ -185,7 +212,24 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
                 source: anyhow::anyhow!("an injected save failure"),
             });
         }
-        self.inner.save(scope, name, tree, parent).await
+        let info = self.inner.save(scope, name, tree, parent).await?;
+        let offset = *self
+            .faults
+            .clock_offset
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let millis = u64::try_from(offset.as_millis()).unwrap_or(u64::MAX);
+        self.faults
+            .times
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                name.as_str().to_string(),
+                golem_common::model::Timestamp::from(
+                    info.created_at.to_millis().saturating_add(millis),
+                ),
+            );
+        Ok(self.timed(name, info))
     }
 
     async fn restore(
@@ -220,14 +264,24 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
         self.faults.stats.fetch_add(1, Ordering::SeqCst);
-        self.inner.stat(scope, name).await
+        Ok(self
+            .inner
+            .stat(scope, name)
+            .await?
+            .map(|info| self.timed(name, info)))
     }
 
     async fn list(
         &self,
         scope: &SnapshotScope,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
-        self.inner.list(scope).await
+        Ok(self
+            .inner
+            .list(scope)
+            .await?
+            .iter()
+            .map(|(name, info)| (name.clone(), self.timed(name, *info)))
+            .collect())
     }
 
     async fn delete(

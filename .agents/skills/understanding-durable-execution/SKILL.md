@@ -510,9 +510,11 @@ tree holds only the initial files of the agent. When the tree did not change sin
 confirmed snapshot, the record reuses its name and the confirmation comes with it
 (`Snapshot` then `SnapshotConfirmed`); the status then keeps the older usable record as the
 fallback. A manual update saves its filesystem snapshot before it writes `PendingUpdate`. When a
-periodic upload of the agent runs, the update waits for it once, for at most
-`confirmation_wait`, and asks again; another refusal fails the update. The retention of the
-update snapshots runs after `PendingUpdate` commits.
+periodic upload of the agent runs, the update waits for it to decide and end once, for at most
+`confirmation_wait`, and asks again; another refusal fails the update. A terminal interrupt ends
+that wait, or the upload of the update, and fails the update. The retention of the update
+snapshots runs after `PendingUpdate` commits, and it never deletes the snapshot of the last
+successful manual update, because a start restores that baseline without a fallback.
 
 The upload job saves the snapshot, then asks the worker for a confirmation
 (`worker/filesystem_snapshots.rs::WorkerConfirmer`). The worker appends `SnapshotConfirmed` only

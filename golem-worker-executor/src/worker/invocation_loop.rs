@@ -2796,10 +2796,24 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let snapshots = self.parent.agent_filesystem_snapshots();
         let scope = SnapshotScope::agent(&self.owned_agent_id);
         // An upload of a periodic snapshot of the agent can run now. The update waits for it once
-        // and asks again, so a frequent snapshot does not fail the update.
+        // and asks again, so a frequent snapshot does not fail the update. A terminal interrupt
+        // ends the wait and fails the update.
         let admitted = match snapshots.admit(&scope, SnapshotKind::Update).await {
             Err(SnapshotSkip::UploadInFlight) => {
-                snapshots.wait_for_upload_of_scope(&scope).await;
+                let waited = tokio::select! {
+                    () = snapshots.wait_for_upload_of_scope(&scope) => true,
+                    () = self.parent.clone().terminal_interrupt_queued() => false,
+                };
+                if !waited {
+                    return self
+                        .fail_update(
+                            target_revision,
+                            "the update was interrupted while it waited for an upload of a \
+                             filesystem snapshot of the agent"
+                                .to_string(),
+                        )
+                        .await;
+                }
                 snapshots.admit(&scope, SnapshotKind::Update).await
             }
             admitted => admitted,
@@ -2911,7 +2925,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         if self.parent.enqueue_update(update_description).await.is_ok()
                             && let Some(retention) = retention
                         {
-                            retention.run();
+                            let baseline = self.parent.manual_update_baseline_name().await;
+                            retention.run(baseline.as_ref());
                         }
 
                         // Reactivate the worker
@@ -3098,13 +3113,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             ),
             Some(CaptureOutcome::Captured { capture, .. }) => {
                 let name = admission.name().clone();
-                admission
-                    .upload_now(capture)
-                    .await
-                    .map(|retention| Some((name, retention)))
-                    .map_err(|error| {
-                        format!("failed to upload the filesystem snapshot for the update: {error}")
-                    })
+                // A terminal interrupt drops the upload: an interrupted save publishes nothing.
+                tokio::select! {
+                    uploaded = admission.upload_now(capture) => uploaded
+                        .map(|retention| Some((name, retention)))
+                        .map_err(|error| {
+                            format!(
+                                "failed to upload the filesystem snapshot for the update: {error}"
+                            )
+                        }),
+                    () = self.parent.clone().terminal_interrupt_queued() => Err(
+                        "the update was interrupted while it uploaded the filesystem snapshot"
+                            .to_string(),
+                    ),
+                }
             }
         }
     }

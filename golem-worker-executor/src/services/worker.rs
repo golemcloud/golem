@@ -322,8 +322,8 @@ pub trait WorkerService: Send + Sync {
         owned_agent_id: &OwnedAgentId,
     ) -> Result<(), WorkerExecutorError>;
 
-    /// Gives the indexes of the automatic snapshot entries that a start of the incarnation
-    /// `fingerprint` rejected.
+    /// Gives the stored indexes of the rejected automatic snapshot entries of the incarnation
+    /// `fingerprint`, or an empty set when none is stored.
     async fn get_rejected_periodic_snapshots(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -332,8 +332,9 @@ pub trait WorkerService: Send + Sync {
         Ok(HashSet::new())
     }
 
-    /// Adds `oplog_indexes` to the rejected automatic snapshot entries of the incarnation
-    /// `fingerprint`. A start never selects a rejected entry.
+    /// Adds `oplog_indexes` to the stored rejected automatic snapshot entries of the incarnation
+    /// `fingerprint`. The stored set only grows, and each set of one incarnation is apart from
+    /// the sets of the others.
     async fn reject_periodic_snapshots(
         &self,
         _owned_agent_id: &OwnedAgentId,

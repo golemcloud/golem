@@ -61,12 +61,49 @@ pub(crate) fn select_automatic_snapshot(
     last.into_iter()
         .chain(status.previous_usable_automatic_snapshot.clone())
         .find(|snapshot| {
-            !filter.has_pending_update
-                && snapshot.component_revision == status.component_revision
-                && !filter.rejected.contains(&snapshot.index)
-                && !filter.unavailable.contains(&snapshot.index)
-                && (filter.filesystem_snapshots_enabled || snapshot.filesystem_snapshot.is_none())
+            passes(
+                status,
+                filter,
+                snapshot.index,
+                snapshot.component_revision,
+                snapshot.filesystem_snapshot.is_some(),
+            )
         })
+}
+
+/// Whether a start would select the last automatic snapshot record if a confirmation record
+/// confirmed it.
+pub(crate) fn selects_the_last_record_once_confirmed(
+    status: &AgentStatusRecord,
+    filter: AutomaticSnapshotFilter<'_>,
+) -> bool {
+    status
+        .last_automatic_snapshot_index
+        .zip(status.last_automatic_snapshot_component_revision)
+        .is_some_and(|(index, component_revision)| {
+            passes(
+                status,
+                filter,
+                index,
+                component_revision,
+                status.last_automatic_snapshot_filesystem_snapshot.is_some(),
+            )
+        })
+}
+
+/// Whether the usable record at `index` passes `filter` for a start of `status`.
+fn passes(
+    status: &AgentStatusRecord,
+    filter: AutomaticSnapshotFilter<'_>,
+    index: OplogIndex,
+    component_revision: ComponentRevision,
+    has_filesystem_snapshot: bool,
+) -> bool {
+    !filter.has_pending_update
+        && component_revision == status.component_revision
+        && !filter.rejected.contains(&index)
+        && !filter.unavailable.contains(&index)
+        && (filter.filesystem_snapshots_enabled || !has_filesystem_snapshot)
 }
 
 /// Gives the component revision at the start of the replay: the revision of the selected
@@ -146,6 +183,28 @@ mod tests {
         filter: AutomaticSnapshotFilter<'_>,
     ) -> Option<u64> {
         select_automatic_snapshot(status, filter).map(|snapshot| u64::from(snapshot.index))
+    }
+
+    #[test]
+    fn an_unconfirmed_last_entry_is_selected_once_confirmed_only_when_it_passes_the_filter() {
+        let status = status(Some(FilesystemSnapshotName::periodic()), false, Some(None));
+        let unavailable = HashSet::from([OplogIndex::from_u64(10)]);
+        let older_revision = AgentStatusRecord {
+            last_automatic_snapshot_component_revision: Some(revision(1)),
+            ..status.clone()
+        };
+
+        let cases = (
+            selects_the_last_record_once_confirmed(&status, filter(&HashSet::new())),
+            selects_the_last_record_once_confirmed(&status, filter(&unavailable)),
+            selects_the_last_record_once_confirmed(&older_revision, filter(&HashSet::new())),
+            selects_the_last_record_once_confirmed(
+                &AgentStatusRecord::default(),
+                filter(&HashSet::new()),
+            ),
+        );
+
+        assert_eq!(cases, (true, false, false, false));
     }
 
     #[test]

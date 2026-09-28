@@ -814,6 +814,23 @@ impl TestWorkerExecutor {
         Ok(oplog_index)
     }
 
+    /// Queues an interrupt of `kind` on the loaded worker, as a shard move or an executor-side
+    /// stop does. Unlike the interrupt API, it also reaches a worker whose status is idle.
+    pub async fn interrupt_loaded_worker(
+        &self,
+        agent_id: &AgentId,
+        kind: golem_service_base::error::worker_executor::InterruptKind,
+    ) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        let _ = worker.set_interrupting(kind).await;
+        Ok(())
+    }
+
     pub async fn queue_card_revocation(
         &self,
         agent_id: &AgentId,

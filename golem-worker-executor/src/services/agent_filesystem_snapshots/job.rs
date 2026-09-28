@@ -93,16 +93,14 @@ impl Upload {
         match outcome {
             ConfirmOutcome::Confirmed => {
                 if self.kind == SnapshotKind::Periodic {
-                    self.apply_retention(&info).await;
+                    self.apply_retention(&info, None).await;
                 }
             }
             ConfirmOutcome::Superseded => {
                 crate::metrics::filesystem_snapshots::record_dropped_confirmation(outcome.label());
                 self.delete_own_snapshot().await;
             }
-            ConfirmOutcome::Deferred => {
-                crate::metrics::filesystem_snapshots::record_dropped_confirmation(outcome.label());
-            }
+            ConfirmOutcome::Deferred => {}
         }
         drop(permit);
     }
@@ -138,7 +136,8 @@ impl Upload {
     }
 
     /// Waits for a slot of the uploads and applies retention after the save that gave `info`.
-    pub(super) async fn retain_in_background(self, info: SnapshotInfo) {
+    /// `kept` is a snapshot that the retention never deletes.
+    pub(super) async fn retain_in_background(self, info: SnapshotInfo, kept: Option<SnapshotName>) {
         let _permit = tokio::select! {
             permit = Arc::clone(&self.inner.uploads).acquire_owned() => match permit {
                 Ok(permit) => permit,
@@ -146,7 +145,7 @@ impl Upload {
             },
             () = self.stopped() => return,
         };
-        self.apply_retention(&info).await;
+        self.apply_retention(&info, kept.as_ref()).await;
     }
 
     /// Whether `forget_scope` or a shutdown stopped the upload.
@@ -223,14 +222,14 @@ impl Upload {
     /// Keeps the own snapshot and the newest older snapshots of its kind, and deletes the rest of
     /// its kind that are older than it. `info` is the info of the own snapshot. A stop ends it at
     /// once, and a later retention deletes what it left.
-    async fn apply_retention(&self, info: &SnapshotInfo) {
+    async fn apply_retention(&self, info: &SnapshotInfo, kept: Option<&SnapshotName>) {
         tokio::select! {
-            () = self.retain(info) => {}
+            () = self.retain(info, kept) => {}
             () = self.stopped() => {}
         }
     }
 
-    async fn retain(&self, info: &SnapshotInfo) {
+    async fn retain(&self, info: &SnapshotInfo, kept: Option<&SnapshotName>) {
         let Ok(own) = store_name(&self.name) else {
             return;
         };
@@ -245,7 +244,7 @@ impl Upload {
             SnapshotKind::Periodic => self.inner.settings.retained_periodic_snapshots(),
             SnapshotKind::Update => self.inner.settings.retained_update_snapshots(),
         };
-        let victims = retention::victims(&listing, &own, info, keep.get());
+        let victims = retention::victims(&listing, &own, info, keep.get(), kept);
         futures::stream::iter(victims.iter())
             .for_each(|name| async move {
                 if let Err(error) = retrying(

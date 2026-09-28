@@ -156,7 +156,8 @@ impl SnapshotConfirmer {
     }
 }
 
-/// The source of the waits of the service. Tests give a clock that they move themselves.
+/// The source of the waits of the service. A sleep completes when its clock says the duration
+/// passed.
 pub(crate) trait SnapshotClock: Send + Sync {
     /// Completes after `duration`.
     fn sleep(&self, duration: Duration) -> BoxFuture<'static, ()>;
@@ -306,7 +307,8 @@ struct ScopeJob {
     id: u64,
     /// The name of the snapshot of the job.
     name: FilesystemSnapshotName,
-    /// Cancelled by `forget_scope`. The job stops and writes nothing.
+    /// Cancelled by `forget_scope`. The job stops and sends nothing more; a confirmation that it
+    /// already sent can still be appended.
     cancel: CancellationToken,
     /// Cancelled when the job ended.
     ended: CancellationToken,
@@ -546,7 +548,8 @@ impl AgentFilesystemSnapshots {
     }
 
     /// Deletes the scope in the background, after the job of the scope ended. The call cancels
-    /// that job first, so it writes nothing more. The call returns at once and cannot fail.
+    /// that job first, so it sends nothing more; a confirmation that it already sent can still be
+    /// appended. The call returns at once and cannot fail.
     ///
     /// Until the delete ends, with success or with an error, an admission of the scope gives
     /// [`SnapshotSkip::ScopeDeleting`].
@@ -607,22 +610,6 @@ impl AgentFilesystemSnapshots {
             () = decided_and_ended => {}
             () = inner.clock.sleep(inner.settings.confirmation_wait()) => {}
             () = inner.shutdown.cancelled() => {}
-        }
-    }
-
-    /// Waits until the job of `scope` ended, for at most `limit`. Gives `true` when no job of the
-    /// scope runs at the return.
-    #[allow(dead_code)]
-    pub(crate) async fn wait_for_pending(&self, scope: &SnapshotScope, limit: Duration) -> bool {
-        let Some(inner) = &self.inner else {
-            return true;
-        };
-        let Some(job) = inner.jobs_of_scope().jobs.get(scope).cloned() else {
-            return true;
-        };
-        tokio::select! {
-            () = job.ended.cancelled() => true,
-            () = inner.clock.sleep(limit) => job.ended.is_cancelled(),
         }
     }
 
@@ -711,7 +698,8 @@ impl UploadAdmission {
     /// runs no retention. On `Deferred` it keeps the snapshot and runs no retention, because a
     /// later start can confirm it. When the retries are used up, it confirms nothing.
     /// `forget_scope` or a shutdown stops the job at each step, also in its retention or its
-    /// delete: it then writes nothing more and deletes nothing more.
+    /// delete: it then sends nothing more and deletes nothing more. A confirmation that it
+    /// already sent can still be appended.
     pub(crate) fn submit(
         mut self,
         capture: impl CapturedTree,
@@ -766,11 +754,13 @@ pub(crate) struct UpdateRetention {
 
 impl UpdateRetention {
     /// Applies retention in the background, under a slot of the uploads: it keeps the own
-    /// snapshot and the newest older update snapshots, with the rules of periodic retention.
-    /// `forget_scope` or a shutdown stops it.
-    pub(crate) fn run(self) {
+    /// snapshot and the newest older update snapshots, with the rules of periodic retention, and
+    /// it never deletes `baseline`, the snapshot of the last successful manual update, whose
+    /// record a start restores without a fallback. `forget_scope` or a shutdown stops it.
+    pub(crate) fn run(self, baseline: Option<&FilesystemSnapshotName>) {
+        let kept = baseline.and_then(|name| store_name(name).ok());
         let jobs = self.upload.inner.jobs.clone();
-        jobs.spawn(self.upload.retain_in_background(self.info));
+        jobs.spawn(self.upload.retain_in_background(self.info, kept));
     }
 }
 

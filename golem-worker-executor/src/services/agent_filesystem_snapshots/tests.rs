@@ -904,8 +904,8 @@ fn retention_keeps_the_own_snapshot_and_the_newest_older_ones_of_its_kind() {
     .map(|(name, minutes)| (SnapshotName::new(name).unwrap(), info_at(minutes)));
     let own = SnapshotName::new("p-own").unwrap();
 
-    let periodic = names(&retention::victims(&listing, &own, &info_at(100), 2));
-    let only_own = names(&retention::victims(&listing, &own, &info_at(100), 1));
+    let periodic = names(&retention::victims(&listing, &own, &info_at(100), 2, None));
+    let only_own = names(&retention::victims(&listing, &own, &info_at(100), 1, None));
 
     assert_eq!(periodic, vec!["p-2", "p-1"]);
     assert_eq!(only_own, vec!["p-3", "p-2", "p-1"]);
@@ -917,7 +917,25 @@ fn retention_counts_update_snapshots_apart_from_periodic_ones() {
         .map(|(name, minutes)| (SnapshotName::new(name).unwrap(), info_at(minutes)));
     let own = SnapshotName::new("u-own").unwrap();
 
-    let victims = names(&retention::victims(&listing, &own, &info_at(100), 2));
+    let victims = names(&retention::victims(&listing, &own, &info_at(100), 2, None));
+
+    assert_eq!(victims, vec!["u-1"]);
+}
+
+#[test]
+fn retention_never_deletes_the_kept_snapshot() {
+    let listing = [("u-own", 100), ("u-2", 90), ("u-1", 80), ("u-baseline", 70)]
+        .map(|(name, minutes)| (SnapshotName::new(name).unwrap(), info_at(minutes)));
+    let own = SnapshotName::new("u-own").unwrap();
+    let baseline = SnapshotName::new("u-baseline").unwrap();
+
+    let victims = names(&retention::victims(
+        &listing,
+        &own,
+        &info_at(100),
+        2,
+        Some(&baseline),
+    ));
 
     assert_eq!(victims, vec!["u-1"]);
 }
@@ -994,7 +1012,7 @@ async fn the_decision_of_a_job_carries_its_outcome_before_the_job_ends() {
 
 #[test]
 #[timeout("10s")]
-async fn the_pending_wait_returns_at_the_limit_and_when_the_job_ends() {
+async fn the_wait_for_an_upload_of_a_scope_returns_at_the_limit_and_when_the_job_ends() {
     let store = Arc::new(ScriptedStore::default());
     let gate = Arc::new(Gate::default());
     *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
@@ -1014,7 +1032,13 @@ async fn the_pending_wait_returns_at_the_limit_and_when_the_job_ends() {
     );
     gate.wait_reached(1).await;
 
-    let waiting = snapshots.wait_for_pending(&scope, Duration::from_secs(60));
+    let job_runs = || {
+        snapshots
+            .inner
+            .as_ref()
+            .is_some_and(|inner| inner.jobs_of_scope().jobs.contains_key(&scope))
+    };
+    let waiting = snapshots.wait_for_upload_of_scope(&scope);
     let at_limit = {
         let mut waiting = std::pin::pin!(waiting);
         let not_yet = tokio::time::timeout(Duration::from_millis(50), &mut waiting)
@@ -1022,19 +1046,21 @@ async fn the_pending_wait_returns_at_the_limit_and_when_the_job_ends() {
             .is_err();
         eventually(|| clock.sleeps().contains(&Duration::from_secs(60))).await;
         clock.release();
-        (not_yet, waiting.await)
+        waiting.await;
+        (not_yet, job_runs())
     };
-    let second = snapshots.wait_for_pending(&scope, Duration::from_secs(60));
+    let second = snapshots.wait_for_upload_of_scope(&scope);
     gate.open();
-    let after_end = second.await;
-    let without_job = snapshots
-        .wait_for_pending(&self::scope("no-job"), Duration::from_secs(60))
-        .await;
+    second.await;
+    let after_end = !job_runs();
+    tokio::time::timeout(
+        Duration::from_millis(50),
+        snapshots.wait_for_upload_of_scope(&self::scope("no-job")),
+    )
+    .await
+    .unwrap();
 
-    assert_eq!(
-        (at_limit, after_end, without_job),
-        ((true, false), true, true)
-    );
+    assert_eq!((at_limit, after_end), ((true, true), true));
 }
 
 #[test]
@@ -1355,8 +1381,9 @@ async fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation
     assert_eq!(discarded.load(Ordering::SeqCst), 1);
     assert!(
         snapshots
-            .wait_for_pending(&scope, Duration::from_secs(1))
-            .await
+            .inner
+            .as_ref()
+            .is_some_and(|inner| !inner.jobs_of_scope().jobs.contains_key(&scope))
     );
 }
 
@@ -1419,7 +1446,7 @@ async fn update_uploads_with_retention(
                     .upload_now(TestCapture::with(format!("{index}").as_bytes(), discarded))
                     .await
                     .unwrap()
-                    .run();
+                    .run(None);
                 ended(snapshots, scope).await;
                 name
             }
