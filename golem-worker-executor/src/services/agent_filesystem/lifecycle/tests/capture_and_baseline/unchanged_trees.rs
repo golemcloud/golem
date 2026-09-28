@@ -16,6 +16,9 @@
 //! tree of initial files, or a copy with its change detection.
 
 use super::*;
+use crate::services::agent_filesystem::lifecycle::baseline::{
+    TIMESTAMP_SETTLE, detection, settle_delay, unchanged,
+};
 use test_r::{test, timeout};
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -1136,4 +1139,199 @@ async fn a_restored_tree_of_initial_files_is_never_a_tree_of_initial_files() {
     captured.discard().await.unwrap();
     delete(seal(source)).await.unwrap();
     delete(seal(restored)).await.unwrap();
+}
+
+fn counters(changes: u64, carried: u64, chosen: u64) -> TreeCounters {
+    TreeCounters {
+        changes,
+        carried,
+        chosen,
+        restored_times: false,
+    }
+}
+
+fn mark_at(generation: u64, changes: u64, carried: u64, saved_times: bool) -> TreeMark {
+    TreeMark {
+        generation,
+        changes,
+        carried,
+        saved_times,
+    }
+}
+
+#[test]
+fn a_lease_counts_a_change_only_for_an_effect_that_changes_the_tree_at_once() {
+    assert_eq!(
+        [
+            CallEffect::Read,
+            CallEffect::Decides,
+            CallEffect::Changes,
+            CallEffect::ChoosesTimes,
+            CallEffect::Installs,
+        ]
+        .map(CallEffect::counted),
+        [
+            None,
+            None,
+            Some(Counted::Fresh),
+            Some(Counted::Chosen),
+            Some(Counted::Installed),
+        ]
+    );
+}
+
+#[test]
+fn each_counted_change_grows_its_counters_and_keeps_the_restored_times() {
+    let start = TreeCounters {
+        restored_times: true,
+        ..counters(4, 2, 1)
+    };
+    assert_eq!(
+        [Counted::Fresh, Counted::Installed, Counted::Chosen].map(|counted| start.after(counted)),
+        [
+            TreeCounters {
+                restored_times: true,
+                ..counters(5, 2, 1)
+            },
+            TreeCounters {
+                restored_times: true,
+                ..counters(5, 3, 1)
+            },
+            TreeCounters {
+                restored_times: true,
+                ..counters(5, 3, 2)
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_restore_counts_a_chosen_time_and_sets_whether_the_tree_keeps_its_saved_times() {
+    let start = TreeCounters {
+        restored_times: true,
+        ..counters(1, 1, 0)
+    };
+    assert_eq!(
+        [true, false].map(|saved_times| start.after_restore(saved_times)),
+        [
+            TreeCounters {
+                restored_times: true,
+                ..counters(2, 2, 1)
+            },
+            counters(2, 2, 1),
+        ]
+    );
+}
+
+#[test]
+fn a_baseline_mark_has_the_saved_times_of_a_restore_and_a_captured_mark_always_has_them() {
+    let restored = TreeCounters {
+        restored_times: true,
+        ..counters(3, 2, 1)
+    };
+    assert_eq!(counters(3, 2, 1).mark(7), mark_at(7, 3, 2, false));
+    assert_eq!(restored.mark(7), mark_at(7, 3, 2, true));
+    assert_eq!(counters(3, 2, 1).captured_mark(7), mark_at(7, 3, 2, true));
+    assert!(counters(3, 2, 1).has_chosen_times());
+    assert!(!counters(3, 2, 0).has_chosen_times());
+}
+
+#[test]
+fn only_a_change_of_the_modification_time_counts_and_a_chosen_time_counts_as_chosen() {
+    let before = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let other = before + Duration::from_secs(1);
+    assert_eq!(
+        [
+            (Some(before), TimeChange::Keep),
+            (Some(before), TimeChange::Set(before)),
+            (Some(before), TimeChange::Set(other)),
+            (None, TimeChange::Set(other)),
+            (Some(before), TimeChange::Now),
+            (None, TimeChange::Now),
+        ]
+        .map(|(before, requested)| set_times_change(before, requested)),
+        [
+            None,
+            None,
+            Some(Counted::Chosen),
+            Some(Counted::Chosen),
+            Some(Counted::Fresh),
+            Some(Counted::Fresh),
+        ]
+    );
+}
+
+#[test]
+fn the_settle_delay_is_what_is_left_of_the_settle_time_after_the_last_call() {
+    let last = 1_000_000;
+    let at = |millis: u64| std::time::SystemTime::UNIX_EPOCH + Duration::from_millis(millis);
+    assert_eq!(settle_delay(last, at(last)), Some(TIMESTAMP_SETTLE));
+    assert_eq!(
+        settle_delay(last, at(last + 5)),
+        Some(TIMESTAMP_SETTLE - Duration::from_millis(5))
+    );
+    assert_eq!(settle_delay(last, at(last + 20)), Some(Duration::ZERO));
+    assert_eq!(settle_delay(last, at(last + 21)), None);
+}
+
+#[test]
+fn a_tree_is_unchanged_only_against_a_mark_of_its_generation_with_its_changes() {
+    let now = mark_at(3, 5, 2, true);
+    assert_eq!(
+        [
+            None,
+            Some(mark_at(3, 5, 2, true)),
+            Some(mark_at(3, 5, 1, false)),
+            Some(mark_at(3, 4, 2, true)),
+            Some(mark_at(2, 5, 2, true)),
+        ]
+        .map(|since| unchanged(&now, since.as_ref())),
+        [false, true, true, false, false]
+    );
+}
+
+#[test]
+fn size_and_mtime_detection_needs_a_mark_of_the_generation_with_saved_times_and_its_carried_count()
+{
+    let now = mark_at(3, 5, 2, true);
+    assert_eq!(
+        [
+            None,
+            Some(mark_at(3, 4, 2, true)),
+            Some(mark_at(3, 4, 2, false)),
+            Some(mark_at(3, 4, 1, true)),
+            Some(mark_at(2, 4, 2, true)),
+        ]
+        .map(|since| detection(&now, since.as_ref())),
+        [
+            ChangeDetection::Full,
+            ChangeDetection::SizeMtime,
+            ChangeDetection::Full,
+            ChangeDetection::Full,
+            ChangeDetection::Full,
+        ]
+    );
+}
+
+#[test]
+fn each_capture_result_has_its_metric_label() {
+    assert_eq!(
+        [
+            CaptureOutcome::Unchanged.label(),
+            CaptureOutcome::InitialFiles.label(),
+            WholeCapture::InitialFiles.label(),
+            CaptureError::Busy.label(),
+            CaptureError::Invalidated.label(),
+            CaptureError::Sandbox(FilesystemStorageError::verification("test", Path::new("x"),))
+                .label(),
+        ],
+        [
+            "unchanged",
+            "initial_files",
+            "initial_files",
+            "busy",
+            "invalidated",
+            "failed",
+        ]
+    );
 }

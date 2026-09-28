@@ -18,8 +18,8 @@ use crate::model::{LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
     CaptureError, CaptureOutcome, DeleteFailure, FilesystemCapture, LimitTransition,
-    ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem, TreeMark, capture,
-    drain_sealed_filesystem, filesystem_activity, seal, set_limits,
+    ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem, TreeMark, WholeCapture,
+    capture, capture_whole, drain_sealed_filesystem, filesystem_activity, seal, set_limits,
 };
 use crate::services::agent_filesystem_snapshots::{
     SnapshotConfirmer, SnapshotKind, SnapshotSkip, UpdateRetention, UploadAdmission,
@@ -3341,33 +3341,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         wait: Option<std::time::Duration>,
         since: Option<TreeMark>,
     ) -> Option<CaptureOutcome> {
-        let started = std::time::Instant::now();
         let wait = wait.unwrap_or(std::time::Duration::from_secs(5));
-        match capture(self.filesystem, wait, since).await {
-            Ok(outcome) => {
-                crate::metrics::filesystem_snapshots::record_capture(
-                    match &outcome {
-                        CaptureOutcome::Unchanged => "unchanged",
-                        CaptureOutcome::InitialFiles => "initial_files",
-                        CaptureOutcome::Captured { .. } => "captured",
-                    },
-                    started.elapsed(),
-                );
-                Some(outcome)
-            }
-            Err(error) => {
-                crate::metrics::filesystem_snapshots::record_capture(
-                    match &error {
-                        CaptureError::Busy => "busy",
-                        CaptureError::Invalidated => "invalidated",
-                        CaptureError::Sandbox(_) => "failed",
-                    },
-                    started.elapsed(),
-                );
-                warn!("Skipping the snapshot: the agent filesystem was not captured: {error}");
-                None
-            }
-        }
+        measured_capture(
+            || capture(self.filesystem, wait, since),
+            CaptureOutcome::label,
+        )
+        .await
     }
 
     /// Captures the agent filesystem for a manual update and waits for its upload. Gives the name
@@ -3379,19 +3358,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         admission: UploadAdmission,
     ) -> Result<Option<(FilesystemSnapshotName, UpdateRetention)>, UpdateUploadError> {
         let snapshots = self.parent.agent_filesystem_snapshots();
-        match self
-            .capture_filesystem(snapshots.capture_wait(), None)
-            .await
-        {
+        let wait = snapshots
+            .capture_wait()
+            .unwrap_or(std::time::Duration::from_secs(5));
+        match measured_capture(|| capture_whole(self.filesystem, wait), WholeCapture::label).await {
             None => Err(UpdateUploadError::Failed(
                 "failed to capture the agent filesystem for the update".to_string(),
             )),
-            Some(CaptureOutcome::InitialFiles) => Ok(None),
-            Some(CaptureOutcome::Unchanged) => Err(UpdateUploadError::Failed(
-                "the capture of the agent filesystem for the update found no change without a mark"
-                    .to_string(),
-            )),
-            Some(CaptureOutcome::Captured { capture, .. }) => {
+            Some(WholeCapture::InitialFiles) => Ok(None),
+            Some(WholeCapture::Captured { capture, .. }) => {
                 let name = admission.name().clone();
                 // A terminal interrupt stops the save, and the capture is discarded. An
                 // interrupted save writes no record: a snapshot that its publish still leaves
@@ -3817,6 +3792,28 @@ impl UpdateUploadError {
             Self::Failed(details) => details,
         }
     }
+}
+
+/// Waits for a capture of the agent filesystem and counts its outcome with the label `label`
+/// gives, or with the label of its error. Gives `None` when the capture failed.
+async fn measured_capture<Outcome, Capturing>(
+    capture: impl FnOnce() -> Capturing,
+    label: fn(&Outcome) -> &'static str,
+) -> Option<Outcome>
+where
+    Capturing: Future<Output = Result<Outcome, CaptureError>>,
+{
+    let started = std::time::Instant::now();
+    let result = capture().await;
+    crate::metrics::filesystem_snapshots::record_capture(
+        result.as_ref().map_or_else(CaptureError::label, label),
+        started.elapsed(),
+    );
+    result
+        .inspect_err(|error| {
+            warn!("Skipping the snapshot: the agent filesystem was not captured: {error}")
+        })
+        .ok()
 }
 
 /// The filesystem part of a periodic snapshot record, from the admission and the capture to the

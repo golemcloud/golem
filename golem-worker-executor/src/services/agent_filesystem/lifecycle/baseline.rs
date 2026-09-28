@@ -179,10 +179,80 @@ pub(crate) enum CaptureOutcome {
     },
 }
 
+impl CaptureOutcome {
+    /// The metric label of the outcome.
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::Unchanged => "unchanged",
+            Self::InitialFiles => "initial_files",
+            Self::Captured { .. } => "captured",
+        }
+    }
+
+    /// The copy of the outcome, when the capture made one.
+    fn into_copy(self) -> Option<FilesystemCapture> {
+        match self {
+            Self::Captured { capture, .. } => Some(capture),
+            Self::Unchanged | Self::InitialFiles => None,
+        }
+    }
+}
+
+/// What a capture that compares with no mark found. It never finds an unchanged tree.
+pub(crate) enum WholeCapture {
+    /// The tree is what a start from the initial files of the generation gives. The capture
+    /// copied nothing.
+    InitialFiles,
+    /// The capture copied the tree. `mark` is the mark of the copied tree.
+    Captured {
+        capture: FilesystemCapture,
+        mark: TreeMark,
+    },
+}
+
+impl WholeCapture {
+    /// The metric label of the outcome.
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::InitialFiles => "initial_files",
+            Self::Captured { .. } => "captured",
+        }
+    }
+
+    /// The copy of the outcome, when the capture made one.
+    fn into_copy(self) -> Option<FilesystemCapture> {
+        match self {
+            Self::Captured { capture, .. } => Some(capture),
+            Self::InitialFiles => None,
+        }
+    }
+}
+
+/// Whether the tree at the mark `now` is the tree of `since`.
+pub(super) fn unchanged(now: &TreeMark, since: Option<&TreeMark>) -> bool {
+    since.is_some_and(|since| now.generation == since.generation && now.changes == since.changes)
+}
+
+/// How a save of the tree at the mark `now` can compare it with the tree of `since`: by size and
+/// modification time when `since` is a mark of the same generation with the times of a save, and
+/// only calls whose times the kernel gave ran since it.
+pub(super) fn detection(now: &TreeMark, since: Option<&TreeMark>) -> ChangeDetection {
+    match since {
+        Some(since)
+            if since.saved_times
+                && now.generation == since.generation
+                && now.carried == since.carried =>
+        {
+            ChangeDetection::SizeMtime
+        }
+        _ => ChangeDetection::Full,
+    }
+}
+
 /// The time that a capture keeps the calls stopped after the last call ended, when it copied a
 /// changed tree. A change after the capture then never gets the modification time of a change
 /// before it. This is two ticks of a kernel with 100 ticks each second.
-const TIMESTAMP_SETTLE: Duration = Duration::from_millis(20);
+pub(super) const TIMESTAMP_SETTLE: Duration = Duration::from_millis(20);
 
 /// Gives the mark of the tree of `filesystem` now. Use it for the baseline of a start, before any
 /// call runs.
@@ -214,6 +284,17 @@ impl Display for CaptureError {
             Self::Invalidated => formatter.write_str("agent filesystem access is revoked"),
             Self::Busy => formatter.write_str("agent filesystem has an open call"),
             Self::Sandbox(error) => Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl CaptureError {
+    /// The metric label of the error.
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::Busy => "busy",
+            Self::Invalidated => "invalidated",
+            Self::Sandbox(_) => "failed",
         }
     }
 }
@@ -306,6 +387,57 @@ pub(crate) fn capture<Adapter: SandboxFilesystemAdapter>(
     wait: Duration,
     since: Option<TreeMark>,
 ) -> impl Future<Output = Result<CaptureOutcome, CaptureError>> + Send + 'static {
+    fenced(
+        filesystem,
+        wait,
+        move |generation| async move {
+            let (number, counters) = generation.registry.counters();
+            if unchanged(&counters.captured_mark(number), since.as_ref()) {
+                return Ok(CaptureOutcome::Unchanged);
+            }
+            Ok(match copy_fenced(&generation).await? {
+                WholeCapture::InitialFiles => CaptureOutcome::InitialFiles,
+                WholeCapture::Captured { capture, mark } => CaptureOutcome::Captured {
+                    capture,
+                    mark,
+                    detection: detection(&mark, since.as_ref()),
+                },
+            })
+        },
+        CaptureOutcome::into_copy,
+    )
+}
+
+/// Copies a resident filesystem into a new host directory, and leaves the filesystem resident, as
+/// [`capture`] does without a mark to compare with. The result is never an unchanged tree, and a
+/// save of the copy reads each file.
+pub(crate) fn capture_whole<Adapter: SandboxFilesystemAdapter>(
+    filesystem: &ResidentFilesystem<Adapter>,
+    wait: Duration,
+) -> impl Future<Output = Result<WholeCapture, CaptureError>> + Send + 'static {
+    fenced(
+        filesystem,
+        wait,
+        |generation| async move { copy_fenced(&generation).await },
+        WholeCapture::into_copy,
+    )
+}
+
+/// Runs `run` in a task of the module while no filesystem call runs. The task stops new calls,
+/// waits up to `wait` for the open calls, runs `run`, and opens the filesystem again. A copy that
+/// the caller does not take, because it went away, is discarded.
+fn fenced<Adapter, Outcome, Run, Running>(
+    filesystem: &ResidentFilesystem<Adapter>,
+    wait: Duration,
+    run: Run,
+    copy: fn(Outcome) -> Option<FilesystemCapture>,
+) -> impl Future<Output = Result<Outcome, CaptureError>> + Send + 'static
+where
+    Adapter: SandboxFilesystemAdapter,
+    Outcome: Send + 'static,
+    Run: FnOnce(Arc<FilesystemGeneration<Adapter>>) -> Running + Send + 'static,
+    Running: Future<Output = Result<Outcome, CaptureError>> + Send,
+{
     let generation = Arc::clone(
         filesystem
             .generation
@@ -314,11 +446,9 @@ pub(crate) fn capture<Adapter: SandboxFilesystemAdapter>(
     );
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_module_task(async move {
-        let result = complete_capture(&generation, wait, since).await;
-        if let Err(Ok(CaptureOutcome::Captured {
-            capture: unobserved,
-            ..
-        })) = sender.send(result)
+        let result = complete_capture(generation, wait, run).await;
+        if let Err(Ok(outcome)) = sender.send(result)
+            && let Some(unobserved) = copy(outcome)
             && let Err(error) = unobserved.discard().await
         {
             tracing::warn!(error = %error, "Failed to discard an unobserved filesystem capture");
@@ -331,11 +461,16 @@ pub(crate) fn capture<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
-async fn complete_capture<Adapter: SandboxFilesystemAdapter>(
-    generation: &FilesystemGeneration<Adapter>,
+async fn complete_capture<Adapter, Outcome, Run, Running>(
+    generation: Arc<FilesystemGeneration<Adapter>>,
     wait: Duration,
-    since: Option<TreeMark>,
-) -> Result<CaptureOutcome, CaptureError> {
+    run: Run,
+) -> Result<Outcome, CaptureError>
+where
+    Adapter: SandboxFilesystemAdapter,
+    Run: FnOnce(Arc<FilesystemGeneration<Adapter>>) -> Running,
+    Running: Future<Output = Result<Outcome, CaptureError>>,
+{
     generation
         .registry
         .begin_transition()
@@ -346,7 +481,7 @@ async fn complete_capture<Adapter: SandboxFilesystemAdapter>(
             }
         })?;
     let result = match tokio::time::timeout(wait, generation.registry.wait_for_calls()).await {
-        Ok(()) => capture_fenced(generation, since).await,
+        Ok(()) => run(Arc::clone(&generation)).await,
         Err(_) => Err(CaptureError::Busy),
     };
     generation.registry.finish_transition();
@@ -354,41 +489,31 @@ async fn complete_capture<Adapter: SandboxFilesystemAdapter>(
 }
 
 /// Decides and copies while no call runs.
-async fn capture_fenced<Adapter: SandboxFilesystemAdapter>(
+async fn copy_fenced<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
-    since: Option<TreeMark>,
-) -> Result<CaptureOutcome, CaptureError> {
-    let mark = generation.registry.capture_mark();
-    if since.is_some_and(|since| mark.same_tree(&since)) {
-        return Ok(CaptureOutcome::Unchanged);
-    }
-    let captured = capture_into_scratch(generation).await?;
+) -> Result<WholeCapture, CaptureError> {
+    let (number, counters) = generation.registry.counters();
+    let mark = counters.captured_mark(number);
+    let captured = capture_into_scratch(generation, counters.has_chosen_times()).await?;
     let Some(capture) = captured else {
-        return Ok(CaptureOutcome::InitialFiles);
+        return Ok(WholeCapture::InitialFiles);
     };
-    settle_timestamps(generation).await;
-    Ok(CaptureOutcome::Captured {
-        capture,
-        mark,
-        detection: match since {
-            Some(since) if mark.fresh_since(&since) => ChangeDetection::SizeMtime,
-            _ => ChangeDetection::Full,
-        },
-    })
-}
-
-/// Waits until [`TIMESTAMP_SETTLE`] passed since the last call ended.
-async fn settle_timestamps<Adapter: SandboxFilesystemAdapter>(
-    generation: &FilesystemGeneration<Adapter>,
-) {
     let last = generation
         .registry
         .last_effect_completion_millis
         .load(std::sync::atomic::Ordering::Acquire);
-    let settled = std::time::UNIX_EPOCH + Duration::from_millis(last) + TIMESTAMP_SETTLE;
-    if let Ok(remaining) = settled.duration_since(std::time::SystemTime::now()) {
+    if let Some(remaining) = settle_delay(last, std::time::SystemTime::now()) {
         tokio::time::sleep(remaining).await;
     }
+    Ok(WholeCapture::Captured { capture, mark })
+}
+
+/// The time left until [`TIMESTAMP_SETTLE`] passed since the last call ended at `last_millis`
+/// after the Unix epoch, or `None` when it passed at `now`.
+pub(super) fn settle_delay(last_millis: u64, now: std::time::SystemTime) -> Option<Duration> {
+    (std::time::UNIX_EPOCH + Duration::from_millis(last_millis) + TIMESTAMP_SETTLE)
+        .duration_since(now)
+        .ok()
 }
 
 /// Copies the tree into a new directory in the scratch directory, or gives `None` when the tree
@@ -399,6 +524,7 @@ async fn settle_timestamps<Adapter: SandboxFilesystemAdapter>(
 /// the guard is what makes the deletion wait for the copy.
 async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
+    chosen_times: bool,
 ) -> Result<Option<FilesystemCapture>, CaptureError> {
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or(CaptureError::Invalidated)?;
@@ -406,7 +532,7 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     let left_out = left_out_files(sandbox.as_ref(), &state)
         .await
         .map_err(CaptureError::Sandbox)?;
-    if !generation.registry.has_chosen_times()
+    if !chosen_times
         && holds_only_initial_files(sandbox.as_ref(), &state, &left_out)
             .await
             .map_err(CaptureError::Sandbox)?

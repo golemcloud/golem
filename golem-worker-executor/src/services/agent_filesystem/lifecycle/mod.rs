@@ -57,7 +57,8 @@ mod initial_files;
 #[allow(unused_imports)]
 pub(crate) use baseline::{
     CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore,
-    RestoreError, RestoreTree, capture, materialize_baseline, tree_mark,
+    RestoreError, RestoreTree, WholeCapture, capture, capture_whole, materialize_baseline,
+    tree_mark,
 };
 pub(crate) use initial_files::InitialFileConflict;
 use initial_files::{InitialFileSources, InitialFileState};
@@ -1308,13 +1309,111 @@ pub(crate) enum CallEffect {
     Decides,
 }
 
-/// A change that a call records after its check.
+impl CallEffect {
+    /// What the lease of a call with this effect counts. A call that decides after a check counts
+    /// its change itself, so its lease counts nothing.
+    fn counted(self) -> Option<Counted> {
+        match self {
+            Self::Read | Self::Decides => None,
+            Self::Changes => Some(Counted::Fresh),
+            Self::ChoosesTimes => Some(Counted::Chosen),
+            Self::Installs => Some(Counted::Installed),
+        }
+    }
+}
+
+/// A change that the counters of a generation count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TreeChange {
+enum Counted {
     /// The kernel gives each changed object the time of the change.
     Fresh,
-    /// The change puts a chosen modification time at a path.
-    ChosenTime,
+    /// An install of initial files. The seeds copy the modification times of the cached files.
+    Installed,
+    /// The change puts an existing or a chosen modification time at a path outside an install.
+    Chosen,
+}
+
+/// The counters of the tree of one generation. They only grow.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TreeCounters {
+    /// The number of changes that could change the tree.
+    changes: u64,
+    /// The number of those changes that could put an existing or a chosen modification time at a
+    /// path.
+    carried: u64,
+    /// The number of changes that could put a chosen modification time at a path outside an
+    /// install of initial files: a rename, a hard link, a set of a given time, and a restore.
+    chosen: u64,
+    /// Whether the baseline is a restored tree with the modification times of its save.
+    restored_times: bool,
+}
+
+impl TreeCounters {
+    /// The counters after one more change of the kind `counted`.
+    fn after(self, counted: Counted) -> Self {
+        let (carried, chosen) = match counted {
+            Counted::Fresh => (0, 0),
+            Counted::Installed => (1, 0),
+            Counted::Chosen => (1, 1),
+        };
+        Self {
+            changes: self.changes + 1,
+            carried: self.carried + carried,
+            chosen: self.chosen + chosen,
+            ..self
+        }
+    }
+
+    /// The counters after a restore of the baseline. A restored tree holds the modification times
+    /// of its save, which a start without the restore does not give, so the restore counts as a
+    /// chosen time. `saved_times` tells whether the tree keeps the times of its save, which is
+    /// false when the initial-file rule changes it.
+    fn after_restore(self, saved_times: bool) -> Self {
+        Self {
+            restored_times: saved_times,
+            ..self.after(Counted::Chosen)
+        }
+    }
+
+    /// The mark of the tree of the generation `generation` at these counters, for a tree that no
+    /// capture copied.
+    fn mark(self, generation: u64) -> TreeMark {
+        TreeMark {
+            generation,
+            changes: self.changes,
+            carried: self.carried,
+            saved_times: self.restored_times,
+        }
+    }
+
+    /// The mark of the tree of the generation `generation` at these counters, for a tree that a
+    /// capture copies.
+    fn captured_mark(self, generation: u64) -> TreeMark {
+        TreeMark {
+            saved_times: true,
+            ..self.mark(generation)
+        }
+    }
+
+    /// Whether a change put a chosen modification time at a path outside an install.
+    fn has_chosen_times(self) -> bool {
+        self.chosen != 0
+    }
+}
+
+/// What a change of the times of an object with the modification time `before_modified` counts.
+/// A snapshot keeps no access time, so only a change of the modification time changes the tree.
+fn set_times_change(
+    before_modified: Option<std::time::SystemTime>,
+    requested: TimeChange,
+) -> Option<Counted> {
+    if time_change_satisfied(before_modified, before_modified, requested, None) {
+        return None;
+    }
+    Some(match requested {
+        TimeChange::Set(_) => Counted::Chosen,
+        TimeChange::Now | TimeChange::Keep => Counted::Fresh,
+    })
 }
 
 /// The state of the tree of one generation at one moment, as the counters of the lifecycle give
@@ -1334,17 +1433,6 @@ pub(crate) struct TreeMark {
 }
 
 impl TreeMark {
-    /// Whether the tree of `self` is the tree of `since`.
-    fn same_tree(&self, since: &TreeMark) -> bool {
-        self.generation == since.generation && self.changes == since.changes
-    }
-
-    /// Whether each file that changed since `since` has a modification time that the kernel gave
-    /// after `since`.
-    fn fresh_since(&self, since: &TreeMark) -> bool {
-        since.saved_times && self.generation == since.generation && self.carried == since.carried
-    }
-
     /// Whether `self` and `other` are marks of one generation.
     pub(crate) fn same_generation(&self, other: &TreeMark) -> bool {
         self.generation == other.generation
@@ -1375,28 +1463,7 @@ struct RegistryState {
     nodes: usize,
     /// The number of the generation, unique in the process.
     generation: u64,
-    /// The number of calls that could change the tree.
-    changes: u64,
-    /// The number of those calls that could put an existing or a chosen modification time at a
-    /// path.
-    carried: u64,
-    /// The number of changes that could put a chosen modification time at a path outside an
-    /// install of initial files: a rename, a hard link, a set of a given time, and a restore.
-    chosen: u64,
-    /// Whether the baseline is a restored tree with the modification times of its save.
-    restored_times: bool,
-}
-
-impl RegistryState {
-    fn count(&mut self, carried: bool, chosen: bool) {
-        self.changes += 1;
-        if carried {
-            self.carried += 1;
-        }
-        if chosen {
-            self.chosen += 1;
-        }
-    }
+    counters: TreeCounters,
 }
 
 impl GenerationRegistry {
@@ -1408,10 +1475,7 @@ impl GenerationRegistry {
                 calls: 0,
                 nodes: 0,
                 generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                changes: 0,
-                carried: 0,
-                chosen: 0,
-                restored_times: false,
+                counters: TreeCounters::default(),
             }),
             changed: tokio::sync::Notify::new(),
             last_effect_completion_millis: std::sync::atomic::AtomicU64::new(0),
@@ -1433,11 +1497,8 @@ impl GenerationRegistry {
             .calls
             .checked_add(1)
             .expect("filesystem call count overflowed");
-        match effect {
-            CallEffect::Read | CallEffect::Decides => {}
-            CallEffect::Changes => state.count(false, false),
-            CallEffect::ChoosesTimes => state.count(true, true),
-            CallEffect::Installs => state.count(true, false),
+        if let Some(counted) = effect.counted() {
+            state.counters = state.counters.after(counted);
         }
         Ok(CallLease {
             registry: Arc::clone(self),
@@ -1446,46 +1507,27 @@ impl GenerationRegistry {
 
     /// Counts a change that a call with [`CallEffect::Decides`] makes. The call records it while
     /// it holds its lease, before its first change.
-    fn record(&self, change: TreeChange) {
+    fn record(&self, counted: Counted) {
         let mut state = self.state.lock().unwrap();
-        match change {
-            TreeChange::Fresh => state.count(false, false),
-            TreeChange::ChosenTime => state.count(true, true),
-        }
+        state.counters = state.counters.after(counted);
     }
 
-    /// Records that the baseline is a restored tree. A restored tree holds the modification times
-    /// of its save, which a start without the restore does not give, so the restore counts as a
-    /// chosen time. `saved_times` tells whether the tree keeps the times of its save, which is
-    /// false when the initial-file rule changes it.
+    /// Records that the baseline is a restored tree, as [`TreeCounters::after_restore`] tells.
     fn record_restore(&self, saved_times: bool) {
         let mut state = self.state.lock().unwrap();
-        state.count(true, true);
-        state.restored_times = saved_times;
+        state.counters = state.counters.after_restore(saved_times);
     }
 
-    /// The mark of the tree now, for a tree that a capture copies.
-    fn capture_mark(&self) -> TreeMark {
-        TreeMark {
-            saved_times: true,
-            ..self.baseline_mark()
-        }
+    /// The number of the generation and its counters now.
+    fn counters(&self) -> (u64, TreeCounters) {
+        let state = self.state.lock().unwrap();
+        (state.generation, state.counters)
     }
 
     /// The mark of the tree now, for a tree that no capture copied.
     fn baseline_mark(&self) -> TreeMark {
-        let state = self.state.lock().unwrap();
-        TreeMark {
-            generation: state.generation,
-            changes: state.changes,
-            carried: state.carried,
-            saved_times: state.restored_times,
-        }
-    }
-
-    /// Whether a change put a chosen modification time at a path outside an install.
-    fn has_chosen_times(&self) -> bool {
-        self.state.lock().unwrap().chosen != 0
+        let (generation, counters) = self.counters();
+        counters.mark(generation)
     }
 
     fn lease_internal_call(self: &Arc<Self>) -> CallLease {
@@ -2955,7 +2997,7 @@ async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(
     if before.size == size {
         return Ok(());
     }
-    generation.registry.record(TreeChange::Fresh);
+    generation.registry.record(Counted::Fresh);
     let growing = size > before.size;
     let mut budget = RetryBudget::new(2);
     loop {
@@ -3011,12 +3053,8 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
     if time_changes_satisfied(&before, &before, times, None) {
         return Ok(());
     }
-    // A snapshot keeps no access time, so only a change of the modification time changes the tree.
-    if !time_change_satisfied(before.modified, before.modified, times.modified, None) {
-        generation.registry.record(match times.modified {
-            TimeChange::Set(_) => TreeChange::ChosenTime,
-            TimeChange::Now | TimeChange::Keep => TreeChange::Fresh,
-        });
+    if let Some(counted) = set_times_change(before.modified, times.modified) {
+        generation.registry.record(counted);
     }
     let mut budget = RetryBudget::new(2);
     loop {
