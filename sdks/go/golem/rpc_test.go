@@ -62,7 +62,7 @@ func TestCallerEncodingMatchesCalleeDecoding(t *testing.T) {
 	// Decode it the way the callee's invoke path does.
 	fields := defs.structFields(reflect.TypeFor[tChargeIn]())
 	dst := reflect.New(reflect.TypeFor[tChargeIn]()).Elem()
-	if err := decodeParams(tree, fields, dst); err != nil {
+	if err := decodeParams(tree, fields, dst, nil); err != nil {
 		t.Fatalf("callee could not decode the caller's arguments: %v", err)
 	}
 	if got := dst.Interface().(tChargeIn); !reflect.DeepEqual(got, in) {
@@ -119,7 +119,7 @@ func TestClientConstructorTreeMatchesTheTargetConstructor(t *testing.T) {
 	ctor := encodeParams(e.idFields, reflect.ValueOf(&id).Elem())
 
 	dst := reflect.New(reflect.TypeFor[tPayId]()).Elem()
-	if err := decodeParams(ctor, e.idFields, dst); err != nil {
+	if err := decodeParams(ctor, e.idFields, dst, nil); err != nil {
 		t.Fatalf("target cannot decode the client's constructor tree: %v", err)
 	}
 	if got := dst.Interface().(tPayId); got != id {

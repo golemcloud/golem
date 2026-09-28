@@ -147,6 +147,7 @@ func init() {
 - `Snapshotter` is the **only** way to capture unexported state — the default reflective path sees exported fields only.
 - Implement `Save` and `Load` as a pair on the state (usually pointer receiver); the host calls `Save` to capture and `Load` to restore.
 - `Save`/`Load` return an `error`; a non-nil `Load` error fails the snapshot-based update.
+- The SDK stores the agent's principal (`ctx.Principal()`) beside your payload and restores it before the constructor runs again; `Save`/`Load` see only your own bytes.
 
 ### Related Guides
 | Guide | Description |

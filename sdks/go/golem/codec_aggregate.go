@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/golemcloud/golem/sdks/go/core/values"
 	"reflect"
+	"slices"
 	"time"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -29,6 +30,10 @@ import (
 // the order values are written in.
 func (d *definitions) compileRecord(c *codec) {
 	fields := d.structFields(c.typ)
+	if slices.ContainsFunc(fields, func(f fieldInfo) bool { return f.autoInjected }) {
+		markInvalid(c, "%s", misplacedPrincipal)
+		return
+	}
 
 	c.body = func(g *graphBuilder) types.SchemaTypeBody {
 		nf := make([]types.NamedFieldType, 0, len(fields))

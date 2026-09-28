@@ -185,6 +185,15 @@ async fn test_go_http_router_deployed() {
     assert_eq!(head["path"], "/raw/x");
     assert_eq!(head["query"], "");
 
+    // The mount has no auth, so the request's principal is anonymous.
+    let principal = client
+        .get(format!("{base}/web/principal"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(principal.status(), 200);
+    assert_eq!(principal.text().await.unwrap(), "golem.AnonymousPrincipal");
+
     // net/http: a HEAD carries no body, and a handler may answer without
     // reading its input.
     let head = client

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 )
 
 // snapCustomState — A state that controls its own serialization — the only way to capture
@@ -28,9 +29,25 @@ type snapCustomState struct{ count int64 }
 func (s *snapCustomState) Save() ([]byte, error) { return []byte{byte(s.count)}, nil }
 func (s *snapCustomState) Load(b []byte) error   { s.count = int64(b[0]); return nil }
 
+// restore splits a saved snapshot the way load-snapshot does and loads its
+// state into dst, returning the principal it carried.
+func restore(t *testing.T, dst any, snap host.Snapshot) Principal {
+	t.Helper()
+	principal, state, err := splitSnapshot(snap)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	if err := loadState(dst, state); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	return principal
+}
+
+var snapPrincipal = OidcPrincipal{Sub: "u-1", Issuer: "https://id.example", Email: Some("a@example.com"), Claims: "{}"}
+
 func TestSnapshotViaSnapshotter(t *testing.T) {
 	src := &snapCustomState{count: 42}
-	snap, err := saveState(src)
+	snap, err := saveState(src, snapPrincipal)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -38,8 +55,8 @@ func TestSnapshotViaSnapshotter(t *testing.T) {
 		t.Errorf("MIME = %q, want %q", snap.MimeType, snapshotRawMIME)
 	}
 	dst := &snapCustomState{}
-	if err := loadState(dst, snap); err != nil {
-		t.Fatalf("load: %v", err)
+	if p := restore(t, dst, snap); p != snapPrincipal {
+		t.Errorf("principal = %#v, want %#v", p, snapPrincipal)
 	}
 	if dst.count != 42 {
 		t.Errorf("round trip lost the count: got %d", dst.count)
@@ -52,7 +69,7 @@ func TestSnapshotReflectiveDefaultCoversExportedFields(t *testing.T) {
 		Region string
 	}
 	src := &State{Total: 7, Region: "eu"}
-	snap, err := saveState(src)
+	snap, err := saveState(src, snapPrincipal)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -60,8 +77,8 @@ func TestSnapshotReflectiveDefaultCoversExportedFields(t *testing.T) {
 		t.Errorf("MIME = %q, want %q", snap.MimeType, snapshotJSONMIME)
 	}
 	dst := &State{}
-	if err := loadState(dst, snap); err != nil {
-		t.Fatalf("load: %v", err)
+	if p := restore(t, dst, snap); p != snapPrincipal {
+		t.Errorf("principal = %#v, want %#v", p, snapPrincipal)
 	}
 	if *dst != *src {
 		t.Errorf("round trip = %+v, want %+v", *dst, *src)
@@ -72,12 +89,16 @@ func TestSnapshotReflectiveDefaultCoversExportedFields(t *testing.T) {
 // to reflection and are NOT captured.
 func TestSnapshotReflectiveDefaultDropsUnexportedFields(t *testing.T) {
 	src := &struct{ count int64 }{count: 99}
-	snap, err := saveState(src)
+	snap, err := saveState(src, snapPrincipal)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if string(snap.Payload) != "{}" {
-		t.Errorf("expected empty JSON for all-unexported state, got %q", snap.Payload)
+	_, state, err := splitSnapshot(snap)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	if string(state.Payload) != "{}" {
+		t.Errorf("expected empty JSON for all-unexported state, got %q", state.Payload)
 	}
 }
 

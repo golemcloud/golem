@@ -160,7 +160,7 @@ func (c *DynamicToolClient) InvokeDynamic(path []string, input TypedValue) (Opti
 // output means the method returns nothing.
 func localMethodCodecs[In any, Out any]() ([]fieldInfo, *codec, error) {
 	inFields := defs.structFields(typeOf[In]())
-	for _, f := range inFields {
+	for _, f := range userFields(inFields) {
 		if f.codec.invalid != "" {
 			return nil, nil, fmt.Errorf("golem: parameter %q: %s", f.name, f.codec.invalid)
 		}

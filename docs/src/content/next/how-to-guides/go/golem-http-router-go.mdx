@@ -96,6 +96,20 @@ mux.HandleFunc("GET /web/hello", func(w http.ResponseWriter, r *http.Request) {
 
 In a raw handler or OpenAPI provider, pass its `ctx`. Calling `Config` with any other context panics. Config values are set in `golem.yaml` under `agents: <RouterName>: config:` (see [`golem-add-config-go`](/next/how-to-guides/go/golem-add-config-go)).
 
+## The request's principal
+
+`Site.Principal(r.Context())` (or the raw handler's `ctx`) is the principal of the request: the authenticated user behind a mount with `Auth: true`, otherwise a `golem.AnonymousPrincipal`. The OpenAPI provider serves no request, so there it is nil.
+
+```go
+mux.HandleFunc("GET /web/me", func(w http.ResponseWriter, r *http.Request) {
+    if p, ok := Site.Principal(r.Context()).(golem.OidcPrincipal); ok {
+        io.WriteString(w, p.Sub)
+        return
+    }
+    http.Error(w, "login required", http.StatusUnauthorized)
+})
+```
+
 ## Static files
 
 `StaticFiles` serves files of the component — provisioned with the manifest's `files` (see [`golem-add-initial-files`](/next/how-to-guides/common/golem-add-initial-files)) — before the handler is consulted:

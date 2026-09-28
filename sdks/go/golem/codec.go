@@ -126,6 +126,10 @@ func (d *definitions) typeID(t reflect.Type) string {
 }
 
 func (d *definitions) buildCodec(c *codec) {
+	if c.typ == principalType {
+		markInvalid(c, "%s", misplacedPrincipal)
+		return
+	}
 	// User-declared variants and enums are looked up before the kind switch:
 	// an enum is a named integer, which would otherwise compile as a plain
 	// integer, and a variant is an interface, which has no other meaning.
@@ -283,6 +287,9 @@ func (d *definitions) buildCodec(c *codec) {
 // ([graphBuilder.invalids]) so the problem is attributed to the agent(s) that
 // actually use the type and reported at discovery — never as an init() trap, and
 // never poisoning an unrelated agent.
+// misplacedPrincipal explains a Principal anywhere but where the host fills it.
+const misplacedPrincipal = "golem.Principal is filled by the host, so it is only valid as a direct field of a method's input struct or of an agent's Id struct"
+
 func markInvalid(c *codec, format string, args ...any) {
 	c.invalid = fmt.Sprintf(format, args...)
 	c.body = func(*graphBuilder) types.SchemaTypeBody { return types.MakeSchemaTypeBodyBoolType() }

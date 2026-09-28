@@ -178,12 +178,18 @@ type Spec struct {
 // Context is passed to every method handler. State is the agent instance's
 // private state, as returned by the agent's init function.
 type Context[S any] struct {
-	State   *S
-	agentID string
+	State     *S
+	agentID   string
+	principal Principal
 }
 
 // AgentID returns the raw agent id the running instance was initialized with.
 func (c *Context[S]) AgentID() string { return c.agentID }
+
+// Principal returns the principal the agent was initialized with. The
+// principal of the current invocation is a [Principal] field of the method's
+// input struct.
+func (c *Context[S]) Principal() Principal { return c.principal }
 
 // InitContext is the execution scope passed to a [DefineConfiguredAgent]
 // constructor. It carries the constructor parameters ([InitContext.ID]) and reads
@@ -192,9 +198,13 @@ func (c *Context[S]) AgentID() string { return c.agentID }
 // method. Agents declared with the plain [DefineAgent] receive their id directly
 // and never see this type.
 type InitContext[Id any, S any, Cfg any] struct {
-	id      Id
-	agentID string
+	id        Id
+	agentID   string
+	principal Principal
 }
+
+// Principal returns the principal initializing the agent.
+func (c *InitContext[Id, S, Cfg]) Principal() Principal { return c.principal }
 
 // ID returns the constructor parameters the agent instance was created with.
 func (c *InitContext[Id, S, Cfg]) ID() Id { return c.id }

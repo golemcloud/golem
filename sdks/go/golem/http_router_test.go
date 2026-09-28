@@ -85,8 +85,11 @@ func TestARouterPublishesTheRouterKind(t *testing.T) {
 		t.Fatalf("handler endpoint = %+v", handle.HttpEndpoint)
 	}
 	params := handle.InputSchema.Parameters()
-	if len(params) != 1 || params[0].Name != "request" {
-		t.Fatalf("the handler takes exactly one parameter named request, got %+v", params)
+	// The host accepts exactly one user-supplied parameter, request; the
+	// principal rides beside it, filled by the host.
+	if len(params) != 2 || params[0].Name != "request" || params[0].Source.Tag() != common.FieldSourceUserSupplied ||
+		params[1].Name != "principal" || params[1].Source.Tag() != common.FieldSourceAutoInjected {
+		t.Fatalf("the handler takes request plus the host-filled principal, got %+v", params)
 	}
 	if provider := methods[routerOpenAPIMethod]; len(provider.HttpEndpoint) != 0 || len(provider.InputSchema.Parameters()) != 0 {
 		t.Fatalf("the OpenAPI provider takes nothing and has no route: %+v", provider)
@@ -165,15 +168,15 @@ func TestRouterMisuseIsADefinitionError(t *testing.T) {
 // makes first is tested on its own.
 func TestConfigNeedsTheRoutersOwnRequest(t *testing.T) {
 	r := defineRouterInto[NoConfig](newDefinitions(), RouterSpec{Name: "R", Mount: "/r"})
-	checkRouterScope(r.scope(), "R")
-	for _, ctx := range []context.Context{context.Background(), (&HTTPRouter[NoConfig]{name: "Other"}).scope()} {
+	checkRouterScope(r.scope(nil), "R", "Config")
+	for _, ctx := range []context.Context{context.Background(), (&HTTPRouter[NoConfig]{name: "Other"}).scope(nil)} {
 		func() {
 			defer func() {
 				if p := recover(); p == nil || !strings.Contains(fmt.Sprint(p), "outside one of its requests") {
 					t.Fatalf("got %v", p)
 				}
 			}()
-			checkRouterScope(ctx, "R")
+			checkRouterScope(ctx, "R", "Config")
 		}()
 	}
 }

@@ -49,6 +49,9 @@ func encodeParams(fields []fieldInfo, v reflect.Value) types.SchemaValueTree {
 	var b valBuilder
 	idxs := make([]int32, 0, len(fields))
 	for _, f := range fields {
+		if f.autoInjected {
+			continue // filled by the host, never sent
+		}
 		idxs = append(idxs, f.codec.encode(&b, v.Field(f.index)))
 	}
 	root := b.push(types.MakeSchemaValueNodeRecordValue(idxs))
@@ -70,7 +73,15 @@ func (d *decoder) node(idx int32) (types.SchemaValueNode, error) {
 
 // decodeParams decodes a parameter-list tree (a record at the root) into dst's
 // fields. An empty parameter list is permitted to arrive as an empty record.
-func decodeParams(tree types.SchemaValueTree, fields []fieldInfo, dst reflect.Value) error {
+// Principal fields have no value in the tree: they are set to principal, which
+// may be nil where there is no invocation (parsing an agent id).
+func decodeParams(tree types.SchemaValueTree, fields []fieldInfo, dst reflect.Value, principal Principal) error {
+	if principal != nil {
+		for _, f := range principalFields(fields) {
+			dst.Field(f.index).Set(reflect.ValueOf(&principal).Elem())
+		}
+	}
+	fields = userFields(fields)
 	d := decoder{nodes: tree.ValueNodes}
 	if len(d.nodes) == 0 {
 		if len(fields) == 0 {

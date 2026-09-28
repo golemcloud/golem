@@ -119,7 +119,7 @@ func TestPackParametersBuildsTheInvocationRecord(t *testing.T) {
 	// The same tree decodes back into the agent's own Go type.
 	var in GreetIn
 	fields := newDefinitions().structFields(reflect.TypeFor[GreetIn]())
-	if err := decodeParams(tree, fields, reflect.ValueOf(&in).Elem()); err != nil {
+	if err := decodeParams(tree, fields, reflect.ValueOf(&in).Elem(), nil); err != nil {
 		t.Fatalf("the packed tree is not readable by the target: %v", err)
 	}
 	if in.Greeting != "hi" || in.Times != 2 {

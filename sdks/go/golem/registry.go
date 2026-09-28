@@ -30,6 +30,9 @@ type fieldInfo struct {
 	index int
 	typ   reflect.Type
 	codec *codec
+	// autoInjected marks a Principal field: the host fills it from the
+	// invocation, so it has no codec and no value on the wire.
+	autoInjected bool
 }
 
 type methodEntry struct {
@@ -42,7 +45,7 @@ type methodEntry struct {
 	outType   reflect.Type    // nil => unit output
 	// invoke is the erased dispatcher produced by Implement. Calling it is a
 	// direct func-value call: no reflection is used to reach the handler.
-	invoke func(state any, agentID string, in types.SchemaValueTree) (out *types.SchemaValueTree, err error)
+	invoke func(inst *instance, principal Principal, in types.SchemaValueTree) (out *types.SchemaValueTree, err error)
 }
 
 type agentEntry struct {
@@ -58,7 +61,7 @@ type agentEntry struct {
 	configs  []configDecl   // declared config keys + secrets
 	idType   reflect.Type
 	idFields []fieldInfo
-	newState func(idVal reflect.Value, agentID string) any
+	newState func(idVal reflect.Value, agentID string, principal Principal) any
 	methods  map[string]*methodEntry
 	order    []string
 	// router is set when the entry is an HTTP router rather than an ordinary
@@ -73,6 +76,8 @@ type instance struct {
 	def     *agentEntry
 	state   any
 	agentID string
+	// principal is the one the agent was initialized with.
+	principal Principal
 	// config is the agent's materialized config (its Cfg value), cached for the
 	// worker's life on first read. Its local fields are read from the host once;
 	// its secret fields are lazy handles that re-read on Secret.Get(). nil until
@@ -95,6 +100,10 @@ func (d *definitions) structFields(t reflect.Type) []fieldInfo {
 	for i := range t.NumField() {
 		f := t.Field(i)
 		if f.PkgPath != "" { // unexported
+			continue
+		}
+		if f.Type == principalType {
+			out = append(out, fieldInfo{name: lowerFirst(f.Name), index: i, typ: f.Type, autoInjected: true})
 			continue
 		}
 		out = append(out, fieldInfo{
@@ -294,21 +303,21 @@ func (i *AgentImpl[Id, S, Cfg]) Handle[In any, Out any](
 // inside func init().
 type Registered struct{}
 
-func simpleNewState[Id any, S any](init func(Id) *S) func(reflect.Value, string) any {
+func simpleNewState[Id any, S any](init func(Id) *S) func(reflect.Value, string, Principal) any {
 	if init == nil {
 		return nil
 	}
-	return func(idVal reflect.Value, _ string) any { return init(idVal.Interface().(Id)) }
+	return func(idVal reflect.Value, _ string, _ Principal) any { return init(idVal.Interface().(Id)) }
 }
 
-func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cfg]) *S) func(reflect.Value, string) any {
+func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cfg]) *S) func(reflect.Value, string, Principal) any {
 	if init == nil {
 		return nil
 	}
 	// No host call here: the constructor reads config lazily via ctx.Config(),
 	// keeping get-config-value out of this always-linked path.
-	return func(idVal reflect.Value, agentID string) any {
-		return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), agentID: agentID})
+	return func(idVal reflect.Value, agentID string, principal Principal) any {
+		return init(&InitContext[Id, S, Cfg]{id: idVal.Interface().(Id), agentID: agentID, principal: principal})
 	}
 }
 
@@ -318,7 +327,7 @@ func configuredNewState[Id any, S any, Cfg any](init func(*InitContext[Id, S, Cf
 func implementInto[Id any, S any, Cfg any](
 	d *definitions,
 	def *AgentDefinition[Id, Cfg],
-	newState func(reflect.Value, string) any,
+	newState func(reflect.Value, string, Principal) any,
 	initNil bool,
 ) *AgentImpl[Id, S, Cfg] {
 	e := d.agents[def.name]
@@ -390,7 +399,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 		me.outType = outType
 	}
 
-	me.invoke = func(state any, agentID string, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {
+	me.invoke = func(inst *instance, principal Principal, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {
 		// Panic hardening: a panic becomes an agent-error instead of killing the
 		// component. stage attributes it, so an SDK bug is not reported as if it
 		// were the agent's fault.
@@ -402,12 +411,12 @@ func bindMethodInto[Id any, S any, In any, Out any](
 		}()
 
 		inVal := reflect.New(inType).Elem()
-		if derr := decodeParams(tree, me.inFields, inVal); derr != nil {
+		if derr := decodeParams(tree, me.inFields, inVal, principal); derr != nil {
 			return nil, &decodeError{derr.Error()}
 		}
 
 		stage = stageHandler
-		ctx := &Context[S]{State: state.(*S), agentID: agentID}
+		ctx := &Context[S]{State: inst.state.(*S), agentID: inst.agentID, principal: inst.principal}
 		result := h(ctx, inVal.Interface().(In))
 		if me.outCodec == nil {
 			return nil, nil

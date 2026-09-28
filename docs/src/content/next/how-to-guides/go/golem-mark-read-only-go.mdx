@@ -123,14 +123,18 @@ Read-only methods are the natural fit for HTTP `GET`/`HEAD` endpoints. Combine
 var Catalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly(), golem.HTTP(golem.GET("/catalog")))
 ```
 
-## Not available in the Go SDK
+## Per-principal caching
 
-Unlike the Rust SDK, the Go SDK has **no per-principal read-only caching** — there
-is no `Principal` parameter you can add to a method and no automatic
-`Cache-Control: private` / `Vary` switch. Read-only results are cached
-per `(method, input)` and shared across callers. If you need per-caller isolation,
-model it explicitly (e.g. include the caller identity in the method input) rather
-than expecting the runtime to derive it.
+Read-only results are cached per `(method, input)` and shared across callers. Add a
+`golem.Principal` field to the input and the cache is kept per principal instead:
+the host fills the field, callers never supply it, and the method is marked as
+depending on its principal.
+
+```go
+type BalanceIn struct{ Principal golem.Principal }
+
+var Balance = Agent.Method[BalanceIn, int64]("balance", golem.ReadOnly(golem.CacheFor(time.Minute)))
+```
 
 ## Key Constraints
 

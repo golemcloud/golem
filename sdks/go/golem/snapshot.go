@@ -15,7 +15,10 @@
 package golem
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 )
@@ -35,20 +38,76 @@ const (
 	snapshotJSONMIME = "application/json"
 )
 
-// saveState serializes an agent instance's state into a host snapshot.
-func saveState(state any) (host.Snapshot, error) {
+// The agent's principal travels with its state, since a restore runs the
+// constructor again without an initialize call to supply it. The layout is the
+// Rust SDK's: a JSON snapshot is {"version":1,"principal":…,"state":…}; a raw one
+// is a version byte (2), the principal's length as a big-endian uint32, the
+// principal, then the Snapshotter's bytes.
+const (
+	snapshotJSONVersion = 1
+	snapshotRawVersion  = 2
+)
+
+type jsonSnapshot struct {
+	Version   int             `json:"version"`
+	Principal json.RawMessage `json:"principal"`
+	State     json.RawMessage `json:"state"`
+}
+
+// saveState serializes an agent instance's state and principal into a host
+// snapshot.
+func saveState(state any, principal Principal) (host.Snapshot, error) {
+	p, err := marshalPrincipal(principal)
+	if err != nil {
+		return host.Snapshot{}, err
+	}
 	if sn, ok := state.(Snapshotter); ok {
 		payload, err := sn.Save()
 		if err != nil {
 			return host.Snapshot{}, err
 		}
-		return host.Snapshot{Payload: payload, MimeType: snapshotRawMIME}, nil
+		out := make([]byte, 0, 5+len(p)+len(payload))
+		out = append(out, snapshotRawVersion)
+		out = binary.BigEndian.AppendUint32(out, uint32(len(p)))
+		out = append(out, p...)
+		out = append(out, payload...)
+		return host.Snapshot{Payload: out, MimeType: snapshotRawMIME}, nil
 	}
-	payload, err := json.Marshal(state)
+	s, err := json.Marshal(state)
+	if err != nil {
+		return host.Snapshot{}, err
+	}
+	payload, err := json.Marshal(jsonSnapshot{Version: snapshotJSONVersion, Principal: p, State: s})
 	if err != nil {
 		return host.Snapshot{}, err
 	}
 	return host.Snapshot{Payload: payload, MimeType: snapshotJSONMIME}, nil
+}
+
+// splitSnapshot separates a snapshot into the agent's principal and the state
+// payload [loadState] reads.
+func splitSnapshot(snap host.Snapshot) (Principal, host.Snapshot, error) {
+	if snap.MimeType == snapshotJSONMIME {
+		var js jsonSnapshot
+		if err := json.Unmarshal(snap.Payload, &js); err != nil {
+			return nil, snap, fmt.Errorf("golem: decoding the snapshot: %w", err)
+		}
+		if js.Version != snapshotJSONVersion {
+			return nil, snap, fmt.Errorf("golem: unsupported JSON snapshot version %d", js.Version)
+		}
+		p, err := unmarshalPrincipal(js.Principal)
+		return p, host.Snapshot{Payload: js.State, MimeType: snap.MimeType}, err
+	}
+	b := snap.Payload
+	if len(b) < 5 || b[0] != snapshotRawVersion {
+		return nil, snap, errors.New("golem: not a snapshot this SDK wrote")
+	}
+	n := binary.BigEndian.Uint32(b[1:5])
+	if uint64(len(b)-5) < uint64(n) {
+		return nil, snap, errors.New("golem: snapshot too short for its principal")
+	}
+	p, err := unmarshalPrincipal(b[5 : 5+n])
+	return p, host.Snapshot{Payload: b[5+n:], MimeType: snap.MimeType}, err
 }
 
 // loadState restores an agent instance's state from a host snapshot. state must

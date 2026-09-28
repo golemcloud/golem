@@ -140,6 +140,7 @@ Returning `golem.Err(...)` completes the invocation successfully — the caller 
 ## Key Constraints
 
 - Method parameters/results are passed by value; wrap the parameter list in a struct (one field per WIT parameter).
+- A `golem.Principal` field in a method's input struct (or the `ID`) is filled by the host with the invocation's principal and is not a parameter callers pass; `ctx.Principal()` is the principal the agent was initialized with (see [`golem-add-http-auth-go`](/next/how-to-guides/go/golem-add-http-auth-go)).
 - `ID` must be a struct; its fields are the agent identity. Agents are created implicitly on first invocation. An `ID` with no fields (`type ID struct{}`) is a **singleton** — exactly one instance of the agent.
 - Invocations run **sequentially in a single thread** — no concurrency within one agent, no locks needed.
 - Method descriptors must be **package-level vars** in the definition package (the same value is used by the schema, the binding, and callers).

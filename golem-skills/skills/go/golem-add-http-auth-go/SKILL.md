@@ -66,6 +66,29 @@ var (
 )
 ```
 
+## Receiving the principal
+
+Read who is calling from a `golem.Principal` field of the method's input struct. The host fills it for every invocation (an `OidcPrincipal` for an authenticated user), so it is never mapped from the path, query, headers or body, and callers leave it nil. `ctx.Principal()` is the principal the agent was initialized with:
+
+```go
+type ProfileIn struct {
+	Principal golem.Principal
+}
+
+var Profile = Agent.Method[ProfileIn, string]("profile", golem.HTTP(golem.GET("/profile")))
+
+agent.Handle(Profile, func(ctx *golem.Context[state], in ProfileIn) string {
+	switch p := in.Principal.(type) {
+	case golem.OidcPrincipal:
+		return "hello " + p.Sub
+	default:
+		return "hello stranger"
+	}
+})
+```
+
+The principal is one of `golem.OidcPrincipal`, `golem.AgentPrincipal` (another agent over RPC), `golem.GolemUserPrincipal` (a Golem account, e.g. the CLI) and `golem.AnonymousPrincipal`.
+
 ## Deployment configuration
 
 After declaring auth in code, configure a security scheme in `golem.yaml` under the `httpApi` deployment (this is where `subdomain` versus `domain` is chosen). Quick reference:
@@ -88,6 +111,7 @@ httpApi:
 - `Mount.Auth` is a plain `bool`; `golem.EndpointAuth(required bool)` takes an explicit value (`true` to require, `false` to open).
 - Setting `golem.EndpointAuth` **more than once** on one endpoint is a definition error, not a silent overwrite — set it exactly once per route.
 - An endpoint with no `golem.EndpointAuth` inherits the mount's `Auth`.
+- A `golem.Principal` field cannot be bound to a `{var}`, query parameter or header; that is a definition error.
 - Declaring auth requires an `httpApi` deployment with a security scheme to actually enforce it — mounting alone only advertises the requirement.
 
 ### Related Skills

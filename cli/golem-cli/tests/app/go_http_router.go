@@ -4,6 +4,7 @@ package routers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -58,6 +59,9 @@ func init() {
 	mux.HandleFunc("POST /web/early", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = io.WriteString(w, "early")
+	})
+	mux.HandleFunc("GET /web/principal", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprintf(w, "%T", WebRouter.Principal(r.Context()))
 	})
 	mux.HandleFunc("GET /web/head", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "not sent for HEAD")

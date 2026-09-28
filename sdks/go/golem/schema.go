@@ -156,6 +156,14 @@ func (g *graphBuilder) build() types.SchemaGraph {
 func namedFields(g *graphBuilder, fs []fieldInfo) []common.NamedField {
 	out := make([]common.NamedField, 0, len(fs))
 	for _, f := range fs {
+		if f.autoInjected {
+			out = append(out, common.NamedField{
+				Name:   f.name,
+				Source: common.MakeFieldSourceAutoInjected(common.AutoInjectedKindPrincipal),
+				Schema: g.node(principalSlotCodec),
+			})
+			continue
+		}
 		out = append(out, common.NamedField{
 			Name:   f.name,
 			Source: common.MakeFieldSourceUserSupplied(),
@@ -163,6 +171,18 @@ func namedFields(g *graphBuilder, fs []fieldInfo) []common.NamedField {
 		})
 	}
 	return out
+}
+
+// principalSlotCodec types a principal field in the schema. The field carries
+// no value, so like the Rust SDK it is an empty record; its own key type keeps
+// it apart from a misplaced Principal's codec.
+type principalSlot struct{}
+
+var principalSlotCodec = &codec{
+	typ: reflect.TypeFor[principalSlot](),
+	body: func(*graphBuilder) types.SchemaTypeBody {
+		return types.MakeSchemaTypeBodyRecordType([]types.NamedFieldType{})
+	},
 }
 
 // buildAgentType derives the full agent-type metadata reported by
@@ -185,7 +205,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		if m.readOnly != nil {
 			readOnly = witTypes.Some(common.ReadOnlyConfig{
 				CachePolicy:   m.readOnly.policy.toWit(),
-				UsesPrincipal: false,
+				UsesPrincipal: len(principalFields(m.inFields)) > 0,
 			})
 		}
 		methods = append(methods, common.AgentMethod{

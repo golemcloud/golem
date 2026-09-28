@@ -127,9 +127,10 @@ const (
 )
 
 // routerHandleIn is the handler method's input: the host requires exactly one
-// parameter, named "request".
+// user-supplied parameter, named "request"; the principal is filled by the host.
 type routerHandleIn struct {
-	Request HTTPRequest
+	Request   HTTPRequest
+	Principal Principal
 }
 
 // routerID and routerState fill the type parameters an agent method needs; a
@@ -158,7 +159,7 @@ func defineRouterInto[Cfg any](d *definitions, spec RouterSpec) *HTTPRouter[Cfg]
 		snapshot: SnapshotDisabled,
 		idType:   reflect.TypeFor[routerID](),
 		methods:  map[string]*methodEntry{},
-		newState: func(reflect.Value, string) any { return &routerState{} },
+		newState: func(reflect.Value, string, Principal) any { return &routerState{} },
 		router:   &routerEntry{staticFiles: spec.StaticFiles},
 	}
 	d.agents[spec.Name] = e
@@ -217,7 +218,7 @@ func (r *HTTPRouter[Cfg]) HandleRaw(h func(ctx context.Context, req HTTPRequest)
 	m := MethodDef[routerID, routerHandleIn, HTTPResponse]{name: routerHandleMethod, desc: "Handles an HTTP request"}
 	bindMethodInto[routerID, routerState, routerHandleIn, HTTPResponse](r.d, e, m,
 		func(_ *Context[routerState], in routerHandleIn) HTTPResponse {
-			return h(r.scope(), in.Request)
+			return h(r.scope(in.Principal), in.Request)
 		})
 	return Registered{}
 }
@@ -242,16 +243,32 @@ func (r *HTTPRouter[Cfg]) OpenAPI(provide func(ctx context.Context) string) Regi
 	m := MethodDef[routerID, Unit, string]{name: routerOpenAPIMethod, desc: "Returns the router's OpenAPI document"}
 	bindMethodInto[routerID, routerState, Unit, string](r.d, e, m,
 		func(_ *Context[routerState], _ Unit) string {
-			return provide(r.scope())
+			return provide(r.scope(nil))
 		})
 	return Registered{}
 }
 
-// routerScopeKey keys the router a context belongs to.
-type routerScopeKey struct{}
+// routerScopeKey keys the router a context belongs to, and
+// routerPrincipalKey the principal of the request it serves.
+type (
+	routerScopeKey     struct{}
+	routerPrincipalKey struct{}
+)
 
-func (r *HTTPRouter[Cfg]) scope() context.Context {
-	return context.WithValue(context.Background(), routerScopeKey{}, r.name)
+func (r *HTTPRouter[Cfg]) scope(principal Principal) context.Context {
+	ctx := context.WithValue(context.Background(), routerScopeKey{}, r.name)
+	return context.WithValue(ctx, routerPrincipalKey{}, principal)
+}
+
+// Principal returns the principal of the request ctx belongs to — r.Context()
+// in a [net/http.Handler], or the ctx passed to a raw handler. Behind a mount
+// with Auth it is the authenticated user; otherwise it is an
+// [AnonymousPrincipal]. The OpenAPI provider serves no request, so there it is
+// nil.
+func (r *HTTPRouter[Cfg]) Principal(ctx context.Context) Principal {
+	checkRouterScope(ctx, r.name, "Principal")
+	p, _ := ctx.Value(routerPrincipalKey{}).(Principal)
+	return p
 }
 
 // Config returns the router's config. ctx must be the context of one of this
@@ -262,14 +279,14 @@ func (r *HTTPRouter[Cfg]) scope() context.Context {
 // Like an agent's config it is read from the host once per worker; a [Secret]
 // field re-reads the host on each Get.
 func (r *HTTPRouter[Cfg]) Config(ctx context.Context) Cfg {
-	checkRouterScope(ctx, r.name)
+	checkRouterScope(ctx, r.name, "Config")
 	return materializeAgentConfig[Cfg]()
 }
 
 // checkRouterScope panics unless ctx belongs to a request of the named router.
-func checkRouterScope(ctx context.Context, router string) {
+func checkRouterScope(ctx context.Context, router, accessor string) {
 	if name, _ := ctx.Value(routerScopeKey{}).(string); name != router {
-		panic(fmt.Errorf("golem: %s.Config called outside one of its requests", router))
+		panic(fmt.Errorf("golem: %s.%s called outside one of its requests", router, accessor))
 	}
 }
 

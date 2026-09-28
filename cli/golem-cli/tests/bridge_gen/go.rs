@@ -43,7 +43,7 @@ use golem_cli::model::app::ApplicationConfig;
 use golem_cli::sdk_overrides::workspace_root;
 use golem_common::model::agent::{AgentMode, CorsOptions, FileMapping, HttpMountDetails};
 use golem_common::schema::schema_type::{DiscriminatorRule, ResultSpec, UnionBranch, UnionSpec};
-use golem_common::schema::{AgentTypeSchema, SchemaType};
+use golem_common::schema::{AgentTypeSchema, AutoInjectedKind, NamedField, SchemaType};
 use std::process::Command;
 use tempfile::TempDir;
 use test_r::{test, test_dep};
@@ -792,6 +792,47 @@ fn go_external_client_leaves_out_stream_bearing_methods(env: &GoEnv) {
     assert_stream_methods_left_out(&generated);
     generated.assert_gofmt_clean(env);
     generated.assert_vets_natively(env);
+}
+
+/// The host fills a principal parameter, so neither client asks a caller for
+/// one: not in the id, not in a method's arguments.
+#[test]
+fn go_clients_leave_out_the_principal(env: &GoEnv) {
+    let principal = || {
+        NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::record(vec![]),
+        )
+    };
+    let with_principal = || {
+        agent(
+            "LedgerAgent",
+            "go",
+            vec![field("name", SchemaType::string()), principal()],
+            vec![method(
+                "charge",
+                vec![field("amount", SchemaType::s64()), principal()],
+                Some(SchemaType::string()),
+            )],
+            vec![],
+            AgentMode::Durable,
+        )
+    };
+    for generated in [
+        GeneratedGo::guest(env, with_principal()),
+        GeneratedGo::external(env, with_principal()),
+    ] {
+        let client = generated.read("client.go");
+        assert!(!client.to_lowercase().contains("principal"), "{client}");
+        // the guest client takes the arguments alone, the external one a ctx first
+        assert!(
+            client.contains("Charge(amount int64)")
+                || client.contains("Charge(ctx context.Context, amount int64)"),
+            "{client}"
+        );
+        generated.assert_gofmt_clean(env);
+    }
 }
 
 /// A constructor stream cannot be left out: without it there is no client.

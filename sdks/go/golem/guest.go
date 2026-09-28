@@ -123,7 +123,7 @@ func toAgentError(err error) common.AgentError {
 // and constructor parameters. It backs both entry points that can bring an
 // agent to life: the host's `initialize` call for a new agent, and
 // `load-snapshot`, which restores an agent onto a fresh instance.
-func initializeAgent(agentType string, input types.SchemaValueTree) witTypes.Result[witTypes.Unit, common.AgentError] {
+func initializeAgent(agentType string, input types.SchemaValueTree, principal Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
 	// Route structured logging (slog, and via it the standard log package)
 	// through the host logging channel so it carries a real level + context.
 	// Build-tag-gated to the wasm target so native `go test` never links the
@@ -140,7 +140,7 @@ func initializeAgent(agentType string, input types.SchemaValueTree) witTypes.Res
 		return witTypes.Err[witTypes.Unit](customError("agent already initialized"))
 	}
 	idVal := reflect.New(e.idType).Elem()
-	if err := decodeParams(input, e.idFields, idVal); err != nil {
+	if err := decodeParams(input, e.idFields, idVal, principal); err != nil {
 		return witTypes.Err[witTypes.Unit](common.MakeAgentErrorInvalidInput(err.Error()))
 	}
 	// Publish the instance before running the constructor so a constructor that
@@ -148,18 +148,18 @@ func initializeAgent(agentType string, input types.SchemaValueTree) witTypes.Res
 	// the methods use. The constructor sees only its InitContext, never the
 	// not-yet-built state, so the nil state during this window is unobservable.
 	agentID := os.Getenv(agentIDEnvVar)
-	inst := &instance{def: e, agentID: agentID}
+	inst := &instance{def: e, agentID: agentID, principal: principal}
 	active = inst
-	inst.state = e.newState(idVal, agentID)
+	inst.state = e.newState(idVal, agentID, principal)
 	return witTypes.Ok[witTypes.Unit, common.AgentError](witTypes.Unit{})
 }
 
 func init() {
-	guestExports.Exports.Initialize = func(agentType string, input types.SchemaValueTree, _ common.Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
-		return initializeAgent(agentType, input)
+	guestExports.Exports.Initialize = func(agentType string, input types.SchemaValueTree, principal common.Principal) witTypes.Result[witTypes.Unit, common.AgentError] {
+		return initializeAgent(agentType, input, principalFromWit(principal))
 	}
 
-	guestExports.Exports.Invoke = func(methodName string, input types.SchemaValueTree, _ common.Principal) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
+	guestExports.Exports.Invoke = func(methodName string, input types.SchemaValueTree, principal common.Principal) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
 		fail := func(e common.AgentError) witTypes.Result[witTypes.Option[types.SchemaValueTree], common.AgentError] {
 			return witTypes.Err[witTypes.Option[types.SchemaValueTree]](e)
 		}
@@ -170,7 +170,7 @@ func init() {
 		if m == nil {
 			return fail(common.MakeAgentErrorInvalidMethod("unknown method: " + methodName))
 		}
-		out, err := m.invoke(active.state, active.agentID, input)
+		out, err := m.invoke(active, principalFromWit(principal), input)
 		if err != nil {
 			return fail(toAgentError(err))
 		}
@@ -216,7 +216,7 @@ func init() {
 		if active == nil {
 			panic(fmt.Errorf("golem: save-snapshot before initialize"))
 		}
-		snap, err := saveState(active.state)
+		snap, err := saveState(active.state, active.principal)
 		if err != nil {
 			panic(fmt.Errorf("golem: snapshot save failed: %w", err))
 		}
@@ -240,10 +240,14 @@ func init() {
 		if err != nil {
 			return witTypes.Err[witTypes.Unit]("parsing " + agentIDEnvVar + ": " + err.Error())
 		}
-		if res := initializeAgent(agentType, ctorParams); res.IsErr() {
+		principal, state, err := splitSnapshot(snap)
+		if err != nil {
+			return witTypes.Err[witTypes.Unit](err.Error())
+		}
+		if res := initializeAgent(agentType, ctorParams, principal); res.IsErr() {
 			return witTypes.Err[witTypes.Unit](agentErrorToGo(res.Err()).Error())
 		}
-		if err := loadState(active.state, snap); err != nil {
+		if err := loadState(active.state, state); err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}
 		return witTypes.Ok[witTypes.Unit, string](witTypes.Unit{})
