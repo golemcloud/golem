@@ -18,9 +18,12 @@
 //! keeps the gate of the held calls closed until the storage is dropped. So the threads of rustic
 //! stop because of the deadline, and not because the gate opens.
 
+pub(super) mod holding;
+pub(super) mod scripted;
+
+use self::holding::{holding_storage, reached_deadline};
+use self::scripted::{Script, ScriptedBlobStorage};
 use super::backend::BlobBackend;
-use super::holding::{holding_storage, reached_deadline};
-use super::scripted::{Script, ScriptedBlobStorage};
 use super::{
     ChangeDetection, Chunking, Compression, OperationPhase, PruneSettings, RepackLimits,
     Repository, RepositoryKey, RepositorySettings, SaveSettings, backup_options, config_options,
@@ -238,6 +241,7 @@ async fn dropped_within_limit(dropped: oneshot::Receiver<()>) -> bool {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_saved_tree_comes_back_the_same() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let repository = repository(&storage, &new_scope());
@@ -257,6 +261,7 @@ async fn a_saved_tree_comes_back_the_same() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_restore_report_gives_each_phase_of_the_restore_in_order() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let repository = repository(&storage, &new_scope());
@@ -287,6 +292,7 @@ async fn a_restore_report_gives_each_phase_of_the_restore_in_order() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_pack() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -327,6 +333,7 @@ async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_second_save_has_the_first_as_parent_and_reads_only_the_changed_file() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let repository = repository(&storage, &new_scope());
@@ -368,6 +375,7 @@ async fn a_second_save_has_the_first_as_parent_and_reads_only_the_changed_file()
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_forgotten_name_does_not_restore_and_the_other_names_do() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let repository = repository(&storage, &new_scope());
@@ -401,6 +409,7 @@ async fn a_forgotten_name_does_not_restore_and_the_other_names_do() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_open_it() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -446,6 +455,7 @@ async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_
 }
 
 #[test]
+#[timeout("60s")]
 async fn each_scope_is_its_own_repository() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let (one, other) = (new_scope(), new_scope());
@@ -901,6 +911,7 @@ async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_prune_after_a_forget_deletes_the_packs_of_that_name_and_the_other_name_restores() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -1240,6 +1251,7 @@ async fn a_repository_keeps_the_settings_of_its_creation_and_a_bridge_save_uses_
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_file_and_a_ctime_save_reads_each() {
     // A copy gives each file a new inode and a new change time, and keeps its size and its
     // modification time. The size-and-mtime form must also not compare inodes: in rustic,
@@ -1287,6 +1299,7 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_file_and_a_ctime_save_r
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mtime() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let size_mtime = SaveSettings {
@@ -1339,6 +1352,7 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
 }
 
 #[test]
+#[timeout("60s")]
 async fn two_prunes_without_a_grace_period_give_back_the_data_that_no_snapshot_uses() {
     // The first save puts both files in one pack. The second save rewrites one of them. After the
     // forget, that pack holds a used and an unused blob, so a prune without limits repacks it.
@@ -1419,6 +1433,7 @@ async fn two_prunes_without_a_grace_period_give_back_the_data_that_no_snapshot_u
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_prune_of_a_scope_without_a_repository_gives_nothing() {
     let storage = Arc::new(InMemoryBlobStorage::new());
 

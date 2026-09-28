@@ -19,14 +19,17 @@
 
 use super::backend::CONFIG_PATH;
 use super::files::SnapshotFiles;
-use super::prune::LEDGER_PATH;
+use super::prune::LEDGERS_PATH;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_service_base::storage::blob::PutIfAbsent;
 use std::path::Path;
 
 /// The directories of a repository in the order of a listing. A save writes them in the reverse
 /// order, and so does a copy, so a snapshot file always has its data.
-const LISTING_ORDER: [&str; 4] = ["snapshots", "index", "keys", "data"];
+const LISTING_ORDER: [&str; 4] = [SNAPSHOTS_PATH, "index", "keys", "data"];
+
+/// The directory of the snapshot files of a repository.
+const SNAPSHOTS_PATH: &str = "snapshots";
 
 /// Copies the repository of `from` into the empty scope `to`, with the config file last, so `to`
 /// holds a repository only when all its blobs are there. It copies nothing without a config file,
@@ -38,7 +41,8 @@ pub(super) async fn copy_scope(from: &SnapshotFiles, to: &SnapshotFiles) -> anyh
     let listed = stream::iter(LISTING_ORDER)
         .then(|directory| from.list_below("copy_list", Path::new(directory)))
         .try_collect::<Vec<_>>()
-        .await?;
+        .await?
+        .into_boxed_slice();
     let paths = listed
         .iter()
         .rev()
@@ -55,7 +59,14 @@ pub(super) async fn copy_scope(from: &SnapshotFiles, to: &SnapshotFiles) -> anyh
 async fn copy_blob(from: &SnapshotFiles, to: &SnapshotFiles, path: &Path) -> anyhow::Result<()> {
     match from.get("copy_read", path).await? {
         Some(content) => to.put("copy_write", path, &content).await,
-        None => Ok(()),
+        // A delete removed the snapshot file after the listing, so the copy leaves it out.
+        None if path.starts_with(SNAPSHOTS_PATH) => Ok(()),
+        // A prune removed a file that the copy listed, so the copy can be incomplete. It fails
+        // before the config write, so the target holds no repository, and a new copy can succeed.
+        None => Err(anyhow::anyhow!(
+            "the blob {} that the copy listed is gone, because a prune removed it",
+            path.display()
+        )),
     }
 }
 
@@ -67,7 +78,7 @@ pub(super) async fn delete_scope(files: &SnapshotFiles) -> anyhow::Result<()> {
         LISTING_ORDER
             .iter()
             .map(Path::new)
-            .chain(Path::new(LEDGER_PATH).parent())
+            .chain(Path::new(LEDGERS_PATH).parent())
             .map(Ok),
     )
     .try_for_each(|directory| async move {

@@ -19,7 +19,7 @@
 //! and each call waits for the blob storage on the runtime that the backend holds. Each call waits
 //! for at most a deadline, and a cancelled operation makes no more calls.
 
-use super::fault::{BlobCallFailed, ConfigExists, FileMissing, OperationCancelled};
+use super::fault::{BlobCallFailed, ConfigExists, FileMissing, LeaseExpired, OperationCancelled};
 use super::files::TARGET_LABEL;
 use super::publish::{SnapshotStage, StagedSnapshot};
 use bytes::Bytes;
@@ -32,8 +32,8 @@ use rustic_core::{
 };
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::task_tracker::TaskTrackerToken;
@@ -43,6 +43,41 @@ pub(super) const CONFIG_PATH: &str = "config";
 
 /// The largest number of bytes of tree packs that one backend keeps in memory.
 const KEPT_PACKS_LIMIT: usize = 32 * 1024 * 1024;
+
+/// The time until which a prune may make storage calls. A prune holds its claim until the time in
+/// its newest marker plus the hold, as the other deletes see it. The lease ends before that, so a
+/// prune stops before another delete can take its claim over.
+#[derive(Debug)]
+pub(super) struct Lease {
+    expiry: Mutex<Instant>,
+}
+
+impl Lease {
+    /// Gives a lease that ends at the instant.
+    pub(super) fn until(expiry: Instant) -> Self {
+        Self {
+            expiry: Mutex::new(expiry),
+        }
+    }
+
+    /// Moves the end of the lease to `span` after `started`, the start of a marker write that
+    /// succeeded, when that is later. A write that started at or after the end of the lease does
+    /// not move it, so a lease that ran out stays out: another delete can have taken the claim over
+    /// before the marker of that write was visible. A write that started before the end and ends
+    /// late can still move it, because no other delete can take the claim over before that marker
+    /// is visible.
+    pub(super) fn extend_from(&self, started: Instant, span: Duration) {
+        let mut current = self.expiry.lock().unwrap_or_else(PoisonError::into_inner);
+        if started < *current {
+            *current = (*current).max(started + span);
+        }
+    }
+
+    /// Gives the end of the lease.
+    pub(super) fn expiry(&self) -> Instant {
+        *self.expiry.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// A call that the backend makes on the blob storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +135,9 @@ pub(super) struct BlobBackend {
     _tracked: Option<TaskTrackerToken>,
     /// The packs of tree blobs that the operation of the backend read.
     kept: KeptPacks,
+    /// The lease of the prune of the backend. A backend without a lease has no limit other than
+    /// the deadline of each call.
+    lease: Option<Arc<Lease>>,
 }
 
 impl BlobBackend {
@@ -120,6 +158,7 @@ impl BlobBackend {
             stage: None,
             _tracked: None,
             kept: KeptPacks::new(KEPT_PACKS_LIMIT),
+            lease: None,
         }
     }
 
@@ -145,6 +184,15 @@ impl BlobBackend {
         }
     }
 
+    /// Gives the backend with the lease of a prune. When the lease has run out, a call gives an
+    /// error at once, and a call that runs gives an error when the lease runs out.
+    pub(super) fn leased_by(self, lease: Arc<Lease>) -> Self {
+        Self {
+            lease: Some(lease),
+            ..self
+        }
+    }
+
     /// Gives the backend with a token of a task tracker. The tracker counts the backend until the
     /// last owner drops it, for example a thread of rustic.
     pub(super) fn tracked_by(self, token: TaskTrackerToken) -> Self {
@@ -155,16 +203,22 @@ impl BlobBackend {
     }
 
     /// Waits for one call on the blob storage, which each call of the backend goes through. A call
-    /// without an answer within the deadline, or of a cancelled operation, gives an error, the same
-    /// as a call that failed.
+    /// without an answer within the deadline, of a cancelled operation, or of a backend whose lease
+    /// ran out, gives an error, the same as a call that failed.
     fn request<T>(
         &self,
         call: StorageCall,
         path: &Path,
         future: impl Future<Output = anyhow::Result<T>>,
     ) -> RusticResult<T> {
+        let answer = answer_or_cancel(self.deadline, &self.cancel, future);
         self.runtime
-            .block_on(answer_or_cancel(self.deadline, &self.cancel, future))
+            .block_on(async {
+                match &self.lease {
+                    None => answer.await,
+                    Some(lease) => within_lease(lease, answer).await,
+                }
+            })
             .map_err(|error| storage_error(call, path, error))
     }
 
@@ -182,6 +236,21 @@ impl BlobBackend {
             ),
         )
     }
+}
+
+/// Gives the output of the future, or [`LeaseExpired`] when the lease runs out first. A call does
+/// not start when the lease has run out.
+pub(super) async fn within_lease<T>(
+    lease: &Lease,
+    future: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    let left = lease.expiry().saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(anyhow::Error::new(LeaseExpired));
+    }
+    tokio::time::timeout(left, future)
+        .await
+        .unwrap_or_else(|_| Err(anyhow::Error::new(LeaseExpired)))
 }
 
 /// Gives the output of the future, or an error when the future gives no output within the deadline.
@@ -299,9 +368,14 @@ impl ReadBackend for BlobBackend {
             return Ok(Bytes::new());
         };
         // rustic marks the reads of tree blobs as cacheable, and reads each tree blob on its own.
-        if cacheable && tpe == FileType::Pack {
-            let pack = self.kept.get_or_read(id, || self.read_full(tpe, id))?;
-            return range_of(&pack, &path, offset, last);
+        // A pack of tree blobs is read whole and kept, until the kept packs fill their limit or a
+        // pack that was read whole does not fit. After that, a pack that is not kept is read by its
+        // range, as each other blob.
+        if cacheable
+            && tpe == FileType::Pack
+            && let Some(pack) = self.kept.get_or_read(id, || self.read_full(tpe, id))
+        {
+            return range_of(&pack?, &path, offset, last);
         }
         let start = u64::from(offset);
         self.request(
@@ -457,7 +531,7 @@ fn missing_file(path: &Path) -> Box<RusticError> {
     RusticError::with_source(
         ErrorKind::Backend,
         "The blob storage holds no file at `{path}`.",
-        FileMissing,
+        FileMissing { path: path.into() },
     )
     .attach_context("path", path.display().to_string())
 }

@@ -50,17 +50,13 @@ impl LowPriority {
 
     /// Runs the work at nice 19 on a new thread with the name, inside a new rayon pool, and waits
     /// for it. The threads that the work starts get the same nice value. On a platform other than
-    /// Linux the work runs as it is.
+    /// Linux the priority stays as it is, and the work still runs on its own thread in its own pool.
     pub(super) fn run<T: Send + 'static>(
         self,
         name: &'static str,
         work: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     ) -> anyhow::Result<T> {
-        if cfg!(target_os = "linux") {
-            self.on_own_thread(name, work)
-        } else {
-            work()
-        }
+        self.on_own_thread(name, work)
     }
 
     /// Runs the work on a new thread that first lowers its priority and builds the pool. A failure
@@ -81,16 +77,7 @@ impl LowPriority {
                         "Failed to lower the CPU priority of filesystem snapshot work, so it runs at the normal priority"
                     );
                 }
-                match (self.build_pool)(name, self.threads) {
-                    Ok(pool) => pool.install(|| run_taken(&slot)),
-                    Err(error) => {
-                        warn!(
-                            error = %error,
-                            "Failed to build the thread pool of filesystem snapshot work, so its parallel parts use the global pool"
-                        );
-                        run_taken(&slot)
-                    }
-                }
+                self.in_own_pool(name, || run_taken(&slot))
             }
         });
         match spawned {
@@ -103,6 +90,38 @@ impl LowPriority {
                     "Failed to start a thread for filesystem snapshot work, so it runs at the normal priority"
                 );
                 run_taken(&slot)
+            }
+        }
+    }
+}
+
+impl LowPriority {
+    /// Runs the work at the normal priority on the calling thread, inside a new rayon pool with
+    /// the name, and gives its result. So the rayon work of one operation does not wait for the
+    /// rayon work of another operation on the global pool.
+    pub(super) fn run_at_normal_priority<T: Send>(
+        self,
+        name: &'static str,
+        work: impl FnOnce() -> anyhow::Result<T> + Send,
+    ) -> anyhow::Result<T> {
+        self.in_own_pool(name, work)
+    }
+
+    /// Runs the work inside a new rayon pool. A pool that does not build gives a warning, and the
+    /// work runs without it.
+    fn in_own_pool<T: Send>(
+        self,
+        name: &'static str,
+        work: impl FnOnce() -> anyhow::Result<T> + Send,
+    ) -> anyhow::Result<T> {
+        match (self.build_pool)(name, self.threads) {
+            Ok(pool) => pool.install(work),
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "Failed to build the thread pool of filesystem snapshot work, so its parallel parts use the global pool"
+                );
+                work()
             }
         }
     }
@@ -143,6 +162,7 @@ fn lower_own_priority() -> std::io::Result<()> {
     }
 }
 
+/// Keeps the priority of the calling thread on a platform other than Linux.
 #[cfg(not(target_os = "linux"))]
 fn lower_own_priority() -> std::io::Result<()> {
     Ok(())

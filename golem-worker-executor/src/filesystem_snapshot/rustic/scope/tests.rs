@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::super::files::SnapshotFiles;
-use super::super::scripted::{Script, ScriptedBlobStorage};
+use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{copy_scope, delete_scope};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -22,7 +22,7 @@ use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use test_r::test;
+use test_r::{test, timeout};
 use uuid::Uuid;
 
 const DEADLINE: Duration = Duration::from_secs(2);
@@ -31,7 +31,7 @@ const DEADLINE: Duration = Duration::from_secs(2);
 const REPOSITORY: [(&str, &str); 6] = [
     ("config", "config"),
     ("data/ab/abab", "pack"),
-    ("golem/prune-ledger", "ledger"),
+    ("golem/prune-ledgers/1000-0-0f0f", "ledger"),
     ("index/cdcd", "index"),
     ("keys/efef", "key"),
     ("snapshots/0101", "snapshot"),
@@ -46,6 +46,7 @@ fn files<S: BlobStorage + 'static>(
         namespace: namespace.clone(),
         deadline: DEADLINE,
         cancel: tokio_util::sync::CancellationToken::new(),
+        tracker: tokio_util::task::TaskTracker::new(),
     }
 }
 
@@ -108,6 +109,7 @@ fn owned(blobs: &[(&str, &str)]) -> Vec<(String, String)> {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_copy_gives_the_target_each_blob_of_the_repository_and_not_the_ledger() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let (from, to) = (new_namespace(), new_namespace());
@@ -132,6 +134,7 @@ async fn a_copy_gives_the_target_each_blob_of_the_repository_and_not_the_ledger(
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_copy_writes_the_packs_the_keys_the_index_files_the_snapshot_files_and_then_the_config() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
@@ -160,6 +163,7 @@ async fn a_copy_writes_the_packs_the_keys_the_index_files_the_snapshot_files_and
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_copy_lists_the_snapshot_files_before_the_index_files_the_keys_and_the_packs() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
@@ -182,6 +186,7 @@ async fn a_copy_lists_the_snapshot_files_before_the_index_files_the_keys_and_the
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_copy_of_a_namespace_without_a_config_copies_nothing() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let (from, to) = (new_namespace(), new_namespace());
@@ -203,6 +208,7 @@ async fn a_copy_of_a_namespace_without_a_config_copies_nothing() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_copy_that_fails_gives_the_error_and_the_target_has_no_config() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
@@ -234,6 +240,7 @@ async fn a_copy_that_fails_gives_the_error_and_the_target_has_no_config() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_deleted_scope_holds_no_blob_and_another_scope_keeps_its_blobs() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let (deleted, kept) = (new_namespace(), new_namespace());
@@ -252,6 +259,7 @@ async fn a_deleted_scope_holds_no_blob_and_another_scope_keeps_its_blobs() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_delete_of_a_scope_deletes_the_config_first() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
@@ -272,6 +280,7 @@ async fn a_delete_of_a_scope_deletes_the_config_first() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_delete_of_an_unused_scope_succeeds_and_can_run_again() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let namespace = new_namespace();

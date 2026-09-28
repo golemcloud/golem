@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::super::files::SnapshotFiles;
-use super::super::holding::reached_deadline;
-use super::super::scripted::{Script, ScriptedBlobStorage};
+use super::super::tests::holding::reached_deadline;
+use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{SnapshotStage, StagedSnapshot, publish, retract};
 use bytes::Bytes;
 use futures::FutureExt;
@@ -67,6 +67,7 @@ fn files(
             },
             deadline,
             cancel: tokio_util::sync::CancellationToken::new(),
+            tracker: tokio_util::task::TaskTracker::new(),
         },
         storage,
         inner,
@@ -87,6 +88,7 @@ async fn stored(files: &SnapshotFiles, inner: &InMemoryBlobStorage) -> Option<Ve
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_publish_writes_the_staged_file() {
     let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
 
@@ -99,6 +101,7 @@ async fn a_publish_writes_the_staged_file() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_publish_of_a_file_that_is_there_succeeds_and_keeps_the_file() {
     let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
     let tracker = TaskTracker::new();
@@ -113,6 +116,7 @@ async fn a_publish_of_a_file_that_is_there_succeeds_and_keeps_the_file() {
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_publish_whose_answer_is_lost_deletes_the_file_and_gives_the_error() {
     let (files, storage, inner) =
         files(Script::LoseTheAnswer, Script::Pass, Duration::from_secs(2));
@@ -188,6 +192,7 @@ async fn a_publish_that_the_caller_drops_deletes_the_file_in_a_task_of_the_track
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_publish_that_returns_keeps_the_file_when_the_tasks_of_the_tracker_end() {
     let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
     let tracker = TaskTracker::new();
@@ -207,6 +212,7 @@ async fn a_publish_that_returns_keeps_the_file_when_the_tasks_of_the_tracker_end
 }
 
 #[test]
+#[timeout("60s")]
 async fn a_retract_of_a_path_without_a_file_succeeds() {
     let (files, _, _) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
 

@@ -18,10 +18,10 @@
 //! runtime that the backend holds, as the threads of rustic are not.
 
 use super::super::fault::{Operation, OperationCancelled, classify, is_config_exists};
-use super::super::holding::{holding_storage, reached_deadline};
 use super::super::publish::{SnapshotStage, StagedSnapshot};
-use super::super::scripted::{Script, ScriptedBlobStorage};
-use super::{BlobBackend, file_size};
+use super::super::tests::holding::{holding_storage, reached_deadline};
+use super::super::tests::scripted::{Script, ScriptedBlobStorage};
+use super::{BlobBackend, Lease, file_size};
 use crate::filesystem_snapshot::SnapshotStoreError;
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::anyhow;
@@ -490,8 +490,9 @@ fn pack_content() -> Vec<u8> {
     (0..100).collect()
 }
 
-/// A backend over a storage that holds one pack at the path of the id `ab`, with the rule of
-/// the storage and the limit of the kept packs. The storage records each call.
+/// A backend over a storage that holds one pack at the path of the id `ab` and one at the path of
+/// the id `cd`, with the rule of the storage and the limit of the kept packs. The storage records
+/// each call.
 struct PackFixture {
     _runtime: Runtime,
     storage: Arc<ScriptedBlobStorage>,
@@ -503,15 +504,17 @@ impl PackFixture {
         let runtime = Runtime::new().unwrap();
         let inner = Arc::new(InMemoryBlobStorage::new());
         let namespace = new_namespace();
-        runtime
-            .block_on(inner.put_raw(
-                "test",
-                "test",
-                namespace.clone(),
-                Path::new(&format!("data/ab/{}", "ab".repeat(32))),
-                &pack_content(),
-            ))
-            .unwrap();
+        ["ab", "cd"].iter().for_each(|pack| {
+            runtime
+                .block_on(inner.put_raw(
+                    "test",
+                    "test",
+                    namespace.clone(),
+                    Path::new(&format!("data/{pack}/{}", pack.repeat(32))),
+                    &pack_content(),
+                ))
+                .unwrap();
+        });
         let storage = ScriptedBlobStorage::new(inner, rule);
         let backend = BlobBackend::new(
             storage.clone(),
@@ -596,8 +599,8 @@ fn a_range_that_is_not_cacheable_is_a_ranged_read_each_time() {
 
 #[test]
 fn two_threads_that_miss_one_pack_make_one_storage_read() {
-    // The first read waits at the gate. The second thread starts while it waits, and the gate
-    // opens only after the second thread had time to ask for the pack.
+    // The first read waits at the gate. The gate opens only when the second thread waits for that
+    // read, or when the second thread reads the pack itself.
     let fixture = PackFixture::new(1024, |op_label, _| {
         if op_label == "read" {
             Script::WaitForGate
@@ -617,17 +620,22 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
         let backend = fixture.backend.clone();
         move || tree_range(&backend, 50, 10).ok()
     });
-    std::thread::sleep(Duration::from_millis(200));
+    let second_asked = (0..1000).any(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        fixture.backend.kept.waiters() == 1 || fixture.pack_calls().len() > 1
+    });
     fixture.storage.open_gate();
 
     assert_eq!(
         (
             first_read_started,
+            second_asked,
             first.recv_timeout(LIMIT).ok().flatten(),
             second.recv_timeout(LIMIT).ok().flatten(),
             fixture.pack_calls()
         ),
         (
+            true,
             true,
             Some(Bytes::from_iter(0..10)),
             Some(Bytes::from_iter(50..60)),
@@ -637,7 +645,7 @@ fn two_threads_that_miss_one_pack_make_one_storage_read() {
 }
 
 #[test]
-fn a_pack_over_the_limit_is_read_again_at_its_next_range() {
+fn a_pack_over_the_limit_is_read_whole_one_time_and_its_next_range_is_a_ranged_read() {
     let fixture = PackFixture::new(99, |_, _| Script::Pass);
     let backend = fixture.backend.clone();
 
@@ -655,7 +663,73 @@ fn a_pack_over_the_limit_is_read_again_at_its_next_range() {
                 Some(Bytes::from_iter(0..10)),
                 Some(Bytes::from_iter(20..30))
             )),
-            vec!["read", "read"]
+            vec!["read", "read_range"]
+        )
+    );
+}
+
+#[test]
+fn a_pack_that_does_not_fit_below_the_limit_is_read_whole_one_time_and_then_by_its_ranges() {
+    // The first pack is kept, and its 100 bytes stay below the limit of 150. The second pack does
+    // not fit, so it is read whole one time and not kept.
+    let fixture = PackFixture::new(150, |_, _| Script::Pass);
+    let backend = fixture.backend.clone();
+
+    let ranges = within_limit(move || {
+        let second = |offset| {
+            backend
+                .read_partial(FileType::Pack, &id("cd"), true, offset, 10)
+                .ok()
+        };
+        (
+            tree_range(&backend, 0, 10).ok(),
+            second(20),
+            second(40),
+            second(60),
+            tree_range(&backend, 80, 10).ok(),
+        )
+    });
+
+    assert_eq!(
+        (ranges, fixture.pack_calls()),
+        (
+            Some((
+                Some(Bytes::from_iter(0..10)),
+                Some(Bytes::from_iter(20..30)),
+                Some(Bytes::from_iter(40..50)),
+                Some(Bytes::from_iter(60..70)),
+                Some(Bytes::from_iter(80..90))
+            )),
+            vec!["read", "read", "read_range", "read_range"]
+        )
+    );
+}
+
+#[test]
+fn once_the_kept_packs_fill_the_limit_a_range_of_another_pack_is_a_ranged_read() {
+    // The first pack fills the limit when it is kept.
+    let fixture = PackFixture::new(100, |_, _| Script::Pass);
+    let backend = fixture.backend.clone();
+
+    let ranges = within_limit(move || {
+        (
+            tree_range(&backend, 0, 10).ok(),
+            backend
+                .read_partial(FileType::Pack, &id("cd"), true, 20, 10)
+                .ok(),
+            tree_range(&backend, 40, 10).ok(),
+        )
+    });
+
+    assert_eq!(
+        (ranges, fixture.pack_calls()),
+        (
+            Some((
+                Some(Bytes::from_iter(0..10)),
+                Some(Bytes::from_iter(20..30)),
+                Some(Bytes::from_iter(40..50))
+            )),
+            vec!["read", "read_range"]
         )
     );
 }
@@ -768,10 +842,33 @@ fn a_cancelled_backend_makes_no_storage_call() {
 }
 
 #[test]
+fn a_marker_write_that_starts_at_the_end_of_the_lease_does_not_move_it_and_one_that_starts_before_does()
+ {
+    let end = Instant::now() + Duration::from_secs(60);
+    let span = Duration::from_secs(10);
+    let at_the_end = Lease::until(end);
+    let just_before = Lease::until(end);
+
+    at_the_end.extend_from(end, span);
+    just_before.extend_from(end - Duration::from_nanos(1), span);
+
+    assert_eq!(
+        (at_the_end.expiry(), just_before.expiry()),
+        (end, end - Duration::from_nanos(1) + span)
+    );
+}
+
+#[test]
 fn a_cancel_ends_a_call_that_runs() {
     let runtime = Runtime::new().unwrap();
-    let (storage, _gate, _dropped) =
-        holding_storage(Arc::new(InMemoryBlobStorage::new()), |_, _| true);
+    let held = CancellationToken::new();
+    let (storage, _gate, _dropped) = holding_storage(Arc::new(InMemoryBlobStorage::new()), {
+        let held = held.clone();
+        move |_, _| {
+            held.cancel();
+            true
+        }
+    });
     let cancel = CancellationToken::new();
     let backend = BlobBackend::new(
         storage,
@@ -781,7 +878,7 @@ fn a_cancel_ends_a_call_that_runs() {
     )
     .cancelled_by(cancel.clone());
     runtime.spawn(async move {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        held.cancelled().await;
         cancel.cancel();
     });
 

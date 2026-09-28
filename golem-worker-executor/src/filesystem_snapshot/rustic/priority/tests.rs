@@ -58,6 +58,29 @@ fn work_at_low_priority_runs_at_nice_19_in_a_pool_of_its_own_and_the_caller_keep
 }
 
 #[test]
+fn work_whose_priority_step_does_nothing_runs_on_its_own_thread_in_a_pool_of_its_own() {
+    // Off Linux, the step that lowers the priority does nothing. The rest of the path is the same
+    // on each platform.
+    let before = own_nice();
+    let low_priority = LowPriority {
+        lower: || Ok(()),
+        ..LowPriority::new(NonZeroUsize::new(2))
+    };
+
+    let inside = low_priority.run("fs-snap-test", seen);
+
+    assert_eq!(
+        inside.ok().map(|(nice, name, in_pool, threads)| (
+            nice,
+            name.is_some_and(|name| name.starts_with("fs-snap-test-")),
+            in_pool,
+            threads
+        )),
+        Some((before, true, true, 2))
+    );
+}
+
+#[test]
 fn work_whose_priority_cannot_be_lowered_still_runs_at_the_normal_priority() {
     let before = own_nice();
     let low_priority = LowPriority {
