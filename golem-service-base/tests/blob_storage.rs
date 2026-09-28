@@ -3355,7 +3355,7 @@ async fn exists_on_a_blob_that_also_has_blobs_below_gives_a_file(
 #[test]
 #[tracing::instrument]
 async fn a_read_at_a_root_path_finds_no_blob(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3411,13 +3411,33 @@ async fn a_read_at_a_root_path_finds_no_blob(
             None,
             "get_raw_slice({root_path:?})"
         );
+
+        // A length of zero and a length of one byte, because the S3 backend reads the head of
+        // the object for the first and the object for the second.
+        for length in [0, 1] {
+            assert!(
+                storage
+                    .get_range_stream(
+                        label,
+                        "get-range-stream",
+                        namespace.clone(),
+                        path,
+                        0,
+                        length
+                    )
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "get_range_stream({root_path:?}, 0, {length})"
+            );
+        }
     }
 }
 
 #[test]
 #[tracing::instrument]
 async fn a_write_at_a_root_path_is_an_error(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3427,12 +3447,16 @@ async fn a_write_at_a_root_path_is_an_error(
     for root_path in ROOT_PATHS {
         let path = Path::new(root_path);
 
-        assert!(
+        assert_eq!(
             storage
                 .put_raw(label, "put-raw", namespace.clone(), path, &data)
                 .await
-                .is_err(),
-            "put_raw({root_path:?}) wrote a blob"
+                .err()
+                .and_then(name_error),
+            Some(BlobNameError::NoName {
+                path: PathBuf::new()
+            }),
+            "put_raw({root_path:?})"
         );
 
         let stream = (&data)
@@ -3440,12 +3464,16 @@ async fn a_write_at_a_root_path_is_an_error(
             .map_error(widen_infallible)
             .erased();
 
-        assert!(
+        assert_eq!(
             storage
                 .put_stream(label, "put-stream", namespace.clone(), path, &stream)
                 .await
-                .is_err(),
-            "put_stream({root_path:?}) wrote a blob"
+                .err()
+                .and_then(name_error),
+            Some(BlobNameError::NoName {
+                path: PathBuf::new()
+            }),
+            "put_stream({root_path:?})"
         );
 
         assert_eq!(
@@ -3470,7 +3498,7 @@ async fn a_write_at_a_root_path_is_an_error(
 #[test]
 #[tracing::instrument]
 async fn a_delete_at_a_root_path_deletes_no_blob(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3517,7 +3545,7 @@ async fn a_delete_at_a_root_path_deletes_no_blob(
 #[test]
 #[tracing::instrument]
 async fn a_copy_or_a_move_at_a_root_path_is_an_error(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3536,7 +3564,7 @@ async fn a_copy_or_a_move_at_a_root_path_is_an_error(
 
     for root_path in ROOT_PATHS {
         for (from, to) in [(root_path, "blob"), ("blob", root_path)] {
-            assert!(
+            assert_eq!(
                 storage
                     .copy(
                         label,
@@ -3546,11 +3574,15 @@ async fn a_copy_or_a_move_at_a_root_path_is_an_error(
                         Path::new(to)
                     )
                     .await
-                    .is_err(),
+                    .err()
+                    .and_then(name_error),
+                Some(BlobNameError::NoName {
+                    path: PathBuf::new()
+                }),
                 "copy({from:?}, {to:?})"
             );
 
-            assert!(
+            assert_eq!(
                 storage
                     .r#move(
                         label,
@@ -3560,7 +3592,11 @@ async fn a_copy_or_a_move_at_a_root_path_is_an_error(
                         Path::new(to)
                     )
                     .await
-                    .is_err(),
+                    .err()
+                    .and_then(name_error),
+                Some(BlobNameError::NoName {
+                    path: PathBuf::new()
+                }),
                 "move({from:?}, {to:?})"
             );
         }

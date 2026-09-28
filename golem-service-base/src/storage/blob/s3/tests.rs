@@ -17,6 +17,7 @@ use super::{
     read_body,
 };
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
+use crate::replayable_stream::ReplayableStream;
 use crate::storage::blob::{
     BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
     ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment,
@@ -45,6 +46,7 @@ use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::widen_infallible;
 use http_body::Frame;
 use http_body_util::StreamBody;
 use pretty_assertions::assert_eq;
@@ -2089,39 +2091,198 @@ async fn get_metadata_gives_none_for_a_missing_name_whose_marker_does_not_fit_th
     );
 }
 
-#[test]
-async fn the_marker_key_of_a_root_path_has_one_separator() {
-    // The key of a root path is the prefix of the namespace and a `/` after it, so a marker
-    // key that always puts a separator of its own before the marker would have `//` in it.
-    // MinIO rejects such a key with `XMinioInvalidObjectName`, and no rule of `BlobNameError`
-    // reads the marker key, so nothing else would catch it. `get_metadata` is the one method
-    // that reads the marker of a root path: `exists` gives `Directory` for such a path and
-    // sends no request, and `create_dir` leaves no directory at the root.
-    let prefix = namespace_prefix();
-    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, ""));
+/// The answer of one operation at a root path, and the number of requests that it sent. An
+/// answer is the text of the value, or the `BlobNameError` of the error.
+type RootAnswer = (&'static str, Result<String, Option<BlobNameError>>, usize);
 
-    let root = storage
-        .get_metadata("test", "get-metadata", namespace(), Path::new(""))
+/// Runs the call, and gives its answer and the number of requests that it sent.
+async fn root_answer<T: Debug>(
+    requests: &SentRequests,
+    operation: &'static str,
+    call: impl Future<Output = anyhow::Result<T>>,
+) -> RootAnswer {
+    let before = sent(requests).len();
+    let answer = call
         .await
-        .map(|metadata| metadata.is_some())
+        .map(|value| format!("{value:?}"))
         .map_err(name_error);
+    (operation, answer, sent(requests).len() - before)
+}
 
-    assert_eq!(
-        (
-            root,
-            sent(&requests)
-                .iter()
-                .map(|request| request.uri.clone())
-                .collect::<Vec<_>>()
-        ),
-        (
-            Ok(false),
-            vec![
-                format!("http://s3.test/custom-data/{prefix}/"),
-                format!("http://s3.test/custom-data/{prefix}/__dir_marker"),
-            ]
+/// Gives the answer of each operation that reads, writes or deletes a blob at `root`, and of
+/// `create_dir`, `delete_dir` and `exists` at `root`.
+async fn root_answers(
+    storage: &S3BlobStorage,
+    requests: &SentRequests,
+    root: &'static str,
+) -> Vec<RootAnswer> {
+    let path = Path::new(root);
+    let data = b"payload".to_vec();
+    let stream = (&data)
+        .map_item(|item| item.map_err(widen_infallible))
+        .map_error(widen_infallible)
+        .erased();
+    let label = "test";
+    vec![
+        root_answer(
+            requests,
+            "get_raw",
+            storage.get_raw(label, "get-raw", namespace(), path),
         )
-    );
+        .await,
+        root_answer(requests, "get_stream", async {
+            storage
+                .get_stream(label, "get-stream", namespace(), path)
+                .await
+                .map(|stream| stream.is_some())
+        })
+        .await,
+        root_answer(requests, "get_range_stream(0, 0)", async {
+            storage
+                .get_range_stream(label, "get-range-stream", namespace(), path, 0, 0)
+                .await
+                .map(|stream| stream.is_some())
+        })
+        .await,
+        root_answer(requests, "get_range_stream(0, 1)", async {
+            storage
+                .get_range_stream(label, "get-range-stream", namespace(), path, 0, 1)
+                .await
+                .map(|stream| stream.is_some())
+        })
+        .await,
+        root_answer(
+            requests,
+            "get_raw_slice",
+            storage.get_raw_slice(label, "get-raw-slice", namespace(), path, 0, 0),
+        )
+        .await,
+        root_answer(requests, "get_metadata", async {
+            storage
+                .get_metadata(label, "get-metadata", namespace(), path)
+                .await
+                .map(|metadata| metadata.is_some())
+        })
+        .await,
+        root_answer(
+            requests,
+            "put_raw",
+            storage.put_raw(label, "put-raw", namespace(), path, &data),
+        )
+        .await,
+        root_answer(
+            requests,
+            "put_raw_if_absent",
+            storage.put_raw_if_absent(label, "put-raw-if-absent", namespace(), path, &data),
+        )
+        .await,
+        root_answer(
+            requests,
+            "put_stream",
+            storage.put_stream(label, "put-stream", namespace(), path, &stream),
+        )
+        .await,
+        root_answer(
+            requests,
+            "delete",
+            storage.delete(label, "delete", namespace(), path),
+        )
+        .await,
+        root_answer(
+            requests,
+            "delete_many",
+            storage.delete_many(label, "delete-many", namespace(), &[path.to_path_buf()]),
+        )
+        .await,
+        root_answer(
+            requests,
+            "create_dir",
+            storage.create_dir(label, "create-dir", namespace(), path),
+        )
+        .await,
+        root_answer(
+            requests,
+            "delete_dir",
+            storage.delete_dir(label, "delete-dir", namespace(), path),
+        )
+        .await,
+        root_answer(
+            requests,
+            "exists",
+            storage.exists(label, "exists", namespace(), path),
+        )
+        .await,
+        root_answer(
+            requests,
+            "copy from the root",
+            storage.copy(label, "copy", namespace(), path, Path::new("blob")),
+        )
+        .await,
+        root_answer(
+            requests,
+            "copy to the root",
+            storage.copy(label, "copy", namespace(), Path::new("blob"), path),
+        )
+        .await,
+        root_answer(
+            requests,
+            "move from the root",
+            storage.r#move(label, "move", namespace(), path, Path::new("blob")),
+        )
+        .await,
+        root_answer(
+            requests,
+            "move to the root",
+            storage.r#move(label, "move", namespace(), Path::new("blob"), path),
+        )
+        .await,
+    ]
+}
+
+#[test]
+async fn a_root_path_sends_no_request() {
+    // A root path is a directory, so the trait documents each answer at it without a look at
+    // the bucket. The script answers each request with an object, so an operation that sends a
+    // request at a root path finds something there and gives another answer.
+    let (storage, requests) = scripted_storage("", |_, _| Answer {
+        last_modified: Some("Wed, 21 Oct 2015 07:28:00 GMT"),
+        ..Answer::new(200, "x")
+    });
+    let roots = ["", ".", "./", "././"];
+
+    let answers = futures::stream::iter(roots)
+        .then(|root| root_answers(&storage, &requests, root))
+        .collect::<Vec<_>>()
+        .await;
+
+    let no_name = || {
+        Err(Some(BlobNameError::NoName {
+            path: PathBuf::new(),
+        }))
+    };
+    let expected = roots.map(|_| {
+        vec![
+            ("get_raw", Ok("None".to_string()), 0),
+            ("get_stream", Ok("false".to_string()), 0),
+            ("get_range_stream(0, 0)", Ok("false".to_string()), 0),
+            ("get_range_stream(0, 1)", Ok("false".to_string()), 0),
+            ("get_raw_slice", Ok("None".to_string()), 0),
+            ("get_metadata", Ok("false".to_string()), 0),
+            ("put_raw", no_name(), 0),
+            ("put_raw_if_absent", no_name(), 0),
+            ("put_stream", no_name(), 0),
+            ("delete", Ok("()".to_string()), 0),
+            ("delete_many", Ok("()".to_string()), 0),
+            ("create_dir", Ok("()".to_string()), 0),
+            ("delete_dir", Ok("false".to_string()), 0),
+            ("exists", Ok("Directory".to_string()), 0),
+            ("copy from the root", no_name(), 0),
+            ("copy to the root", no_name(), 0),
+            ("move from the root", no_name(), 0),
+            ("move to the root", no_name(), 0),
+        ]
+    });
+    assert_eq!(answers, expected.to_vec());
 }
 
 #[test]
