@@ -15,7 +15,9 @@
 package golem
 
 import (
+	"fmt"
 	"reflect"
+	"slices"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -103,6 +105,21 @@ func (d *definitions) structFields(t reflect.Type) []fieldInfo {
 		})
 	}
 	return out
+}
+
+// paramsTypeProblem explains why t cannot carry a method's parameters, or
+// returns "". The parameters are t's exported fields, so t must be a struct,
+// and one with fields that are all unexported — a stream, an option, or any
+// other value type — would publish none.
+func paramsTypeProblem(t reflect.Type) string {
+	const want = "In must be a struct whose exported fields are the parameters (golem.Unit for none)"
+	if t.Kind() != reflect.Struct {
+		return fmt.Sprintf("%s, got %s", want, t)
+	}
+	if t.NumField() > 0 && !slices.ContainsFunc(reflect.VisibleFields(t), func(f reflect.StructField) bool { return f.IsExported() }) {
+		return fmt.Sprintf("%s; %s has none, so wrap it in a struct field", want, t)
+	}
+	return ""
 }
 
 func lowerFirst(s string) string {
@@ -364,6 +381,9 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	// Codecs are compiled once, here at registration — not per invocation.
 	inType := reflect.TypeFor[In]()
 	outType := reflect.TypeFor[Out]()
+	if problem := paramsTypeProblem(inType); problem != "" {
+		d.recordErr(e.name, m.name, "method %q: %s", m.name, problem)
+	}
 	me := &methodEntry{name: m.name, desc: m.desc, inFields: d.structFields(inType), endpoints: m.endpoints, readOnly: m.readOnly}
 	if outType != reflect.TypeFor[Unit]() {
 		me.outCodec = d.compile(outType)

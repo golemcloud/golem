@@ -34,7 +34,7 @@ import (
 //	    Times golem.Opt[int32]
 //	}
 //
-//	var Greet = Greeter.Command[GreetArgs, string]("greet", GreetArgs{
+//	var Greet = golem.Command[GreetArgs, string](Greeter, []string{"greet"}, GreetArgs{
 //	    Name:  golem.Positional[string]{Doc: "who to greet"},
 //	    Loud:  golem.Flag{Short: 'l', Doc: "shout the greeting"},
 //	    Times: golem.Opt[int32]{Short: 'n', Default: Some(int32(1))},

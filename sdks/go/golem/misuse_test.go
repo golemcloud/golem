@@ -122,6 +122,19 @@ func TestMisuseNilHandler(t *testing.T) {
 
 // --- method-level misuse ----------------------------------------------------
 
+// TestMisuseNonStructMethodInput — a method's parameters are the fields of In,
+// so a bare type such as a stream would silently publish no parameters.
+func TestMisuseNonStructMethodInput(t *testing.T) {
+	type Id struct{ Name string }
+	type St struct{}
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
+		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+		impl.Handle(def.Method[AgentStream[string], int64]("count"), func(*Context[St], AgentStream[string]) int64 { return 0 })
+		mustDefErr(t, d, "wrap it in a struct field")
+	})
+}
+
 func TestMisuseEmptyMethodName(t *testing.T) {
 	type Id struct{ Name string }
 	type St struct{}

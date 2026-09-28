@@ -34,7 +34,7 @@ import (
 //	    Summary: "Greets people",
 //	})
 //
-//	var Greet = golem.Command[GreetArgs, string](Greeter, "greet", GreetArgs{...})
+//	var Greet = golem.Command[GreetArgs, string](Greeter, []string{"greet"}, GreetArgs{...})
 //
 //	var _ = golem.HandleCommand(Greet, func(ctx *golem.ToolContext, in GreetArgs) string {
 //	    return "hi " + in.Name.Get()

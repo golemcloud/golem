@@ -149,6 +149,9 @@ func (m MethodDef[Id, In, Out]) encodeInput(in In) (tree types.SchemaValueTree, 
 		}
 	}()
 	inType := reflect.TypeFor[In]()
+	if problem := paramsTypeProblem(inType); problem != "" {
+		return tree, fmt.Errorf("golem: %s: %s", m.name, problem)
+	}
 	return encodeParams(defs.structFields(inType), reflect.ValueOf(&in).Elem()), nil
 }
 

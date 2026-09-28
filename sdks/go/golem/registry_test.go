@@ -64,13 +64,14 @@ func TestImplementRegistersMethods(t *testing.T) {
 	type St struct{ n int64 }
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "Counter"})
-		add := def.Method[int64, int64]("add", Desc("adds to the counter"))
+		type AddIn struct{ N int64 }
+		add := def.Method[AddIn, int64]("add", Desc("adds to the counter"))
 		get := def.Method[Unit, int64]("get")
 
 		// Implement binds the constructor + returns the handle; Handle registers each
 		// method, In/Out inferred from the handler and tied to the agent's Id + St.
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-		impl.Handle(add, func(ctx *Context[St], in int64) int64 { ctx.State.n += in; return ctx.State.n })
+		impl.Handle(add, func(ctx *Context[St], in AddIn) int64 { ctx.State.n += in.N; return ctx.State.n })
 		impl.Handle(get, Bind0(func(s *St) int64 { return s.n })) // method-expression style
 
 		e := d.agents["Counter"]
