@@ -83,6 +83,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 mod middleware_acceptance;
 mod moonbit_exports;
+mod trapped_leaf_observers;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

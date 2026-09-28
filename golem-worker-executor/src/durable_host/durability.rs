@@ -2308,33 +2308,21 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     }
 
     fn create_interrupt_signal(&self) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
-        // Synthetic deadline broadcasts only reach subscribers that already exist, so a signal
-        // is created before checking the latches. That closes the check-before-subscribe race: a
-        // deadline either sets its latch first or broadcasts to this subscription. A real external
-        // interrupt keeps precedence over either synthetic deadline.
-        let interrupt_signal = {
-            let status = self.execution_status.read().unwrap();
-            status.create_await_interrupt_signal()
-        };
-        let entity_cancellation = self.entity_cancellation();
-        if self
-            .state
-            .invocation_deadline_exceeded
-            .load(std::sync::atomic::Ordering::Acquire)
-            || self
-                .state
-                .tail_work_deadline_exceeded
+        let interrupt_signal = subscribe_interrupt_with_latch(&self.execution_status, || {
+            self.state
+                .invocation_deadline_exceeded
                 .load(std::sync::atomic::Ordering::Acquire)
-        {
-            let status = self.execution_status.read().unwrap();
-            if matches!(&*status, ExecutionStatus::Interrupting { .. }) {
-                return status.create_await_interrupt_signal();
-            }
-            return Box::pin(std::future::ready(InterruptKind::Interrupt(
-                Timestamp::now_utc(),
-            )));
-        }
-        match entity_cancellation {
+                || self
+                    .state
+                    .tail_work_deadline_exceeded
+                    .load(std::sync::atomic::Ordering::Acquire)
+                || self
+                    .owner_execution
+                    .tool_operations()
+                    .interruptible_owner_failure()
+                    .is_some()
+        });
+        match self.entity_cancellation() {
             Some(cancellation) => Box::pin(async move {
                 tokio::select! {
                     biased;
@@ -2351,6 +2339,27 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
     fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
         DurableWorkerCtx::check_read_only_allows(self, host_function)
     }
+}
+
+fn subscribe_interrupt_with_latch(
+    execution_status: &std::sync::RwLock<ExecutionStatus>,
+    interrupted: impl FnOnce() -> bool,
+) -> Pin<Box<dyn Future<Output = InterruptKind> + Send>> {
+    // Subscribe before checking synthetic interrupts: either the latch or the broadcast wins.
+    let interrupt_signal = execution_status
+        .read()
+        .unwrap()
+        .create_await_interrupt_signal();
+    if interrupted() {
+        let status = execution_status.read().unwrap();
+        if matches!(&*status, ExecutionStatus::Interrupting { .. }) {
+            return status.create_await_interrupt_signal();
+        }
+        return Box::pin(std::future::ready(InterruptKind::Interrupt(
+            Timestamp::now_utc(),
+        )));
+    }
+    interrupt_signal
 }
 
 #[derive(Debug)]
@@ -2767,6 +2776,40 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use test_r::test;
+
+    #[test]
+    async fn synthetic_interrupt_latch_covers_late_and_concurrent_subscribers() {
+        use futures::FutureExt;
+        let signal = Arc::new(tokio::sync::broadcast::channel(1).0);
+        let status = std::sync::RwLock::new(ExecutionStatus::Running {
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+            timestamp: Timestamp::now_utc(),
+            interrupt_signal: signal.clone(),
+        });
+        assert!(signal.send(InterruptKind::Restart).is_err());
+        assert!(matches!(
+            subscribe_interrupt_with_latch(&status, || true).now_or_never(),
+            Some(InterruptKind::Interrupt(_))
+        ));
+        let concurrent = subscribe_interrupt_with_latch(&status, || {
+            signal.send(InterruptKind::Restart).unwrap();
+            false
+        });
+        assert!(matches!(
+            concurrent.now_or_never(),
+            Some(InterruptKind::Restart)
+        ));
+        *status.write().unwrap() = ExecutionStatus::Interrupting {
+            interrupt_kind: InterruptKind::ShardLost,
+            await_interruption: Arc::new(tokio::sync::broadcast::channel(1).0),
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+            timestamp: Timestamp::now_utc(),
+        };
+        assert!(matches!(
+            subscribe_interrupt_with_latch(&status, || true).now_or_never(),
+            Some(InterruptKind::ShardLost)
+        ));
+    }
 
     #[test]
     fn custom_invocation_ids_are_stable_and_unique_within_the_root_namespace() {
