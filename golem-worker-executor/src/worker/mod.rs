@@ -31,6 +31,7 @@ mod invocation_loop;
 mod lifecycle;
 pub mod owner_lane;
 pub mod read_only_cache;
+pub(crate) mod snapshot_selection;
 mod state_actor;
 pub mod status;
 pub mod status_checkpointer;
@@ -101,6 +102,9 @@ use crate::services::{
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
+};
+use crate::worker::snapshot_selection::{
+    AutomaticSnapshotFilter, component_revision_for_replay, select_automatic_snapshot,
 };
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, calculate_revert_validation_regions,
@@ -645,8 +649,13 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     snapshot_policy: SnapshotPolicy,
 
     last_resume_request: Mutex<Timestamp>,
-    pub(crate) rejected_periodic_snapshot_through: AtomicU64,
-    pub(crate) unavailable_periodic_snapshot_through: AtomicU64,
+    /// The automatic snapshot entries whose application snapshot did not load or whose replay
+    /// diverged. A start never selects them. The start that rejects one persists it for the
+    /// incarnation after its fallback succeeds.
+    pub(crate) rejected_periodic_snapshots: StdMutex<HashSet<OplogIndex>>,
+    /// The automatic snapshot entries whose payload or filesystem snapshot the current start
+    /// attempt could not get. A start skips them, and a new start attempt clears them.
+    pub(crate) unavailable_periodic_snapshots: StdMutex<HashSet<OplogIndex>>,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
     memory_limit_interrupt_queued: AtomicBool,
@@ -982,6 +991,14 @@ fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Whether this executor restores filesystem snapshots.
+    fn filesystem_snapshots_enabled(&self) -> bool {
+        matches!(
+            self.deps.config().filesystem_snapshots,
+            crate::services::golem_config::FilesystemSnapshotsConfig::Managed(_)
+        )
+    }
+
     pub(crate) async fn ensure_not_failed<T: HasAll<Ctx> + Send + Sync>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
@@ -1877,8 +1894,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             status_flusher,
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
-            rejected_periodic_snapshot_through: AtomicU64::new(0),
-            unavailable_periodic_snapshot_through: AtomicU64::new(0),
+            rejected_periodic_snapshots: StdMutex::new(HashSet::new()),
+            unavailable_periodic_snapshots: StdMutex::new(HashSet::new()),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
             memory_limit_interrupt_queued: AtomicBool::new(false),
@@ -2190,8 +2207,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let start_attempt =
                     existing_start_attempt.or_else(|| this.startup_attempt.pending());
                 if start_attempt.is_none() {
-                    this.unavailable_periodic_snapshot_through
-                        .store(0, Ordering::Release);
+                    this.unavailable_periodic_snapshots.lock().unwrap().clear();
                 }
                 let memory_requirement = match this.memory_requirement().await {
                     Ok(memory_requirement) => memory_requirement,
@@ -7235,23 +7251,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
 
-        if let Some(rejected) = self
+        let rejected = self
             .worker_service()
-            .get_rejected_periodic_snapshot_through(
+            .get_rejected_periodic_snapshots(
                 &self.owned_agent_id,
                 self.initial_worker_metadata.fingerprint,
             )
-            .await?
-        {
-            self.rejected_periodic_snapshot_through
-                .fetch_max(rejected.into(), Ordering::AcqRel);
-        }
+            .await?;
+        self.rejected_periodic_snapshots
+            .lock()
+            .unwrap()
+            .extend(rejected);
+        let rejected_periodic_snapshots = self.rejected_periodic_snapshots.lock().unwrap().clone();
 
         let replay_revision = component_revision_for_replay(
             status,
-            pending_update.is_some(),
-            self.rejected_periodic_snapshot_through
-                .load(Ordering::Acquire),
+            AutomaticSnapshotFilter {
+                has_pending_update: pending_update.is_some(),
+                rejected: &rejected_periodic_snapshots,
+                unavailable: &HashSet::new(),
+                filesystem_snapshots_enabled: self.filesystem_snapshots_enabled(),
+            },
         );
         let replay_component = if active_component.revision == replay_revision {
             active_component.clone()
@@ -9112,36 +9132,39 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
-        if let Some(rejected) = parent
+        let rejected = parent
             .worker_service()
-            .get_rejected_periodic_snapshot_through(
+            .get_rejected_periodic_snapshots(
                 &parent.owned_agent_id,
                 parent.initial_worker_metadata.fingerprint,
             )
-            .await?
-        {
-            parent
-                .rejected_periodic_snapshot_through
-                .fetch_max(rejected.into(), Ordering::AcqRel);
-        }
+            .await?;
+        parent
+            .rejected_periodic_snapshots
+            .lock()
+            .unwrap()
+            .extend(rejected);
+        let rejected_periodic_snapshots =
+            parent.rejected_periodic_snapshots.lock().unwrap().clone();
 
-        let rejected_or_unavailable_snapshot_through = parent
-            .rejected_periodic_snapshot_through
-            .load(Ordering::Acquire)
-            .max(
-                parent
-                    .unavailable_periodic_snapshot_through
-                    .load(Ordering::Acquire),
-            );
-        let automatic_snapshot = automatic_snapshot_for_replay(
+        let unavailable_periodic_snapshots = parent
+            .unavailable_periodic_snapshots
+            .lock()
+            .unwrap()
+            .clone();
+        let automatic_snapshot_filter = AutomaticSnapshotFilter {
+            has_pending_update: pending_update.is_some(),
+            rejected: &rejected_periodic_snapshots,
+            unavailable: &unavailable_periodic_snapshots,
+            filesystem_snapshots_enabled: parent.filesystem_snapshots_enabled(),
+        };
+        let automatic_snapshot = select_automatic_snapshot(
             &worker_metadata.last_known_status,
-            pending_update.is_some(),
-            rejected_or_unavailable_snapshot_through,
+            automatic_snapshot_filter,
         );
         let component_version_for_replay = component_revision_for_replay(
             &worker_metadata.last_known_status,
-            pending_update.is_some(),
-            rejected_or_unavailable_snapshot_through,
+            automatic_snapshot_filter,
         );
 
         let component_metadata_for_replay =
@@ -9172,7 +9195,7 @@ impl RunningWorker {
         // Only snapshots newer than the rejection watermark and matching the active revision
         // are eligible. Pending updates temporarily ignore them so compatibility
         // is established by replaying from the authoritative manual-update baseline.
-        if let Some((snapshot_idx, _)) = automatic_snapshot {
+        if let Some(snapshot_idx) = automatic_snapshot.as_ref().map(|snapshot| snapshot.index) {
             let snapshot_skip =
                 DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
                     OplogIndex::INITIAL.next()..=snapshot_idx,
@@ -10087,45 +10110,6 @@ fn lookup_result_from_cached_result(
     }
 }
 
-fn automatic_snapshot_for_replay(
-    status: &AgentStatusRecord,
-    has_pending_update: bool,
-    rejected_or_unavailable_through: u64,
-) -> Option<(OplogIndex, ComponentRevision)> {
-    status
-        .last_automatic_snapshot_index
-        .zip(status.last_automatic_snapshot_component_revision)
-        .filter(|(_, snapshot_revision)| *snapshot_revision == status.component_revision)
-        .filter(|(index, _)| {
-            !has_pending_update && u64::from(*index) > rejected_or_unavailable_through
-        })
-}
-
-fn component_revision_for_replay(
-    status: &AgentStatusRecord,
-    has_pending_update: bool,
-    rejected_or_unavailable_snapshot_through: u64,
-) -> ComponentRevision {
-    automatic_snapshot_for_replay(
-        status,
-        has_pending_update,
-        rejected_or_unavailable_snapshot_through,
-    )
-    .map_or_else(
-        || {
-            status
-                .pending_updates
-                .front()
-                .and_then(|update| match update.kind {
-                    PendingUpdateKind::SnapshotBased => Some(update.target_revision),
-                    PendingUpdateKind::Automatic => None,
-                })
-                .unwrap_or(status.component_revision_for_replay)
-        },
-        |(_, snapshot_revision)| snapshot_revision,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -10265,12 +10249,21 @@ mod tests {
             ..Default::default()
         };
 
+        let unavailable = HashSet::new();
+        let rejected = HashSet::from([snapshot_index]);
+        let other = HashSet::from([OplogIndex::from_u64(9)]);
+        let filter = |rejected| AutomaticSnapshotFilter {
+            has_pending_update: false,
+            rejected,
+            unavailable: &unavailable,
+            filesystem_snapshots_enabled: false,
+        };
         assert_eq!(
-            component_revision_for_replay(&status, false, u64::from(snapshot_index)),
+            component_revision_for_replay(&status, filter(&rejected)),
             replay_revision
         );
         assert_eq!(
-            component_revision_for_replay(&status, false, u64::from(snapshot_index) - 1),
+            component_revision_for_replay(&status, filter(&other)),
             active_revision
         );
     }

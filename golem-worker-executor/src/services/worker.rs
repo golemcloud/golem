@@ -322,19 +322,23 @@ pub trait WorkerService: Send + Sync {
         owned_agent_id: &OwnedAgentId,
     ) -> Result<(), WorkerExecutorError>;
 
-    async fn get_rejected_periodic_snapshot_through(
+    /// Gives the indexes of the automatic snapshot entries that a start of the incarnation
+    /// `fingerprint` rejected.
+    async fn get_rejected_periodic_snapshots(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
-    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
-        Ok(None)
+    ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
+        Ok(HashSet::new())
     }
 
-    async fn reject_periodic_snapshots_through(
+    /// Adds `oplog_indexes` to the rejected automatic snapshot entries of the incarnation
+    /// `fingerprint`. A start never selects a rejected entry.
+    async fn reject_periodic_snapshots(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
-        _oplog_index: OplogIndex,
+        _oplog_indexes: &HashSet<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
         Err(WorkerExecutorError::runtime(
             "snapshot rejection storage is unavailable",
@@ -1368,53 +1372,68 @@ impl WorkerService for DefaultWorkerService {
             })
     }
 
-    async fn get_rejected_periodic_snapshot_through(
+    async fn get_rejected_periodic_snapshots(
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
-        let value: Option<Result<OplogIndex, String>> = self
+    ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
+        let value: Option<Result<Vec<OplogIndex>, String>> = self
             .key_value_storage
-            .with_entity(
-                "worker",
-                "get_rejected_periodic_snapshot_through",
-                "oplog_index",
-            )
+            .with_entity("worker", "get_rejected_periodic_snapshots", "oplog_indexes")
             .get_attempt_deserialize(
                 Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
                 &Self::rejected_periodic_snapshots_field(fingerprint),
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        value.transpose().map_err(WorkerExecutorError::runtime)
+        value
+            .transpose()
+            .map(|indexes| indexes.into_iter().flatten().collect())
+            .map_err(WorkerExecutorError::runtime)
     }
 
-    async fn reject_periodic_snapshots_through(
+    async fn reject_periodic_snapshots(
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-        oplog_index: OplogIndex,
+        oplog_indexes: &HashSet<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
         let namespace = Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id);
         let field = Self::rejected_periodic_snapshots_field(fingerprint);
         loop {
             let current = self
                 .key_value_storage
-                .with_entity("worker", "read_rejected_periodic_snapshot", "oplog_index")
+                .with_entity(
+                    "worker",
+                    "read_rejected_periodic_snapshots",
+                    "oplog_indexes",
+                )
                 .get_raw(namespace.clone(), &field)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
-            if let Some(current) = &current {
-                let current_index: OplogIndex =
-                    deserialize(current).map_err(WorkerExecutorError::runtime)?;
-                if current_index >= oplog_index {
-                    return Ok(());
-                }
+            let current_indexes: std::collections::BTreeSet<OplogIndex> = match &current {
+                Some(current) => deserialize::<Vec<OplogIndex>>(current)
+                    .map_err(WorkerExecutorError::runtime)?
+                    .into_iter()
+                    .collect(),
+                None => std::collections::BTreeSet::new(),
+            };
+            if oplog_indexes
+                .iter()
+                .all(|index| current_indexes.contains(index))
+            {
+                return Ok(());
             }
-            let encoded = serialize(&oplog_index).map_err(WorkerExecutorError::runtime)?;
+            let merged = current_indexes
+                .into_iter()
+                .chain(oplog_indexes.iter().copied())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let encoded = serialize(&merged).map_err(WorkerExecutorError::runtime)?;
             let updated = self
                 .key_value_storage
-                .with_entity("worker", "reject_periodic_snapshots_through", "oplog_index")
+                .with_entity("worker", "reject_periodic_snapshots", "oplog_indexes")
                 .compare_and_set_many_raw(
                     namespace.clone(),
                     &field,
@@ -2149,42 +2168,51 @@ mod tests {
     }
 
     #[test]
-    async fn rejected_periodic_snapshot_watermark_is_monotonic_and_incarnation_scoped() {
+    async fn rejected_periodic_snapshots_are_exact_indexes_and_incarnation_scoped() {
         let (service, _, owned_agent_id) = index_test_service(BTreeMap::new());
         let first = AgentFingerprint::new();
         let second = AgentFingerprint::new();
+        let expected = HashSet::from([OplogIndex::from_u64(7), OplogIndex::from_u64(12)]);
 
         service
-            .reject_periodic_snapshots_through(&owned_agent_id, first, OplogIndex::from_u64(12))
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                first,
+                &HashSet::from([OplogIndex::from_u64(12)]),
+            )
             .await
             .unwrap();
         service
-            .reject_periodic_snapshots_through(&owned_agent_id, first, OplogIndex::from_u64(7))
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                first,
+                &HashSet::from([OplogIndex::from_u64(7)]),
+            )
             .await
             .unwrap();
 
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .get_rejected_periodic_snapshots(&owned_agent_id, first)
                 .await
                 .unwrap(),
-            Some(OplogIndex::from_u64(12))
+            expected
         );
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, second)
+                .get_rejected_periodic_snapshots(&owned_agent_id, second)
                 .await
                 .unwrap(),
-            None
+            HashSet::new()
         );
 
         service.remove_cached_status(&owned_agent_id).await.unwrap();
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .get_rejected_periodic_snapshots(&owned_agent_id, first)
                 .await
                 .unwrap(),
-            Some(OplogIndex::from_u64(12))
+            expected
         );
 
         service
@@ -2198,10 +2226,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .get_rejected_periodic_snapshots(&owned_agent_id, first)
                 .await
                 .unwrap(),
-            None
+            HashSet::new()
         );
     }
 

@@ -1229,6 +1229,19 @@ impl Default for InvocationResultMembership {
     }
 }
 
+/// An automatic snapshot entry that a start can use as its baseline.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct UsableAutomaticSnapshot {
+    /// The index of the `Snapshot` entry.
+    pub index: OplogIndex,
+    /// The component revision that made the entry.
+    pub component_revision: ComponentRevision,
+    /// The filesystem snapshot name of the entry, which a `SnapshotConfirmed` entry confirmed.
+    /// `None` when the entry has no filesystem snapshot name.
+    pub filesystem_snapshot: Option<FilesystemSnapshotName>,
+}
+
 /// Contains status information about a worker according to a given oplog index.
 ///
 /// This status is just cached information, all fields must be computable by the oplog alone.
@@ -1286,6 +1299,12 @@ pub struct AgentStatusRecord {
     /// True when a `SnapshotConfirmed` entry with the same name follows the last automatic
     /// snapshot entry. The filesystem snapshot is a usable baseline only when this is true.
     pub last_automatic_snapshot_confirmed: bool,
+    /// The newest automatic snapshot entry before the last one that was usable when the last one
+    /// came: an entry with a confirmed filesystem snapshot, or an entry without a filesystem
+    /// snapshot name. A start uses it when the last automatic snapshot entry is not usable, or
+    /// when the filesystem snapshot of the last entry does not restore. A successful update clears
+    /// it together with the last automatic snapshot entry.
+    pub previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,
     /// The agent mode the worker was created with. Decided at create time and persisted in the
     /// `Create` oplog entry; immutable for the life of the worker. `#[transient]`: it is not part
     /// of the serialized record (it is persisted separately) and defaults to `Durable` on
@@ -1330,6 +1349,7 @@ impl Default for AgentStatusRecord {
             last_automatic_snapshot_component_revision: None,
             last_automatic_snapshot_filesystem_snapshot: None,
             last_automatic_snapshot_confirmed: false,
+            previous_usable_automatic_snapshot: None,
             agent_mode: AgentMode::Durable,
         }
     }

@@ -889,6 +889,11 @@ fn agent_status_record_agent_mode_is_not_serialized() {
         component_revision: ComponentRevision::new(7).unwrap(),
         component_size: 1234,
         received_card_transfers,
+        previous_usable_automatic_snapshot: Some(crate::model::UsableAutomaticSnapshot {
+            index: crate::model::oplog::OplogIndex::from_u64(5),
+            component_revision: ComponentRevision::new(7).unwrap(),
+            filesystem_snapshot: Some(crate::model::oplog::FilesystemSnapshotName::periodic()),
+        }),
         agent_mode: AgentMode::Ephemeral,
         ..AgentStatusRecord::default()
     };

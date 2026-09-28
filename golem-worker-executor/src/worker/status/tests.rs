@@ -51,7 +51,7 @@ use golem_common::model::{
     AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
     OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
     PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
-    SuccessfulUpdateRecord, Timestamp,
+    SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
 };
 use golem_common::read_only_lock;
 use golem_common::schema::IntoTypedSchemaValue;
@@ -1664,6 +1664,168 @@ async fn snapshot_confirmed_for_unknown_name_is_ignored() {
 }
 
 #[test]
+async fn a_new_snapshot_keeps_a_confirmed_candidate_as_the_previous_usable_snapshot() {
+    let first = FilesystemSnapshotName::periodic();
+    let second = FilesystemSnapshotName::periodic();
+
+    let test_case = TestCase::builder(1)
+        .snapshot_with_filesystem(Some(first.clone()))
+        .snapshot_confirmed(first.clone(), true)
+        .snapshot_with_filesystem(Some(second))
+        .build();
+    let final_status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(
+        final_status.previous_usable_automatic_snapshot,
+        Some(UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(2),
+            component_revision: ComponentRevision::new(1).unwrap(),
+            filesystem_snapshot: Some(first),
+        })
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn a_new_snapshot_keeps_a_candidate_without_a_name_as_the_previous_usable_snapshot() {
+    let test_case = TestCase::builder(1)
+        .snapshot()
+        .snapshot_with_filesystem(Some(FilesystemSnapshotName::periodic()))
+        .build();
+    let final_status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(
+        final_status.previous_usable_automatic_snapshot,
+        Some(UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(2),
+            component_revision: ComponentRevision::new(1).unwrap(),
+            filesystem_snapshot: None,
+        })
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn a_new_snapshot_after_an_unconfirmed_candidate_keeps_the_older_usable_snapshot() {
+    let first = FilesystemSnapshotName::periodic();
+
+    let test_case = TestCase::builder(1)
+        .snapshot_with_filesystem(Some(first.clone()))
+        .snapshot_confirmed(first.clone(), true)
+        .snapshot_with_filesystem(Some(FilesystemSnapshotName::periodic()))
+        .snapshot_with_filesystem(Some(FilesystemSnapshotName::periodic()))
+        .build();
+    let final_status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(
+        final_status
+            .previous_usable_automatic_snapshot
+            .as_ref()
+            .map(|snapshot| (snapshot.index, snapshot.filesystem_snapshot.clone())),
+        Some((OplogIndex::from_u64(2), Some(first)))
+    );
+    assert_eq!(
+        final_status.last_automatic_snapshot_index,
+        Some(OplogIndex::from_u64(5))
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn a_record_that_reuses_a_confirmed_name_is_confirmed_and_keeps_the_older_record() {
+    let name = FilesystemSnapshotName::periodic();
+
+    let test_case = TestCase::builder(1)
+        .snapshot_with_filesystem(Some(name.clone()))
+        .snapshot_confirmed(name.clone(), true)
+        .snapshot_with_filesystem(Some(name.clone()))
+        .snapshot_confirmed(name.clone(), true)
+        .build();
+    let final_status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(
+        final_status.last_automatic_snapshot_index,
+        Some(OplogIndex::from_u64(4))
+    );
+    assert!(final_status.last_automatic_snapshot_confirmed);
+    assert_eq!(
+        final_status
+            .previous_usable_automatic_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.index),
+        Some(OplogIndex::from_u64(2))
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn a_successful_update_clears_the_previous_usable_snapshot() {
+    let update = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+
+    let test_case = TestCase::builder(1)
+        .snapshot()
+        .snapshot()
+        .pending_update(&update, |_| {})
+        .successful_update(update, 2000, &HashSet::new())
+        .build();
+    let final_status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(final_status.previous_usable_automatic_snapshot, None);
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn a_failed_update_keeps_the_previous_usable_snapshot() {
+    let update = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+
+    let test_case = TestCase::builder(1)
+        .snapshot()
+        .snapshot()
+        .pending_update(&update, |_| {})
+        .failed_update(update)
+        .build();
+    let final_status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(
+        final_status
+            .previous_usable_automatic_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.index),
+        Some(OplogIndex::from_u64(2))
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn a_revert_of_the_newer_records_restores_the_previous_usable_snapshot() {
+    let first = FilesystemSnapshotName::periodic();
+    let second = FilesystemSnapshotName::periodic();
+
+    let test_case = TestCase::builder(1)
+        .snapshot_with_filesystem(Some(first.clone()))
+        .snapshot_confirmed(first.clone(), true)
+        .grow_memory(10)
+        .snapshot_with_filesystem(Some(second.clone()))
+        .snapshot_confirmed(second, true)
+        .snapshot_with_filesystem(Some(FilesystemSnapshotName::periodic()))
+        .revert(OplogIndex::from_u64(3))
+        .build();
+    let final_status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(
+        final_status.last_automatic_snapshot_index,
+        Some(OplogIndex::from_u64(2))
+    );
+    assert!(final_status.last_automatic_snapshot_confirmed);
+    assert_eq!(final_status.previous_usable_automatic_snapshot, None);
+    run_test_case(test_case).await;
+}
+
+#[test]
 async fn successful_auto_update_invalidates_automatic_snapshot() {
     let update = UpdateDescription::Automatic {
         target_revision: ComponentRevision::new(2).unwrap(),
@@ -2080,6 +2242,20 @@ impl TestCaseBuilder {
                 filesystem_snapshot: filesystem_snapshot.clone(),
             },
             move |mut status| {
+                if let (Some(index), Some(component_revision)) = (
+                    status.last_automatic_snapshot_index,
+                    status.last_automatic_snapshot_component_revision,
+                ) && (status.last_automatic_snapshot_confirmed
+                    || status.last_automatic_snapshot_filesystem_snapshot.is_none())
+                {
+                    status.previous_usable_automatic_snapshot = Some(UsableAutomaticSnapshot {
+                        index,
+                        component_revision,
+                        filesystem_snapshot: status
+                            .last_automatic_snapshot_filesystem_snapshot
+                            .clone(),
+                    });
+                }
                 status.last_automatic_snapshot_index = Some(oplog_idx);
                 status.last_automatic_snapshot_timestamp = Some(timestamp);
                 status.last_automatic_snapshot_component_revision = Some(status.component_revision);
@@ -2169,6 +2345,8 @@ impl TestCaseBuilder {
             status.last_automatic_snapshot_filesystem_snapshot =
                 old_status.last_automatic_snapshot_filesystem_snapshot;
             status.last_automatic_snapshot_confirmed = old_status.last_automatic_snapshot_confirmed;
+            status.previous_usable_automatic_snapshot =
+                old_status.previous_usable_automatic_snapshot;
 
             status
         })
@@ -2300,6 +2478,7 @@ impl TestCaseBuilder {
             status.last_automatic_snapshot_component_revision = None;
             status.last_automatic_snapshot_filesystem_snapshot = None;
             status.last_automatic_snapshot_confirmed = false;
+            status.previous_usable_automatic_snapshot = None;
 
             if status.skipped_regions.is_overridden() {
                 status.skipped_regions.merge_override();

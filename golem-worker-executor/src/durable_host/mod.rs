@@ -3929,8 +3929,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .data()
                         .get_public_state()
                         .worker()
-                        .unavailable_periodic_snapshot_through
-                        .fetch_max(snapshot_index.into(), Ordering::AcqRel);
+                        .unavailable_periodic_snapshots
+                        .lock()
+                        .unwrap()
+                        .insert(snapshot_index);
                     return SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
                 }
                 return SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error));
@@ -4122,8 +4124,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .data()
             .get_public_state()
             .worker()
-            .rejected_periodic_snapshot_through
-            .fetch_max(snapshot_index.into(), Ordering::AcqRel);
+            .rejected_periodic_snapshots
+            .lock()
+            .unwrap()
+            .insert(snapshot_index);
         RetryDecision::Immediate
     }
 
@@ -6260,23 +6264,23 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         match prepare_result {
             Ok(None) => {
                 let worker = store.as_context().data().get_public_state().worker();
-                let rejected = worker
-                    .rejected_periodic_snapshot_through
-                    .load(Ordering::Acquire);
-                if rejected != 0 {
+                let rejected = worker.rejected_periodic_snapshots.lock().unwrap().clone();
+                if !rejected.is_empty() {
                     let metadata = worker.get_initial_worker_metadata();
                     worker
                         .worker_service()
-                        .reject_periodic_snapshots_through(
+                        .reject_periodic_snapshots(
                             &metadata.owned_agent_id(),
                             metadata.fingerprint,
-                            OplogIndex::from_u64(rejected),
+                            &rejected,
                         )
                         .await?;
                 }
                 worker
-                    .unavailable_periodic_snapshot_through
-                    .store(0, Ordering::Release);
+                    .unavailable_periodic_snapshots
+                    .lock()
+                    .unwrap()
+                    .clear();
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)
             }
